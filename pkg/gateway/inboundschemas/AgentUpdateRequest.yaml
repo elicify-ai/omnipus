@@ -1,7 +1,10 @@
 type: object
 description: >
   Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
-  Locked (core) agents reject mutations to name, description, and soul.
+  Locked (core) agents reject mutations to name, description, and soul. Exception
+  (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul`
+  mutations — soul/rubric unification means the Judge's soul is its judging rubric,
+  editable while the agent stays otherwise locked.
   model, timeout_seconds, and max_tool_iterations may be updated on locked agents.
   heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents
   (heartbeat is workspace-scoped, ADR-027).
@@ -46,8 +49,12 @@ properties:
     type: string
     minLength: 1
     description: >
-      New SOUL.md content (agent system prompt). Rejected on locked agents.
-      Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
+      New SOUL.md content (agent system prompt). Rejected on locked core
+      agents. Exception (ADR-052 FR-038, soul/rubric unification): accepted
+      for locked `type: system` agents (e.g. the Judge) — for those, this
+      field IS the judging rubric, the only prompt-equivalent field a
+      locked System Agent accepts. Writing this triggers a config reload.
+      Whitespace-only is rejected as minLength violation.
     example: "You are a helpful assistant..."
   heartbeat:
     type: string
@@ -184,11 +191,10 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
-  rubric:
-    type: string
+  memory_enabled:
+    type: boolean
     description: >
-      New System Agent rubric prompt (ADR-049 D3). Only accepted for
-      `type: system` agents (e.g. the Judge) — rejected 400 on all other
-      agent types. This is the only prompt-equivalent field a locked System
-      Agent accepts (`soul` is rejected on locked agents).
-    example: "You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone..."
+      New value for the memory-injection gate (ADR-052 FR-039). When false,
+      ContextBuilder skips memory injection for this agent's turns. Allowed
+      on all agents.
+    example: true

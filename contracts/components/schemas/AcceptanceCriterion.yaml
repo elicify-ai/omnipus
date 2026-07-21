@@ -28,10 +28,15 @@ properties:
     enum:
       - check
       - prose
+      - behavior
     description: >
       `check` = machine-checkable command with an expected exit code, run via
       the assignee's `bash` tool. `prose` = free-text statement judged by the
-      Judge System Agent.
+      Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic
+      machine check over the session's own tool-call log — the comparator is
+      the count of successful calls of a named tool within a scope, resolved
+      WITHOUT the LLM verifier or `inspect_session`. Ladder order:
+      machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
     example: "check"
   text:
     type: string
@@ -67,6 +72,51 @@ properties:
         maximum: 255
         description: Exit code that counts as PASS (`met`) for this check.
         example: 0
+  behavior:
+    type: object
+    description: >
+      Present iff `kind == behavior` (400 if present with a different `kind`
+      — no mixed shape); required iff `kind == behavior` (400 if absent).
+      ADR-052 FR-034 — resolved deterministically from the session's
+      per-entry tool-call log (no LLM verifier dispatch). Unknown fields are
+      rejected 400 (`additionalProperties: false`). `min_count >= 0`, and
+      `min_count == 0` with `max_count == 0` expresses "never call this
+      tool"; when both are present, `max_count >= min_count` (400 if
+      violated).
+    required:
+      - tool
+    additionalProperties: false
+    properties:
+      tool:
+        type: string
+        minLength: 1
+        description: Name of the tool whose successful-call count is checked.
+        example: "bash"
+      min_count:
+        type: integer
+        minimum: 0
+        default: 1
+        description: Minimum number of successful calls of `tool` required within `scope`.
+        example: 1
+      max_count:
+        type: integer
+        minimum: 0
+        description: >
+          Maximum number of successful calls of `tool` allowed within
+          `scope`. Absent = no upper bound. Must be >= `min_count` when
+          present.
+        example: 5
+      scope:
+        type: string
+        enum:
+          - attempt
+          - task_session
+        default: task_session
+        description: >
+          Window the tool-call count is evaluated over. `attempt` = the
+          current retry attempt only. `task_session` (default) = the whole
+          session backing the task/plan-member run.
+        example: "task_session"
   author:
     type: object
     description: >

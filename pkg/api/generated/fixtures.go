@@ -956,6 +956,12 @@ func FixtureTask_Populated() Task {
 			Id   string                 `json:"id"`
 			Kind TaskCriteriaAuthorKind `json:"kind"`
 		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int                       `json:"max_count,omitempty"`
+			MinCount *int                       `json:"min_count,omitempty"`
+			Scope    *TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+			Tool     string                     `json:"tool"`
+		} `json:"behavior,omitempty"`
 		Check *struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
@@ -2209,6 +2215,12 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 					Id   string                             `json:"id"`
 					Kind PlanListResponsePlansDodAuthorKind `json:"kind"`
 				} `json:"author"`
+				Behavior *struct {
+					MaxCount *int                                   `json:"max_count,omitempty"`
+					MinCount *int                                   `json:"min_count,omitempty"`
+					Scope    *PlanListResponsePlansDodBehaviorScope `json:"scope,omitempty"`
+					Tool     string                                 `json:"tool"`
+				} `json:"behavior,omitempty"`
 				Check *struct {
 					Command          string `json:"command"`
 					ExpectedExitCode int    `json:"expected_exit_code"`

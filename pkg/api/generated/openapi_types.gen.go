@@ -35,15 +35,36 @@ func (e AcceptanceCriterionAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for AcceptanceCriterionBehaviorScope.
+const (
+	AcceptanceCriterionBehaviorScopeAttempt     AcceptanceCriterionBehaviorScope = "attempt"
+	AcceptanceCriterionBehaviorScopeTaskSession AcceptanceCriterionBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionBehaviorScope enum.
+func (e AcceptanceCriterionBehaviorScope) Valid() bool {
+	switch e {
+	case AcceptanceCriterionBehaviorScopeAttempt:
+		return true
+	case AcceptanceCriterionBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AcceptanceCriterionKind.
 const (
-	AcceptanceCriterionKindCheck AcceptanceCriterionKind = "check"
-	AcceptanceCriterionKindProse AcceptanceCriterionKind = "prose"
+	AcceptanceCriterionKindBehavior AcceptanceCriterionKind = "behavior"
+	AcceptanceCriterionKindCheck    AcceptanceCriterionKind = "check"
+	AcceptanceCriterionKindProse    AcceptanceCriterionKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the AcceptanceCriterionKind enum.
 func (e AcceptanceCriterionKind) Valid() bool {
 	switch e {
+	case AcceptanceCriterionKindBehavior:
+		return true
 	case AcceptanceCriterionKindCheck:
 		return true
 	case AcceptanceCriterionKindProse:
@@ -1457,15 +1478,36 @@ func (e PlanDodAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for PlanDodBehaviorScope.
+const (
+	PlanDodBehaviorScopeAttempt     PlanDodBehaviorScope = "attempt"
+	PlanDodBehaviorScopeTaskSession PlanDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the PlanDodBehaviorScope enum.
+func (e PlanDodBehaviorScope) Valid() bool {
+	switch e {
+	case PlanDodBehaviorScopeAttempt:
+		return true
+	case PlanDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanDodKind.
 const (
-	PlanDodKindCheck PlanDodKind = "check"
-	PlanDodKindProse PlanDodKind = "prose"
+	PlanDodKindBehavior PlanDodKind = "behavior"
+	PlanDodKindCheck    PlanDodKind = "check"
+	PlanDodKindProse    PlanDodKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the PlanDodKind enum.
 func (e PlanDodKind) Valid() bool {
 	switch e {
+	case PlanDodKindBehavior:
+		return true
 	case PlanDodKindCheck:
 		return true
 	case PlanDodKindProse:
@@ -1586,15 +1628,36 @@ func (e PlanCreateRequestDodAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for PlanCreateRequestDodBehaviorScope.
+const (
+	PlanCreateRequestDodBehaviorScopeAttempt     PlanCreateRequestDodBehaviorScope = "attempt"
+	PlanCreateRequestDodBehaviorScopeTaskSession PlanCreateRequestDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the PlanCreateRequestDodBehaviorScope enum.
+func (e PlanCreateRequestDodBehaviorScope) Valid() bool {
+	switch e {
+	case PlanCreateRequestDodBehaviorScopeAttempt:
+		return true
+	case PlanCreateRequestDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanCreateRequestDodKind.
 const (
-	PlanCreateRequestDodKindCheck PlanCreateRequestDodKind = "check"
-	PlanCreateRequestDodKindProse PlanCreateRequestDodKind = "prose"
+	PlanCreateRequestDodKindBehavior PlanCreateRequestDodKind = "behavior"
+	PlanCreateRequestDodKindCheck    PlanCreateRequestDodKind = "check"
+	PlanCreateRequestDodKindProse    PlanCreateRequestDodKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the PlanCreateRequestDodKind enum.
 func (e PlanCreateRequestDodKind) Valid() bool {
 	switch e {
+	case PlanCreateRequestDodKindBehavior:
+		return true
 	case PlanCreateRequestDodKindCheck:
 		return true
 	case PlanCreateRequestDodKindProse:
@@ -1643,15 +1706,36 @@ func (e PlanListResponsePlansDodAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for PlanListResponsePlansDodBehaviorScope.
+const (
+	PlanListResponsePlansDodBehaviorScopeAttempt     PlanListResponsePlansDodBehaviorScope = "attempt"
+	PlanListResponsePlansDodBehaviorScopeTaskSession PlanListResponsePlansDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansDodBehaviorScope enum.
+func (e PlanListResponsePlansDodBehaviorScope) Valid() bool {
+	switch e {
+	case PlanListResponsePlansDodBehaviorScopeAttempt:
+		return true
+	case PlanListResponsePlansDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanListResponsePlansDodKind.
 const (
-	PlanListResponsePlansDodKindCheck PlanListResponsePlansDodKind = "check"
-	PlanListResponsePlansDodKindProse PlanListResponsePlansDodKind = "prose"
+	PlanListResponsePlansDodKindBehavior PlanListResponsePlansDodKind = "behavior"
+	PlanListResponsePlansDodKindCheck    PlanListResponsePlansDodKind = "check"
+	PlanListResponsePlansDodKindProse    PlanListResponsePlansDodKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the PlanListResponsePlansDodKind enum.
 func (e PlanListResponsePlansDodKind) Valid() bool {
 	switch e {
+	case PlanListResponsePlansDodKindBehavior:
+		return true
 	case PlanListResponsePlansDodKindCheck:
 		return true
 	case PlanListResponsePlansDodKindProse:
@@ -1772,15 +1856,36 @@ func (e PlanUpdateRequestDodAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for PlanUpdateRequestDodBehaviorScope.
+const (
+	PlanUpdateRequestDodBehaviorScopeAttempt     PlanUpdateRequestDodBehaviorScope = "attempt"
+	PlanUpdateRequestDodBehaviorScopeTaskSession PlanUpdateRequestDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestDodBehaviorScope enum.
+func (e PlanUpdateRequestDodBehaviorScope) Valid() bool {
+	switch e {
+	case PlanUpdateRequestDodBehaviorScopeAttempt:
+		return true
+	case PlanUpdateRequestDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanUpdateRequestDodKind.
 const (
-	PlanUpdateRequestDodKindCheck PlanUpdateRequestDodKind = "check"
-	PlanUpdateRequestDodKindProse PlanUpdateRequestDodKind = "prose"
+	PlanUpdateRequestDodKindBehavior PlanUpdateRequestDodKind = "behavior"
+	PlanUpdateRequestDodKindCheck    PlanUpdateRequestDodKind = "check"
+	PlanUpdateRequestDodKindProse    PlanUpdateRequestDodKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the PlanUpdateRequestDodKind enum.
 func (e PlanUpdateRequestDodKind) Valid() bool {
 	switch e {
+	case PlanUpdateRequestDodKindBehavior:
+		return true
 	case PlanUpdateRequestDodKindCheck:
 		return true
 	case PlanUpdateRequestDodKindProse:
@@ -2583,6 +2688,7 @@ const (
 	SessionTypeHeartbeat SessionType = "heartbeat"
 	SessionTypeScheduled SessionType = "scheduled"
 	SessionTypeTask      SessionType = "task"
+	SessionTypeVerifier  SessionType = "verifier"
 )
 
 // Valid indicates whether the value is a known member of the SessionType enum.
@@ -2597,6 +2703,8 @@ func (e SessionType) Valid() bool {
 	case SessionTypeScheduled:
 		return true
 	case SessionTypeTask:
+		return true
+	case SessionTypeVerifier:
 		return true
 	default:
 		return false
@@ -2820,6 +2928,7 @@ const (
 	SessionDetailSessionTypeHeartbeat SessionDetailSessionType = "heartbeat"
 	SessionDetailSessionTypeScheduled SessionDetailSessionType = "scheduled"
 	SessionDetailSessionTypeTask      SessionDetailSessionType = "task"
+	SessionDetailSessionTypeVerifier  SessionDetailSessionType = "verifier"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionType enum.
@@ -2834,6 +2943,8 @@ func (e SessionDetailSessionType) Valid() bool {
 	case SessionDetailSessionTypeScheduled:
 		return true
 	case SessionDetailSessionTypeTask:
+		return true
+	case SessionDetailSessionTypeVerifier:
 		return true
 	default:
 		return false
@@ -3029,6 +3140,21 @@ func (e TaskAction) Valid() bool {
 	}
 }
 
+// Defines values for TaskCancelReason.
+const (
+	StoppedByUser TaskCancelReason = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the TaskCancelReason enum.
+func (e TaskCancelReason) Valid() bool {
+	switch e {
+	case StoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCriteriaAuthorKind.
 const (
 	TaskCriteriaAuthorKindAgent TaskCriteriaAuthorKind = "agent"
@@ -3047,15 +3173,36 @@ func (e TaskCriteriaAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for TaskCriteriaBehaviorScope.
+const (
+	TaskCriteriaBehaviorScopeAttempt     TaskCriteriaBehaviorScope = "attempt"
+	TaskCriteriaBehaviorScopeTaskSession TaskCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the TaskCriteriaBehaviorScope enum.
+func (e TaskCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case TaskCriteriaBehaviorScopeAttempt:
+		return true
+	case TaskCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCriteriaKind.
 const (
-	TaskCriteriaKindCheck TaskCriteriaKind = "check"
-	TaskCriteriaKindProse TaskCriteriaKind = "prose"
+	TaskCriteriaKindBehavior TaskCriteriaKind = "behavior"
+	TaskCriteriaKindCheck    TaskCriteriaKind = "check"
+	TaskCriteriaKindProse    TaskCriteriaKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the TaskCriteriaKind enum.
 func (e TaskCriteriaKind) Valid() bool {
 	switch e {
+	case TaskCriteriaKindBehavior:
+		return true
 	case TaskCriteriaKindCheck:
 		return true
 	case TaskCriteriaKindProse:
@@ -3242,15 +3389,36 @@ func (e TaskCreateRequestCriteriaAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for TaskCreateRequestCriteriaBehaviorScope.
+const (
+	TaskCreateRequestCriteriaBehaviorScopeAttempt     TaskCreateRequestCriteriaBehaviorScope = "attempt"
+	TaskCreateRequestCriteriaBehaviorScopeTaskSession TaskCreateRequestCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaBehaviorScope enum.
+func (e TaskCreateRequestCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case TaskCreateRequestCriteriaBehaviorScopeAttempt:
+		return true
+	case TaskCreateRequestCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCreateRequestCriteriaKind.
 const (
-	TaskCreateRequestCriteriaKindCheck TaskCreateRequestCriteriaKind = "check"
-	TaskCreateRequestCriteriaKindProse TaskCreateRequestCriteriaKind = "prose"
+	TaskCreateRequestCriteriaKindBehavior TaskCreateRequestCriteriaKind = "behavior"
+	TaskCreateRequestCriteriaKindCheck    TaskCreateRequestCriteriaKind = "check"
+	TaskCreateRequestCriteriaKindProse    TaskCreateRequestCriteriaKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaKind enum.
 func (e TaskCreateRequestCriteriaKind) Valid() bool {
 	switch e {
+	case TaskCreateRequestCriteriaKindBehavior:
+		return true
 	case TaskCreateRequestCriteriaKindCheck:
 		return true
 	case TaskCreateRequestCriteriaKindProse:
@@ -3362,15 +3530,36 @@ func (e TaskUpdateRequestCriteriaAuthorKind) Valid() bool {
 	}
 }
 
+// Defines values for TaskUpdateRequestCriteriaBehaviorScope.
+const (
+	TaskUpdateRequestCriteriaBehaviorScopeAttempt     TaskUpdateRequestCriteriaBehaviorScope = "attempt"
+	TaskUpdateRequestCriteriaBehaviorScopeTaskSession TaskUpdateRequestCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaBehaviorScope enum.
+func (e TaskUpdateRequestCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case TaskUpdateRequestCriteriaBehaviorScopeAttempt:
+		return true
+	case TaskUpdateRequestCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskUpdateRequestCriteriaKind.
 const (
-	TaskUpdateRequestCriteriaKindCheck TaskUpdateRequestCriteriaKind = "check"
-	TaskUpdateRequestCriteriaKindProse TaskUpdateRequestCriteriaKind = "prose"
+	TaskUpdateRequestCriteriaKindBehavior TaskUpdateRequestCriteriaKind = "behavior"
+	TaskUpdateRequestCriteriaKindCheck    TaskUpdateRequestCriteriaKind = "check"
+	TaskUpdateRequestCriteriaKindProse    TaskUpdateRequestCriteriaKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaKind enum.
 func (e TaskUpdateRequestCriteriaKind) Valid() bool {
 	switch e {
+	case TaskUpdateRequestCriteriaKindBehavior:
+		return true
 	case TaskUpdateRequestCriteriaKindCheck:
 		return true
 	case TaskUpdateRequestCriteriaKindProse:
@@ -3830,6 +4019,7 @@ const (
 	ListSessionsParamsTypeChat      ListSessionsParamsType = "chat"
 	ListSessionsParamsTypeScheduled ListSessionsParamsType = "scheduled"
 	ListSessionsParamsTypeTask      ListSessionsParamsType = "task"
+	ListSessionsParamsTypeVerifier  ListSessionsParamsType = "verifier"
 )
 
 // Valid indicates whether the value is a known member of the ListSessionsParamsType enum.
@@ -3842,6 +4032,8 @@ func (e ListSessionsParamsType) Valid() bool {
 	case ListSessionsParamsTypeScheduled:
 		return true
 	case ListSessionsParamsTypeTask:
+		return true
+	case ListSessionsParamsTypeVerifier:
 		return true
 	default:
 		return false
@@ -3988,6 +4180,21 @@ type AcceptanceCriterion struct {
 		Kind AcceptanceCriterionAuthorKind `json:"kind"`
 	} `json:"author"`
 
+	// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+	Behavior *struct {
+		// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+		MaxCount *int `json:"max_count,omitempty"`
+
+		// MinCount Minimum number of successful calls of `tool` required within `scope`.
+		MinCount *int `json:"min_count,omitempty"`
+
+		// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+		Scope *AcceptanceCriterionBehaviorScope `json:"scope,omitempty"`
+
+		// Tool Name of the tool whose successful-call count is checked.
+		Tool string `json:"tool"`
+	} `json:"behavior,omitempty"`
+
 	// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 	Check *struct {
 		// Command Shell command run through the assignee's `bash` tool.
@@ -4000,7 +4207,7 @@ type AcceptanceCriterion struct {
 	// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 	Id *string `json:"id,omitempty"`
 
-	// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+	// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 	Kind AcceptanceCriterionKind `json:"kind"`
 
 	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -4013,7 +4220,10 @@ type AcceptanceCriterion struct {
 // AcceptanceCriterionAuthorKind Whether this criterion was authored by an agent or a human user.
 type AcceptanceCriterionAuthorKind string
 
-// AcceptanceCriterionKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// AcceptanceCriterionBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type AcceptanceCriterionBehaviorScope string
+
+// AcceptanceCriterionKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type AcceptanceCriterionKind string
 
 // AcceptanceCriterionStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -4124,6 +4334,9 @@ type Agent struct {
 	// MaxToolIterations Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
 	MaxToolIterations int `json:"max_tool_iterations"`
 
+	// MemoryEnabled Gates ContextBuilder memory injection for this agent (ADR-052 FR-039). Defaults to true for ordinary agents. The seeded Judge (and, by extension, any verifier-role agent) is seeded false — memory OFF produces reproducible, impartial verdicts (same evidence -> same verdict) since injected memory would otherwise vary the outcome between runs.
+	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
+
 	// Model Model slug used for LLM calls (resolved from defaults when not explicitly set on the agent). With the O3 two-field model, this is the bare model slug (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider` field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split into {model, provider} by the config-load migration. Never inferred at call time once `provider` is set.
 	Model *string `json:"model,omitempty"`
 
@@ -4160,9 +4373,6 @@ type Agent struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// Rubric System Agent rubric prompt (ADR-049 D3) — the System Agent's system prompt / judging rubric, stored as the agent's soul/prompt-override field (the rubric IS the judge's system prompt). Editable only for `type: system` agents (e.g. the Judge); the only prompt-equivalent field a locked System Agent accepts. Empty for non-system agents.
-	Rubric *string `json:"rubric,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
@@ -4175,7 +4385,7 @@ type Agent struct {
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
-	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
+	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null). For `type: system` agents (e.g. the Judge), this is ALSO the judging rubric — one unified soul concept (ADR-052 FR-038, no separate `rubric` field); the Judge's soul is editable while the agent stays otherwise locked.
 	Soul string `json:"soul"`
 
 	// Stats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
@@ -4220,7 +4430,7 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `rubric` are editable (the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 	Type AgentType `json:"type"`
 
 	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -4242,7 +4452,7 @@ type AgentStatus string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `rubric` are editable (the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
@@ -4768,7 +4978,7 @@ type AgentToolsUpdateRequestBuiltinMode string
 // AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
 type AgentToolsUpdateRequestBuiltinPolicies string
 
-// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
+// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
 type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
@@ -4822,6 +5032,9 @@ type AgentUpdateRequest struct {
 	// MaxToolIterations New maximum tool calls per turn. Allowed on all agents.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
+	// MemoryEnabled New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Allowed on all agents.
+	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
+
 	// Model New model slug. Allowed on all agents. With the O3 two-field model, pair with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
@@ -4858,9 +5071,6 @@ type AgentUpdateRequest struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// Rubric New System Agent rubric prompt (ADR-049 D3). Only accepted for `type: system` agents (e.g. the Judge) — rejected 400 on all other agent types. This is the only prompt-equivalent field a locked System Agent accepts (`soul` is rejected on locked agents).
-	Rubric *string `json:"rubric,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Must each be valid Go regexp patterns (400 on invalid regexp).
@@ -4871,7 +5081,7 @@ type AgentUpdateRequest struct {
 	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
 	Skills *[]string `json:"skills,omitempty"`
 
-	// Soul New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
+	// Soul New SOUL.md content (agent system prompt). Rejected on locked core agents. Exception (ADR-052 FR-038, soul/rubric unification): accepted for locked `type: system` agents (e.g. the Judge) — for those, this field IS the judging rubric, the only prompt-equivalent field a locked System Agent accepts. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
 	Soul *string `json:"soul,omitempty"`
 
 	// TimeoutSeconds New timeout in seconds per turn. Allowed on all agents.
@@ -6669,6 +6879,21 @@ type Plan struct {
 			Kind PlanDodAuthorKind `json:"kind"`
 		} `json:"author"`
 
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *PlanDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
 		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
@@ -6681,7 +6906,7 @@ type Plan struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind PlanDodKind `json:"kind"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -6740,7 +6965,10 @@ type Plan struct {
 // PlanDodAuthorKind Whether this criterion was authored by an agent or a human user.
 type PlanDodAuthorKind string
 
-// PlanDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// PlanDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type PlanDodBehaviorScope string
+
+// PlanDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanDodKind string
 
 // PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -6795,6 +7023,21 @@ type PlanCreateRequest struct {
 			Kind PlanCreateRequestDodAuthorKind `json:"kind"`
 		} `json:"author"`
 
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *PlanCreateRequestDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
 		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
@@ -6807,7 +7050,7 @@ type PlanCreateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind PlanCreateRequestDodKind `json:"kind"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -6833,7 +7076,10 @@ type PlanCreateRequest struct {
 // PlanCreateRequestDodAuthorKind Whether this criterion was authored by an agent or a human user.
 type PlanCreateRequestDodAuthorKind string
 
-// PlanCreateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// PlanCreateRequestDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type PlanCreateRequestDodBehaviorScope string
+
+// PlanCreateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanCreateRequestDodKind string
 
 // PlanCreateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -6881,6 +7127,21 @@ type PlanListResponse struct {
 				Kind PlanListResponsePlansDodAuthorKind `json:"kind"`
 			} `json:"author"`
 
+			// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+			Behavior *struct {
+				// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+				MaxCount *int `json:"max_count,omitempty"`
+
+				// MinCount Minimum number of successful calls of `tool` required within `scope`.
+				MinCount *int `json:"min_count,omitempty"`
+
+				// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+				Scope *PlanListResponsePlansDodBehaviorScope `json:"scope,omitempty"`
+
+				// Tool Name of the tool whose successful-call count is checked.
+				Tool string `json:"tool"`
+			} `json:"behavior,omitempty"`
+
 			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 			Check *struct {
 				// Command Shell command run through the assignee's `bash` tool.
@@ -6893,7 +7154,7 @@ type PlanListResponse struct {
 			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 			Id *string `json:"id,omitempty"`
 
-			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 			Kind PlanListResponsePlansDodKind `json:"kind"`
 
 			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -6956,7 +7217,10 @@ type PlanListResponse struct {
 // PlanListResponsePlansDodAuthorKind Whether this criterion was authored by an agent or a human user.
 type PlanListResponsePlansDodAuthorKind string
 
-// PlanListResponsePlansDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// PlanListResponsePlansDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type PlanListResponsePlansDodBehaviorScope string
+
+// PlanListResponsePlansDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanListResponsePlansDodKind string
 
 // PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -6993,6 +7257,21 @@ type PlanUpdateRequest struct {
 			Kind PlanUpdateRequestDodAuthorKind `json:"kind"`
 		} `json:"author"`
 
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *PlanUpdateRequestDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
 		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
@@ -7005,7 +7284,7 @@ type PlanUpdateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind PlanUpdateRequestDodKind `json:"kind"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -7031,7 +7310,10 @@ type PlanUpdateRequest struct {
 // PlanUpdateRequestDodAuthorKind Whether this criterion was authored by an agent or a human user.
 type PlanUpdateRequestDodAuthorKind string
 
-// PlanUpdateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// PlanUpdateRequestDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type PlanUpdateRequestDodBehaviorScope string
+
+// PlanUpdateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanUpdateRequestDodKind string
 
 // PlanUpdateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -7957,7 +8239,7 @@ type Session struct {
 	// Title Human-readable session title. May be auto-generated or user-renamed.
 	Title string `json:"title"`
 
-	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
+	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
 	Type *SessionType `json:"type,omitempty"`
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -7970,7 +8252,7 @@ type Session struct {
 // SessionStatus Current lifecycle status of the session.
 type SessionStatus string
 
-// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
+// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
 type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
@@ -8220,7 +8502,7 @@ type SessionDetail struct {
 		// Title Human-readable session title. May be auto-generated or user-renamed.
 		Title string `json:"title"`
 
-		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
+		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
 		Type *SessionDetailSessionType `json:"type,omitempty"`
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -8255,7 +8537,7 @@ type SessionDetailMessagesVerdictScope string
 // SessionDetailSessionStatus Current lifecycle status of the session.
 type SessionDetailSessionStatus string
 
-// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
+// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
 type SessionDetailSessionType string
 
 // SessionRenameRequest Body for PUT /sessions/{id}. Renames a session.
@@ -8540,6 +8822,9 @@ type Task struct {
 	// BlockedBy Ordered list of task IDs that must reach `done` before this task is eligible to advance (DAG ordering only — an AND-join, no conditional semantics in Tier 2). A write-time cycle validator (carried over from the legacy boardtask store) rejects self-edges, 2-node, and N-node cycles; orphan edges (target deleted) are dropped on load; max depth 50. Empty when the task has no dependencies.
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
+	// CancelReason Cancelled-task discriminator (ADR-052 FR-028), mirroring `Plan.failed_reason`. Set only when `status == failed` AND the task was terminated via POST /tasks/{id}/stop (distinguishes a user-cancelled task, rendered with an orange "Cancelled" marker in the Failed column, from a genuine failure, e.g. attempts exhausted, which leaves this field null/absent). POST /tasks/{id}/restart clears it — a restarted task is no longer "stopped by user"; a later genuine failure records its own outcome via `result` with this field absent.
+	CancelReason *TaskCancelReason `json:"cancel_reason,omitempty"`
+
 	// CompletedAt RFC 3339 timestamp when the task reached `done` or `failed`. Absent until then.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
@@ -8560,6 +8845,21 @@ type Task struct {
 			Kind TaskCriteriaAuthorKind `json:"kind"`
 		} `json:"author"`
 
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *TaskCriteriaBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
 		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
@@ -8572,7 +8872,7 @@ type Task struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind TaskCriteriaKind `json:"kind"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -8690,10 +8990,16 @@ type Task struct {
 // TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 type TaskAction string
 
+// TaskCancelReason Cancelled-task discriminator (ADR-052 FR-028), mirroring `Plan.failed_reason`. Set only when `status == failed` AND the task was terminated via POST /tasks/{id}/stop (distinguishes a user-cancelled task, rendered with an orange "Cancelled" marker in the Failed column, from a genuine failure, e.g. attempts exhausted, which leaves this field null/absent). POST /tasks/{id}/restart clears it — a restarted task is no longer "stopped by user"; a later genuine failure records its own outcome via `result` with this field absent.
+type TaskCancelReason string
+
 // TaskCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
 type TaskCriteriaAuthorKind string
 
-// TaskCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// TaskCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type TaskCriteriaBehaviorScope string
+
+// TaskCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type TaskCriteriaKind string
 
 // TaskCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -8751,6 +9057,21 @@ type TaskCreateRequest struct {
 			Kind TaskCreateRequestCriteriaAuthorKind `json:"kind"`
 		} `json:"author"`
 
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *TaskCreateRequestCriteriaBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
 		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
@@ -8763,7 +9084,7 @@ type TaskCreateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind TaskCreateRequestCriteriaKind `json:"kind"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -8851,7 +9172,10 @@ type TaskCreateRequestAction string
 // TaskCreateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
 type TaskCreateRequestCriteriaAuthorKind string
 
-// TaskCreateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// TaskCreateRequestCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type TaskCreateRequestCriteriaBehaviorScope string
+
+// TaskCreateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type TaskCreateRequestCriteriaKind string
 
 // TaskCreateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -8944,6 +9268,21 @@ type TaskUpdateRequest struct {
 			Kind TaskUpdateRequestCriteriaAuthorKind `json:"kind"`
 		} `json:"author"`
 
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *TaskUpdateRequestCriteriaBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
 		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
@@ -8956,7 +9295,7 @@ type TaskUpdateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind TaskUpdateRequestCriteriaKind `json:"kind"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -9038,7 +9377,10 @@ type TaskUpdateRequest struct {
 // TaskUpdateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
 type TaskUpdateRequestCriteriaAuthorKind string
 
-// TaskUpdateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+// TaskUpdateRequestCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type TaskUpdateRequestCriteriaBehaviorScope string
+
+// TaskUpdateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type TaskUpdateRequestCriteriaKind string
 
 // TaskUpdateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
@@ -9544,6 +9886,9 @@ type ListSessionsParams struct {
 
 	// Type Filter by session type.
 	Type *ListSessionsParamsType `form:"type,omitempty" json:"type,omitempty"`
+
+	// IncludeVerifier When true, includes sessions of type "verifier" in the response (ADR-052 FR-036). Defaults to false so verifier-role adjudication sessions stay hidden from the general session list (Sidebar, SearchModal); UsageScreen passes true to surface verifier LLM spend.
+	IncludeVerifier *bool `form:"include_verifier,omitempty" json:"include_verifier,omitempty"`
 }
 
 // ListSessionsParamsType defines parameters for ListSessions.

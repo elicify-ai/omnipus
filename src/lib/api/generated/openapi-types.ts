@@ -253,7 +253,7 @@ export interface paths {
         };
         /**
          * List sessions across all agents
-         * @description Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array.
+         * @description Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed.
          */
         get: operations["listSessions"];
         put?: never;
@@ -1994,6 +1994,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/{id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart a stopped standalone task
+         * @description Restarts a standalone (non-plan-member) task previously stopped by the user (`status: failed`, `cancel_reason: stopped_by_user`) — the Play route (ADR-052 FR-026). Resets `attempt_count` to 0, clears `cancel_reason`, and transitions the task to `next` so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not `failed`, or `failed` for a reason other than `stopped_by_user`).
+         */
+        post: operations["restartTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp-servers": {
         parameters: {
             query?: never;
@@ -2468,6 +2488,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plans/{id}/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restart a stopped plan
+         * @description Restarts a plan previously stopped by the user (`state: failed`, `failed_reason: stopped_by_user`) — the Play route (ADR-052 FR-026). Resets every non-`done` member task to `next`/`blocked` with `attempt_count` reset to 0, resets the plan's `judge_rounds` to 0, preserves `done` members and their evidence, clears `failed_reason`, and transitions the plan to `approved` (NOT directly to `running`) via a store-level reason-aware guard that permits only `failed[stopped_by_user] -> approved` — the engine then promotes `approved -> running` under the global active-loop cap on its next tick, exactly like a first execute (restarting straight to `running` would skip cap admission). Rejected 409 when the plan is not `failed`, or its `failed_reason` is not `stopped_by_user` (e.g. `judge_rounds_exhausted` or `idle_expired` are not restartable — no Play offered for those). Rejected 400 on a malformed request.
+         */
+        post: operations["restartPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stats/tokens": {
         parameters: {
             query?: never;
@@ -2708,11 +2748,11 @@ export interface components {
              */
             id: string;
             /**
-             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one.
+             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
              * @example chat
              * @enum {string}
              */
-            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat";
+            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat" | "verifier";
             /**
              * @description Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
              * @example false
@@ -3070,7 +3110,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `rubric` are editable (the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that execute as no-tools structured calls (e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
              * @example core
              * @enum {string}
              */
@@ -3112,7 +3152,7 @@ export interface components {
              */
             status: "active" | "idle" | "draft" | "error";
             /**
-             * @description Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
+             * @description Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null). For `type: system` agents (e.g. the Judge), this is ALSO the judging rubric — one unified soul concept (ADR-052 FR-038, no separate `rubric` field); the Judge's soul is editable while the agent stays otherwise locked.
              * @example You are Jim, a senior software engineer...
              */
             soul: string;
@@ -3172,10 +3212,11 @@ export interface components {
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
             /**
-             * @description System Agent rubric prompt (ADR-049 D3) — the System Agent's system prompt / judging rubric, stored as the agent's soul/prompt-override field (the rubric IS the judge's system prompt). Editable only for `type: system` agents (e.g. the Judge); the only prompt-equivalent field a locked System Agent accepts. Empty for non-system agents.
-             * @example You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone...
+             * @description Gates ContextBuilder memory injection for this agent (ADR-052 FR-039). Defaults to true for ordinary agents. The seeded Judge (and, by extension, any verifier-role agent) is seeded false — memory OFF produces reproducible, impartial verdicts (same evidence -> same verdict) since injected memory would otherwise vary the outcome between runs.
+             * @default true
+             * @example true
              */
-            rubric?: string;
+            memory_enabled: boolean;
         };
         /**
          * AgentModelParams
@@ -3665,7 +3706,7 @@ export interface components {
              */
             timeout_seconds?: number;
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
+        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
         AgentUpdateRequest: {
             /**
              * Format: date-time
@@ -3694,7 +3735,7 @@ export interface components {
              */
             provider?: string;
             /**
-             * @description New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
+             * @description New SOUL.md content (agent system prompt). Rejected on locked core agents. Exception (ADR-052 FR-038, soul/rubric unification): accepted for locked `type: system` agents (e.g. the Judge) — for those, this field IS the judging rubric, the only prompt-equivalent field a locked System Agent accepts. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
              * @example You are a helpful assistant...
              */
             soul?: string;
@@ -3820,10 +3861,10 @@ export interface components {
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
             /**
-             * @description New System Agent rubric prompt (ADR-049 D3). Only accepted for `type: system` agents (e.g. the Judge) — rejected 400 on all other agent types. This is the only prompt-equivalent field a locked System Agent accepts (`soul` is rejected on locked agents).
-             * @example You are the Judge. Score each criterion strictly against evidence, never the worker's own summary alone...
+             * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Allowed on all agents.
+             * @example true
              */
-            rubric?: string;
+            memory_enabled?: boolean;
         };
         /**
          * @description One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
@@ -5311,6 +5352,12 @@ export interface components {
              * @example jim
              */
             agent_id?: string;
+            /**
+             * @description Cancelled-task discriminator (ADR-052 FR-028), mirroring `Plan.failed_reason`. Set only when `status == failed` AND the task was terminated via POST /tasks/{id}/stop (distinguishes a user-cancelled task, rendered with an orange "Cancelled" marker in the Failed column, from a genuine failure, e.g. attempts exhausted, which leaves this field null/absent). POST /tasks/{id}/restart clears it — a restarted task is no longer "stopped by user"; a later genuine failure records its own outcome via `result` with this field absent.
+             * @example stopped_by_user
+             * @enum {string|null}
+             */
+            cancel_reason?: "stopped_by_user" | null;
             /**
              * @description Display name of the assigned agent. Read-time only (resolved from the agent registry; never authoritative storage).
              * @example Jim
@@ -7946,11 +7993,11 @@ export interface components {
              */
             id?: string;
             /**
-             * @description `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent.
+             * @description `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
              * @example check
              * @enum {string}
              */
-            kind: "check" | "prose";
+            kind: "check" | "prose" | "behavior";
             /**
              * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
              * @example All new pkg/plan tests pass
@@ -7968,6 +8015,32 @@ export interface components {
                  * @example 0
                  */
                 expected_exit_code: number;
+            };
+            /** @description Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated). */
+            behavior?: {
+                /**
+                 * @description Name of the tool whose successful-call count is checked.
+                 * @example bash
+                 */
+                tool: string;
+                /**
+                 * @description Minimum number of successful calls of `tool` required within `scope`.
+                 * @default 1
+                 * @example 1
+                 */
+                min_count: number;
+                /**
+                 * @description Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+                 * @example 5
+                 */
+                max_count?: number;
+                /**
+                 * @description Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+                 * @default task_session
+                 * @example task_session
+                 * @enum {string}
+                 */
+                scope: "attempt" | "task_session";
             };
             /** @description Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting. */
             author: {
@@ -8700,7 +8773,12 @@ export interface operations {
                  * @description Filter by session type.
                  * @example chat
                  */
-                type?: "chat" | "task" | "channel" | "scheduled";
+                type?: "chat" | "task" | "channel" | "scheduled" | "verifier";
+                /**
+                 * @description When true, includes sessions of type "verifier" in the response (ADR-052 FR-036). Defaults to false so verifier-role adjudication sessions stay hidden from the general session list (Sidebar, SearchModal); UsageScreen passes true to surface verifier LLM spend.
+                 * @example false
+                 */
+                include_verifier?: boolean;
             };
             header?: never;
             path?: never;
@@ -12419,6 +12497,32 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    restartTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restarted task (status `next`, `cancel_reason` cleared). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+        };
+    };
     listMcpServers: {
         parameters: {
             query?: never;
@@ -13413,6 +13517,33 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+        };
+    };
+    restartPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Plan ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restarted plan (state `approved`, `failed_reason` cleared). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plan"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
         };
     };
     getTokenStats: {

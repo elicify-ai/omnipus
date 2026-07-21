@@ -983,7 +983,7 @@ paths:
     get:
       operationId: listSessions
       summary: List sessions across all agents
-      description: 'Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array.
+      description: 'Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed.
 
         '
       tags:
@@ -1007,7 +1007,20 @@ paths:
           - task
           - channel
           - scheduled
+          - verifier
         example: chat
+      - name: include_verifier
+        in: query
+        description: >
+          When true, includes sessions of type "verifier" in the response
+          (ADR-052 FR-036). Defaults to false so verifier-role adjudication
+          sessions stay hidden from the general session list (Sidebar,
+          SearchModal); UsageScreen passes true to surface verifier LLM
+          spend.
+        schema:
+          type: boolean
+          default: false
+        example: false
       responses:
         '200':
           description: 'List of sessions. When partial errors occur, the response body is {"sessions": [...], "partial_errors": ["agent=X: session_list_failed"]}. When no errors, the response body is a plain JSON array of Session objects.
@@ -4688,6 +4701,43 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/restart:
+    post:
+      operationId: restartTask
+      summary: Restart a stopped standalone task
+      description: >
+        Restarts a standalone (non-plan-member) task previously stopped by
+        the user (`status: failed`, `cancel_reason: stopped_by_user`) — the
+        Play route (ADR-052 FR-026). Resets `attempt_count` to 0, clears
+        `cancel_reason`, and transitions the task to `next` so the goal loop
+        picks it up again. Rejected 409 when the task belongs to a plan
+        (restart the plan instead, via POST /plans/{id}/restart, which
+        re-runs its non-done members) or is not in a restartable state (not
+        `failed`, or `failed` for a reason other than `stopped_by_user`).
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Restarted task (status `next`, `cancel_reason` cleared).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
   /mcp-servers:
     get:
       operationId: listMcpServers
@@ -5766,6 +5816,53 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+
+  /plans/{id}/restart:
+    post:
+      operationId: restartPlan
+      summary: Restart a stopped plan
+      description: >
+        Restarts a plan previously stopped by the user (`state: failed`,
+        `failed_reason: stopped_by_user`) — the Play route (ADR-052
+        FR-026). Resets every non-`done` member task to `next`/`blocked`
+        with `attempt_count` reset to 0, resets the plan's `judge_rounds`
+        to 0, preserves `done` members and their evidence, clears
+        `failed_reason`, and transitions the plan to `approved` (NOT
+        directly to `running`) via a store-level reason-aware guard that
+        permits only `failed[stopped_by_user] -> approved` — the engine
+        then promotes `approved -> running` under the global active-loop
+        cap on its next tick, exactly like a first execute (restarting
+        straight to `running` would skip cap admission). Rejected 409 when
+        the plan is not `failed`, or its `failed_reason` is not
+        `stopped_by_user` (e.g. `judge_rounds_exhausted` or `idle_expired`
+        are not restartable — no Play offered for those). Rejected 400 on
+        a malformed request.
+      tags:
+      - Plans
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Plan ID.
+      responses:
+        '200':
+          description: Restarted plan (state `approved`, `failed_reason` cleared).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /stats/tokens:
     get:

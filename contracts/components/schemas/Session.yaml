@@ -27,6 +27,7 @@ properties:
       - channel
       - scheduled
       - heartbeat
+      - verifier
     description: >
       Session classification. Legacy sessions without a type field are treated as "chat"
       by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a
@@ -34,7 +35,12 @@ properties:
       be accepted here or GET /api/v1/sessions fails SPA schema validation once any
       scheduled/heartbeat session exists. "heartbeat" tags the eager standing session
       created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron
-      job continues this session rather than starting a fresh one.
+      job continues this session rather than starting a fresh one. "verifier" (ADR-052
+      FR-036) tags a session created for a verifier-role adjudication (the Judge, or a
+      future custom verifier) — persisted with normal 90-day retention but hidden by
+      default from GET /api/v1/sessions (see `include_verifier`); Sidebar and
+      SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is
+      visible there), and the ActivityPanel / verdict drill-down surface it on demand.
     example: "chat"
   protected:
     type: boolean
