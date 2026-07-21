@@ -102,6 +102,19 @@ build_archive() {
         sha="$(sha256sum "$out_dir/chromium/chrome-linux64/chrome" | awk '{print $1}')"
         printf '%s  chrome-linux64/chrome\n' "$sha" > "$out_dir/chromium/chrome.sha256"
         ;;
+      linux64-cft-real)
+        # REAL cft-bundle.sh layout (PERF2-001): chrome.sha256 lives NEXT
+        # TO the binary at chromium/chrome-linux64/chrome.sha256, NOT at
+        # the chromium/ root. This is what the actual producer writes —
+        # the exact layout Phase 2 caught install.sh mishandling (it was
+        # looking only at the chromium/ root and refused the real archive).
+        mkdir -p "$out_dir/chromium/chrome-linux64"
+        cp "$STAGE_BIN_DIR/omnipus" "$out_dir/chromium/chrome-linux64/chrome"
+        chmod +x "$out_dir/chromium/chrome-linux64/chrome"
+        local sha
+        sha="$(sha256sum "$out_dir/chromium/chrome-linux64/chrome" | awk '{print $1}')"
+        printf '%s  chrome\n' "$sha" > "$out_dir/chromium/chrome-linux64/chrome.sha256"
+        ;;
       linux-arm64)
         mkdir -p "$out_dir/chromium/chrome-linux-arm64"
         cp "$STAGE_BIN_DIR/omnipus" "$out_dir/chromium/chrome-linux-arm64/chrome"
@@ -169,6 +182,21 @@ build_archive() {
   [ -d "$SANDBOX/bin/../share/omnipus/chromium" ]
   [ -x "$SANDBOX/bin/../share/omnipus/chromium/chrome-linux64/chrome" ]
   [ -f "$SANDBOX/bin/../share/omnipus/chromium/chrome.sha256" ]
+}
+
+@test "install.sh: REAL cft-bundle layout (chrome.sha256 next to binary) installs cleanly" {
+  # Regression for the Phase 2 defect: cft-bundle.sh writes chrome.sha256
+  # BESIDE the binary (chrome-linux64/chrome.sha256), not at the chromium/
+  # root. install.sh must find it there (PERF2-001). Before the fix,
+  # install.sh looked only at chromium/chrome.sha256 and aborted the real
+  # archive with "chrome.sha256 missing".
+  build_archive "$SANDBOX/dist" yes linux64-cft-real
+  export OMNIPUS_INSTALL_URL="file://$SANDBOX/dist/omnipus_Linux_x86_64.tar.gz"
+  run "$INSTALL_SH"
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+  [ -x "$SANDBOX/bin/../share/omnipus/chromium/chrome-linux64/chrome" ]
 }
 
 @test "install.sh: bundled chromium + chrome-linux-arm64 layout is accepted defensively" {

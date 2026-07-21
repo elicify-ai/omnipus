@@ -207,12 +207,21 @@ if [ -d "$CHROMIUM_DIR" ]; then
       \( -name chrome -o -name 'Google Chrome for Testing' -o -name chrome.exe \) \
       -print 2>/dev/null | head -n 1)"
   fi
-  SHA_FILE="${CHROMIUM_DIR}/chrome.sha256"
+  # Validate the chrome binary was found before locating its manifest.
+  if [ -z "$CHROME_BIN" ] || [ ! -f "$CHROME_BIN" ]; then
+    err "bundled chrome binary missing — refusing to install (corrupted archive)"
+  fi
+  # chrome.sha256 lives NEXT TO the binary (PERF2-001 / SEC-ADR052-003):
+  # cft-bundle.sh writes <subdir>/chrome.sha256 beside <subdir>/chrome
+  # (e.g. chromium/chrome-linux64/chrome.sha256), and the runtime's
+  # findPackageChrome probes alongside the binary first. Fall back to the
+  # chromium/ root for alternative packagers that place it there.
+  SHA_FILE="$(dirname "$CHROME_BIN")/chrome.sha256"
+  if [ ! -f "$SHA_FILE" ]; then
+    SHA_FILE="${CHROMIUM_DIR}/chrome.sha256"
+  fi
   if [ ! -f "$SHA_FILE" ]; then
     err "bundled chrome present but chrome.sha256 missing — refusing to install (corrupted archive)"
-  fi
-  if [ -z "$CHROME_BIN" ] || [ ! -f "$CHROME_BIN" ]; then
-    err "bundled chrome.sha256 present but chrome binary missing — refusing to install (corrupted archive)"
   fi
   ACTUAL="$(sha256_of "$CHROME_BIN")"
   if [ -z "$ACTUAL" ]; then
