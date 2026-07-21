@@ -761,15 +761,28 @@ func systemAgentSeed(_ CoreAgentID) map[string]config.ToolPolicy {
 	return denyAllThenOverride(nil)
 }
 
-// judgeDefaultRubric is the Judge System Agent's default system prompt / judging
-// rubric (ADR-049 D3, seeded into AgentConfig.Rubric on fresh install). It is
-// EDITABLE by the operator — SeedConfig backfills it only when empty and never
-// overwrites an operator edit — so this constant is the fresh-install default,
-// not a hardcoded runtime value. The Judge engine (Wave 2) renders this together
-// with the criteria/evidence/worker-summary and requires a strict per-criterion
-// {met, reason} JSON verdict; absence of evidence for a criterion is scored
-// unmet (fail-closed, NFR-2).
-const judgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine.
+// JudgeDefaultRubric is the Judge System Agent's default system prompt /
+// judging rubric (ADR-049 D3; ADR-052 FR-038 soul/rubric unification —
+// R3-1 CLOSED). AgentConfig.Rubric was DELETED: there is now one unified
+// "soul" concept and the Judge's judging standards live in its SOUL.md like
+// any other agent's soul, EDITABLE by the operator while the Judge stays
+// otherwise locked. Exported (was unexported judgeDefaultRubric) so
+// pkg/agent can reference it: seedSystemAgents below deliberately does NOT
+// write SOUL.md itself — SeedConfig is documented, and relied on by its own
+// test suite (none of which sets OMNIPUS_HOME), as a PURE config-struct
+// mutation with zero filesystem side effects, so introducing a disk write
+// here would silently start touching the real machine's home directory on
+// every `go test ./pkg/coreagent/...` run. Instead, pkg/agent's
+// ensureVerifierSoul (verifier_adjudication.go) lazily materializes this
+// constant into the Judge's SOUL.md on first real verifier dispatch —
+// mirroring how NewAgentInstance itself lazily MkdirAlls an agent's
+// workspace at construction time rather than at config-seed time — and
+// never overwrites an operator's own edit (the same "backfill only when
+// empty" rule the old Rubric field used). The Judge engine renders this
+// together with the criteria/evidence/worker-summary and requires a strict
+// per-criterion {met, reason} JSON verdict; absence of evidence for a
+// criterion is scored unmet (fail-closed, NFR-2).
+const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine.
 
 You receive: a unit's acceptance criteria (machine-check evidence records and prose criteria), the relevant file diffs, and the worker's own last completion summary. The worker's summary is a CLAIM, never a verdict — judge only against the criteria and the real evidence.
 
@@ -1162,8 +1175,14 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 	for _, sa := range SystemAgents() {
 		policies := systemAgentSeed(sa.ID)
 		if !existing[string(sa.ID)] {
-			// Fresh seed: locked, non-default, all-deny, Type=system. Rubric
-			// seeded from the compiled default (operator-editable thereafter).
+			// Fresh seed: locked, non-default, all-deny, Type=system. No
+			// Rubric field to seed anymore (ADR-052 FR-038, R3-1 CLOSED: the
+			// field was deleted) — the Judge's soul (its default judging
+			// standards, JudgeDefaultRubric) is lazily materialized into
+			// SOUL.md by pkg/agent's ensureVerifierSoul on first real
+			// verifier dispatch, not here (SeedConfig stays a pure
+			// config-struct mutation with zero filesystem side effects — see
+			// JudgeDefaultRubric's doc comment for why).
 			cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
 				ID:          string(sa.ID),
 				Name:        sa.Name,
@@ -1173,7 +1192,6 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				Type:        config.AgentTypeSystem,
 				Locked:      true,
 				Default:     false,
-				Rubric:      judgeDefaultRubric,
 				Tools: &config.AgentToolsCfg{
 					Builtin: config.AgentBuiltinToolsCfg{
 						Policies: policies,
@@ -1232,13 +1250,12 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				a.Tools.Builtin.Policies = policies
 				modified = true
 			}
-			// Rubric is operator-editable: backfill the default ONLY when empty
-			// (upgrade from a release that predated the field) — never overwrite
-			// an operator edit. Model/Provider are likewise left untouched.
-			if a.Rubric == "" {
-				a.Rubric = judgeDefaultRubric
-				modified = true
-			}
+			// No Rubric field left to backfill (ADR-052 FR-038 deleted it —
+			// see the fresh-seed branch above and JudgeDefaultRubric's doc
+			// comment). Model/Provider are likewise left untouched here;
+			// the Judge's soul-file backfill-when-empty now happens lazily
+			// in pkg/agent's ensureVerifierSoul, not on this config-mutation
+			// path.
 			break
 		}
 	}
