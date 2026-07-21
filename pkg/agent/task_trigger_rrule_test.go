@@ -1322,7 +1322,11 @@ func TestTriggerOverlapGuard_RecordsSkippedOccurrence(t *testing.T) {
 		t.Errorf("skipped run must carry no session_id (no session ever ran), got %q", got.SessionID)
 	}
 	if got.Kind != task.RunKindScheduled {
-		t.Errorf("skipped run kind = %q, want %q (this occurrence WAS the scheduled fire)", got.Kind, task.RunKindScheduled)
+		t.Errorf(
+			"skipped run kind = %q, want %q (this occurrence WAS the scheduled fire)",
+			got.Kind,
+			task.RunKindScheduled,
+		)
 	}
 	if got.EndedAt == nil {
 		t.Errorf("skipped run must be recorded already-closed (EndedAt set), got nil")
@@ -1402,8 +1406,8 @@ func TestTriggerOverlapGuard_SuppressesSkipWhenOccurrenceAlreadyRunNow(t *testin
 	// own natural scheduled fire arrives (mirrors TestTriggerOverlapGuard's
 	// technique for forcing the overlap guard).
 	inProgress := task.StatusInProgress
-	if _, err := store.Update(tsk.ID, task.Patch{Status: &inProgress}); err != nil {
-		t.Fatalf("store.Update to in_progress: %v", err)
+	if _, updateErr := store.Update(tsk.ID, task.Patch{Status: &inProgress}); updateErr != nil {
+		t.Fatalf("store.Update to in_progress: %v", updateErr)
 	}
 
 	clk.Advance(2 * time.Minute)
