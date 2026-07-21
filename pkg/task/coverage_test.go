@@ -1438,3 +1438,250 @@ func TestCreatePersistsAllFields(t *testing.T) {
 	assert.NotEqual(t, r1.WorkspaceID, r2.WorkspaceID)
 	assert.NotEqual(t, r1.Priority, r2.Priority)
 }
+
+// ---- CancelReason (ADR-052 FR-028) ------------------------------------------
+
+// TestCancelReason_SetClearRoundTrip exercises the full user-Stop → restart
+// lifecycle: a failed task is stopped by a user (CancelReason set to
+// stopped_by_user, mirroring handleTaskStop's own future patch), persists,
+// then a restart-style patch (failed→next + CancelReason cleared) succeeds
+// and the clear persists too (FR-028: "restart MUST clear it").
+func TestCancelReason_SetClearRoundTrip(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	// User Stop: in_progress -> failed, cancel_reason set.
+	stopped, err := s.Update(tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+	require.NoError(t, err, "stop patch must be accepted")
+	assert.Equal(t, StatusFailed, stopped.Status)
+	assert.Equal(t, CancelReasonStoppedByUser, stopped.CancelReason)
+
+	// Persistence check: reload from disk.
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason, "cancel_reason must persist")
+
+	// Restart-style patch: failed -> next, cancel_reason cleared, in the SAME call.
+	empty := CancelReason("")
+	restarted, err := s.Update(tk.ID, Patch{
+		Status:       ptr(StatusNext),
+		CancelReason: &empty,
+	})
+	require.NoError(t, err, "failed->next with cancel_reason clear must be accepted")
+	assert.Equal(t, StatusNext, restarted.Status)
+	assert.Empty(t, restarted.CancelReason, "cancel_reason must be cleared")
+
+	got2, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got2.CancelReason, "cleared cancel_reason must persist")
+}
+
+func TestCancelReason_InvalidValueRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	mustCreate(t, s, tk)
+
+	bogus := CancelReason("bogus_reason")
+	_, err := s.Update(tk.ID, Patch{CancelReason: &bogus})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation), "invalid cancel_reason must wrap ErrValidation")
+}
+
+// TestCancelReason_RequiresFailedStatus locks in the FR-028 coupling
+// invariant (mirrors plan.Plan's FailedReason/State coupling): a non-empty
+// CancelReason is only valid when Status is failed, checked against the
+// FULLY merged patch (not just whichever field was touched).
+func TestCancelReason_RequiresFailedStatus(t *testing.T) {
+	s := newStore(t)
+
+	t.Run("set on a non-failed task is rejected", func(t *testing.T) {
+		tk := mkTask("t1", "ws")
+		tk.Status = StatusNext
+		mustCreate(t, s, tk)
+
+		_, err := s.Update(tk.ID, Patch{CancelReason: ptr(CancelReasonStoppedByUser)})
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrValidation))
+	})
+
+	t.Run("leaving failed without clearing cancel_reason is rejected", func(t *testing.T) {
+		tk := mkTask("t2", "ws")
+		tk.Status = StatusInProgress
+		mustCreate(t, s, tk)
+		mustUpdate(t, s, tk.ID, Patch{
+			Status:       ptr(StatusFailed),
+			CancelReason: ptr(CancelReasonStoppedByUser),
+		})
+
+		_, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+		require.Error(t, err, "status leaving failed must reject a stale cancel_reason")
+		assert.True(t, errors.Is(err, ErrValidation))
+
+		// The task must be unchanged on disk (still failed + cancel_reason set).
+		got, gerr := s.Get(tk.ID)
+		require.NoError(t, gerr)
+		assert.Equal(t, StatusFailed, got.Status)
+		assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason)
+	})
+
+	t.Run("create-time coupling is also enforced", func(t *testing.T) {
+		bad := &Task{
+			Title: "x", Action: ActionLLM, WorkspaceID: "ws",
+			Status: StatusNext, CancelReason: CancelReasonStoppedByUser,
+		}
+		err := s.Create(bad)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrValidation))
+	})
+}
+
+// TestValidateTransition_FailedToNext_AnyReason confirms (ADR-052 §7) that
+// task-level failed→next is un-frozen unconditionally — i.e. NOT gated on
+// CancelReason the way the plan-level restart guard is gated on
+// FailedReason==stopped_by_user. A task that failed for a reason OTHER than
+// a user Stop (CancelReason empty — e.g. attempt-limit exhaustion) can still
+// retry/restart via failed→next.
+func TestValidateTransition_FailedToNext_AnyReason(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	// Genuine failure: no CancelReason set at all.
+	mustUpdate(t, s, tk.ID, Patch{Status: ptr(StatusFailed)})
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	require.Empty(t, got.CancelReason, "genuine failure leaves cancel_reason empty")
+
+	// failed (no reason) -> next must still be legal.
+	restarted, err := s.Update(tk.ID, Patch{Status: ptr(StatusNext)})
+	require.NoError(t, err, "failed->next must be legal for a genuine (reason-less) failure")
+	assert.Equal(t, StatusNext, restarted.Status)
+}
+
+// ---- RestartReset (ADR-052 FR-016/017/028) ----------------------------------
+
+func TestRestartReset_HappyPath(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	tk.CancelReason = CancelReasonStoppedByUser
+	mustCreate(t, s, tk)
+
+	// Simulate a prior run's leftovers directly (bypassing the public API,
+	// mirroring TestSpawnReset_ClearsRunFields's own pattern).
+	const at = "2026-01-01T00:00:00Z"
+	loaded, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	loaded.AttemptCount = 2
+	loaded.Result = "old-result"
+	loaded.Artifacts = []string{"a.txt"}
+	loaded.SessionID = "sess-abc"
+	loaded.StartedAt = at
+	loaded.CompletedAt = at
+	loaded.FollowedUp = true
+	loaded.PendingJudgeClaim = "claim text"
+	require.NoError(t, s.write(loaded))
+
+	reset, err := s.RestartReset(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusNext, reset.Status, "no unmet deps -> next")
+	assert.Equal(t, 0, reset.AttemptCount, "attempt_count reset to 0")
+	assert.Empty(t, reset.CancelReason, "cancel_reason cleared")
+	assert.Empty(t, reset.Result)
+	assert.Nil(t, reset.Artifacts)
+	assert.Empty(t, reset.SessionID)
+	assert.Empty(t, reset.StartedAt)
+	assert.Empty(t, reset.CompletedAt)
+	assert.False(t, reset.FollowedUp)
+	assert.Empty(t, reset.PendingJudgeClaim)
+
+	// Persistence check.
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusNext, got.Status)
+	assert.Equal(t, 0, got.AttemptCount)
+	assert.Empty(t, got.CancelReason)
+}
+
+// TestRestartReset_ToBlockedWhenDepUnmet confirms the "reset to next/blocked"
+// half of DS-5: a failed member whose blocked_by dependency is not yet done
+// lands on the derived `blocked` side-state, not `next`.
+func TestRestartReset_ToBlockedWhenDepUnmet(t *testing.T) {
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	dep.Status = StatusNext
+	mustCreate(t, s, dep)
+
+	member := mkTask("member", "ws")
+	member.Status = StatusFailed
+	member.CancelReason = CancelReasonStoppedByUser
+	member.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, member)
+
+	reset, err := s.RestartReset(member.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBlocked, reset.Status, "unmet dep -> blocked, not next")
+	assert.Equal(t, 0, reset.AttemptCount)
+	assert.Empty(t, reset.CancelReason)
+
+	// Once the dep completes, AdvanceBlockedDependents should later move it —
+	// out of scope here, this test only asserts RestartReset's own landing state.
+}
+
+// TestRestartReset_PreservesDoneMember confirms restart is a no-op error on
+// an already-`done` member (FR-017: "preserve done members" — the restart
+// orchestrator must skip done members rather than calling RestartReset on
+// them; this locks in that RestartReset itself refuses to touch one).
+func TestRestartReset_PreservesDoneMember(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusDone
+	tk.Result = "final result"
+	mustCreate(t, s, tk)
+
+	_, err := s.RestartReset(tk.ID)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotRestartable))
+
+	got, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusDone, got.Status, "done member must be untouched")
+	assert.Equal(t, "final result", got.Result, "done member's result must be preserved")
+}
+
+func TestRestartReset_RejectsNonFailed(t *testing.T) {
+	s := newStore(t)
+	cases := []Status{StatusInbox, StatusNext, StatusInProgress, StatusBlocked}
+	for _, st := range cases {
+		t.Run(string(st), func(t *testing.T) {
+			var tk *Task
+			if st == StatusBlocked {
+				dep := mkTask("dep-"+string(st), "ws")
+				mustCreate(t, s, dep)
+				tk = newBlockedTask("t-"+string(st), "ws", []string{dep.ID})
+			} else {
+				tk = mkTask("t-"+string(st), "ws")
+				tk.Status = st
+			}
+			mustCreate(t, s, tk)
+
+			_, err := s.RestartReset(tk.ID)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrNotRestartable), "status %q must be rejected", st)
+		})
+	}
+}
+
+func TestRestartReset_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.RestartReset("does-not-exist")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound))
+}

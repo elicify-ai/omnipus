@@ -62,6 +62,28 @@ func IsValidStatus(s Status) bool { return validStatuses[s] }
 // IsTerminal reports whether s is a terminal status (done or failed).
 func IsTerminal(s Status) bool { return s == StatusDone || s == StatusFailed }
 
+// CancelReason discriminates why a Status=failed task was cancelled (ADR-052
+// FR-028, mirrors plan.Plan.FailedReason — pkg/plan/plan.go:148). It is set
+// only when Status == StatusFailed; empty for every other failure path (e.g.
+// attempt-limit exhaustion leaves it empty) and for every non-failed status.
+// A restart/re-run clears it (ADR-052 FR-028: "a re-run task is no longer
+// 'stopped by user'"; mirrors FR-016's Plan.FailedReason clear on restart).
+type CancelReason string
+
+// CancelReasonStoppedByUser is the only cancel reason today: a user-initiated
+// Stop (handleTaskStop, pkg/gateway/rest_tasks.go). The type mirrors
+// plan.FailedReason's shape so future genuine task-level failure reasons
+// (were one ever needed) slot in the same way.
+const CancelReasonStoppedByUser CancelReason = "stopped_by_user"
+
+// validCancelReasons is the set of allowed non-empty CancelReason values.
+var validCancelReasons = map[CancelReason]bool{ //nolint:gochecknoglobals
+	CancelReasonStoppedByUser: true,
+}
+
+// IsValidCancelReason reports whether r is a known, explicit cancel reason.
+func IsValidCancelReason(r CancelReason) bool { return validCancelReasons[r] }
+
 // Action is the kind of work a task performs (remediation D4). Tier 2 ships
 // `llm` only; the type reserves room for v0.3 (human/tool/notify/sub_workflow).
 type Action string
@@ -205,6 +227,10 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Scratchpad bool   `json:"scratchpad,omitempty"`
 	Action     Action `json:"action"`
 	Status     Status `json:"status"`
+	// CancelReason is set on a Status=failed task cancelled via a user Stop
+	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
+	// exhaustion) and for every non-failed status. Cleared on restart/re-run.
+	CancelReason CancelReason `json:"cancel_reason,omitempty"`
 	// AgentID is the assigned agent. Empty for human-only tasks.
 	AgentID string `json:"agent_id,omitempty"`
 	// Priority is 1 (highest) – 5 (lowest); 0 = unset (treated as 3 on read).
