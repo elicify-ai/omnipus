@@ -35,33 +35,33 @@ before:
     # can write its own artifacts there (or it errors "dist is not empty").
     - sh -c 'rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa && rm -rf dist'
     # ADR-052 Phase 1: bundle a pinned full Chrome-for-Testing build alongside
-    # the binary so each per-OS package ships a version-pinned, integrity-
-    # verified Chrome. Only run for linux/amd64 in Phase 1 — darwin/arm64 and
-    # windows/amd64 land in Phases 3 and 4 (the macOS notarization decision +
-    # Windows allocator work). See docs/internal/architecture/ADR-052-*.md §D2
-    # + SEC-ADR052-003 (security review mandates the CfT X-Goog-Hash md5
-    # verification + chrome.sha256 emit on every build).
+    # the binary so each per-OS+arch package ships a version-pinned,
+    # integrity-verified Chrome. The chrome bundling itself runs from the
+    # per-arch `builds.hooks.pre` below (after the SPA mirror, just before
+    # the per-arch go build) — cft-bundle.sh accepts an arch arg, walks the
+    # live CfT manifest for that arch's Stable-channel chrome zip, and
+    # cleanly no-ops (exit 0, log a warning) when CfT has no build for the
+    # arch. As of 2026-07-21 CfT publishes {linux64, mac-arm64, mac-x64,
+    # win32, win64}; linux-arm64 is NOT published — the arm64 linux archive
+    # therefore ships without a chromium/ payload and the runtime falls
+    # back to managed download. Darwin/windcome in Phases 3/4. See
+    # docs/internal/architecture/ADR-052-*.md §D2 + SEC-ADR052-003.
     #
-    # Pipeline (the scripts/cft-bundle.sh helper does steps 1-5; this hook
-    # only gates on platform + delegates):
-    #   1. Fetch the live CfT "last-known-good-versions-with-downloads.json"
-    #      manifest via curl (same URL pkg/tools/browser/installer.go's
-    #      cftManifestURL uses at runtime).
-    #   2. Parse with python3 to resolve the chrome-linux64.zip URL for the
-    #      Stable channel's "chrome" build (full Chrome, NOT
-    #      chrome-headless-shell — per ADR D2 the bundled build must be
-    #      full Chrome).
-    #   3. Download chrome-linux64.zip to a temp dir + verify X-Goog-Hash md5
-    #      against the response header (mirrors verifyGoogHashMD5 in
-    #      pkg/tools/browser/installer.go:414-461 — M2 / SEC-ADR052-003).
-    #   4. Unzip into dist/chromium/ (goreleaser's working dir).
-    #   5. Compute SHA-256 of dist/chromium/chrome-linux64/chrome and write
-    #      to dist/chromium/chrome.sha256 — the integrity manifest the
-    #      runtime reads back and verifies at first launch
-    #      (chrome.sha256 reader: cmd/omnipus/internal/doctor/command.go's
-    #      readChromeSHA — BOM/CRLF/comment/prefix tolerant per
-    #      SEC-ADR052-004).
-    - sh -c 'test "{{ .Os }}" = "linux" && test "{{ .Arch }}" = "amd64" && bash scripts/cft-bundle.sh || echo "ADR-052: skipping chrome bundling for {{ .Os }}/{{ .Arch }} (Phase 1 is linux/amd64 only)"'
+    # Pipeline (scripts/cft-bundle.sh implements all five steps per arch):
+    #   1. Fetch CfT last-known-good-versions-with-downloads.json.
+    #   2. Parse with jq (no python3 dependency) to resolve the chrome
+    #      zip URL for the Stable channel's "chrome" build (full Chrome,
+    #      NOT chrome-headless-shell — per ADR D2 the bundled build must
+    #      be full Chrome).
+    #   3. Download + verify X-Goog-Hash md5 against the response header
+    #      (mirrors verifyGoogHashMD5 in pkg/tools/browser/installer.go —
+    #      M2 / SEC-ADR052-003). Repeated X-Goog-Hash header lines are
+    #      concatenated (the CORS-folding pattern — see CORR-008).
+    #   4. Unzip into dist/chromium/ (goreleaser's working dir), wiping
+    #      any prior arch's payload first.
+    #   5. Compute SHA-256 of dist/chromium/<subdir>/chrome and write
+    #      dist/chromium/chrome.sha256 — the integrity manifest the
+    #      runtime reads back and verifies at first launch.
 
 builds:
   - id: omnipus
@@ -89,6 +89,21 @@ builds:
       # macos-latest = arm64). Adding macos-13 runner is a v0.1.1 task.
       - goos: darwin
         goarch: amd64
+    hooks:
+      pre:
+        # ADR-052 Phase 1: per-arch bundled-Chrome-for-Testing payload.
+        # Runs AFTER the global `before.hooks` SPA mirror (which wipes
+        # dist/) and BEFORE the go build for this arch. cft-bundle.sh:
+        #   - downloads + verifies the per-arch CfT chrome zip,
+        #   - stages dist/chromium/<subdir>/chrome + chrome.sha256,
+        #   - no-ops (exit 0 + warning) when CfT has no build for the arch
+        #     (today: linux/arm64 — CfT publishes no linux-arm64 build).
+        # The `archives.files: chromium/**/*` glob below picks up the
+        # staged chromium/ for whichever arch goreleaser is currently
+        # archiving; the per-arch `rm -rf dist/chromium` inside
+        # cft-bundle.sh prevents leakage between arches.
+        - cmd: bash scripts/cft-bundle.sh {{ .Arch }}
+          dir: .
 
 dockers_v2:
   - id: omnipus

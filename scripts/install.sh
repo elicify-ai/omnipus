@@ -24,8 +24,9 @@
 #   - On Linux, after extracting the archive we verify the bundled Chrome's
 #     chrome.sha256 against the binary's actual SHA-256. A mismatch aborts
 #     the install (refuse-to-install, no fall-back). Bare-binary users with
-#     no chromium/ payload (older archives, hand-built tarballs) skip this
-#     check cleanly.
+#     no chromium/ payload (older archives, hand-built tarballs, linux/arm64
+#     archives since CfT publishes no linux-arm64 build) skip this check
+#     cleanly.
 #   - On Linux, we ensure Chrome's documented host shared libraries are
 #     installed (apt or dnf), absent which a bundled full Chrome exits
 #     "error while loading shared libraries". This is the C2 host-prereq
@@ -33,10 +34,18 @@
 #     a stock desktop already has them.
 #   - The chromium/ directory is moved to a sibling of the installed binary
 #     so the runtime's os.Executable()-based resolver
-#     (pkg/tools/browser/exec_resolver.go) finds it. With the default
-#     /usr/local/bin install, that is /usr/local/share/omnipus/chromium.
-#   - macOS Phase 1: host libs are macOS-bundled (the .app bundle covers
-#     them in Phase 3); no extra steps required here.
+#     (pkg/tools/browser/exec_resolver.go::packageChromeRoot) finds it. With
+#     the default /usr/local/bin install, that is
+#     /usr/local/share/omnipus/chromium; with $HOME/.local/bin, that is
+#     $HOME/.local/share/omnipus/chromium. The runtime's findPackageChrome
+#     looks for chromium/<fullChromeBinaryRelPath()> (linux:
+#     chromium/chrome-linux64/chrome) — the install.sh's staged chromium/
+#     dir is laid out to match.
+#   - macOS Phase 1: Chrome is NOT bundled in the Darwin archive (CfT's
+#     mac-arm64 build is real but the macOS .app notarization decision is
+#     deferred to Phase 3 per ADR-052 §2/§3). Runtime falls back to
+#     managed download on Darwin; operators wanting the bundled-chrome
+#     floor on macOS will get it in Phase 3.
 
 set -eu
 
@@ -173,22 +182,36 @@ info "extracting archive"
 tar -xzf "$ARCHIVE_PATH" -C "$WORK_DIR"
 
 # ── Verify bundled Chrome integrity (ADR-052 M2) ──────────────────────────────
-# A chromium/ directory is present in every Phase 1+ archive (built by the
-# goreleaser pre-build hook). When present, refuse to install on hash
-# mismatch — a corrupted or substituted Chrome is the exact failure mode
-# SHA-256 pinning exists to catch.
+# A chromium/ directory is present in every Phase 1+ archive that has a
+# CfT-published chrome build for its OS+arch (built by the goreleaser
+# pre-build hook). When present, refuse to install on hash mismatch — a
+# corrupted or substituted Chrome is the exact failure mode SHA-256 pinning
+# exists to catch. Bare-binary archives (linux/arm64 today, since CfT
+# publishes no linux-arm64 build) skip this check cleanly.
+#
+# Layout the runtime's findPackageChrome consults:
+#   chromium/<fullChromeBinaryRelPath()>
+# which on linux resolves to chromium/chrome-linux64/chrome (and would be
+# chromium/chrome-linux-arm64/chrome if CfT published one — see cft-bundle.sh
+# for the per-arch mapping). We accept either layout defensively.
 CHROMIUM_DIR="${WORK_DIR}/chromium"
 if [ -d "$CHROMIUM_DIR" ]; then
-  if [ "$OS" = "Linux" ]; then
-    CHROME_BIN="${CHROMIUM_DIR}/chrome-linux64/chrome"
+  # Resolve the chrome binary: try the linux CfT layout first, then the
+  # (hypothetical) arm64 CfT layout, then a glob for future darwin/win.
+  if [ -x "$CHROMIUM_DIR/chrome-linux64/chrome" ]; then
+    CHROME_BIN="$CHROMIUM_DIR/chrome-linux64/chrome"
+  elif [ -x "$CHROMIUM_DIR/chrome-linux-arm64/chrome" ]; then
+    CHROME_BIN="$CHROMIUM_DIR/chrome-linux-arm64/chrome"
   else
-    CHROME_BIN="$(find "$CHROMIUM_DIR" -type f \( -name chrome -o -name 'Google Chrome for Testing' -o -name chrome.exe \) -print -quit)"
+    CHROME_BIN="$(find "$CHROMIUM_DIR" -type f \
+      \( -name chrome -o -name 'Google Chrome for Testing' -o -name chrome.exe \) \
+      -print 2>/dev/null | head -n 1)"
   fi
   SHA_FILE="${CHROMIUM_DIR}/chrome.sha256"
   if [ ! -f "$SHA_FILE" ]; then
     err "bundled chrome present but chrome.sha256 missing — refusing to install (corrupted archive)"
   fi
-  if [ ! -f "$CHROME_BIN" ]; then
+  if [ -z "$CHROME_BIN" ] || [ ! -f "$CHROME_BIN" ]; then
     err "bundled chrome.sha256 present but chrome binary missing — refusing to install (corrupted archive)"
   fi
   ACTUAL="$(sha256_of "$CHROME_BIN")"
@@ -196,9 +219,9 @@ if [ -d "$CHROMIUM_DIR" ]; then
     err "no SHA256 tool available (need sha256sum or shasum); refusing to install unverified chrome. Set OMNIPUS_INSTALL_URL to override."
   fi
   EXPECTED="$(awk '
-    BEGIN { IGNORECASE = 1 }
-    # SHA-256 parser (ADR-052 SEC-ADR052-004). Tolerates:
-    #   - UTF-8 BOM at file start (lines[1] stripped of \xEF\xBB\xBF)
+    # SHA-256 parser (ADR-052 SEC-ADR052-004). POSIX-clean awk: no IGNORECASE,
+    # no \xHH escapes, no gawk extensions, no `continue` outside loops (use
+    # `next` which is valid in any pattern-action context). Tolerates:
     #   - CRLF line endings (CR stripped)
     #   - "sha256: <hex>" prefix
     #   - "# comment" lines
@@ -206,22 +229,21 @@ if [ -d "$CHROMIUM_DIR" ]; then
     #   - sha256sum text mode ("<hex>  filename") AND binary mode ("<hex> *filename")
     # Rejects (no field matches):
     #   - Uppercase hex (sha256sum + shasum both default lowercase; uppercase
-    #     indicates a toolchain mismatch and is surfaced as a parse failure)
+    #     indicates a toolchain mismatch and is surfaced as a parse failure
+    #     — consistent with the runtime Go readers)
     #   - Wrong-length digests (no "match by chance")
     {
       line = $0
       # Strip CR (CRLF tolerance).
       sub(/\r$/, "", line)
-      # Strip leading whitespace + BOM if present.
-      sub(/^[[:space:]]*/, "", line)
-      sub(/^\xef\xbb\xbf/, "", line)
-      sub(/^[[:space:]]*/, "", line)
-      if (line == "") continue
+      # Strip leading whitespace.
+      sub(/^[[:space:]]+/, "", line)
+      if (line == "") next
       # Skip comment lines.
-      if (substr(line, 1, 1) == "#") continue
+      if (substr(line, 1, 1) == "#") next
       # Strip optional "sha256:" prefix.
       sub(/^sha256:/, "", line)
-      sub(/^[[:space:]]*/, "", line)
+      sub(/^[[:space:]]+/, "", line)
       # Walk fields; emit the first 64-char lowercase-hex one.
       for (i = 1; i <= NF; i++) {
         if (length($i) == 64 && $i ~ /^[0-9a-f]{64}$/) { print $i; exit }
@@ -229,7 +251,10 @@ if [ -d "$CHROMIUM_DIR" ]; then
     }
   ' "$SHA_FILE")"
   if [ -z "$EXPECTED" ]; then
-    err "could not parse SHA256 from $SHA_FILE"
+    # Per SEC-ADR052-004: uppercase hex or non-hex chars are toolchain
+    # mismatches and must fail closed. The above regex only accepts
+    # lowercase hex, so an uppercase or non-hex chrome.sha256 lands here.
+    err "could not parse SHA256 from $SHA_FILE (non-lowercase hex or unexpected format — toolchain mismatch)"
   fi
   if [ "$EXPECTED" != "$ACTUAL" ]; then
     err "bundled chrome SHA256 mismatch (expected $EXPECTED, got $ACTUAL) — refusing to install"
@@ -260,7 +285,10 @@ if [ -d "$CHROMIUM_DIR" ]; then
   rm -rf "$TARGET_CHROMIUM"
   mv "$CHROMIUM_DIR" "$TARGET_CHROMIUM" \
     || err "cannot move chromium/ to $TARGET_CHROMIUM"
+  # Best-effort +x on the chrome binary — it's typically already executable
+  # from the tarball, but some filesystems strip the bit during transfer.
   chmod +x "$TARGET_CHROMIUM/chrome-linux64/chrome" 2>/dev/null || true
+  chmod +x "$TARGET_CHROMIUM/chrome-linux-arm64/chrome" 2>/dev/null || true
   info "bundled chrome installed at $TARGET_CHROMIUM"
 fi
 
@@ -270,42 +298,58 @@ fi
 # (Debian slim, RHEL minimal, Alpine-without-gcompat) they are absent and
 # Chrome exits "error while loading shared libraries". install.sh installs
 # them via the host package manager when missing — a one-time install step,
-# no daemon, no rebuild.
-if [ "$OS" = "Linux" ] && [ -d "${WORK_DIR}/chromium" -o -d "${INSTALL_DIR}/../share/omnipus/chromium" ]; then
-  if command -v apt-get >/dev/null 2>&1; then
+# no daemon, no rebuild. linux/arm64 ships without a bundled chrome (CfT
+# has no linux-arm64 build), so the post-install managed download is what
+# matters there — runtime will need the same host libs.
+SHARE_CHROMIUM="${INSTALL_DIR}/../share/omnipus/chromium"
+if [ "$OS" = "Linux" ] && { [ -d "$CHROMIUM_DIR" ] || [ -d "$SHARE_CHROMIUM" ]; }; then
+  install_host_libs_apt() {
     HOST_LIBS="libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxshmfence1 libasound2 libpango-1.0-0 libcairo2"
-    MISSING=""
+    set --
     for lib in $HOST_LIBS; do
       if ! dpkg -s "$lib" >/dev/null 2>&1; then
-        MISSING="$MISSING $lib"
+        set -- "$@" "$lib"
       fi
     done
-    if [ -n "$MISSING" ]; then
-      info "installing Chrome host libraries:$MISSING"
-      SUDO=""
-      if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
-      $SUDO apt-get update >/dev/null 2>&1 || true
-      $SUDO apt-get install -y $MISSING \
-        || err "failed to install host libraries (try: sudo apt-get install$MISSING)"
+    if [ "$#" -gt 0 ]; then
+      info "installing Chrome host libraries: $*"
+      if [ "$(id -u)" -ne 0 ]; then
+        sudo apt-get update >/dev/null 2>&1 || true
+        sudo apt-get install -y "$@" \
+          || err "failed to install host libraries (try: sudo apt-get install $*)"
+      else
+        apt-get update >/dev/null 2>&1 || true
+        apt-get install -y "$@" \
+          || err "failed to install host libraries (try: apt-get install $*)"
+      fi
     fi
-  elif command -v dnf >/dev/null 2>&1; then
+  }
+  install_host_libs_dnf() {
     # dnf package names differ slightly (no version suffix on libdrm2/libgbm1;
     # no .0 suffix on libnss3 etc.). Map the apt set to the corresponding dnf
     # names.
     HOST_LIBS_DNF="nss nspr atk at-spi2-atk cups-libs libdrm mesa-libgbm libxkbcommon libXcomposite libXdamage libXrandr libxshmfence alsa-lib pango cairo"
-    MISSING=""
+    set --
     for lib in $HOST_LIBS_DNF; do
       if ! rpm -q "$lib" >/dev/null 2>&1; then
-        MISSING="$MISSING $lib"
+        set -- "$@" "$lib"
       fi
     done
-    if [ -n "$MISSING" ]; then
-      info "installing Chrome host libraries:$MISSING"
-      SUDO=""
-      if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
-      $SUDO dnf install -y $MISSING \
-        || err "failed to install host libraries (try: sudo dnf install$MISSING)"
+    if [ "$#" -gt 0 ]; then
+      info "installing Chrome host libraries: $*"
+      if [ "$(id -u)" -ne 0 ]; then
+        sudo dnf install -y "$@" \
+          || err "failed to install host libraries (try: sudo dnf install $*)"
+      else
+        dnf install -y "$@" \
+          || err "failed to install host libraries (try: dnf install $*)"
+      fi
     fi
+  }
+  if command -v apt-get >/dev/null 2>&1; then
+    install_host_libs_apt
+  elif command -v dnf >/dev/null 2>&1; then
+    install_host_libs_dnf
   else
     info "(note: neither apt-get nor dnf detected — Chrome's host shared libraries must be installed manually)"
   fi
