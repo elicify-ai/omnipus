@@ -54,8 +54,9 @@ const (
 	// core/worker loop (so ByID/IsCoreAgent never classify it as core), carries
 	// Type=AgentTypeSystem, is never a chat target, never the default, never a
 	// delegation/binding/team target, and is subject to SEC-26 like any
-	// non-core agent. Only its Model/Provider and Rubric are editable; every
-	// other identity/type/locked/policy field is re-enforced on every boot.
+	// non-core agent. Only its Model/Provider and soul (SOUL.md — its judging
+	// rubric, ADR-052 FR-038) are editable; every other
+	// identity/type/locked/policy field is re-enforced on every boot.
 	IDJudge CoreAgentID = "judge"
 	// IDMax is intentionally absent: Max was retired from the 4-base roster
 	// in Spec-3 (v0.1.0 foundation). The ID constant is removed so that any
@@ -269,6 +270,14 @@ func GetPrompt(id string) string {
 //   - 11 browser-automation tools (pkg/tools/browser/tools.go +
 //     pkg/tools/browser/tabs.go).
 //   - 35 sysagent management tools (pkg/sysagent/tools/*.go).
+//   - 4 ADR-052 (autonomous agent plan execution) planning/verifier tools —
+//     create_plan, execute_plan, run_task, inspect_session. Registered here
+//     ahead of / independent of their pkg/tools|pkg/sysagent/tools
+//     implementation landing (this literal and buildKnownBuiltinToolNames,
+//     pkg/gateway/gateway.go, are the two catalogs the tool-policy-coverage
+//     invariant is checked against — FR-027), so a seeded-override
+//     referencing one of these four names does not panic boot via
+//     validateOverrideKeys below.
 //
 // This is a hardcoded Go literal, NOT computed by importing pkg/tools or
 // pkg/sysagent/tools: pkg/sysagent/tools/agent.go already imports
@@ -310,6 +319,10 @@ var allStaticToolNames = []string{
 	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 	"get_config", "set_config",
 	"create_agent", "update_agent", "delete_agent",
+
+	// ADR-052 — autonomous agent plan execution: planning tools + the
+	// verifier-role-only inspect_session tool.
+	"create_plan", "execute_plan", "run_task", "inspect_session",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -461,6 +474,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"delete_workspace": deny,
 			"list_workspaces":  deny,
 			"get_workspace":    deny,
+			// --- ADR-052 planning/verifier tools: deliberately ABSENT here,
+			// same as list_agents/list_tasks above — Worker inherits
+			// create_plan/execute_plan/run_task ("ask") and inspect_session
+			// ("deny") from the global ceiling (DS-6), which is sufficient
+			// coverage under the OR-based coverage validator.
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -469,9 +487,16 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	// allowed. None of these ever get bash or any system-management tool
 	// (create_agent, set_config, add_mcp_server, …) — those stay denied.
 	if IsSubagentTierID(id) {
+		ask := config.ToolPolicyAsk
 		overrides := map[string]config.ToolPolicy{
 			// Every leaf reports its result back.
 			"send_message": allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
 		}
 		switch id {
 		case IDPlanner:
@@ -573,6 +598,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"update_workspace": allow,
 			"list_workspaces":  allow,
 			"get_workspace":    allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -610,6 +641,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"search_web":  allow,
 			"fetch_url":   allow,
 			"find_skills": allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -617,6 +654,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// drive a browser for interactive sources, write up findings to files,
 		// synthesize with memory, present with citations). No shell, no admin, no
 		// task/agent management — he researches and reports, he doesn't build or run.
+		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// Web research.
 			"search_web": allow,
@@ -657,6 +695,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// Working aids (his summarize skill; a research checklist).
 			"find_skills": allow,
 			"set_todos":   allow,
+			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+			// "ask" (never absent, never deny) for the three plan-execution
+			// tools — an operator-approval prompt gates any attempted use.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -739,6 +783,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"delete_task_in_workspace": ask,
 			"delete_workspace":         ask,
 			"remove_mcp_server":        ask,
+			// ADR-052 FR-005/R2-06: Jim is the ONLY seeded agent granted
+			// unprompted plan-execution — consistent with his orchestrator
+			// role. Every other seeded agent + the global ceiling get
+			// explicit "ask" instead (never absent, never deny).
+			"create_plan":  allow,
+			"execute_plan": allow,
+			"run_task":     allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
@@ -747,18 +798,40 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	return denyAllThenOverride(nil)
 }
 
-// systemAgentSeed returns the constructor-seeded, fully-enumerated ALL-DENY tool
-// policy for a System Agent (ADR-049 D3). A System Agent (the Judge) executes as
-// a no-tools structured LLM call — it never invokes a builtin tool — so every
-// static builtin name is seeded to "deny". Building the map via
-// denyAllThenOverride(nil) (one literal "deny" entry per allStaticToolNames)
-// keeps config.ValidateToolPolicyCoverage gap-free for the System Agent under
-// Constraint #6 (no default-policy fallback): every (judge, tool) pair resolves
-// from an explicit literal entry, exactly like every core agent.
+// systemAgentSeed returns the constructor-seeded, fully-enumerated tool
+// policy for a System Agent (ADR-049 D3, redefined by ADR-052 R3-2/FR-027).
+//
+// The invariant is no longer "all-deny" — a System Agent now carries EXACTLY
+// its seeded tool set, re-enforced every boot: the Judge runs adjudication as
+// a real agent in a VERIFIER ROLE (ADR-052 FR-011/FR-012), in its own
+// session, with a narrow read-only + verification surface (`read_file`,
+// `list_directory`, and the verifier-role-only `inspect_session` — FR-033)
+// allowed; every OTHER static builtin name — including the three
+// plan-execution tools `create_plan`/`execute_plan`/`run_task`, which are
+// verifier-inapplicable — stays explicit "deny", never "ask" (DS-6). Building
+// the map via denyAllThenOverride (one literal entry per allStaticToolNames,
+// with the verifier overrides applied) keeps config.ValidateToolPolicyCoverage
+// gap-free for the System Agent under Constraint #6 (no default-policy
+// fallback): every (system-agent, tool) pair resolves from an explicit
+// literal entry, exactly like every core agent.
+//
+// Any System Agent besides the Judge (none seeded today — SystemAgents()
+// returns only Judge()) falls back to all-deny (the pre-ADR-052 invariant)
+// until it is given its own named case.
 //
 // The returned map is an independent allocation — callers may mutate it safely.
-func systemAgentSeed(_ CoreAgentID) map[string]config.ToolPolicy {
-	return denyAllThenOverride(nil)
+func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	switch id {
+	case IDJudge:
+		return denyAllThenOverride(map[string]config.ToolPolicy{
+			"read_file":       allow,
+			"list_directory":  allow,
+			"inspect_session": allow,
+		})
+	default:
+		return denyAllThenOverride(nil)
+	}
 }
 
 // JudgeDefaultRubric is the Judge System Agent's default system prompt /
@@ -1155,9 +1228,9 @@ func SeedConfig(cfg *config.Config) bool {
 	// System Agent (the Judge) is never classified as core (ByID/IsCoreAgent
 	// iterate All(), which excludes SystemAgents()). Every identity/type/locked/
 	// tool-policy field is re-enforced on EVERY boot (tamper protection, mirrors
-	// the core re-enforcement loop); only Model/Provider and the Rubric are
-	// operator-editable and therefore preserved across boots (Rubric is
-	// backfilled only when empty, exactly like the skills-allowlist migration).
+	// the core re-enforcement loop); only Model/Provider and the soul
+	// (SOUL.md, lazily materialized from JudgeDefaultRubric — ADR-052 FR-038)
+	// are operator-editable and therefore preserved across boots.
 	if seedSystemAgents(cfg, existing) {
 		modified = true
 	}
@@ -1175,14 +1248,16 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 	for _, sa := range SystemAgents() {
 		policies := systemAgentSeed(sa.ID)
 		if !existing[string(sa.ID)] {
-			// Fresh seed: locked, non-default, all-deny, Type=system. No
-			// Rubric field to seed anymore (ADR-052 FR-038, R3-1 CLOSED: the
-			// field was deleted) — the Judge's soul (its default judging
-			// standards, JudgeDefaultRubric) is lazily materialized into
-			// SOUL.md by pkg/agent's ensureVerifierSoul on first real
-			// verifier dispatch, not here (SeedConfig stays a pure
-			// config-struct mutation with zero filesystem side effects — see
-			// JudgeDefaultRubric's doc comment for why).
+			// Fresh seed: locked, non-default, Type=system. Tool policy is
+			// EXACTLY the seeded verifier set (ADR-052 R3-2 — read_file /
+			// list_directory / inspect_session allow for the Judge, else
+			// deny; see systemAgentSeed). No Rubric field to seed anymore
+			// (ADR-052 FR-038, R3-1 CLOSED: the field was deleted) — the
+			// Judge's soul (its default judging standards,
+			// JudgeDefaultRubric) is lazily materialized into SOUL.md by
+			// pkg/agent's ensureVerifierSoul on first real verifier
+			// dispatch, not here (SeedConfig stays a pure config-struct
+			// mutation with zero filesystem side effects).
 			cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
 				ID:          string(sa.ID),
 				Name:        sa.Name,
@@ -1238,11 +1313,14 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				a.Icon = sa.Icon
 				modified = true
 			}
-			// Re-enforce the all-deny tool policy on EVERY boot. This is stricter
-			// than the core-agent loop (which preserves operator tool edits)
-			// BECAUSE the System Agent's no-tools contract is a hard invariant
-			// (it executes as a no-tools structured call), not an operator
-			// preference — and it keeps ValidateToolPolicyCoverage gap-free.
+			// Re-enforce the EXACT seeded tool policy on EVERY boot (ADR-052
+			// R3-2: "System Agents carry exactly their seeded tool set,
+			// re-enforced every boot" — no longer "all-deny re-enforced").
+			// This is stricter than the core-agent loop (which preserves
+			// operator tool edits) BECAUSE a System Agent's tool surface is a
+			// hard invariant of its role (e.g. the Judge's narrow verifier
+			// read-only + inspect_session set), not an operator preference —
+			// and it keeps ValidateToolPolicyCoverage gap-free.
 			if a.Tools == nil {
 				a.Tools = &config.AgentToolsCfg{}
 			}
@@ -1263,8 +1341,8 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 }
 
 // toolPolicyMapsEqual reports whether two tool-policy maps have identical keys
-// and values. Used by seedSystemAgents to re-enforce the all-deny policy only
-// when it actually drifted, avoiding a spurious config write on every boot.
+// and values. Used by seedSystemAgents to re-enforce the exact seeded policy
+// only when it actually drifted, avoiding a spurious config write on every boot.
 func toolPolicyMapsEqual(a, b map[string]config.ToolPolicy) bool {
 	if len(a) != len(b) {
 		return false
@@ -1492,12 +1570,14 @@ func Researcher() *CoreAgent {
 // Judge returns the Judge System Agent (ADR-049 D3). It is a System Agent
 // (Type=system, seeded via SystemAgents()), NOT a core/base agent and NOT a
 // worker: locked identity, never a chat target, never the default, non-privileged
-// (subject to SEC-26). It carries NO tools — its constructor-seeded policy is
-// all-deny (systemAgentSeed) because the Judge executes as a no-tools structured
-// LLM call. Its "prompt" is the editable Rubric stored on AgentConfig (seeded
-// from judgeDefaultRubric), NOT a compiled entry in the prompts map — which is
-// why the Judge is deliberately excluded from All() and from init()'s
-// compiled-prompt invariant.
+// (subject to SEC-26). Its constructor-seeded tool policy is EXACTLY the
+// read-only verifier set (systemAgentSeed: read_file / list_directory /
+// inspect_session allow, everything else deny — ADR-052): the Judge executes
+// as a real agent turn in its own session, constrained to verification.
+// Its "prompt" is its soul (SOUL.md, lazily materialized from
+// JudgeDefaultRubric and operator-editable — ADR-052 FR-038), NOT a compiled
+// entry in the prompts map — which is why the Judge is deliberately excluded
+// from All() and from init()'s compiled-prompt invariant.
 func Judge() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDJudge,

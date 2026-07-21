@@ -45,9 +45,35 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 	}
 
+	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — a third
+	// ceiling category alongside "destructive" (ask) and the allow-by-default
+	// rest: the three plan-execution tools are explicit "ask" (never absent,
+	// never deny — only Jim's own seeded policy is "allow"), and the
+	// verifier-role-only inspect_session is explicit "deny" (not ask-able;
+	// only the Judge's own seeded policy is "allow").
+	planningAsk := map[string]bool{
+		"create_plan":  true,
+		"execute_plan": true,
+		"run_task":     true,
+	}
+	for name := range planningAsk {
+		got, ok := cfg.Sandbox.ToolPolicies[name]
+		if !ok {
+			t.Errorf("expected sandbox.tool_policies to seed an entry for %q, found none", name)
+			continue
+		}
+		if got != "ask" {
+			t.Errorf("expected seeded ceiling policy 'ask' for plan-execution tool %q, got %q", name, got)
+		}
+	}
+	if got := cfg.Sandbox.ToolPolicies["inspect_session"]; got != "deny" {
+		t.Errorf("expected seeded ceiling policy 'deny' for verifier-only tool \"inspect_session\", got %q", got)
+	}
+
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6) — 78 static builtin tools (32 general + 11 browser + 35
-	// sysagent), matching pkg/coreagent's allStaticToolNames literal-for-literal.
+	// constraint 6) — 82 static builtin tools (32 general + 11 browser + 35
+	// sysagent + 4 ADR-052 planning/verifier tools), matching
+	// pkg/coreagent's allStaticToolNames literal-for-literal.
 	// Browser gained browser_list_tabs / browser_switch_tab / browser_close_tab
 	// (ADR-041 multi-tab), taking browser from 7 to 10, then browser_open_tab
 	// (live-UAT finding, Alex — "no agent tool to open a new tab"), taking it to 11.
@@ -55,7 +81,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// recall_memory / run_retrospective / recall_conversation) that was
 	// registered but omitted from the seed + catalog, so it was denied-by-default
 	// (fail-closed) on every install — taking general from 31 to 32.
-	const wantToolCount = 78
+	// ADR-052 added create_plan/execute_plan/run_task/inspect_session, taking
+	// the total from 78 to 82.
+	const wantToolCount = 82
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
 		t.Errorf(
 			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",
@@ -64,11 +92,12 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		)
 	}
 
-	// Every non-destructive entry must be "allow" — this is an allow-by-default
-	// ceiling, not a narrow ask-list. disable_channel is explicitly checked as
-	// the canonical "reversible, not destructive" example.
+	// Every non-destructive, non-ADR-052-planning entry must be "allow" —
+	// this is an allow-by-default ceiling, not a narrow ask-list.
+	// disable_channel is explicitly checked as the canonical
+	// "reversible, not destructive" example.
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		if destructive[name] {
+		if destructive[name] || planningAsk[name] || name == "inspect_session" {
 			continue
 		}
 		if policy != "allow" {

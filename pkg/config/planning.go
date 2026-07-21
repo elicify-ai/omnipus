@@ -16,6 +16,10 @@ const (
 	DefaultIdleExpiryDays      = 7
 	DefaultGlobalActiveLoopCap = 16
 	DefaultCheckTimeoutSeconds = 60
+	// DefaultVerifierWindowTokens is the last-N-tokens bound for the
+	// transcript window fed to a verifier adjudication (ADR-052 FR-032,
+	// operator interview 2026-07-21 confirmed N=20000).
+	DefaultVerifierWindowTokens = 20000
 )
 
 // PlanningConfig holds the global bounds for the Planning & Goals epic's
@@ -50,6 +54,14 @@ type PlanningConfig struct {
 	// criterion's command may run before it is killed and judged unmet
 	// (evidence.TimedOut=true).
 	CheckTimeoutSeconds int `json:"check_timeout_seconds,omitempty"`
+	// VerifierWindowTokens bounds the last-N-tokens transcript window fed to
+	// a verifier adjudication (ADR-052 FR-032, R3-2/GS-07): entries are read
+	// via the session store's PartitionStore read path, rendered with the
+	// existing transcript-to-context renderer, estimated with the existing
+	// token estimator, and the LAST N tokens are kept. No per-entity override
+	// exists yet (interview 2026-07-21 confirmed N=20000 globally;
+	// per-verifier override is a noted future direction only).
+	VerifierWindowTokens int `json:"verifier_window_tokens,omitempty"`
 }
 
 // EffectiveTaskMaxAttempts resolves the attempt ceiling (FR-9): a non-nil,
@@ -116,4 +128,18 @@ func (c PlanningConfig) EffectiveLoopMaxRuns() int {
 		return c.LoopMaxRuns
 	}
 	return DefaultLoopMaxRuns
+}
+
+// EffectiveVerifierWindowTokens resolves the verifier transcript-window
+// token bound (FR-032): this config's VerifierWindowTokens when >=1, else
+// DefaultVerifierWindowTokens. Same no-per-entity-override rationale as
+// EffectiveGoalMaxRounds/EffectiveLoopMaxRuns above (per-verifier override is
+// a noted future direction only, not implemented) — the resolved value is
+// not currently snapshotted anywhere since a verifier session is fresh-built
+// per adjudication (FR-011), unlike /goal or /loop's session-lifetime bound.
+func (c PlanningConfig) EffectiveVerifierWindowTokens() int {
+	if c.VerifierWindowTokens >= 1 {
+		return c.VerifierWindowTokens
+	}
+	return DefaultVerifierWindowTokens
 }
