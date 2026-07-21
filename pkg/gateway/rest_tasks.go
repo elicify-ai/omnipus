@@ -1510,6 +1510,15 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 			jsonErr(w, http.StatusNotFound, "task not found")
 			return
 		}
+		// TOCTOU between the handler's own precheck and the engine's
+		// authoritative re-check under planDecisionMu: if the task left
+		// in_progress in that window (completed, or a concurrent Stop won),
+		// the raced request gets an honest 409, not a generic 500 — the
+		// same mapping handlePlanStop applies.
+		if reread, rerr := a.taskStore.Get(id); rerr == nil && reread.Status != task.StatusInProgress {
+			jsonErr(w, http.StatusConflict, fmt.Sprintf("task is %q; only an in-progress task can be stopped", reread.Status))
+			return
+		}
 		slog.Error("rest: task stop: engine stop failed", "id", id, "error", serr)
 		jsonErr(w, http.StatusInternalServerError, "could not stop task")
 		return

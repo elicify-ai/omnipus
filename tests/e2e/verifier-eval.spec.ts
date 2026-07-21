@@ -107,10 +107,11 @@
  * reached the verifier, the latter means it did and got the wrong answer.
  *
  * ============================================================================
- * KNOWN BLOCKER FOUND VIA LOCAL SMOKE (2026-07-21, pre-worker-gate) — NOT a
- * bug in this spec; a cross-feature product gap between ADR-046 P1 and
- * ADR-052. Recorded here so a BLOCKED result on the next worker run is
- * diagnosed instantly instead of re-investigated from scratch.
+ * BLOCKER FOUND VIA LOCAL SMOKE (2026-07-21, pre-worker-gate) — FIXED AT HEAD.
+ * NOT a bug in this spec; was a cross-feature product gap between ADR-046 P1
+ * and ADR-052. Recorded here so a FUTURE BLOCKED result on the worker gate is
+ * diagnosed correctly (as a REAL regression) instead of being dismissed as
+ * this already-closed issue re-occurring.
  * ============================================================================
  * A local smoke of case 1 (fresh build, fresh gateway, real REST calls
  * identical to this spec's own helpers) got all the way through: agent
@@ -119,8 +120,8 @@
  * the crafted claim verbatim (`external-cli dispatch: run finished ...
  * output_len=266` in the gateway log — the delivery mechanism above is
  * CONFIRMED WORKING end-to-end). The run then hung: `GET .../verdicts` never
- * returned an entry because the Judge's OWN verifier turn is refused before
- * it can even start:
+ * returned an entry because the Judge's OWN verifier turn was refused before
+ * it could even start:
  *
  *   WARN turn refused: agent is not a member of any workspace {agent_id: judge}
  *   WARN verifier: turn failed; pausing (D7 unavailability)
@@ -134,34 +135,51 @@
  * scan). `runVerifierAdjudication` (this file's companion,
  * verifier_adjudication.go:617) dispatches the Judge's turn via
  * `al.processTaskDirect(callCtx, judgeInst.ID, ...)` with NO workspace id
- * threaded through at all, so it falls straight into that same generic
+ * threaded through at all, so it fell straight into that same generic
  * membership scan for agent id "judge". But `judge` is a System Agent, and
  * `PUT /api/v1/workspaces/{id}` REJECTS 400 ("core_team member \"judge\" is
  * a System Agent and cannot be added to a workspace team roster",
  * rest_workspaces.go:1390) — the SAME rule the default-workspace seeder
  * applies, confirmed live: a completely fresh boot logs `gateway: configured
  * agents are members of no workspace ... agent_ids=judge count=1` BEFORE any
- * test-created workspace exists. There is no exemption for System/verifier-
- * role agents anywhere in this chain. Net effect: on an unmodified fresh
- * install, `runVerifierAdjudication` can NEVER succeed for ANY of its 3
- * callers (task/plan/goal) — this is not specific to this eval's delivery
+ * test-created workspace exists. There was no exemption for System/verifier-
+ * role agents anywhere in this chain. Net effect (as found): on an unmodified
+ * fresh install, `runVerifierAdjudication` could NEVER succeed for ANY of its
+ * 3 callers (task/plan/goal) — not specific to this eval's delivery
  * mechanism, cases, or criteria. (git log shows the Go integration-test
- * suite itself needed dedicated fixture fixes for exactly this —
+ * suite needed dedicated fixture fixes for exactly this —
  * "fix(gateway): seed ADR-046 P1 workspace membership for gateway test
  * agents", "test(agent): seed workspace membership for external-cli cancel
- * tests" — i.e. Go tests route around it with direct fixture seeding a real
- * install cannot perform.)
+ * tests" — i.e. Go tests routed around it with direct fixture seeding a real
+ * install could not perform.)
  *
- * This spec intentionally does NOT work around this — it exercises the same
- * REST-only path any real user/install is limited to, which cannot construct
- * a workspace containing "judge" by any legitimate means. If a WRONG VERDICT
- * failure format is seen instead of a poll-timeout, or a fix lands, revisit
- * this note. If the next worker-gate run reports a timeout/BLOCKED failure
- * with `judge ... not a member of any workspace` in the shard's gateway.log,
- * this is that bug, not a flake or a delivery-mechanism regression — needs a
- * backend-lead / architect fix in pkg/agent/workspace_reroot.go or
- * verifier_adjudication.go (e.g. a System/verifier-role exemption from the
- * literal core_team scan), not a test change.
+ * FIX (2026-07-21, operator-directed: "make the judge a member of every
+ * workspace, keep it simple"): System Agents (`coreagent.IsSystemAgentID`)
+ * are now IMPLICIT members of every workspace, decided at the one place
+ * membership itself is resolved — `pkg/workspace/find_for_agent.go`'s
+ * `isImplicitMember`, consulted uniformly by `FindForAgent` /
+ * `FindForAgentPreferring` for every caller including
+ * `resolveTurnWorkDirOrRefuse`. No bypass or refusal special-case was added
+ * at the call site; membership itself now resolves positively for a System
+ * Agent against every workspace that exists. This spec still exercises the
+ * same REST-only path any real user/install is limited to (it does NOT route
+ * around anything) — the fix means that path now legitimately succeeds for
+ * the Judge without ever adding "judge" to any workspace's `core_team`
+ * (still permanently rejected — that rule is unchanged; membership is
+ * implicit, not roster-driven).
+ *
+ * WHY THIS STAYS RECORDED: this eval's local smoke run is what FOUND the bug
+ * before it ever reached the worker gate — proof this spec earns its keep
+ * independent of the DS-8 adversarial cases it was written for. Because the
+ * fix is a single, central membership rule (not scattered call-site patches),
+ * a REGRESSION here would be a big deal: it would silently break the Judge
+ * for every task/plan/goal verification path at once, not just this eval. If
+ * a future worker-gate run reports a timeout/BLOCKED failure with
+ * `judge ... not a member of any workspace` in the shard's gateway.log, DO
+ * NOT dismiss it as this already-fixed issue reappearing or as a known flake
+ * — treat it as a genuine regression in `pkg/workspace/find_for_agent.go` or
+ * `pkg/agent/workspace_reroot.go` and investigate immediately (a
+ * backend-lead / architect fix, not a test change).
  */
 
 import { expect, type Page } from '@playwright/test';

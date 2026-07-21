@@ -1399,6 +1399,24 @@ export async function fetchSessions(
   const raw: RawSession[] = Array.isArray(resp)
     ? (resp as RawSession[])
     : ((resp as { sessions: RawSession[] }).sessions ?? [])
+  // A non-empty `partial_errors` means one or more agents failed to list
+  // their sessions — the array above is a real but INCOMPLETE enumeration,
+  // not a full one. Silently returning it made a partial listing read as
+  // complete everywhere fetchSessions is consulted (worst on UsageScreen's
+  // spend-audit tab, which sums sessions to report cost/usage). Surface it
+  // the same way a schema mismatch does (console.warn + dev toast) rather
+  // than dropping it on the floor — this does not change the return
+  // signature, so every existing caller keeps working unmodified.
+  if (!Array.isArray(resp) && resp && typeof resp === 'object') {
+    const partialErrors = (resp as { partial_errors?: string[] }).partial_errors
+    if (partialErrors && partialErrors.length > 0) {
+      console.warn('[api] GET /sessions returned partial_errors — the list is incomplete:', partialErrors)
+      void maybeDevToast(
+        `[api] Session list incomplete: ${partialErrors.length} agent(s) failed to enumerate`,
+        'GET:/sessions:partial_errors',
+      )
+    }
+  }
   return raw.map(rawToSession)
 }
 

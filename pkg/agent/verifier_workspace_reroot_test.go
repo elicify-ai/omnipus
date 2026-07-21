@@ -250,6 +250,18 @@ func TestRunVerifierAdjudication_JudgeSystemAgent_NoWorkspaceExistsAtAll_FallsBa
 // that happens to belong to more than one workspace's core_team — NOT the
 // agent-home fallback (which is reserved for the "zero workspaces at all"
 // case proven above).
+//
+// Re-scoped (sign-off 14 MINOR-1 / architect F4): this test now uses
+// task-scope (TaskID) rather than an UNBOUND goal-scope input. Sorted-first
+// remains the generic no-selector behavior for any turn NOT flagged as an
+// unbound /goal — task/plan scope always carries a real work-under-review
+// record even when WorkspaceID itself happens to be empty, so "nothing to
+// prefer among" never applies to them. An unbound /goal specifically (Scope
+// == goal, WorkspaceID == "") is the ONE case with genuinely nothing to
+// prefer among at all, and now asserts agent-home instead — see
+// TestRunVerifierAdjudication_JudgeSystemAgent_UnboundGoal_MultipleWorkspacesExist_RootsAtAgentHome
+// below, which reuses this exact same "two real workspaces" fixture to prove
+// the two scopes behave differently from the SAME environment.
 func TestRunVerifierAdjudication_JudgeSystemAgent_NoOverride_MultipleWorkspacesExist_ResolvesSortedFirst(t *testing.T) {
 	origSleep := judgeSleepFn
 	t.Cleanup(func() { judgeSleepFn = origSleep })
@@ -280,8 +292,8 @@ func TestRunVerifierAdjudication_JudgeSystemAgent_NoOverride_MultipleWorkspacesE
 	judgeInst.Provider = fake
 
 	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
-		Scope:           task.VerdictScopeGoal,
-		GoalSessionID:   "goal-sess-unbound-multi",
+		Scope:           task.VerdictScopeTask,
+		TaskID:          "t-multi-ws-no-selector",
 		AssigneeAgentID: "native-agent",
 		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "ok")},
 		Attempt:         1,
@@ -307,6 +319,83 @@ func TestRunVerifierAdjudication_JudgeSystemAgent_NoOverride_MultipleWorkspacesE
 	}
 	if gotWorkDir == judgeHome {
 		t.Error("verifier turn must NOT fall back to agent home when at least one workspace exists")
+	}
+}
+
+// TestRunVerifierAdjudication_JudgeSystemAgent_UnboundGoal_MultipleWorkspacesExist_RootsAtAgentHome
+// is the other half of the sign-off 14 MINOR-1 / architect F4 fix: an
+// UNBOUND /goal (Scope==goal, WorkspaceID=="") must root at the Judge's own
+// agent home EVEN WHEN one or more workspaces exist — unlike the sibling
+// test above (task scope, no selector), which correctly resolves to the
+// sorted-first workspace from this EXACT SAME fixture. An unbound /goal has
+// no work-under-review workspace to prefer among at all, so picking an
+// arbitrary sorted-first one would be a wrong-in-kind answer, not merely a
+// low-risk one — even though it is harmless in today's single-tenant
+// deployments.
+func TestRunVerifierAdjudication_JudgeSystemAgent_UnboundGoal_MultipleWorkspacesExist_RootsAtAgentHome(t *testing.T) {
+	origSleep := judgeSleepFn
+	t.Cleanup(func() { judgeSleepFn = origSleep })
+	judgeSleepFn = func(context.Context, time.Duration) error {
+		return context.Canceled
+	}
+
+	al, judgeInst, home, judgeHome := newProductionShapeJudgeTestLoop(t, false)
+
+	// Same "two real workspaces" fixture as the sibling task-scope test —
+	// deliberately so the ONLY variable between the two tests is Scope, not
+	// the environment.
+	workspacesDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(workspacesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll workspaces: %v", err)
+	}
+	for _, id := range []string{"ws-b", "ws-a"} {
+		wsJSON := `{"id":"` + id + `","core_team":["native-agent"]}`
+		if err := os.WriteFile(filepath.Join(workspacesDir, id+".json"), []byte(wsJSON), 0o644); err != nil {
+			t.Fatalf("write workspace record %s: %v", id, err)
+		}
+	}
+
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+	judgeInst.Provider = fake
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeGoal,
+		GoalSessionID:   "goal-sess-unbound-multi",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "ok")},
+		Attempt:         1,
+		ClaimText:       "done",
+		// WorkspaceID deliberately left empty — an unbound /goal.
+	})
+	if result.Unavailable {
+		t.Fatalf("unexpected Unavailable for an unbound /goal with workspaces present: %s", result.Reason)
+	}
+	if result.Verdict == nil || !result.Verdict.Met {
+		t.Fatalf("expected a real, met verdict rooted at agent home; got %+v", result)
+	}
+
+	capturedCtx := fake.capturedCtx()
+	if capturedCtx == nil {
+		t.Fatal("the verifier's LLM call must have received a ctx")
+	}
+	gotWorkDir := tools.TurnWorkspaceDir(capturedCtx)
+	if gotWorkDir != judgeHome {
+		t.Errorf("an unbound /goal's verifier turn TurnWorkspaceDir = %q, want the Judge's own agent home %q "+
+			"(no work-under-review workspace exists to prefer among, even though %d workspace(s) exist)",
+			gotWorkDir, judgeHome, 2)
+	}
+	for _, wsID := range []string{"ws-a", "ws-b"} {
+		wsDir, wsErr := workspace.SafeWorkDir(home, wsID)
+		if wsErr != nil {
+			t.Fatalf("workspace.SafeWorkDir(%s): %v", wsID, wsErr)
+		}
+		if gotWorkDir == wsDir {
+			t.Errorf("an unbound /goal must NOT resolve to workspace %q's work dir, got %q", wsID, gotWorkDir)
+		}
 	}
 }
 

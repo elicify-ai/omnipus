@@ -273,7 +273,8 @@ func DefaultConfig() *Config {
 			// exactly like any operator-set entry.
 			//
 			// Every entry below mirrors pkg/coreagent/core.go's allStaticToolNames
-			// literal-for-literal (77 tools: 31 general + 11 browser + 35 sysagent) —
+			// literal-for-literal (the full static catalog; the pkg/gateway
+			// catalog-sync test is authoritative for the count, not this comment) —
 			// pkg/config cannot import pkg/coreagent (coreagent already imports
 			// config, so the reverse would cycle), so this list is a second,
 			// independent hardcoded literal. A drift between the two is caught
@@ -402,8 +403,14 @@ func DefaultConfig() *Config {
 				// ceiling's "allow"), so the strictest-wins merge still
 				// resolves deny for everyone except the Judge, whose own
 				// "allow" now merges cleanly against an "allow" ceiling.
-				// Custom/unlisted agents are covered by the existing
-				// backfill-to-explicit-deny coverage repair.
+				// Custom/unlisted agents are NOT deny-backfilled for this
+				// tool — the coverage repair only fills gaps, and this
+				// ceiling entry means inspect_session is never a gap — so a
+				// custom agent with no override resolves "allow" at the
+				// policy layer. Their real protection is the engine-set,
+				// fail-closed verifier-session scope lock
+				// (tools.VerifierSessionScopeAllows): a turn without the
+				// scope is refused every session id regardless of policy.
 				"create_plan":     "ask",
 				"execute_plan":    "ask",
 				"run_task":        "ask",

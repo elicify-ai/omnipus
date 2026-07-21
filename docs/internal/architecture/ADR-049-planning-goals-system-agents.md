@@ -1,6 +1,7 @@
 # ADR-049: Planning & Goals — Plan entity, evidence-ladder judge, goal loops, System Agents
 
 - **Status:** Proposed (ratification of operator interview 2026-07-19; amended post grill-reviews **r1 (BLOCK) → r2 (REVISE) → r3 (PASS)**, all 2026-07-19; grill gate cleared — next: `/plan-spec`)
+- **Superseded in part:** by [ADR-052](ADR-052-autonomous-agent-plan-execution.md) (autonomous agent plan execution) — ADR-052's autonomous kickoff replaces this ADR's human-only approval gate, and the Judge's execution mechanism is re-architected (real agent, own verifier session, replacing the direct `Provider.Chat` shortcut). This ADR's Plan entity, evidence-ladder concept, and System Agents stand.
 - **Date:** 2026-07-19
 - **Deciders:** Operator (Daniel Piatkowski); structured/ratified by Albert
 - **Evidence level (highest used):** 1 user-input (operator interview), grounded by 2–3 (documented patterns / shipped prior art) and codebase `[FACT]`s

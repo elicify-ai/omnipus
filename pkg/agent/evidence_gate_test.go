@@ -366,6 +366,22 @@ func TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond(t *
 
 	resp := "still working.\nTASK_STATUS: success\n"
 	for i := 0; i < 2; i++ {
+		if i > 0 {
+			// ADR-052 FR-014/§6.4(b) TOCTOU fix: rejectBareEvidenceClaim's
+			// free-retry write is now a CAS expecting in_progress (the SAME
+			// guard consumeAttemptOrExhaust's write uses) — mirror what the
+			// REAL dispatch cycle does between re-dispatch attempts
+			// (ExecuteTask -> ClaimForRun, next -> in_progress) rather than
+			// calling finishTaskRun a second time against a task this test
+			// left at `next` (attempt 0's free-retry write, which itself
+			// only succeeds because the task WAS genuinely in_progress at
+			// that point). Skipping this claim would make attempt 1 look,
+			// from the store's perspective, indistinguishable from a
+			// concurrent Stop having landed — which it is not.
+			if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
+				t.Fatalf("re-claim before attempt %d: %v", i, err)
+			}
+		}
 		current, gerr := taskStore.Get(tk.ID)
 		if gerr != nil {
 			t.Fatalf("re-read task before attempt %d: %v", i, gerr)

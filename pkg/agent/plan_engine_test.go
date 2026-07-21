@@ -54,6 +54,9 @@ type fakePlanDispatcher struct {
 	store *task.Store
 	// onDispatch overrides the default claim behavior when set.
 	onDispatch func(taskID string) error
+	// clearedStreaks records every ClearEvidenceGateStreak call (fix-wave
+	// item ii regression coverage — see plan_stop_test.go).
+	clearedStreaks []string
 }
 
 func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string) error {
@@ -74,6 +77,21 @@ func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string) error
 	inProgress := task.StatusInProgress
 	_, err = f.store.Update(taskID, task.Patch{Status: &inProgress})
 	return err
+}
+
+// ClearEvidenceGateStreak satisfies planTaskDispatcher's widened contract
+// (ADR-052 fix-wave item ii) — mirrors *TaskExecutor.ClearEvidenceGateStreak
+// closely enough for cancelMemberLocked's test coverage to assert on.
+func (f *fakePlanDispatcher) ClearEvidenceGateStreak(taskID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearedStreaks = append(f.clearedStreaks, taskID)
+}
+
+func (f *fakePlanDispatcher) clearedStreakList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.clearedStreaks...)
 }
 
 func (f *fakePlanDispatcher) callList() []string {

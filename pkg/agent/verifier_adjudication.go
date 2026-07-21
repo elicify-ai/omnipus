@@ -495,6 +495,80 @@ func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string 
 	return meta.ID
 }
 
+// --- Judge-unavailability escalation (sign-off finding 1) ------------------
+//
+// Every JudgeCriteria caller (task_executor.go, plan_engine.go, goal_loop.go)
+// already handles a single Unavailable result the same way: a WARN log and a
+// silent pause/retry-later — the right response to a one-off transient blip.
+// But that same handling makes a PERSISTENTLY down Judge (a dead provider,
+// SEC-26's daily-cost cap permanently exhausted) operator-invisible: every
+// individual WARN reads exactly like an isolated hiccup, so nothing in the
+// logs distinguishes "the Judge stumbled once" from "verification has been
+// stalled for hours." Fixing this in each of the three callers would be
+// three near-duplicate implementations (and two of them are owned by other
+// waves) — this is the single, CENTRAL point every adjudication already
+// passes through, so it is fixed here once.
+
+// verifierUnavailabilityEscalateAt is the number of CONSECUTIVE Unavailable
+// outcomes for the SAME adjudication unit that crosses the ERROR escalation
+// threshold (sign-off finding 1's "N=3").
+const verifierUnavailabilityEscalateAt = 3
+
+var (
+	verifierUnavailabilityMu sync.Mutex
+	//nolint:gochecknoglobals // process-wide consecutive-Unavailable counter, see recordVerifierAvailabilityOutcome's doc comment.
+	verifierUnavailabilityStreak = make(map[string]int)
+)
+
+// verifierUnavailabilityEscalateFn is the seam recordVerifierAvailabilityOutcome
+// calls once a unit's streak reaches/exceeds verifierUnavailabilityEscalateAt
+// (and again on every occurrence thereafter — this must stay loud for as
+// long as the condition persists, not fire once and go quiet). Production
+// default logs at ERROR: an unambiguous, operator-actionable message,
+// distinct from the WARN every caller already emits for a single blip.
+// Overridable in tests (mirrors this file's own judgeSleepFn/
+// killProcessGroupFn-style seam pattern) so the escalation is verifiable
+// deterministically, without scraping the process's real log output.
+var verifierUnavailabilityEscalateFn = func(unitID string, streak int) {
+	logger.ErrorCF("agent",
+		fmt.Sprintf(
+			"verifier unavailable %d consecutive times for %s — verification is stalled; "+
+				"check the Judge's provider/model and SEC-26 budget",
+			streak, unitID,
+		),
+		map[string]any{"unit_id": unitID, "consecutive_unavailable": streak},
+	)
+}
+
+// recordVerifierAvailabilityOutcome updates unitID's consecutive-Unavailable
+// streak with the outcome runVerifierAdjudication is about to return to its
+// caller for THIS invocation, and escalates via verifierUnavailabilityEscalateFn
+// once (and on every call thereafter) the streak crosses
+// verifierUnavailabilityEscalateAt.
+//
+// A non-Unavailable outcome clears the streak to zero — including a
+// fail-closed verdict from a parse/content error (build_error, empty
+// content, malformed JSON): those mean the Judge's LLM call itself DID
+// complete, which is exactly the thing this streak is tracking the absence
+// of. Only a run of genuine provider/SEC-26/turn-failure Unavailable results
+// in a row is the signal this function exists to surface.
+func recordVerifierAvailabilityOutcome(unitID string, unavailable bool) {
+	if unitID == "" {
+		return
+	}
+	verifierUnavailabilityMu.Lock()
+	defer verifierUnavailabilityMu.Unlock()
+	if !unavailable {
+		delete(verifierUnavailabilityStreak, unitID)
+		return
+	}
+	verifierUnavailabilityStreak[unitID]++
+	streak := verifierUnavailabilityStreak[unitID]
+	if streak >= verifierUnavailabilityEscalateAt {
+		verifierUnavailabilityEscalateFn(unitID, streak)
+	}
+}
+
 // --- The verifier turn itself (ADR-052 FR-011) ------------------------------
 
 // runVerifierAdjudication adjudicates proseCriteria by running ONE real
@@ -554,6 +628,13 @@ func (al *AgentLoop) runVerifierAdjudication(
 		if registered {
 			registry.Unregister(unitID)
 		}
+	}()
+	// Sign-off finding 1: record this call's outcome against unitID's
+	// consecutive-Unavailable streak. Reads the named return `unavailable`
+	// AFTER it has been set by whichever return statement below fires — a
+	// defer over a named return always observes the final value.
+	defer func() {
+		recordVerifierAvailabilityOutcome(unitID, unavailable)
 	}()
 
 	windowText := al.resolveVerifierWindowText(in)
@@ -623,7 +704,25 @@ func (al *AgentLoop) runVerifierAdjudication(
 		// own workspace), so its read-only escalation tools (FR-012(c)) can
 		// actually reach the artifacts they exist to inspect, rather than
 		// an arbitrary sorted-first workspace.
-		callCtx = WithSystemAgentWorkspaceOverride(callCtx, in.WorkspaceID)
+		// Sign-off 14 MINOR-1 / architect F4: an UNBOUND /goal (Scope==goal
+		// with no WorkspaceID) has no work-under-review workspace to prefer
+		// at all — there is nothing for optWorkspaceID to select AMONG, so
+		// falling through to FindForAgentPreferring's ordinary sorted-first
+		// pick would root the turn in an arbitrary one of the Judge's
+		// (every) implicit memberships. That is benign today only because
+		// real deployments happen to be single-tenant; it is still the
+		// wrong THING to pick, not merely a low-risk one. Root at the
+		// Judge's own agent home instead — exactly the rooting
+		// resolveTurnWorkDirOrRefuse's pre-onboarding "no workspace exists
+		// yet" branch already expresses for the "nothing to prefer" case,
+		// requested here via WithSystemAgentAgentHomeOverride (one small,
+		// explicit branch — never a bypass of the ordinary selector for any
+		// other scope/WorkspaceID combination).
+		if in.Scope == task.VerdictScopeGoal && strings.TrimSpace(in.WorkspaceID) == "" {
+			callCtx = WithSystemAgentAgentHomeOverride(callCtx)
+		} else {
+			callCtx = WithSystemAgentWorkspaceOverride(callCtx, in.WorkspaceID)
+		}
 		content, callErr := al.processTaskDirect(callCtx, judgeInst.ID, prompt, sessionKey, chatID)
 		cancel()
 

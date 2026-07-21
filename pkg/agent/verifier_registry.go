@@ -43,7 +43,9 @@
 // marker — registered with an empty verifierSessionID synchronously BEFORE
 // the round's goroutine is launched (mirroring the exact timing the old
 // inFlightJudge[p.ID]=true write had), then upserted with the REAL verifier
-// session id once judge.go creates it. SessionsFor deliberately omits
+// session id once verifier_adjudication.go's runVerifierAdjudication creates
+// it (via session.NewVerifierSession — the sanctioned verifier-session
+// constructor, see its own doc comment). SessionsFor deliberately omits
 // empty-session entries: an adjudication that has been claimed but has not
 // yet created its verifier session has nothing live to cancel yet, so a
 // Stop landing in that split-second window correctly finds nothing to kill
@@ -69,9 +71,9 @@ func verifierUnitForGoal(goalSessionID string) string { return "goal:" + goalSes
 // VerifierSessionRegistry maps an adjudication unit (plan ID, task ID, or
 // goal-session ID) to the verifier's own session ID for the lifetime of one
 // adjudication. It is the exported, minimal dependency surface a verifier
-// dispatcher (judge.go's runVerifierAdjudication, goal_loop.go's `/goal`
-// verifier path) and the Stop fan-out (PlanEngine.StopPlan/StopTask) both
-// depend on — neither needs to know about the other's implementation.
+// dispatcher (verifier_adjudication.go's runVerifierAdjudication, goal_loop.go's
+// `/goal` verifier path) and the Stop fan-out (PlanEngine.StopPlan/StopTask)
+// both depend on — neither needs to know about the other's implementation.
 //
 // Implementations must be safe for concurrent use.
 type VerifierSessionRegistry interface {

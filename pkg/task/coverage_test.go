@@ -1818,3 +1818,207 @@ func TestValidateStandaloneRestart(t *testing.T) {
 		})
 	}
 }
+
+// ---- Stop guarantee TOCTOU fix (ADR-052 FR-014/§6.4(b)) --------------------
+//
+// validateStopGuard (store.go) closes interleaving (b) from the FR-014
+// TOCTOU postmortem: a judge verdict computed just before a Stop landed
+// could otherwise resolve failed[stopped_by_user] -> done via a plain
+// Update, silently marking a user-cancelled task as successfully DONE — the
+// lifecycle matrix's own "failed is not frozen" rule (TestFailedCanBeRetried
+// above) exists precisely so a GENUINE failure stays retryable, and cannot
+// by itself distinguish that from "complete a cancelled one". UpdateIfStatus
+// closes the companion EXECUTOR-side gap: a stale in-memory task object plus
+// a separate later write can revive or clobber a task the store's own
+// CancelReason-only guard does not block (e.g. failed[stopped_by_user] ->
+// next, which must stay legal for the restart/re-run routes).
+
+// TestValidateStopGuard_RejectsDoneAfterUserStop is a direct unit test of
+// the extracted guard: failed[stopped_by_user] -> done is rejected,
+// regardless of what validateTransition alone would have permitted.
+func TestValidateStopGuard_RejectsDoneAfterUserStop(t *testing.T) {
+	stopped := &Task{Status: StatusFailed, CancelReason: CancelReasonStoppedByUser}
+	err := validateStopGuard(stopped, StatusDone)
+	require.Error(t, err, "failed[stopped_by_user] -> done must be rejected")
+	assert.True(t, errors.Is(err, ErrIllegalTransition))
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+// TestValidateStopGuard_AllowsRestartAndRerunDirections proves the guard is
+// narrowly scoped to `-> done` only: the Play/restart direction (-> next)
+// and the Run re-run direction (-> in_progress) both stay legal, and a
+// GENUINE failure (no stopped_by_user reason) is never touched by this
+// guard at all — it is validateTransition's ordinary "failed is not frozen"
+// rule that governs those, unchanged.
+func TestValidateStopGuard_AllowsRestartAndRerunDirections(t *testing.T) {
+	stopped := &Task{Status: StatusFailed, CancelReason: CancelReasonStoppedByUser}
+	for _, to := range []Status{StatusNext, StatusInProgress} {
+		if err := validateStopGuard(stopped, to); err != nil {
+			t.Errorf("failed[stopped_by_user] -> %s must remain legal, got: %v", to, err)
+		}
+	}
+	genuine := &Task{Status: StatusFailed}
+	if err := validateStopGuard(genuine, StatusDone); err != nil {
+		t.Errorf("a GENUINE failure (no stopped_by_user reason) -> done must not be blocked by the stop "+
+			"guard (it has nothing to guard here), got: %v", err)
+	}
+}
+
+// TestUpdate_StopGuard_RejectsDoneOverwriteAfterStop is the store-level,
+// end-to-end proof of interleaving (b): a task the user Stopped (failed +
+// stopped_by_user, exactly what PlanEngine.cancelMemberLocked / handleTaskStop
+// write) can never be moved to done via a plain Update, even though nothing
+// else in the lifecycle matrix would have blocked failed -> done. This is
+// the PRE-FIX bug reproduced literally: before validateStopGuard existed,
+// this exact call succeeded and silently marked a cancelled task "done".
+func TestUpdate_StopGuard_RejectsDoneOverwriteAfterStop(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	mustUpdate(t, s, tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+
+	_, err := s.Update(tk.ID, Patch{Status: ptr(StatusDone), Result: ptr("claims success")})
+	require.Error(t, err, "a stale MET verdict must not be able to overwrite a user Stop as done")
+	assert.True(t, errors.Is(err, ErrIllegalTransition))
+
+	got, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusFailed, got.Status, "status must remain the Stop's own failed outcome")
+	assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason, "cancel_reason must survive the rejected write")
+	assert.NotEqual(t, "claims success", got.Result, "the rejected write's Result must never land")
+}
+
+// ---- UpdateIfStatus (executor CAS primitive) --------------------------------
+
+func TestUpdateIfStatus_SucceedsWhenStatusMatches(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	newAttempt := 1
+	nextStatus := StatusNext
+	got, err := s.UpdateIfStatus(tk.ID, StatusInProgress, Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	require.NoError(t, err)
+	assert.Equal(t, StatusNext, got.Status)
+	assert.Equal(t, 1, got.AttemptCount)
+
+	reread, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusNext, reread.Status, "the write must persist")
+}
+
+// TestUpdateIfStatus_ConflictWhenStatusDiffers is the direct unit proof of
+// the CAS primitive's core contract: when the on-disk status no longer
+// matches `expected` (simulating a concurrent Stop that already landed —
+// "driving the store directly to simulate the interleaving"), NOTHING is
+// written and ErrStatusConflict is returned.
+func TestUpdateIfStatus_ConflictWhenStatusDiffers(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+
+	// Simulate a concurrent Stop landing between the caller's stale read and
+	// this write attempt.
+	mustUpdate(t, s, tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+
+	newAttempt := 1
+	nextStatus := StatusNext
+	_, err := s.UpdateIfStatus(tk.ID, StatusInProgress, Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrStatusConflict))
+	assert.False(t, errors.Is(err, ErrValidation), "a CAS conflict is a race outcome, not a validation error")
+
+	got, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, StatusFailed, got.Status, "the dropped write must leave the Stop outcome untouched")
+	assert.Equal(t, CancelReasonStoppedByUser, got.CancelReason)
+	assert.Equal(t, 0, got.AttemptCount, "a dropped conflict write must not consume an attempt")
+}
+
+func TestUpdateIfStatus_NotFound(t *testing.T) {
+	s := newStore(t)
+	_, err := s.UpdateIfStatus("does-not-exist", StatusInProgress, Patch{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+func TestUpdateIfStatus_InvalidID(t *testing.T) {
+	s := newStore(t)
+	_, err := s.UpdateIfStatus("../escape", StatusInProgress, Patch{})
+	require.Error(t, err)
+}
+
+// TestUpdateIfStatus_StillHonorsStopGuard proves UpdateIfStatus routes
+// through the SAME updateLocked validation path as Update — a CAS success
+// on the status check does not bypass the Stop guard (belt-and-suspenders:
+// even if a caller mistakenly passed StatusFailed as `expected` against an
+// already-stopped task, the done-overwrite is still rejected).
+func TestUpdateIfStatus_StillHonorsStopGuard(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusInProgress
+	mustCreate(t, s, tk)
+	mustUpdate(t, s, tk.ID, Patch{
+		Status:       ptr(StatusFailed),
+		CancelReason: ptr(CancelReasonStoppedByUser),
+	})
+
+	_, err := s.UpdateIfStatus(tk.ID, StatusFailed, Patch{Status: ptr(StatusDone)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrIllegalTransition), "UpdateIfStatus must still honor the Stop guard")
+}
+
+// ---- Run-route AttemptCount decision (item iii) -----------------------------
+
+// TestAttemptCount_NotResetOnRunRoute pins the deliberate decision
+// documented at updateLocked's CancelReason auto-clear site: a genuinely-
+// failed task's AttemptCount survives a plain Update-based re-run (the
+// "Run" PATCH route, failed -> in_progress), unlike RestartReset (the
+// "Play" route) which always zeroes it. This is the "resuming-the-budget is
+// defensible" branch — Run continues the existing budget, it is not amnesty.
+func TestAttemptCount_NotResetOnRunRoute(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	mustCreate(t, s, tk)
+	// Simulate a genuine attempt-exhaustion failure (no cancel_reason) that
+	// already consumed its full budget.
+	newAttempt := 3
+	mustUpdate(t, s, tk.ID, Patch{AttemptCount: &newAttempt})
+
+	got, err := s.Update(tk.ID, Patch{Status: ptr(StatusInProgress)})
+	require.NoError(t, err, "Run route (failed -> in_progress) must remain legal for a genuine failure")
+	assert.Equal(t, 3, got.AttemptCount, "AttemptCount must NOT be reset by the plain Run route")
+	assert.Empty(t, got.CancelReason, "cancel_reason auto-clear is unaffected by this decision")
+
+	reread, gerr := s.Get(tk.ID)
+	require.NoError(t, gerr)
+	assert.Equal(t, 3, reread.AttemptCount, "the unreset AttemptCount must persist")
+}
+
+// TestAttemptCount_IsResetByRestartReset contrasts the above: the Play
+// route (RestartReset) DOES reset AttemptCount to 0 — the two routes are
+// deliberately asymmetric, not an oversight.
+func TestAttemptCount_IsResetByRestartReset(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	tk.Status = StatusFailed
+	tk.CancelReason = CancelReasonStoppedByUser
+	mustCreate(t, s, tk)
+	newAttempt := 2
+	mustUpdate(t, s, tk.ID, Patch{AttemptCount: &newAttempt})
+
+	got, err := s.RestartReset(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, got.AttemptCount, "RestartReset (Play) always resets AttemptCount to 0")
+}

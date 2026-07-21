@@ -189,6 +189,63 @@ func TestProcessSession_KillAndRelabel_SpecificStatusSupersedesGenericDone(t *te
 	})
 }
 
+// TestStatusPriority_EveryIsDoneTerminalStatusRanksAtLeastOne is a table-
+// driven invariant test (sign-off finding 5a): it iterates the EXACT set of
+// values ProcessSession.IsDone() treats as terminal and asserts
+// statusPriority(s) >= 1 for every one of them. statusPriority's whole
+// contract (see its own doc comment) hinges on "0" meaning "not a terminal
+// status with a known reason at all" (StatusRunning, or — its own comment
+// says — "any future/unrecognized value"): the priority-upgrade branch in
+// KillAndRelabel only ever corrects FROM a status ranked 1 (a generic
+// terminal fallback) TO one ranked 2 (a specific terminal reason). If a
+// FUTURE terminal status were ever added to IsDone's switch without also
+// being added to statusPriority's switch, it would silently fall through to
+// the `default: return 0` case — indistinguishable from StatusRunning — and
+// KillAndRelabel's upgrade check (which compares priorities) would then
+// treat an ALREADY-terminal session as if it were still running, defeating
+// the very race-correction this file's other tests pin. This test is the
+// tripwire: it fails the moment IsDone's terminal set and statusPriority's
+// ranked set drift apart, without requiring anyone to remember to update
+// both switches by hand.
+func TestStatusPriority_EveryIsDoneTerminalStatusRanksAtLeastOne(t *testing.T) {
+	t.Parallel()
+
+	// The exact terminal set IsDone() recognizes (session.go's own switch) —
+	// duplicated here deliberately (not read via reflection/IsDone directly)
+	// so this test is grounded in the DOCUMENTED contract, not a mechanism
+	// that would trivially "pass" even if IsDone's switch silently drifted
+	// out of sync with itself.
+	terminal := []SessionStatus{StatusDone, StatusExited, StatusKilled, StatusTimeout, StatusCanceled}
+
+	for _, s := range terminal {
+		s := s
+		t.Run(string(s), func(t *testing.T) {
+			t.Parallel()
+
+			// Cross-check against the real IsDone() so this test's own
+			// "terminal set" literal can never silently drift from the
+			// method it is meant to be pinning.
+			probe := &ProcessSession{ID: "priority-invariant-" + string(s), Status: s}
+			if !probe.IsDone() {
+				t.Fatalf("%q must be recognized by IsDone() — this test's terminal set is out of sync with session.go", s)
+			}
+
+			if got := statusPriority(s); got < 1 {
+				t.Errorf("statusPriority(%q) = %d, want >= 1 — every IsDone() terminal status must rank as "+
+					"AT LEAST a generic fallback (1), never fall through to the default/StatusRunning rank (0)",
+					s, got)
+			}
+		})
+	}
+
+	// The negative control: StatusRunning (and, by the same default branch,
+	// any genuinely unrecognized value) must NOT be conflated with a
+	// terminal status.
+	if got := statusPriority(StatusRunning); got != 0 {
+		t.Errorf("statusPriority(StatusRunning) = %d, want 0 (not terminal)", got)
+	}
+}
+
 // TestSessionManager_KillAllForSession_CancelWinsRaceAgainstPriorGenericDone
 // reproduces the exact end-to-end shape of the CI race at the SessionManager
 // level (one level up from the ProcessSession-only test above): a session

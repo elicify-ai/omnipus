@@ -65,12 +65,12 @@ export interface BehaviorFieldsProps {
   /**
    * ADR-052 FR-038 (soul/rubric unification): renders the soul textarea
    * read-only (disabled, no upload button, no required marker/hint) instead
-   * of editable. AgentProfile passes this for every LOCKED agent (core AND
-   * system) — `pkg/gateway/rest.go`'s `updateAgent` unconditionally rejects
-   * `soul` on a locked agent (no `IsSystem()` carve-out exists yet on the
-   * write path today, despite the wire contract describing the Judge's soul
-   * as "editable while locked"), so an interactive textarea here would only
-   * ever silently fail to persist. Defaults to false — the create wizard
+   * of editable. AgentProfile passes this only for locked CORE agents
+   * (`soulReadOnly={isLocked && !isSystemAgent}` — `AgentProfile.tsx`);
+   * System Agents (e.g. the Judge) are the editable carve-out on BOTH sides
+   * of the wire — `pkg/gateway/rest.go`'s `updateAgent` only rejects `soul`
+   * on a locked agent when `!foundAgent.IsSystem()`, so a System Agent's
+   * soul persists even while locked. Defaults to false — the create wizard
    * never passes this, so its behavior is unchanged.
    */
   soulReadOnly?: boolean
