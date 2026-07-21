@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
-
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )

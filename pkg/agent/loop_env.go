@@ -1,9 +1,9 @@
 package agent
 
 import (
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/agent/envcontext"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // wireEnvProviders injects an envcontext.DefaultProvider into every registered

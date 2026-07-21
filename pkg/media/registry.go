@@ -11,7 +11,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // registryFile is the persisted form of FileMediaStore. Only fields needed
 // to make ResolveWithMeta and ReleaseAll work after a restart are stored —
 // path-state refcount and other in-memory bookkeeping is rebuilt on load.

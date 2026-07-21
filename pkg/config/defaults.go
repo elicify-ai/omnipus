@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 
 	"github.com/dapicom-ai/omnipus/pkg"
+
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // DefaultConfig returns the default configuration for Omnipus.
 func DefaultConfig() *Config {
 	// Determine the base path for the workspace.

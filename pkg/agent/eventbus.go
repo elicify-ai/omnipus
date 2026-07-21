@@ -7,7 +7,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 const defaultEventSubscriberBuffer = 16
 
 // EventSubscription identifies a subscriber channel returned by EventBus.Subscribe.

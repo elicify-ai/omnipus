@@ -20,9 +20,10 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )

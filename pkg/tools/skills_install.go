@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
 )

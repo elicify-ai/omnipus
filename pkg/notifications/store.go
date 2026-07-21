@@ -22,8 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
 // Severity values mirror the Notification.severity contract enum.

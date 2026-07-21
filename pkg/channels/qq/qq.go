@@ -25,12 +25,13 @@ import (
 	"github.com/tencent-connect/botgo/token"
 	"golang.org/x/oauth2"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/identity"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
 )

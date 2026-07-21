@@ -24,7 +24,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // Decision is the typed alias for audit decisions. The constants below are
 // untyped string constants so they remain assignable to both `Decision`-typed
 // values (e.g. predicate functions, future field migrations) and to the

@@ -5,7 +5,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 func TestHtmlToMarkdown(t *testing.T) {
 	// Define our test cases
 	tests := []struct {

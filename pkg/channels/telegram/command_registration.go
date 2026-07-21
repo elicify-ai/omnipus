@@ -8,8 +8,9 @@ import (
 
 	"github.com/mymmrac/telego"
 
-	"github.com/dapicom-ai/omnipus/pkg/commands"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/commands"
 )
 
 var commandRegistrationBackoff = []time.Duration{

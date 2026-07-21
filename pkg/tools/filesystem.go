@@ -15,10 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/docextract"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 const MaxReadFileSize = 64 * 1024 // 64KB limit to avoid context overflow

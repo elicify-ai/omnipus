@@ -12,9 +12,9 @@ import (
 	"time"
 
 	basechannels "github.com/dapicom-ai/omnipus/pkg/channels"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 const (

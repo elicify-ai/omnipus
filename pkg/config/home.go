@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 
 	"github.com/dapicom-ai/omnipus/pkg"
+
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // OmnipusHomeDir resolves the base directory for all Omnipus-owned data.
 // Every subsystem that needs to compute an Omnipus path MUST go through this
 // helper — never read HOME / UserHomeDir ad hoc and never join ".omnipus"

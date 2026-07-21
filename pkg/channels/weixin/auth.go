@@ -10,7 +10,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // AuthFlowOpts configures the interactive QR login flow.
 type AuthFlowOpts struct {
 	BaseURL string

@@ -9,7 +9,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // DownloadToFile streams an HTTP response body to a temporary file in small
 // chunks (~32KB), keeping peak memory usage constant regardless of file size.
 //

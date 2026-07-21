@@ -10,8 +10,9 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/dapicom-ai/omnipus/pkg/auth"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/auth"
 	orc "github.com/dapicom-ai/omnipus/pkg/providers/openai_responses_common"
 )
 

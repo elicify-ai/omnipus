@@ -11,8 +11,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/mcp"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )

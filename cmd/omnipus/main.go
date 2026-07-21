@@ -26,8 +26,8 @@ import (
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/skills"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/status"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/version"
-	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 func init() {

@@ -5,8 +5,9 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/dapicom-ai/omnipus/pkg/commands"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+
+	"github.com/dapicom-ai/omnipus/pkg/commands"
 )
 
 // RegisterCommands implements channels.CommandRegistrarCapable for Discord.

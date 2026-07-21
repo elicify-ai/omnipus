@@ -33,8 +33,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
-)
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+)
 // DevServerRegistration captures the per-instance state of a running Tier 3
 // dev server. Stored in DevServerRegistry; surfaced (without the token) to
 // operators via /api/v1/security/dev-servers in a future iteration.

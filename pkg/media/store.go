@@ -10,7 +10,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
-
 // CleanupPolicy controls how the MediaStore treats the underlying file when
 // a ref is released or expires.
 type CleanupPolicy string

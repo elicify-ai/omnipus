@@ -3,8 +3,9 @@ package policy
 import (
 	"log/slog"
 	"time"
-)
 
+	"github.com/dapicom-ai/omnipus/pkg/logger"
+)
 // AuditEntry represents a policy decision to be logged.
 // Mirrors audit.Entry fields relevant to policy evaluation.
 type AuditEntry struct {
