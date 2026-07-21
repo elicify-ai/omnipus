@@ -27,10 +27,14 @@ var judgeAllowedTools = map[string]bool{
 // TestSeed_JudgeSystemAgent verifies ADR-049 D3 / US-4 Acceptance Scenario 1,
 // redefined by ADR-052 R3-2/FR-027 (DS-6, Test 19): a fresh SeedConfig
 // produces EXACTLY ONE type:system Judge that is locked, non-default, not a
-// chat target, carries an editable rubric, and has an explicit tool policy
-// enumerating every static builtin — EXACTLY the seeded verifier set allow
-// (read_file/list_directory/inspect_session), everything else deny (no
-// longer "all-deny").
+// chat target, and has an explicit tool policy enumerating every static
+// builtin — EXACTLY the seeded verifier set allow (read_file/list_directory/
+// inspect_session), everything else deny (no longer "all-deny"). ADR-052
+// FR-038 deleted AgentConfig.Rubric (soul unification): the Judge's prompt is
+// now its SOUL.md, lazily seeded from coreagent.JudgeDefaultRubric by
+// pkg/agent's ensureVerifierSoul on first real verifier dispatch — not a
+// config-struct field SeedConfig populates, so there is nothing rubric-shaped
+// left to assert here.
 func TestSeed_JudgeSystemAgent(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg), "fresh SeedConfig must report modified=true")
@@ -50,7 +54,6 @@ func TestSeed_JudgeSystemAgent(t *testing.T) {
 	assert.False(t, j.Default, "Judge must never be the default agent")
 	assert.False(t, j.IsChatTarget(), "Judge must not be a chat target")
 	assert.True(t, j.IsSystem(), "Judge must report IsSystem()==true")
-	assert.NotEmpty(t, j.Rubric, "Judge must be seeded with a default rubric (its editable system prompt)")
 
 	// Explicit EXACT-SET policy over the ENTIRE static builtin catalog, no
 	// gaps: read_file/list_directory/inspect_session allow, everything else
@@ -137,8 +140,11 @@ func TestSystemAgent_Constraint6_BootCoverage(t *testing.T) {
 
 // TestSeed_JudgeReEnforced_Tamper verifies the boot re-enforcement (tamper
 // protection): a tampered Judge (unlocked, marked default, granted a tool, wrong
-// type) is repaired on the next SeedConfig, while its operator-editable rubric
-// and model are PRESERVED.
+// type) is repaired on the next SeedConfig, while its operator-editable model
+// is PRESERVED. (ADR-052 FR-038 deleted AgentConfig.Rubric — the Judge's
+// operator-editable prompt now lives in SOUL.md, outside SeedConfig's
+// config-struct-only mutation path, so there is no rubric field left to
+// tamper/preserve here.)
 func TestSeed_JudgeReEnforced_Tamper(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -152,7 +158,6 @@ func TestSeed_JudgeReEnforced_Tamper(t *testing.T) {
 		cfg.Agents.List[i].Default = true
 		cfg.Agents.List[i].Type = config.AgentTypeCustom
 		cfg.Agents.List[i].Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
-		cfg.Agents.List[i].Rubric = "operator-customized rubric"
 		cfg.Agents.List[i].Model = &config.AgentModelConfig{Primary: "operator/model"}
 	}
 
@@ -172,7 +177,6 @@ func TestSeed_JudgeReEnforced_Tamper(t *testing.T) {
 	assert.Equal(t, config.ToolPolicyDeny, j.Tools.Builtin.Policies["bash"],
 		"granted tool re-enforced back to deny (no-tools invariant)")
 	// Operator-editable fields preserved.
-	assert.Equal(t, "operator-customized rubric", j.Rubric, "operator rubric edit must survive re-enforcement")
 	require.NotNil(t, j.Model)
 	assert.Equal(t, "operator/model", j.Model.Primary, "operator model edit must survive re-enforcement")
 }

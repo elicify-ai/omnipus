@@ -43,7 +43,7 @@ func TestVerifierUnitID_PrefersTaskThenPlanThenAgentFallback(t *testing.T) {
 // --- verifier-session registry (FR-037) -------------------------------------
 
 func TestVerifierSessionRegistry_DefaultRegisterUnregister(t *testing.T) {
-	r := newDefaultVerifierSessionRegistry()
+	r := NewVerifierSessionRegistry()
 	if _, ok := r.Lookup("task:t1"); ok {
 		t.Fatal("a fresh registry must have no entries")
 	}
@@ -59,11 +59,11 @@ func TestVerifierSessionRegistry_DefaultRegisterUnregister(t *testing.T) {
 }
 
 func TestVerifierSessionRegistry_SetOverrideAndRestoreDefault(t *testing.T) {
-	spy := newDefaultVerifierSessionRegistry()
+	spy := NewVerifierSessionRegistry()
 	SetVerifierSessionRegistry(spy)
 	t.Cleanup(func() { SetVerifierSessionRegistry(nil) })
 
-	if currentVerifierSessionRegistry() != VerifierSessionRegistry(spy) {
+	if currentVerifierSessionRegistry() != VerifierSessionPublisher(spy) {
 		t.Fatal("currentVerifierSessionRegistry must return the overridden registry")
 	}
 

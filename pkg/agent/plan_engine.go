@@ -222,6 +222,11 @@ func NewPlanEngine(al *AgentLoop, planStore *plan.Store, taskStore *task.Store, 
 		pe.notifier = al.asyncNotifier
 		pe.canceller = al
 	}
+	// Point the package-wide publisher seam (verifier_adjudication.go) at
+	// THIS engine's registry so runVerifierAdjudication publishes into the
+	// same instance the Stop fan-out enumerates (ADR-052 FR-037 — one
+	// registry, both sides).
+	SetVerifierSessionRegistry(pe.verifierRegistry)
 	return pe
 }
 
@@ -849,19 +854,23 @@ func (pe *PlanEngine) verdictStillApplicable(planID string) bool {
 // snapshot this code takes while holding the lock is always complete.
 
 // memberCancelReasonMarker prefixes Task.Result on a member/standalone task
-// PlanEngine.StopPlan/StopTask cancels (US-8's orange "Cancelled" marker;
-// FR-041's dead-end detection below). WAVE-MERGE: replace with
-// task.CancelReason once that field lands (owned by a sibling wave) — this
-// Result-text marker is the interim discriminator between a genuine
-// judge/attempt-exhaustion failure and a user cancel, since pkg/task in this
-// worktree does not yet carry a dedicated cancel-reason field.
+// PlanEngine.StopPlan/StopTask cancels — a human-readable echo of the
+// authoritative task.CancelReason field (ADR-052 US-8's orange "Cancelled"
+// marker reads the FIELD; this text is display/log context only).
 const memberCancelReasonMarker = "[reason:stopped_by_user]"
 
 // isCancelledMember reports whether t was terminated by a user Stop (as
 // opposed to a genuine judge/attempt-exhaustion failure) — see
 // memberCancelReasonMarker.
 func isCancelledMember(t *task.Task) bool {
-	return t.Status == task.StatusFailed && strings.HasPrefix(t.Result, memberCancelReasonMarker)
+	if t.Status != task.StatusFailed {
+		return false
+	}
+	// task.CancelReason is the authoritative discriminator (ADR-052 FR-015/
+	// FR-028); the Result-prefix check is kept as a defensive fallback for
+	// records written before the field landed in the same wave.
+	return t.CancelReason == task.CancelReasonStoppedByUser ||
+		strings.HasPrefix(t.Result, memberCancelReasonMarker)
 }
 
 // StopPlan implements US-6: the plan-level Stop fan-out. Cancels {every
@@ -1008,12 +1017,14 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 // must not abort cancelling the rest).
 func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, error) {
 	failed := task.StatusFailed
+	cancelReason := task.CancelReasonStoppedByUser
 	result := fmt.Sprintf("%s Cancelled by %s via Stop.", memberCancelReasonMarker, userID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	updated, err := pe.taskStore.Update(taskID, task.Patch{
-		Status:      &failed,
-		Result:      &result,
-		CompletedAt: &now,
+		Status:       &failed,
+		CancelReason: &cancelReason,
+		Result:       &result,
+		CompletedAt:  &now,
 	})
 	if err != nil {
 		logger.WarnCF("plan_engine", "stop: could not mark member task cancelled",

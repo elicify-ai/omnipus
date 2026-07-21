@@ -133,6 +133,12 @@ type JudgeCriteriaInput struct {
 	// user-message content ahead of the evidence (e.g. a plan's goal/DoD
 	// framing for Wave 2-B's plan-level round). Empty for a plain task.
 	ExtraContext string
+	// GoalSessionID is the chat session carrying a /goal condition when
+	// Scope == task.VerdictScopeGoal (ADR-052 FR-032/FR-037): it keys the
+	// verifier-session registry ("goal:<id>") so /goal clear can cancel an
+	// in-flight goal verifier, and sources the transcript window the goal
+	// verifier is fed. Empty for task/plan scopes.
+	GoalSessionID string
 }
 
 // JudgeCriteriaResult is the outcome of one JudgeCriteria call.
@@ -178,12 +184,17 @@ type JudgeCriteriaResult struct {
 // all — machine-only criteria adjudicate purely from real exit codes, and
 // Unavailable is impossible in that case (FR-052's all-machine scenario).
 func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) JudgeCriteriaResult {
-	var machineCriteria, proseCriteria []task.AcceptanceCriterion
+	var machineCriteria, behaviorCriteria, proseCriteria []task.AcceptanceCriterion
 	perCriterion := make([]task.CriterionVerdict, 0, len(in.Criteria))
 	for _, c := range in.Criteria {
 		switch c.Kind {
 		case task.KindCheck:
 			machineCriteria = append(machineCriteria, c)
+		case task.KindBehavior:
+			// Rung 2 (ADR-052 FR-034): deterministic, no-LLM scan of the
+			// session's tool-call log — dispatched below alongside the
+			// machine checks, never to the LLM verifier.
+			behaviorCriteria = append(behaviorCriteria, c)
 		case task.KindProse:
 			proseCriteria = append(proseCriteria, c)
 		default:
@@ -207,6 +218,10 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		if ev != nil {
 			evidence = append(evidence, *ev)
 		}
+	}
+
+	for _, c := range behaviorCriteria {
+		perCriterion = append(perCriterion, al.runBehaviorScan(in, c))
 	}
 
 	var judgeModel, judgeAgentID string

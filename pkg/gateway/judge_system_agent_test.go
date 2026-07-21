@@ -50,7 +50,7 @@ func newJudgeRosterAPI(t *testing.T) *restAPI {
 				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
 				{
 					ID: "judge", Name: "Judge", Type: config.AgentTypeSystem,
-					Locked: true, Rubric: "seeded judge rubric",
+					Locked: true,
 				},
 			},
 		},
@@ -113,30 +113,41 @@ func TestAgents_JudgeUndisable(t *testing.T) {
 	}
 }
 
-// TestAgents_JudgeRubricGuards verifies rubric is editable ONLY on a type:system
-// agent (400 on a non-system agent) and that the Judge's rubric round-trips on
-// the GET response.
-func TestAgents_JudgeRubricGuards(t *testing.T) {
+// TestAgents_JudgeRubricAbsent verifies ADR-052 FR-038 (soul unification):
+// AgentConfig.Rubric was deleted and the generated wire Agent type no longer
+// carries a rubric field at all — the Judge's prompt now lives in its
+// SOUL.md, lazily seeded from coreagent.JudgeDefaultRubric by pkg/agent's
+// ensureVerifierSoul, not echoed via this REST surface. A PUT carrying a
+// stray "rubric" field is silently ignored (unknown field, no dedicated
+// guard left — soul-editability is a Wave-2 item) and GET must not render a
+// "rubric" key at all.
+func TestAgents_JudgeRubricAbsent(t *testing.T) {
 	api := newJudgeRosterAPI(t)
 
-	t.Run("rubric on a non-system agent is 400", func(t *testing.T) {
+	t.Run("stray rubric field on a non-system agent PUT is not rejected as a rubric guard", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia", strings.NewReader(`{"rubric":"nope"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.updateAgent(w, r, "mia")
-		require.Equal(t, http.StatusBadRequest, w.Code, "rubric on non-system must be 400; body=%s", w.Body.String())
-		assert.Contains(t, w.Body.String(), "System Agents")
+		// The rubric-specific 400 guard was deleted along with AgentConfig.Rubric
+		// (FIX 1, ADR-052 compile cleanup) — a stray "rubric" key is just an
+		// unrecognized field now, not a rejected one.
+		require.Equal(t, http.StatusOK, w.Code, "PUT with a stray rubric field must not 400; body=%s", w.Body.String())
 	})
 
-	t.Run("Judge rubric round-trips on GET", func(t *testing.T) {
+	t.Run("Judge GET response carries no rubric field", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		api.getAgent(w, "judge")
 		require.Equal(t, http.StatusOK, w.Code, "GET judge must be 200; body=%s", w.Body.String())
+
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+		_, hasRubric := raw["rubric"]
+		assert.False(t, hasRubric, "GET response must not carry a rubric field (ADR-052 FR-038 deleted it)")
+
 		var ag gen.Agent
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ag))
 		require.Equal(t, gen.AgentTypeSystem, ag.Type, "Judge must render as type:system")
-		require.NotNil(t, ag.Rubric, "Judge response must carry the rubric")
-		assert.Equal(t, "seeded judge rubric", *ag.Rubric)
 	})
 }
 
