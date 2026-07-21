@@ -15,6 +15,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
+
 // WriteFileAtomic atomically writes data to a file using a temp file + rename pattern.
 //
 // This guarantees that the target file is either:

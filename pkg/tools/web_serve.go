@@ -662,9 +662,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 	if t.auditLogger == nil {
 		if t.devCfg.AuditFailClosed {
 			logger.SlogError("web_serve: auditLogger is nil; cannot record deny — failing closed",
-				"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""), "audit_fail_closed", true)
+				"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""), "audit_fail_closed", true)
 			return &ToolResult{
 				IsError: true,
 				ForLLM:  "audit logger unavailable; command denied and audit trail broken — failing closed",
@@ -676,9 +674,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 		// loss on a configured-but-failing logger, not a deliberate disable.
 		auditDevNilOnce.Do(func() {
 			logger.SlogWarn("web_serve: auditLogger is nil; deny will not be recorded",
-				"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""))
+				"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""))
 		})
 		return nil
 	}
@@ -698,9 +694,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 	}
 	if t.devCfg.AuditFailClosed {
 		logger.SlogError("web_serve: audit write failed for command deny — failing closed",
-			"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""), "error", logErr, "audit_fail_closed", true)
+			"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""), "error", logErr, "audit_fail_closed", true)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit logger degraded; command denied and audit trail broken — failing closed",
@@ -711,9 +705,7 @@ func (t *WebServeTool) auditDevDeny(agentID, command, reason string) *ToolResult
 	// bump — every silently-dropped audit row increments audit_skipped_total.
 	audit.IncSkipped(ToolNameWebServe, audit.DecisionDeny)
 	logger.SlogError("web_serve: audit write failed for command deny",
-		"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""), "error", logErr)
+		"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""), "error", logErr)
 	return nil
 }
 
@@ -736,9 +728,7 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 			// CRIT-BK-1: mirror the deny-path shape — refuse to spawn when the
 			// operator demands a compliance trail and no logger is wired.
 			logger.SlogError("web_serve: auditLogger is nil; cannot record dev-server start — failing closed",
-				"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""), "audit_fail_closed", true)
+				"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""), "audit_fail_closed", true)
 			return &ToolResult{
 				IsError: true,
 				ForLLM:  "audit logger unavailable; dev server start denied — failing closed",
@@ -767,9 +757,7 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 	}
 	if t.devCfg.AuditFailClosed {
 		logger.SlogError("web_serve: audit logger degraded; refusing to run trusted-prompt feature",
-			"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""), "error", logErr, "audit_fail_closed", true)
+			"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""), "error", logErr, "audit_fail_closed", true)
 		return &ToolResult{
 			IsError: true,
 			ForLLM:  "audit logger degraded; refusing to run trusted-prompt feature without compliance trail",
@@ -779,8 +767,6 @@ func (t *WebServeTool) auditDevStart(ctx context.Context, agentID, command strin
 	// B1.2(e): same counter bump on the allow-side write failure.
 	audit.IncSkipped(ToolNameWebServe, audit.DecisionAllow)
 	logger.SlogError("web_serve: audit write failed (continuing — audit_fail_closed=false)",
-		"agent_id", agentID, "command", strings.ReplaceAll(strings.ReplaceAll(command, "
-", ""), "
-", ""), "error", logErr)
+		"command", strings.ReplaceAll(strings.ReplaceAll(command, "\n", ""), "\r", ""), "error", logErr)
 	return nil
 }
