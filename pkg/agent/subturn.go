@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -360,7 +359,7 @@ func spawnSubTurn(
 	// tool call renders as a flat ToolCallBadge instead of an unrooted span.
 	emitSpanEvents := parentSpawnCallID != ""
 	if !emitSpanEvents {
-		slog.Warn("subturn: empty parent_spawn_call_id — skipping span lifecycle emission",
+		logger.SlogWarn("subturn: empty parent_spawn_call_id — skipping span lifecycle emission",
 			"child_id", childID,
 			"parent_turn_id", parentTS.turnID,
 		)
@@ -425,7 +424,7 @@ func spawnSubTurn(
 	if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedSpawn, tools.ExcludedSubagent, tools.ExcludedHandoff)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
-		slog.Info("subturn: child registry constructed",
+		logger.SlogInfo("subturn: child registry constructed",
 			"excluded", []string{"spawn", "subagent", "handoff"},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
@@ -519,7 +518,7 @@ func spawnSubTurn(
 	}
 	// W1-12: only emit span lifecycle events when parentSpawnCallID is non-empty.
 	if emitSpanEvents {
-		slog.Debug("subagent_start",
+		logger.SlogDebug("subagent_start",
 			"span_id", spanID,
 			"parent_call_id", parentSpawnCallID,
 			"agent_id", childTS.agentID,
@@ -546,7 +545,7 @@ func spawnSubTurn(
 			// a user-visible "subturn panicked" back to the logged stack trace.
 			err = fmt.Errorf("subturn %q panicked: %v", childID, r)
 			result = nil
-			slog.Error("subturn: panic recovered",
+			logger.SlogError("subturn: panic recovered",
 				"child_id", childID,
 				"parent_id", parentTS.turnID,
 				"panic", fmt.Sprintf("%v", r),
@@ -566,7 +565,7 @@ func spawnSubTurn(
 				endStatus = SubTurnStatusError
 			}
 			subTurnDurationMS := time.Since(subTurnStartedAt).Milliseconds()
-			slog.Debug("subagent_end",
+			logger.SlogDebug("subagent_end",
 				"span_id", spanID,
 				"parent_call_id", parentSpawnCallID,
 				"agent_id", childTS.agentID,

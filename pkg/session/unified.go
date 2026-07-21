@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/memory"
@@ -161,7 +162,7 @@ func (us *UnifiedStore) migrateLegacy() {
 		name := strings.TrimSuffix(e.Name(), ".jsonl")
 		sessionDir := filepath.Join(us.baseDir, name)
 		if mkErr := os.MkdirAll(sessionDir, 0o700); mkErr != nil {
-			slog.Warn("unified_store: migrate: could not create dir", "name", name, "error", mkErr)
+			logger.SlogWarn("unified_store: migrate: could not create dir", "name", name, "error", mkErr)
 			continue
 		}
 		src := filepath.Join(us.baseDir, e.Name())
@@ -172,11 +173,11 @@ func (us *UnifiedStore) migrateLegacy() {
 		}
 		data, readErr := os.ReadFile(src)
 		if readErr != nil {
-			slog.Warn("unified_store: migrate: could not read file", "path", src, "error", readErr)
+			logger.SlogWarn("unified_store: migrate: could not read file", "path", src, "error", readErr)
 			continue
 		}
 		if writeErr := fileutil.WriteFileAtomic(dst, data, 0o600); writeErr != nil {
-			slog.Warn("unified_store: migrate: could not write context.jsonl", "path", dst, "error", writeErr)
+			logger.SlogWarn("unified_store: migrate: could not write context.jsonl", "path", dst, "error", writeErr)
 			continue
 		}
 		now := time.Now().UTC()
@@ -190,13 +191,13 @@ func (us *UnifiedStore) migrateLegacy() {
 			Type: SessionTypeChat,
 		}
 		if writeMetaErr := writeUnifiedMetaDirect(sessionDir, meta); writeMetaErr != nil {
-			slog.Warn("unified_store: migrate: could not write meta.json", "name", name, "error", writeMetaErr)
+			logger.SlogWarn("unified_store: migrate: could not write meta.json", "name", name, "error", writeMetaErr)
 			continue
 		}
 		if removeErr := os.Remove(src); removeErr != nil {
-			slog.Warn("unified_store: migrate: could not remove legacy file", "path", src, "error", removeErr)
+			logger.SlogWarn("unified_store: migrate: could not remove legacy file", "path", src, "error", removeErr)
 		}
-		slog.Info("unified_store: migrated legacy session", "id", name)
+		logger.SlogInfo("unified_store: migrated legacy session", "id", name)
 	}
 }
 
@@ -252,11 +253,11 @@ func (us *UnifiedStore) createSessionLocked(
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 	if _, statErr := os.Stat(transcriptPath); os.IsNotExist(statErr) {
 		if wErr := fileutil.WriteFileAtomic(transcriptPath, []byte{}, 0o600); wErr != nil {
-			slog.Warn("unified_store: could not create empty transcript", "path", transcriptPath, "error", wErr)
+			logger.SlogWarn("unified_store: could not create empty transcript", "path", transcriptPath, "error", wErr)
 		}
 	}
 
-	slog.Debug("unified_store: created session", "id", sessionID, "type", sessionType, "agent", creatingAgentID)
+	logger.SlogDebug("unified_store: created session", "id", sessionID, "type", sessionType, "agent", creatingAgentID)
 	return meta, nil
 }
 
@@ -403,7 +404,7 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	// Update stats and UpdatedAt in meta (best-effort).
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
-		slog.Warn("unified_store: could not update meta stats", "session_id", sessionID, "error", err)
+		logger.SlogWarn("unified_store: could not update meta stats", "session_id", sessionID, "error", err)
 		return nil
 	}
 	if entry.Role == "assistant" {
@@ -419,7 +420,7 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	}
 	meta.UpdatedAt = entry.Timestamp
 	if writeErr := us.writeMetaLocked(sessionID, meta); writeErr != nil {
-		slog.Warn(
+		logger.SlogWarn(
 			"unified_store: could not write meta after transcript append",
 			"session_id",
 			sessionID,
@@ -456,7 +457,7 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 		return err
 	}
 	if turnID == "" {
-		slog.Warn(
+		logger.SlogWarn(
 			"unified_store: MarkLastEntryTruncated called with empty turnID — falling back to last-assistant-entry behavior",
 			"session_id",
 			sessionID,
@@ -498,7 +499,7 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 		var e TranscriptEntry
 		if jsonErr := json.Unmarshal(entries[i], &e); jsonErr != nil {
 			// Skip malformed lines.
-			slog.Warn(
+			logger.SlogWarn(
 				"unified_store: mark truncated: skipping malformed line",
 				"session_id",
 				sessionID,
@@ -572,7 +573,7 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 		}
 		var entry TranscriptEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
-			slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
+			logger.SlogWarn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
 			continue
 		}
 		entries = append(entries, entry)
@@ -600,7 +601,7 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 		}
 		meta, err := readUnifiedMeta(filepath.Join(us.baseDir, entry.Name()))
 		if err != nil {
-			slog.Warn("unified_store: skipping unreadable session", "dir", entry.Name(), "error", err)
+			logger.SlogWarn("unified_store: skipping unreadable session", "dir", entry.Name(), "error", err)
 			continue
 		}
 		metas = append(metas, meta)
@@ -615,14 +616,14 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 // AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.
 func (us *UnifiedStore) AddMessage(sessionKey, role, content string) {
 	if err := us.backend.AddMessage(context.Background(), sessionKey, role, content); err != nil {
-		slog.Error("unified_store: add message", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: add message", "key", sessionKey, "error", err)
 	}
 }
 
 // AddFullMessage implements SessionStore — appends a complete message to context.jsonl.
 func (us *UnifiedStore) AddFullMessage(sessionKey string, msg providers.Message) {
 	if err := us.backend.AddFullMessage(context.Background(), sessionKey, msg); err != nil {
-		slog.Error("unified_store: add full message", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: add full message", "key", sessionKey, "error", err)
 	}
 }
 
@@ -630,7 +631,7 @@ func (us *UnifiedStore) AddFullMessage(sessionKey string, msg providers.Message)
 func (us *UnifiedStore) GetHistory(sessionKey string) []providers.Message {
 	msgs, err := us.backend.GetHistory(context.Background(), sessionKey)
 	if err != nil {
-		slog.Error("unified_store: get history", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: get history", "key", sessionKey, "error", err)
 		return []providers.Message{}
 	}
 	return msgs
@@ -640,7 +641,7 @@ func (us *UnifiedStore) GetHistory(sessionKey string) []providers.Message {
 func (us *UnifiedStore) GetSummary(sessionKey string) string {
 	summary, err := us.backend.GetSummary(context.Background(), sessionKey)
 	if err != nil {
-		slog.Error("unified_store: get summary", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: get summary", "key", sessionKey, "error", err)
 		return ""
 	}
 	return summary
@@ -649,21 +650,21 @@ func (us *UnifiedStore) GetSummary(sessionKey string) string {
 // SetSummary implements SessionStore.
 func (us *UnifiedStore) SetSummary(sessionKey, summary string) {
 	if err := us.backend.SetSummary(context.Background(), sessionKey, summary); err != nil {
-		slog.Error("unified_store: set summary", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: set summary", "key", sessionKey, "error", err)
 	}
 }
 
 // SetHistory implements SessionStore.
 func (us *UnifiedStore) SetHistory(sessionKey string, history []providers.Message) {
 	if err := us.backend.SetHistory(context.Background(), sessionKey, history); err != nil {
-		slog.Error("unified_store: set history", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: set history", "key", sessionKey, "error", err)
 	}
 }
 
 // TruncateHistory implements SessionStore.
 func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 	if err := us.backend.TruncateHistory(context.Background(), sessionKey, keepLast); err != nil {
-		slog.Error("unified_store: truncate history", "key", sessionKey, "error", err)
+		logger.SlogError("unified_store: truncate history", "key", sessionKey, "error", err)
 	}
 }
 
@@ -707,7 +708,7 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	// of the store's baseDir depth (ADR-017 D5, N-B fix).
 	uploadsDir := filepath.Join(us.uploadsRoot(), sessionID)
 	if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
-		slog.Warn("unified_store: delete session: cascade-delete uploads failed",
+		logger.SlogWarn("unified_store: delete session: cascade-delete uploads failed",
 			"session_id", sessionID, "uploads_dir", uploadsDir, "error", rmErr)
 	}
 	return nil
@@ -735,7 +736,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		dir := filepath.Join(us.baseDir, entry.Name())
 		if err := os.RemoveAll(dir); err != nil {
-			slog.Warn("unified_store: clear all: remove session dir", "dir", dir, "error", err)
+			logger.SlogWarn("unified_store: clear all: remove session dir", "dir", dir, "error", err)
 			continue
 		}
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
@@ -743,7 +744,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		// Cascade-delete uploads for this session.
 		uploadsDir := filepath.Join(uploadsRoot, entry.Name())
 		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
-			slog.Warn("unified_store: clear all: cascade-delete uploads failed",
+			logger.SlogWarn("unified_store: clear all: cascade-delete uploads failed",
 				"session_id", entry.Name(), "error", rmErr)
 		}
 		removed++

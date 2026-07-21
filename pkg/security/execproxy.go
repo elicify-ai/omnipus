@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -207,7 +208,10 @@ func (p *ExecProxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// CheckHost handles both raw IPs and hostnames with DNS resolution
 	if _, err := p.ssrf.CheckHost(r.Context(), hostOnly); err != nil {
-		slog.Warn("execproxy: SSRF blocked", "host", hostOnly, "reason", err.Error())
+		// hostOnly is user-controlled (r.URL.Host, r.Host). Sanitize for log
+		// injection (CodeQL go/log-injection): the inline strings.ReplaceAll
+		// on "\n"/"\r" is the recognized sanitizer.
+		slog.Warn("execproxy: SSRF blocked", "host", strings.ReplaceAll(strings.ReplaceAll(hostOnly, "\n", ""), "\r", ""), "reason", err.Error())
 		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
 		return
 	}
@@ -257,7 +261,9 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// cannot swap the DNS answer between our SSRF check and the actual dial.
 	addrs, err := p.ssrf.CheckHost(r.Context(), host)
 	if err != nil {
-		slog.Warn("execproxy: SSRF blocked in CONNECT", "host", host, "reason", err.Error())
+		// host is user-controlled (CONNECT r.Host). Sanitize for log
+		// injection (CodeQL go/log-injection).
+		slog.Warn("execproxy: SSRF blocked in CONNECT", "host", strings.ReplaceAll(strings.ReplaceAll(host, "\n", ""), "\r", ""), "reason", err.Error())
 		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
 		return
 	}

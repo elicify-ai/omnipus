@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
@@ -152,7 +152,7 @@ func authWeComCmdWithScanner(
 		// If SaveConfig fails, roll back by deleting the secret we just wrote.
 		if err := config.SaveConfig(internal.GetConfigPath(), cfg); err != nil {
 			if delErr := store.Delete(wecomSecretCredRef); delErr != nil {
-				slog.Error("wecom auth: rollback failed — orphaned credential requires manual cleanup",
+				logger.SlogError("wecom auth: rollback failed — orphaned credential requires manual cleanup",
 					"ref", wecomSecretCredRef,
 					"delete_error", delErr,
 					"hint", "run: omnipus credentials delete "+wecomSecretCredRef,

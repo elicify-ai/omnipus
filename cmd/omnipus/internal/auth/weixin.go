@@ -3,12 +3,12 @@ package auth
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/channels/weixin"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
@@ -140,7 +140,7 @@ func saveWeixinConfig(token, baseURL, proxy string) error {
 		// If SaveConfig fails, roll back by deleting the token we just wrote.
 		if err := config.SaveConfig(cfgPath, cfg); err != nil {
 			if delErr := store.Delete(weixinTokenCredRef); delErr != nil {
-				slog.Error("weixin auth: rollback failed — orphaned credential requires manual cleanup",
+				logger.SlogError("weixin auth: rollback failed — orphaned credential requires manual cleanup",
 					"ref", weixinTokenCredRef,
 					"delete_error", delErr,
 					"hint", "run: omnipus credentials delete "+weixinTokenCredRef,

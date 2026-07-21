@@ -28,11 +28,12 @@ package systools
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/datamodel"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
@@ -245,7 +246,7 @@ func (t *AgentWriteMetadataTool) Execute(ctx context.Context, args map[string]an
 	// Hot-reload so the change is immediately visible to the agent loop.
 	if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
-			slog.Warn("agent.write_metadata: hot-reload failed — change will be visible after restart",
+			logger.SlogWarn("agent.write_metadata: hot-reload failed — change will be visible after restart",
 				"agent_id", agentID, "file", filename, "error", err)
 		}
 	}

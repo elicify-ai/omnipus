@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -261,8 +260,8 @@ func (r *ToolRegistry) ExecuteWithContext(
 ) *ToolResult {
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
-			"tool": name,
-			"args": args,
+			"tool":      name,
+			"arg_count": len(args),
 		})
 
 	// Capture auditLogger under lock to avoid a data race with SetAuditLogger.
@@ -383,7 +382,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 				"duration_ms": duration.Milliseconds(),
 			},
 		}); err != nil {
-			slog.Error("SEC-15: audit log write failed for tool execution",
+			logger.SlogError("SEC-15: audit log write failed for tool execution",
 				"tool", name, "agent", agentID, "error", err)
 		}
 	}
@@ -610,7 +609,7 @@ func (r *ToolRegistry) CloneExcept(tools ...ExcludedTool) *ToolRegistry {
 	// Non-fatal so production never crashes on a typo.
 	for name := range excluded {
 		if _, exists := r.tools[name]; !exists {
-			slog.Warn("CloneExcept: tool not in base registry",
+			logger.SlogWarn("CloneExcept: tool not in base registry",
 				"tool", name,
 				"hint", "check for renamed or unregistered tool",
 			)

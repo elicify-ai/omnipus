@@ -6,9 +6,10 @@ package credentials
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
@@ -51,7 +52,7 @@ func InjectFromConfig(cfg *config.Config, store *Store) []error {
 			continue
 		}
 		injected[ref] = true
-		slog.Debug("credentials: injected", "ref", ref, "provider", model.ModelName)
+		logger.SlogDebug("credentials: injected", "ref", ref, "provider", model.ModelName)
 	}
 
 	return errs
