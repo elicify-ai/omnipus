@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -104,6 +105,11 @@ type TaskCreateTool struct {
 	// bashPolicyChecker resolves an assignee agent's effective "bash" tool
 	// policy (ADR-049 D2 rule 5, FR-017/052). Set via SetBashPolicyChecker.
 	bashPolicyChecker func(assigneeAgentID string) (policy string, ok bool)
+	// planStore, when set, backs the optional plan_id linkage arg (ADR-052
+	// FR-002): validates the same-workspace FK and rejects linking to a
+	// terminal plan (validateTaskPlanLinkage, plan.go). A nil planStore with
+	// a non-empty plan_id arg fails closed (see SetPlanStore).
+	planStore *plan.Store
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -150,6 +156,15 @@ func (t *TaskCreateTool) SetOnCreate(fn func(*task.Task)) {
 // permission grant. Do NOT default an unwired checker's outcome to "allow".
 func (t *TaskCreateTool) SetBashPolicyChecker(fn func(assigneeAgentID string) (policy string, ok bool)) {
 	t.bashPolicyChecker = fn
+}
+
+// SetPlanStore installs the plan store backing the optional plan_id linkage
+// arg (ADR-052 FR-002). Wired by the agent loop alongside the task store; a
+// nil (unwired) store makes any create_task(plan_id=...) call fail closed —
+// see validateTaskPlanLinkage (plan.go). create_task calls with no plan_id
+// are entirely unaffected by whether this is wired.
+func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
+	t.planStore = store
 }
 
 // parseCriteriaArgs converts the create_task tool's raw "criteria" argument
@@ -244,6 +259,10 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			"parent_task_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the parent task (optional) — set when this is a subtask of another task",
+			},
+			"plan_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
 			},
 			"blocked_by": map[string]any{
 				"type":        "array",
@@ -524,6 +543,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 			return ErrorResult(fmt.Sprintf("task_create failed: %v", wErr))
 		}
 		entity.BlockedBy = deps
+	}
+
+	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
+	// (validateTaskPlanLinkage, plan.go). A create_task call with no plan_id
+	// is entirely unaffected — the check is a no-op for planID == "".
+	if planID, _ := args["plan_id"].(string); planID != "" {
+		if pErr := validateTaskPlanLinkage(t.planStore, planID, wsID); pErr != nil {
+			return ErrorResult(fmt.Sprintf("task_create failed: %v", pErr))
+		}
+		entity.PlanID = planID
 	}
 
 	if err := t.store.Create(entity); err != nil {

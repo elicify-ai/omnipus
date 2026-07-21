@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -163,6 +164,15 @@ type Deps struct {
 	//
 	// The production gateway wires this to agentLoop.ListAllSessions.
 	ListSessions func() ([]*session.UnifiedMeta, []error)
+
+	// PlanStore, when non-nil, backs create_task_in_workspace's optional
+	// plan_id linkage arg (ADR-052 FR-002): validates the same-workspace FK
+	// and rejects linking to a terminal (done/failed) plan. Mirrors the
+	// plain create_task tool's SetPlanStore (pkg/tools/task.go). A nil
+	// PlanStore with a non-empty plan_id arg fails closed — never a silent
+	// no-op linkage. The production gateway wires this to the same
+	// *plan.Store instance passed to the plain create_task tool.
+	PlanStore *plan.Store
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called
