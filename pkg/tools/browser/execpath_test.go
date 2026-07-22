@@ -83,7 +83,10 @@ func installRootFor(cfg BrowserConfig) string {
 // the first candidate name (google-chrome) resolves via LookPath but exits
 // non-zero when actually run; resolution must skip it and pick the next,
 // genuinely-working candidate (chromium) rather than committing to the
-// broken one.
+// broken one. SEC-ADR052-002: with the security-hardened default
+// TrustPathChrome=false the $PATH result is recorded at WARN-BROWSER-007
+// and discarded, so this test opts in to trusting $PATH to exercise the
+// broken-PATH-candidate skip behavior.
 func TestResolveExecPath_SkipsBrokenPATHCandidate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -97,6 +100,7 @@ func TestResolveExecPath_SkipsBrokenPATHCandidate(t *testing.T) {
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
+	cfg.TrustPathChrome = true // SEC-ADR052-002: opt in to trust $PATH
 	m := &BrowserManager{cfg: cfg}
 
 	got, err := m.resolveExecPath(context.Background())
@@ -136,7 +140,9 @@ func TestResolveExecPath_AllBrokenFallsThroughToManaged(t *testing.T) {
 // TestResolveExecPath_CachesAfterFirstProbe verifies the second
 // resolveExecPath call on the same manager reuses the cached path instead of
 // re-shelling-out to probe the candidate again — proven via a counter file
-// the fake script increments on every real invocation.
+// the fake script increments on every real invocation. SEC-ADR052-002: with
+// the security-hardened default TrustPathChrome=false, $PATH is discarded,
+// so this test opts in to trusting $PATH to exercise the cache.
 func TestResolveExecPath_CachesAfterFirstProbe(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -152,6 +158,7 @@ func TestResolveExecPath_CachesAfterFirstProbe(t *testing.T) {
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
+	cfg.TrustPathChrome = true // SEC-ADR052-002: opt in to trust $PATH
 	m := &BrowserManager{cfg: cfg}
 
 	first, err := m.resolveExecPath(context.Background())
@@ -185,9 +192,13 @@ func TestPreprovision_RemoteCDP_NoOp(t *testing.T) {
 }
 
 // TestPreprovision_ValidPATHCandidate_NoManagedInstallDirCreated verifies
-// that when a validated system Chromium is present, Preprovision resolves
-// to it and never creates the managed install directory (no download
-// attempted when nothing is needed).
+// that when a validated system Chromium is present AND the operator has
+// opted in to trusting a non-package binary (SEC-ADR052-002 —
+// cfg.TrustPathChrome=true), Preprovision resolves to it and never creates
+// the managed install directory (no download attempted when nothing is
+// needed). With the security-hardened default TrustPathChrome=false the
+// $PATH result is recorded at WARN-BROWSER-007 and discarded, so this
+// specific scenario requires the explicit opt-in.
 func TestPreprovision_ValidPATHCandidate_NoManagedInstallDirCreated(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell-script test double")
@@ -200,6 +211,7 @@ func TestPreprovision_ValidPATHCandidate_NoManagedInstallDirCreated(t *testing.T
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
+	cfg.TrustPathChrome = true // SEC-ADR052-002: opt in to trust $PATH
 	m := &BrowserManager{cfg: cfg}
 
 	got, err := m.Preprovision(context.Background())

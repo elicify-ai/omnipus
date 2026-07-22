@@ -584,6 +584,29 @@ func (c *BrowserCoordinator) ApplyRuntimeConfig(newCfg BrowserConfig, newMaxTota
 			nil,
 		)
 	}
+	// ADR-052 D2/M1 + SPEC-002: policy flips invalidate the resolved-path
+	// cache immediately. A cached PATH result can otherwise survive a toggle
+	// until the resolution negative TTL expires, defeating the new policy.
+	if oldCfg.PreferPackaged != newCfg.PreferPackaged || oldCfg.TrustPathChrome != newCfg.TrustPathChrome {
+		c.execPath.invalidate()
+		logger.InfoCF(
+			"browser",
+			"coordinator: browser resolution policy changed; exec-path cache invalidated, next resolution uses the new policy",
+			map[string]any{
+				"prefer_packaged_old":   oldCfg.PreferPackaged,
+				"prefer_packaged_new":   newCfg.PreferPackaged,
+				"trust_path_chrome_old": oldCfg.TrustPathChrome,
+				"trust_path_chrome_new": newCfg.TrustPathChrome,
+			},
+		)
+	}
+	// Persist the new config on the coordinator so subsequent
+	// reloads compare against the latest-applied state. Without this,
+	// a back-to-back reload with the same config would re-log the
+	// change (because oldCfg would be the original, not the latest).
+	c.mu.Lock()
+	c.cfg = newCfg
+	c.mu.Unlock()
 }
 
 // captureSharedContextResolved returns the effective ADR-048
@@ -652,7 +675,8 @@ func (c *BrowserCoordinator) TryOpenTab(agentID string) (bool, string) {
 	if c.totalOpenTabsLocked()+c.reservedTabs >= c.maxTotalTabs {
 		return false, fmt.Sprintf(
 			"global tab budget reached (tools.browser.max_total_tabs=%d); close a tab with browser_close_tab first",
-			c.maxTotalTabs)
+			c.maxTotalTabs,
+		)
 	}
 	c.reservedTabs++
 	return true, ""

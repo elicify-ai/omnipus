@@ -453,6 +453,21 @@ func DefaultConfig() *Config {
 				// WebRTCStunServer="" for host-candidates-only.
 				WebRTCEnabled:    true,
 				WebRTCStunServer: "stun:stun.l.google.com:19302",
+				// ADR-052 D2: default false — operators keep $PATH Chrome as the
+				// winning source by default (operator autonomy preserved), BUT
+				// ONLY when they have also opted into TrustPathChrome (the
+				// SEC-ADR052-002 toggle below). With TrustPathChrome=false
+				// (the default), $PATH Chrome is recorded but refused — see
+				// BrowserToolConfig.PreferPackaged's doc comment for the full
+				// interaction. Fleets that want the pinned package Chrome to
+				// outrank $PATH for reproducibility flip BOTH fields to true
+				// (post-onboarding, in config.json).
+				PreferPackaged: false,
+				// ADR-052 SEC-ADR052-002: default false — the resolver records a
+				// $PATH Chrome but refuses to launch it (falls through to the
+				// package Chrome + emits WARN-BROWSER-007). Operators with a
+				// deliberate custom Chrome opt in with true.
+				TrustPathChrome: false,
 				// ADR-048 condition 1/Option A: default TRUE — WebRTC capture
 				// requires the agent's session to share Chrome's default
 				// browser context (see CaptureSharedContext's doc comment on

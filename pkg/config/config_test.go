@@ -713,6 +713,145 @@ func TestLoadConfig_BrowserExecPathDefaultsEmpty(t *testing.T) {
 	}
 }
 
+// TestDefaultConfig_BrowserADR052SecurityDefaults (ADR-052 D2 / SEC-ADR052-002)
+// asserts that the fresh-install defaults for the two new ADR-052 fields
+// are FALSE — operators keep $PATH Chrome as the winning source by default
+// (D2) and the resolver REFUSES to launch a $PATH Chrome (SEC-ADR052-002).
+// Both defaults are part of the ADR-052 security posture: flipping either
+// to true in a fresh seed would silently change browser provenance
+// expectations on every install. A regression here is a silent downgrade
+// of the ADR-052 contract, not a benign default tweak.
+//
+// Traces to: docs/internal/architecture/ADR-052-native-cross-platform-and-bundled-Chrome.md
+func TestDefaultConfig_BrowserADR052SecurityDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.Tools.Browser.PreferPackaged {
+		t.Errorf("Tools.Browser.PreferPackaged should default to false (ADR-052 D2: " +
+			"operators keep $PATH Chrome as the winning source by default; prefer_packaged is " +
+			"the explicit opt-in for fleets that want reproducibility)")
+	}
+	if cfg.Tools.Browser.TrustPathChrome {
+		t.Errorf("Tools.Browser.TrustPathChrome should default to false (ADR-052 SEC-ADR052-002: " +
+			"a $PATH Chrome is recorded but refused; trust_path_chrome is the explicit opt-in for " +
+			"operators with a deliberate custom $PATH Chrome)")
+	}
+}
+
+// TestLoadConfig_BrowserPreferPackaged verifies that tools.browser.prefer_packaged
+// round-trips through LoadConfig into cfg.Tools.Browser.PreferPackaged.
+// The runtime resolver at pkg/tools/browser/exec_resolver.go reads this
+// field to decide whether the verified package Chrome outranks a $PATH
+// Chrome on a non-TrustPathChrome install — its correctness depends on
+// this loader path staying wired.
+func TestLoadConfig_BrowserPreferPackaged(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{"version":1,"tools":{"browser":{"prefer_packaged":true}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if !cfg.Tools.Browser.PreferPackaged {
+		t.Fatalf("Tools.Browser.PreferPackaged = %v, want true", cfg.Tools.Browser.PreferPackaged)
+	}
+
+	// Also verify the env-var binding OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED=true
+	// lands correctly. We snapshot and restore to keep the test hermetic.
+	t.Setenv("OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED", "true")
+	cfg2, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() with env var error: %v", err)
+	}
+	if !cfg2.Tools.Browser.PreferPackaged {
+		t.Errorf("Tools.Browser.PreferPackaged = %v under OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED=true, want true",
+			cfg2.Tools.Browser.PreferPackaged)
+	}
+}
+
+// TestLoadConfig_BrowserPreferPackagedDefaultsFalse mirrors the
+// ExecPathDefaultsEmpty pattern: omitting the JSON key leaves the seeded
+// default in place. Without this test a regression that drops the seed
+// (or coerces false→true) could slip past LoadConfig-level coverage.
+func TestLoadConfig_BrowserPreferPackagedDefaultsFalse(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{"version":1,"tools":{"browser":{"max_tabs":3}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	// Pin the env var false so a CI runner carrying OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED=true
+	// from a prior test cannot mask a regression in the loader.
+	t.Setenv("OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED", "false")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Browser.PreferPackaged {
+		t.Fatalf("Tools.Browser.PreferPackaged = %v when omitted from JSON + env false, want false",
+			cfg.Tools.Browser.PreferPackaged)
+	}
+}
+
+// TestLoadConfig_BrowserTrustPathChrome verifies the SEC-ADR052-002 field
+// round-trips through LoadConfig and binds to OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME.
+// The runtime resolver (pkg/tools/browser/exec_resolver.go) reads this
+// field to decide whether to honor a $PATH Chrome or refuse it (WARN-BROWSER-007).
+func TestLoadConfig_BrowserTrustPathChrome(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{"version":1,"tools":{"browser":{"trust_path_chrome":true}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if !cfg.Tools.Browser.TrustPathChrome {
+		t.Fatalf("Tools.Browser.TrustPathChrome = %v, want true", cfg.Tools.Browser.TrustPathChrome)
+	}
+
+	t.Setenv("OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME", "true")
+	cfg2, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() with env var error: %v", err)
+	}
+	if !cfg2.Tools.Browser.TrustPathChrome {
+		t.Errorf("Tools.Browser.TrustPathChrome = %v under OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME=true, want true",
+			cfg2.Tools.Browser.TrustPathChrome)
+	}
+}
+
+// TestLoadConfig_BrowserTrustPathChromeDefaultsFalse mirrors the
+// PreferPackagedDefaultsFalse test for trust_path_chrome.
+func TestLoadConfig_BrowserTrustPathChromeDefaultsFalse(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	configJSON := `{"version":1,"tools":{"browser":{"max_tabs":3}}}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("os.WriteFile() error: %v", err)
+	}
+
+	t.Setenv("OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME", "false")
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Browser.TrustPathChrome {
+		t.Fatalf("Tools.Browser.TrustPathChrome = %v when omitted from JSON + env false, want false",
+			cfg.Tools.Browser.TrustPathChrome)
+	}
+}
+
 func TestLoadConfig_HooksProcessConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.json")

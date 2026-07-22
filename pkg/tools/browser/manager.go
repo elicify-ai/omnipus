@@ -53,6 +53,23 @@ type BrowserConfig struct {
 	// post-launch auto-load to actually run.
 	ExtensionDir string `json:"extension_dir,omitempty"`
 	ExtensionID  string `json:"extension_id,omitempty"`
+	// PreferPackaged (ADR-052 D2/M1) makes the runtime package-managed Chrome
+	// (sibling chromium/ dir next to the binary, computed at runtime via
+	// os.Executable()) OUTRANK a system Chrome on $PATH during resolution —
+	// intended for fleets that want the pinned package Chrome to win for
+	// reproducibility. Default false preserves operator autonomy (M1): a
+	// deliberately newer/patched $PATH Chrome still wins on a fresh install.
+	// Operator `exec_path` override (above) ALWAYS outranks this, as before.
+	PreferPackaged bool `json:"prefer_packaged,omitempty"`
+	// TrustPathChrome (ADR-052 SEC-002) gates whether a Chrome found on
+	// $PATH is permitted to launch WITHOUT integrity verification. Default
+	// false (the security-hardened default): a $PATH resolution is recorded
+	// at WARN-BROWSER-007 and the resolver falls through to the verified
+	// package Chrome (SEC-ADR052-002 — an unverified binary is a "trusted
+	// RCE-engine origin" risk on a multi-tenant / CI-runner / compromised
+	// host). Operators who deliberately want a custom Chrome set this to
+	// true (or use the explicit ExecPath override, which always wins).
+	TrustPathChrome bool `json:"trust_path_chrome,omitempty"`
 }
 
 // DefaultConfig returns a BrowserConfig with spec-defined defaults.
@@ -397,11 +414,40 @@ func (m *BrowserManager) InstallRoot() string {
 // full-Chrome download exists under the install root (W3 e2e finding — the
 // install-root-only check wrongly classified such hosts not_capable and
 // permanently disabled WebRTC for them). See ClassifyVideoCapabilityWithExec.
+//
+// When cfg.ExecPath is unset — the common case, since most installs never
+// set an explicit override — this also falls back to the already-RESOLVED
+// exec path cached by execPathCaches (m.execPath.cachedPath(),
+// exec_resolver.go). Rationale (download-vs-launch mismatch): exec_resolver's
+// resolve() checks $PATH for a system google-chrome/chromium BEFORE falling
+// back to the managed Chrome-for-Testing download. On a host with a system
+// Chrome on $PATH, that system binary is what actually launches every real
+// browser session, and the managed install root this method otherwise
+// inspects is NEVER populated — so without this fallback,
+// ClassifyVideoCapability would permanently misclassify a perfectly capable
+// full-Chrome host as not_capable ("full-Chrome build not installed yet"),
+// disabling WebRTC live-view video for good on that host.
+//
+// This reads m.execPath's cache field only — it never calls resolve() /
+// resolveExecPath() itself. Those probe up to 4 PATH candidates (5s timeout
+// each) and can fetch the Chrome-for-Testing manifest over the network, which
+// is unacceptable on this method's call path (gateway request handling, see
+// CaptureVideoCapability's callers in pkg/gateway/browser_webrtc.go) — it
+// must stay a fast, non-blocking, no-network classification. If the cache is
+// empty (nothing resolved yet), behavior is unchanged from before: falls
+// through to the install-root-only check.
 func (m *BrowserManager) VideoCapability() VideoCapability {
 	m.mu.Lock()
 	execPath := m.cfg.ExecPath
 	profileDir := m.cfg.ProfileDir
 	m.mu.Unlock()
+	if execPath == "" {
+		// m.execPath has its own mutex (see execPathCaches' doc comment) —
+		// deliberately read after releasing m.mu above, mirroring every other
+		// caller in this package that touches both locks (ADR-038 discipline:
+		// never hold m.mu while touching execPath's lock, and vice versa).
+		execPath = m.execPath.cachedPath()
+	}
 	return ClassifyVideoCapabilityWithExec(execPath, InstallRootForProfileDir(profileDir))
 }
 
@@ -1108,7 +1154,8 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 func refreshTabMeta(tabCtx context.Context, timeout time.Duration) (title, url string) {
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
-	_ = chromedp.Run(ctx,
+	_ = chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_ = chromedp.Title(&title).Do(ctx)
 			_ = chromedp.Location(&url).Do(ctx)
@@ -1879,7 +1926,8 @@ func applyStealth(tabCtx context.Context, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
 	var ua string
-	if err := chromedp.Run(ctx,
+	if err := chromedp.Run(
+		ctx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_ = chromedp.Evaluate(`navigator.userAgent`, &ua).Do(ctx)
 			if clean := deHeadlessUA(ua); clean != "" && clean != ua {

@@ -47,7 +47,8 @@ func resolveTestBinary(t *testing.T) string {
 		// run). A fixed os.TempDir() path also lets repeat CI runs reuse
 		// the ~130 MB install instead of re-downloading each run.
 		sharedTestBin, errSharedTestBin = EnsureChromium(
-			context.Background(), filepath.Join(os.TempDir(), "omnipus-shared-test-chromium"))
+			context.Background(), filepath.Join(os.TempDir(), "omnipus-shared-test-chromium"),
+		)
 	})
 	if errSharedTestBin != nil {
 		t.Skipf("no managed Chrome for coordinator test: %v", errSharedTestBin)
@@ -97,7 +98,8 @@ func resolveTestBinaryHeadlessShell(t *testing.T) string {
 			}
 		}
 		sharedTestBinHeadlessShell, errSharedTestBinHeadlessShell = EnsureChromiumBuild(
-			context.Background(), filepath.Join(t.TempDir(), "chromium-headless-shell"), headlessShellBuild())
+			context.Background(), filepath.Join(t.TempDir(), "chromium-headless-shell"), headlessShellBuild(),
+		)
 	})
 	if errSharedTestBinHeadlessShell != nil {
 		t.Skipf("no managed chrome-headless-shell for D2 spike: %v", errSharedTestBinHeadlessShell)

@@ -12,7 +12,9 @@ import "testing"
 
 func TestAvailable(t *testing.T) {
 	if Available {
-		t.Fatal("Available must be false in a lite build (Pion compiled out) — the gateway's WebRTC gate ladder (wave-plan W2-A) depends on this to report reason=lite_build without ever attempting a real offer")
+		t.Fatal(
+			"Available must be false in a lite build (Pion compiled out) — the gateway's WebRTC gate ladder (wave-plan W2-A) depends on this to report reason=lite_build without ever attempting a real offer",
+		)
 	}
 }
 

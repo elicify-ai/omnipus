@@ -86,6 +86,11 @@ CONFIDENCE (D1 — WebRTC/Pion transport, SFU relay): High
 
 ### D2 — Capture: `chrome.tabCapture` MV3 extension in `--headless=new` FULL Chrome
 
+> **Platform note:** every API in this decision is standard cross-platform Chrome. The
+> `linux`-only gate in `capability.go` is inherited from ADR-044's abandoned Xvfb/
+> PulseAudio design, **not** from anything in D2. See **§13** for the code-verified
+> per-platform status before assuming video is Linux-only by necessity.
+
 The agent tab is captured as a real `MediaStream` (audio+video together) by a **gateway-owned MV3 extension** whose page **self-consumes** the capture (`chrome.tabCapture.getMediaStreamId` → `getUserMedia({audio:{mandatory:{chromeMediaSource:'tab',chromeMediaSourceId:id}},video})`) and hands the stream to the publisher `RTCPeerConnection`. No Xvfb, no PulseAudio, no `getDisplayMedia`. Launch flags: `--headless=new --remote-debugging-pipe --enable-unsafe-extension-debugging --allowlisted-extension-id=<id> --autoplay-policy=no-user-gesture-required`. AGC/EC/NS default **off** for a faithful tone. `[FACT — spike Q2 recipe, T3/T4]`
 
 This **empirically corrects ADR-044 §6.0's claim** that headless tab capture is impossible ("*extension capture needs a user gesture*"). That claim predated (a) the `--allowlisted-extension-id` flag, which removes the user-gesture requirement, and (b) testing on Chrome 151 `--headless=new`. With the allowlist flag the capture works headless, no gesture, and survives navigation. `[FACT — spike Q2; the flag is what Chromium's own tabCapture tests use]`
@@ -310,3 +315,91 @@ Direction (WebRTC/Pion over WebCodecs-A2): **High** — the full target pipeline
 **Amended in part by ADR-048 (2026-07-18):** capture requires the shared DEFAULT
 browser context; the per-agent-context preservation claim above is withdrawn for
 WebRTC-captured agents.
+
+---
+
+## 13. Platform support — what actually gates video (verified in code, 2026-07-21)
+
+**Read this section before reasoning about which platforms can do live-browser video.
+It exists because the stated reason in ADR-044 §6.0.1 item 4 describes a mechanism that
+was never built, and reading that line at face value has already produced one wrong
+conclusion.**
+
+### 13.1 The render architecture as actually implemented
+
+There is **no Xvfb, no PulseAudio, and no ffmpeg** anywhere in the shipped capture path.
+A repo-wide search of `pkg/` returns zero references to any of the three (the only hits
+are a `PULSE_SERVER` mention in a comment at `cdppipe/allocator.go:41` and an unrelated
+ffmpeg use in the WeChat media path at `pkg/channels/weixin/media.go:463`).
+`[FACT — verified 2026-07-21]`
+
+What actually runs, end to end:
+
+1. Managed **full Chrome** launches over the CDP pipe (`--remote-debugging-pipe`, fd 3/4),
+   flags from `chromeHardeningBaseFlags()` (`pkg/tools/browser/exec_resolver.go:101`),
+   `--headless` appended when `cfg.Headless` (always true in practice —
+   `managedExecAllocatorOpts`).
+2. The gateway loads its own MV3 extension (`pkg/tools/browser/captureext/embedded/`,
+   permissions `["tabCapture","tabs"]`) and opens its `encoder.html` page.
+3. That page calls `chrome.tabCapture.getMediaStreamId({targetTabId})` then
+   `getUserMedia({chromeMediaSource:'tab', chromeMediaSourceId})` for **audio+video
+   together**, and negotiates a non-trickle WebRTC offer to the gateway's loopback
+   ingest WS. `[FACT — captureext/embedded/encoder.js]`
+4. The in-process Pion SFU (`pkg/tools/browser/webrtc/`) relays those tracks to SPA viewers.
+
+Every API in step 3 is a **standard, cross-platform Chrome API**. `encoder.js` contains
+**no platform branch of any kind**. `[FACT]`
+
+### 13.2 The gate as implemented
+
+`ClassifyVideoCapability` (`pkg/tools/browser/capability.go`) hard-returns not-capable
+when `goosForCapability != "linux"`, before inspecting anything else.
+`selectDownloadBuild` (`installer.go`) then reinforces it: non-linux platforms
+deliberately download the lighter `chrome-headless-shell` *because* they "will never be
+video-capable" — which is only true because of the gate itself. `[FACT]`
+
+### 13.3 Where that gate actually came from
+
+ADR-044's original **A2** design captured video via **Xvfb + PulseAudio + ffmpeg**, which
+genuinely are Linux-only. §6.0.1 item 4 recorded video as "Linux-only" on exactly that
+basis — while already flagging it as "an accepted operator scope cost, **not a technical
+necessity**."
+
+**This ADR (§D2) replaced that mechanism entirely** with in-Chrome `tabCapture` + Pion
+("no new process, one fewer Chrome, no CGo, no ffmpeg" — ADR-044 §368). The Linux-only
+*rationale* died with A2. The Linux-only *check* was carried forward unchanged and never
+re-derived: this ADR mentions "non-Linux" exactly once, as a label in the §6.2 fallback
+diagram, with no supporting argument. `[FACT]`
+
+### 13.4 Actual per-platform status
+
+| Platform | Status | Evidence |
+|---|---|---|
+| **Linux** | Supported and validated | Current production path |
+| **macOS** | **No code-level blocker found. UNTESTED.** | Capture path is cross-platform (§13.1); `chromeHardeningBaseFlags` already ships `--use-mock-keychain` (a macOS flag) beside `--password-store=basic` (a Linux one); `coordinator_lock_unix.go` is `//go:build unix`, which includes darwin; Chrome-for-Testing publishes full `chrome` for `mac-arm64` and `mac-x64` |
+| **Windows** | **Genuinely blocked — but not by video** | `cdppipe/allocator.go:232` sets `cmd.ExtraFiles`, and the Go stdlib states "ExtraFiles is not supported on Windows" (`go doc os/exec.Cmd.ExtraFiles`). This breaks the entire managed-Chrome CDP-pipe transport, i.e. **all** managed browsing, not just capture |
+
+**macOS is untested, not impossible.** Do not read §13.4 as "macOS works". The plausible
+failure point is audio: `cfg.Headless` is always true and headless macOS has no loopback
+audio device, so `tabCapture` may yield video without audio, or fail outright. Settling
+this needs an actual run (build darwin/arm64, lift the gate, attempt a session) — it is
+an empirical question, and **no one has run it.** `[ASSUMPTION — flagged as such]`
+
+### 13.5 Classifier bug found and fixed (2026-07-21)
+
+`BrowserManager.VideoCapability()` read only `cfg.ExecPath` (the operator override, empty
+on nearly every install) and so fell through to an install-root check that asks *"did we
+download Chrome?"* — while `execPathCaches.resolve()` probes `$PATH` **first**. On any host
+with a system Chrome on `$PATH`, that binary launches, the managed install root is never
+populated, and video was permanently disabled with
+`"full-Chrome build not installed yet"` despite a fully capable Chrome running.
+
+Observed live: `/usr/bin/google-chrome` = Chrome 150.0.7871.128, `exec_path: ""`, no
+managed install root, live view stuck on JPEG. **Fixed** by falling back to the already-
+resolved cached exec path (never re-resolving — that path must not block or hit the
+network). The classifier now asks *"is the browser we will actually launch
+video-capable?"*, which is the question that was always meant. Regression coverage:
+`TestVideoCapability_CachedExecPathFallback`.
+
+`omnipus doctor` now surfaces all of these preconditions (`WARN-BROWSER-001..004`) instead
+of leaving them in a gateway log line.
