@@ -383,7 +383,7 @@ func runExternalCLISubTurn(
 		runner.ConsentDispatcher(runCtx, evCh, driver, runID, childTS.transcriptSessionID, consent, out)
 	}()
 
-	result := drainExternalRun(runCtx, childTS, runID, cli, out)
+	result := drainExternalRun(runCtx, al, childTS, runID, cli, out)
 	return result, result.Err
 }
 
@@ -397,6 +397,7 @@ func runExternalCLISubTurn(
 // the run context ending.
 func drainExternalRun(
 	ctx context.Context,
+	al *AgentLoop,
 	childTS *turnState,
 	runID, cli string,
 	out <-chan runner.RunEvent,
@@ -490,13 +491,39 @@ func drainExternalRun(
 				ended = true
 			case runner.EventKindError:
 				if ev.Err != nil {
-					msg := ev.Err.Message
+					// Wave 1 (ADR-051 §RD5 MAJ-005 / fail-closed sanitizer):
+					// route runner-channel errors through SanitizeRunnerError
+					// so raw stderr / CLI failure text does NOT reach the
+					// assistant transcript. The transcript gets a generic
+					// marker; the raw is logged + retained on the EventKindError
+					// payload for the WS forwarder (where Verbose Chat
+					// decides whether to show it).
+					rawMsg := ev.Err.Message
+					sanitized := SanitizeRunnerError(rawMsg)
 					childTS.appendIntermediateAssistantTranscript(
-						"[external-cli error] "+msg,
+						"[external-cli error] "+sanitized.AssistantText,
 						transcriptModelFor(childTS.agent),
 					)
+					// Surface the generic EventKindError for the WS forwarder
+					// — the assistant transcript gets sanitized text, but the
+					// structured error frame still carries the code/retryable
+					// bits the SPA needs.
+					emitExternalCLIErrorEvent(al, childTS, ev.Err, sanitized)
 					if ev.Err.Fatal {
-						runErr = fmt.Errorf("external-cli run failed: %s", msg)
+						// ADR-051 B2 fix: runErr MUST carry the sanitized
+						// generic message — it flows into ToolResult.ForLLM
+						// (L535) and reaches the parent agent's tool-result
+						// context. sanitized.LogText is raw stderr / provider
+						// text and must NEVER cross that boundary. The raw
+						// text is retained ONLY in the structured slog.Warn
+						// below for operator triage via gateway.log.
+						runErr = fmt.Errorf("external-cli run failed: %s", sanitized.AssistantText)
+						slog.Warn("external-cli dispatch: fatal runner error",
+							"run_id", runID, "cli", cli,
+							"assistant_text", sanitized.AssistantText,
+							"raw_log_text", sanitized.LogText,
+							"code", string(sanitized.Code),
+							"retryable", sanitized.Retryable)
 					}
 				}
 			}
@@ -791,3 +818,103 @@ func (c *policyApproverConsent) RequestConsent(_ context.Context, req runner.Con
 
 // compile-time interface assertion
 var _ runner.ConsentHandler = (*policyApproverConsent)(nil)
+
+// SanitizedRunnerError is the output of SanitizeRunnerError — the
+// fail-closed separator between an external CLI's raw stderr text and
+// anything that crosses to the assistant or to the operator-visible log.
+// ADR-051 §RD5 MAJ-005: REST-executor (subagent_3p) CLI errors that cross
+// to the SPA must be routed through the shared classifier; the runner
+// channel's raw ev.Err.Message is the most direct path for that data to
+// leak, and this sanitizer is the barrier.
+type SanitizedRunnerError struct {
+	// AssistantText is the user/assistant-facing copy. Generic over CLI
+	// identity and stderr text — the assistant transcript gets this and
+	// ONLY this. NEVER the raw stderr.
+	AssistantText string
+
+	// LogText is the operator-facing copy (raw + classifier code). Lands
+	// in gateway.log only, never on the wire and never in the transcript.
+	LogText string
+
+	// Code is the LLMErrorCode the classifier mapped this error to. Empty
+	// string when classification is unknown; the WS forwarder reads this
+	// to gate the live error frame (e.g. suppress when rate_limited).
+	Code LLMErrorCode
+
+	// Retryable mirrors the LLMError's retryable bit — the WS forwarder
+	// surfaces retry hints when true.
+	Retryable bool
+}
+
+// SanitizeRunnerError is the fail-closed sanitizer between a runner's
+// raw error text and anything that reaches the assistant or the wire.
+// Maps the runner error through the shared translateLLMError classifier
+// (using a synthetic ProviderError built from the message) and returns
+// a SanitizedRunnerError with AssistantText generic over CLI identity.
+//
+// The function NEVER returns the raw stderr verbatim — AssistantText is
+// always one of the userMessages entries, regardless of classification
+// outcome. This is the load-bearing invariant: a failed CLI run cannot
+// leak its raw stderr to the assistant transcript even when the
+// classifier returns CodeUnknown.
+func SanitizeRunnerError(rawMessage string) SanitizedRunnerError {
+	if rawMessage == "" {
+		rawMessage = "external CLI failed"
+	}
+	// Build a synthetic ProviderError carrying only the message; the
+	// classifier falls through to substring matching (no status) — fine
+	// for the common external-CLI errors (auth, content policy, generic
+	// process failure). Status-less classification is intentional: the
+	// runner's ev.Err has no HTTP context.
+	pe := &ProviderError{
+		Status: 0,
+		Body:   rawMessage,
+		Err:    nil,
+	}
+	llm := TranslateLLMError(pe, rawMessage)
+	// The shared translator emits one of the userMessages entries; that
+	// is always safe for the assistant to see. Force the empty/CodeUnknown
+	// case onto the generic copy too — the load-bearing invariant.
+	assistant := llm.Message
+	if assistant == "" {
+		assistant = "The external CLI failed. See gateway.log for details."
+	}
+	return SanitizedRunnerError{
+		AssistantText: assistant,
+		LogText:       rawMessage,
+		Code:          llm.Code,
+		Retryable:     llm.Retryable,
+	}
+}
+
+// emitExternalCLIErrorEvent surfaces a generic EventKindError on the bus
+// for the runner's raw error, carrying the structured classifier code
+// (NOT the raw stderr in the assistant-facing Message — that lives in
+// LogText for operator triage and is gated by Verbose Chat at the WS
+// forwarder). The agent-loop appendErrorTranscript write choke point
+// also runs through translateLLMError, so the transcript gets the same
+// generic copy (NOT the raw CLI stderr).
+func emitExternalCLIErrorEvent(al *AgentLoop, ts *turnState, runnerErr *runner.ErrorEvent, sanitized SanitizedRunnerError) {
+	if al == nil || ts == nil {
+		return
+	}
+	if runnerErr == nil {
+		return
+	}
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("runTurn", "turn.error"),
+		ErrorPayload{
+			Stage:   "external_cli",
+			Message: sanitized.AssistantText,
+		},
+	)
+	// Mirror to the JSONL transcript via the write choke point. The raw
+	// runnerErr.Message stays in sanitized.LogText / gateway.log; the
+	// transcript gets the generic copy.
+	ts.appendErrorTranscript(
+		EventKindError.String(),
+		"external_cli",
+		sanitized.AssistantText,
+	)
+}

@@ -23,3 +23,5 @@ properties:
     minLength: 1
     maxLength: 4096
     description: Human-readable error description.
+  payload:
+    $ref: ./ErrorPayload.yaml

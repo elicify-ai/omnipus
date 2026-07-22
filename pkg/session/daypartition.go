@@ -157,6 +157,12 @@ type TranscriptEntry struct {
 	// omits the model span entirely for those (FR-014) — there is no
 	// "(model not recorded)" placeholder string rendered.
 	Model string `json:"model,omitempty"`
+	// ErrorCode is the translated LLMError.code (per ADR-051 Rev 3).
+	// Populated by appendErrorTranscript and consumed by the replay path so
+	// the SPA can render the same code/message regardless of the live wire.
+	ErrorCode string `json:"error_code,omitempty"`
+	// ErrorRetryable is the translated LLMError.retryable flag.
+	ErrorRetryable bool `json:"error_retryable,omitempty"`
 	// CacheReadTokens and CacheWriteTokens carry the provider cache split for
 	// this assistant turn. Both are 0 for non-assistant entries and for legacy
 	// entries written before Wave 1 token tracking. Used to accumulate

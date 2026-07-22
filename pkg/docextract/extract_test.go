@@ -15,10 +15,26 @@ import (
 )
 
 // makeDocx synthesizes a minimal .docx zip in memory with the given paragraph texts.
+// Includes [Content_Types].xml so the OOXML magic-byte sniff in pkg/docextract/extract.go
+// routes the file through the OOXML extractor instead of the generic archive path.
 func makeDocx(t *testing.T, paragraphs ...string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
+
+	// [Content_Types].xml — required for the OOXML magic-byte sniff.
+	if w, err := zw.Create("[Content_Types].xml"); err != nil {
+		t.Fatal(err)
+	} else {
+		ct := `<?xml version="1.0" encoding="UTF-8"?>` +
+			`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			`<Default Extension="xml" ContentType="application/xml"/>` +
+			`<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+			`</Types>`
+		if _, err := w.Write([]byte(ct)); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// Build word/document.xml
 	var xmlBuf strings.Builder

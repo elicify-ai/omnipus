@@ -14,9 +14,9 @@
 //
 // Spec ref: docs/internal/specs/phase-1-chat-model-and-errors.md
 //
-//	FR-001: rate_limit denial MUST also emit EventKindError with the same
-//	        RateLimitPayload data, AND write a system entry to the JSONL
-//	        transcript so replay shows it.
+//	FR-001: rate_limit denial MUST emit the authoritative EventKindRateLimit
+//	        frame (without a duplicate EventKindError), AND write a system
+//	        entry to the JSONL transcript so replay shows it.
 //	FR-002: any provider error (auth failure, validation, transport) MUST emit
 //	        EventKindError with ErrorPayload, AND write a system entry to the
 //	        JSONL transcript.
@@ -26,15 +26,15 @@
 // EventKindRateLimit on the bus); this file asserts the JSONL transcript
 // carries an error entry the replay path can read.
 //
-// TDD rows: 17 (rate_limit emits EventKindError), 18 (provider error emits
-// EventKindError).
+// TDD rows: 17 (rate_limit emits the authoritative EventKindRateLimit),
+// 18 (provider error emits EventKindError).
 
 package agent
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +48,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -211,8 +212,11 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		"system entry must record the agent that was rate-limited")
 
 	// ---------------------------------------------------------------------
-	// Assert (B): the event bus also emits EventKindError so the WS frame
-	// path continues to work (regression check on the WS frame side).
+	// Assert (B): the EventKindRateLimit frame is the AUTHORITATIVE rate-limit
+	// signal on the bus (BLOCK 2 / FR-009 dedup). EventKindError must NOT
+	// also be emitted for the same denial — a duplicate frame would render
+	// the user a second bubble. The typed live WS frame for `rate_limited`
+	// is suppressed (RateLimitFrame wins) per the BLOCK 2 invariant.
 	// ---------------------------------------------------------------------
 	events := drainEvents(sub.C)
 	var errEvents []Event
@@ -221,36 +225,42 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 			errEvents = append(errEvents, e)
 		}
 	}
-	require.NotEmpty(t, errEvents,
-		"event bus must carry at least one EventKindError after a rate-limit denial")
-
-	// The rate-limit payload must be present on at least one ErrorPayload.
-	// We assert this with a structured type-assert on Payload so the test
-	// fails clearly if the payload type ever changes.
-	foundRLPayload := false
-	for _, e := range errEvents {
-		if _, ok := e.Payload.(RateLimitPayload); ok {
-			foundRLPayload = true
-			break
-		}
-	}
-	assert.True(t, foundRLPayload,
-		"EventKindError payloads must include RateLimitPayload; "+
+	assert.Empty(t, errEvents,
+		"rate-limit denial must NOT also emit a duplicate EventKindError; "+
 			"observed payload types: %v", payloadTypesOf(errEvents))
 
 	// ---------------------------------------------------------------------
 	// Assert (C): the EventKindRateLimit frame is STILL emitted on the bus
 	// (no regression on the existing WS `rate_limit` frame).
 	// ---------------------------------------------------------------------
-	var sawRateLimitFrame bool
+	var rateLimitPayload *RateLimitPayload
 	for _, e := range events {
-		if e.Kind == EventKindRateLimit {
-			sawRateLimitFrame = true
-			break
+		if e.Kind != EventKindRateLimit {
+			continue
 		}
+		payload, ok := e.Payload.(RateLimitPayload)
+		if ok {
+			payloadCopy := payload
+			rateLimitPayload = &payloadCopy
+		}
+		break
 	}
-	assert.True(t, sawRateLimitFrame,
-		"EventKindRateLimit must still be emitted (no regression on the WS frame side)")
+	require.NotNil(t, rateLimitPayload,
+		"EventKindRateLimit with RateLimitPayload must still be emitted (no regression on the WS frame side)")
+
+	// ---------------------------------------------------------------------
+	// Assert (D): the transcript entry carries the typed LLMError code
+	// (BLOCK 2 / FR-008). The persisted ErrorCode must equal "rate_limited"
+	// so the replay path can render the same banner.
+	// ---------------------------------------------------------------------
+	assert.Equal(t, "rate_limited", rlEntry.ErrorCode,
+		"transcript entry must carry the typed rate_limited code")
+	assert.True(t, rlEntry.ErrorRetryable,
+		"rate-limit entries must mark ErrorRetryable=true")
+	expectedRateLimitCopy := fmt.Sprintf("rate limit: %s (retry after %.0fs)",
+		rateLimitPayload.PolicyRule, rateLimitPayload.RetryAfterSeconds)
+	assert.Equal(t, expectedRateLimitCopy, rlEntry.Content,
+		"transcript must preserve the friendly rate-limit copy")
 
 	// ---------------------------------------------------------------------
 	// Assert (D): audit row was written (regression on the existing test).
@@ -281,10 +291,16 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 	workspaceDir := filepath.Join(tmpHome, "workspace")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
-	// Scripted provider returns an auth-failure-like error on every Chat call.
-	// The agent loop retries up to MaxRetries times; we just need enough
-	// scripted error steps to cover the retry budget plus the final failure.
-	providerErr := errors.New("provider auth failed: 401 invalid api key")
+	// Scripted provider returns a structured auth failure on every Chat call.
+	// The structured status/body is the production provider-error shape consumed
+	// by errorToProviderError and the BLOCK 2 classifier.
+	const rawProviderText = `UPSTREAM_SECRET_INVALID_API_KEY`
+	providerErr := &common.ProviderError{
+		Status:      401,
+		Body:        rawProviderText,
+		BodyPreview: rawProviderText,
+		ContentType: "application/json",
+	}
 	const maxRetries = 3
 	provider := testutil.NewScenario()
 	for i := 0; i <= maxRetries; i++ {
@@ -348,25 +364,33 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 		"transcript must contain at least one EntryTypeSystem entry describing the provider error; "+
 			"all entries: %+v", entries)
 
-	// At least one system entry must carry the provider error message.
+	// At least one system entry must carry the generic classifier copy. Raw
+	// provider text must never be persisted.
 	var errEntry *session.TranscriptEntry
 	for i := range systemEntries {
 		c := systemEntries[i]
-		if strings.Contains(c.Content, providerErr.Error()) ||
-			strings.Contains(strings.ToLower(c.Content), "provider") ||
-			strings.Contains(strings.ToLower(c.Content), "auth") ||
-			strings.Contains(strings.ToLower(c.Content), "llm call failed") {
+		assert.NotContains(t, c.Content, rawProviderText,
+			"transcript must never contain raw provider text")
+		if c.ErrorCode == string(CodeProviderRejected) {
 			cp := c
 			errEntry = &cp
 			break
 		}
 	}
 	require.NotNil(t, errEntry,
-		"transcript must contain a system entry carrying the provider error message; "+
-			"system entries found: %+v", systemEntries)
+		"transcript must contain a system entry carrying provider_rejected; system entries found: %+v",
+		systemEntries)
 
 	assert.Equal(t, defaultAgent.ID, errEntry.AgentID,
 		"system entry must record the agent that hit the provider error")
+	assert.Equal(t, string(CodeProviderRejected), errEntry.ErrorCode,
+		"system entry must carry the provider-shaped BLOCK 2 code")
+	assert.False(t, errEntry.ErrorRetryable,
+		"provider rejection must not be marked retryable")
+	assert.Equal(t, UserMessageForCode(CodeProviderRejected), errEntry.Content,
+		"transcript must use the generic classifier copy")
+	assert.NotContains(t, errEntry.Content, rawProviderText,
+		"raw provider text must never appear in the transcript")
 
 	// ---------------------------------------------------------------------
 	// Assert (B): the event bus carries an EventKindError with ErrorPayload.

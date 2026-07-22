@@ -262,10 +262,19 @@ func FixtureDoneFrame_Edge() DoneFrame {
 
 func FixtureErrorFrame_Populated() ErrorFrame {
 	sessId := "sess-1"
+	detail := "structured detail for the live error"
 	return ErrorFrame{
 		Type:      "error",
 		Message:   "LLM rate limit exceeded — retry after 60 seconds",
 		SessionId: &sessId,
+		Payload: &ErrorPayload{
+			LlmError: LLMError{
+				Code:      "rate_limited",
+				Message:   "The AI service is busy. Please retry shortly.",
+				Retryable: true,
+				Detail:    &detail,
+			},
+		},
 	}
 }
 
@@ -277,6 +286,13 @@ func FixtureErrorFrame_Edge() ErrorFrame {
 	return ErrorFrame{
 		Type:    "error",
 		Message: repeatStr("x", 4096), // long error message
+		Payload: &ErrorPayload{
+			LlmError: LLMError{
+				Code:      "unknown",
+				Message:   repeatStr("x", 4096),
+				Retryable: false,
+			},
+		},
 	}
 }
 

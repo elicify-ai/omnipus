@@ -1,0 +1,29 @@
+title: LLMError
+description: Translated provider/LLM error safe for the live WebSocket boundary.
+type: object
+required:
+  - code
+  - message
+  - retryable
+additionalProperties: false
+properties:
+  code:
+    type: string
+    enum:
+      - media_unsupported
+      - provider_rejected
+      - rate_limited
+      - network
+      - content_policy
+      - context_too_long
+      - unknown
+  message:
+    type: string
+    minLength: 1
+    maxLength: 4096
+  retryable:
+    type: boolean
+  detail:
+    type: string
+    maxLength: 2048
+    description: Live-only technical detail; never persisted or replayed.

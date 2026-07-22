@@ -1025,6 +1025,21 @@ func (al *AgentLoop) SetAppliedSandboxMode(mode sandbox.Mode) {
 // fields. Audit failures are logged at warn level and swallowed — a rate-limit
 // denial must still be reported to the caller even when the audit logger is
 // unhealthy.
+//
+// Wave 1 (rate-limit dedup correctness, ADR-051 §RD6): this function
+// emits ONE event (EventKindRateLimit) and writes ONE transcript entry —
+// the previous "EventKindError + RateLimitPayload + EventKindRateLimit"
+// dual-emit caused two live frames for the same condition (the WS
+// forwarder then had to suppress the duplicate via code==rate_limited,
+// but the EventKindError was still emitted onto the bus with a payload
+// that was typed RateLimitPayload, not ErrorPayload — leaking the dual
+// shape into every subscriber). The transcript write now goes through
+// appendErrorTranscript's classifier with pe=nil; the classifier
+// recognizes the "rate limit: …" shape via the message substring and
+// emits CodeRateLimited, but the friendly caller-supplied message is
+// preserved verbatim (ADR-051 §RD5 MAJ-001/004 carve-out — rate-limit
+// messages are already user-safe and don't need a second translation
+// pass).
 func (al *AgentLoop) recordRateLimitDenial(
 	ts *turnState,
 	limitType string,
@@ -1049,17 +1064,12 @@ func (al *AgentLoop) recordRateLimitDenial(
 		})
 	}
 	// FR-001: rate-limit denials MUST be visible after a page reload.
-	// The spec requires EventKindError in the JSONL transcript (consumed by the
-	// replay path on session reopen), but the live WS UI still subscribes to
-	// EventKindRateLimit for the dedicated denial banner. We therefore emit BOTH
-	// — EventKindError drives the persistent record + replay, EventKindRateLimit
-	// drives the live toast/banner. The transcript write below closes the
-	// "Error replay gap" called out as US-1.
-	al.emitEvent(
-		EventKindError,
-		ts.eventMeta("runTurn", "turn.error"),
-		payload,
-	)
+	// EventKindRateLimit is the authoritative live frame for the WS toast
+	// AND the source for the dedicated denial banner. Replay reads the
+	// transcript entry written below. No duplicate EventKindError emit —
+	// the prior dual-emit (EventKindError carrying RateLimitPayload +
+	// EventKindRateLimit) was a live-bus pollution source and was removed
+	// in the Wave 1 fix pass.
 	al.emitEvent(
 		EventKindRateLimit,
 		ts.eventMeta("runTurn", "turn.rate_limit"),
@@ -2867,7 +2877,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 					var err error
 					response, ag, err = al.processMessage(runCtx, msg)
 					if err != nil && response == "" {
-						response = fmt.Sprintf("Error processing message: %v", err)
+						// ADR-051 §RD5: never surface raw err text in the assistant-facing
+						// reply. Route through the classifier so provider-originated body /
+						// status / model identity is replaced with the typed copy.
+						// The raw err stays in the defer's log line for operator triage.
+						response = TranslateLLMError(nil, err.Error()).Message
 					}
 					if response != "" {
 						al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
@@ -3494,7 +3508,7 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 		EventKindError,
 		ts.eventMeta("hooks", "turn.error"),
 		ErrorPayload{
-			Stage:   "hook." + stage,
+			Stage: "hook." + stage, ChatID: ts.opts.ChatID,
 			Message: err.Error(),
 		},
 	)
@@ -6187,16 +6201,24 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// (appendErrorTranscript), AND push a live notification so the
 				// CURRENT session learns immediately — the transcript write alone
 				// only becomes visible after a reload.
+				//
+				// Wave 1 (ADR-051 §RD5 MAJ-003): sanitise the model_switch
+				// message via the classifier so the model name does not leak
+				// into the assistant-facing copy. The classifier recognises
+				// the "could not switch to model" shape via substring and
+				// emits a generic message; raw stays in logger.WarnCF for
+				// operator triage.
 				switchFailMsg := fmt.Sprintf(
 					"Could not switch to model %q: %s. This reply used %q instead.",
 					requested, switchErr.Error(), ts.agent.Model,
 				)
+				switchLLM := TranslateLLMError(nil, switchFailMsg)
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "model_switch", Message: switchFailMsg},
+					ErrorPayload{Stage: "model_switch", Message: switchLLM.Message, ChatID: ts.opts.ChatID},
 				)
-				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchFailMsg)
+				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchLLM.Message)
 				// NB: no notification frame here — `model_switch_failed` is not a
 				// contract NotificationFrame.notification_type, so the SPA's
 				// inbound Zod validation would drop it. The EventKindError +
@@ -6824,30 +6846,84 @@ turnLoop:
 			return err == nil
 		}
 
+		// synthesizeImageRejection restores the pre-classifier friendly path for
+		// image-only capability/format rejections. Image-only failures are terminal:
+		// stripping the image and retrying would silently answer a different prompt.
+		// PDF or mixed-media requests continue through TryMediaDowngrade below.
+		synthesizeImageRejection := func(pe *ProviderError, rejectionErr error) bool {
+			if ts.mediaRetryDone.Load() || rejectionErr == nil {
+				return false
+			}
+
+			rejectionText := rejectionErr.Error()
+			if pe != nil && pe.Body != "" {
+				rejectionText = pe.Body
+			}
+			if !isImageRejectionMessage(rejectionText) || isPDFRejectionMessage(rejectionText) {
+				return false
+			}
+
+			// No media is allowed here for compatibility with capability errors
+			// returned after compaction. When media is present, every block must be
+			// an image; a PDF or any other block makes this a mixed-media request.
+			for _, message := range callMessages {
+				for _, mediaRef := range message.Media {
+					if !startsWithCaseInsensitive(mediaRef, "data:image/") {
+						return false
+					}
+				}
+			}
+
+			logger.WarnCF("agent", "model rejected image input — returning guidance instead of retrying without it",
+				map[string]any{"agent_id": ts.agent.ID, "model": llmModel, "error": rejectionErr.Error()})
+			response = &providers.LLMResponse{
+				Content: fmt.Sprintf(
+					"I can't view images with the current model (%s). To work with images, switch this "+
+						"agent to a model that supports image input, then try again.",
+					llmModel,
+				),
+			}
+			err = nil
+			ts.mediaRetryDone.Store(true)
+			ts.setLastProducedModel(ModelSyntheticImageRejection)
+			logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
+				map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
+			return true
+		}
+
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM(callMessages, providerToolDefs)
 			if err == nil {
 				break
 			}
-			// If the provider rejected image input on a tool result, strip
-			// inline image data URLs from tool messages and retry once. This
-			// keeps text-only models working while still giving vision-capable
-			// models the picture.
-			if strings.Contains(err.Error(), "image input") {
-				stripped := false
-				for i := range callMessages {
-					if callMessages[i].Role == "tool" && len(callMessages[i].Media) > 0 {
-						callMessages[i].Media = nil
-						stripped = true
-					}
-				}
-				if stripped {
-					logger.WarnCF("agent", "provider rejected image input — retrying without media",
-						map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
-					response, err = callLLM(callMessages, providerToolDefs)
-					if err == nil {
-						break
-					}
+			// Preserve the friendly image-only synthesis before the generic media
+			// downgrade path. PDF and mixed-media failures deliberately fall through.
+			pe := errorToProviderError(err)
+			if synthesizeImageRejection(pe, err) {
+				break
+			}
+			// Wave 1 (ADR-051 RD2): classifier-gated media downgrade-retry.
+			// Replaces the prior inline substring "image input" strip path
+			// (which only handled vision-capability errors and ran on every
+			// retry iteration). The new helper:
+			//   1. classifies pe via the shared classifier — only retries
+			//      CodeMediaUnsupported (never content-policy/auth/unknown).
+			//   2. hoists the per-turn guard onto ts.mediaRetryDone — the
+			//      retry cannot fire twice in the same turn.
+			//   3. handles both PDF and image media (PDF via
+			//      downgradePDFMediaToText; image via stripRejectedImageMedia).
+			if TryMediaDowngrade(ts, callMessages, pe) {
+				logger.WarnCF("agent",
+					"provider rejected media input — retrying with downgraded media block",
+					map[string]any{
+						"agent_id": ts.agent.ID,
+						"model":    llmModel,
+						"error":    err.Error(),
+						"code":     string(CodeMediaUnsupported),
+					})
+				response, err = callLLM(callMessages, providerToolDefs)
+				if err == nil {
+					break
 				}
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
@@ -7239,56 +7315,35 @@ turnLoop:
 			if errors.Is(err, context.DeadlineExceeded) {
 				return turnResult{}, fmt.Errorf("turn timed out")
 			}
-			// Friendly degradation for non-vision models. A user attached an image
-			// to a model that can't view images, so the provider returned a raw
-			// 400 whose message specifically indicates a missing vision capability
-			// (e.g. "'claude-3-5-haiku-...' does not support image input.").
-			// isImageInputRejection uses a narrow match: errors about corrupt
-			// images, oversized files, or content-moderation blocks are NOT
-			// intercepted here and fall through to the normal error path.
-			// Images have no text fallback (unlike PDFs), and the tool-result
-			// image-strip above only covers agent-generated images — so instead
-			// of surfacing the raw error, synthesize a clear, actionable
-			// assistant reply and fall through to the normal emit path
-			// (streamed/published like any other response).
-			if isImageInputRejection(err) {
-				logger.WarnCF("agent", "model rejected image input — returning guidance instead of error",
-					map[string]any{"agent_id": ts.agent.ID, "model": llmModel, "error": err.Error()})
-				response = &providers.LLMResponse{
-					Content: fmt.Sprintf(
-						"I can't view images with the current model (%s). To work with images, switch this "+
-							"agent to a model that supports image input, then try again.",
-						llmModel,
-					),
-				}
-				err = nil
-				// The synthesized guidance above is NOT produced by llmModel — the
-				// provider refused the call entirely. Stamp a sentinel so the
-				// transcript model field does NOT mis-attribute this turn to llmModel
-				// (silent-failure-A #5). The original error stays in the warn log
-				// above so operators can debug; we surface a debug-level marker here
-				// for search/discovery.
-				ts.setLastProducedModel(ModelSyntheticImageRejection)
-				logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
-					map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
-				// fall through to the normal post-LLM handling below.
-			}
 		}
 		if err != nil {
 			turnStatus = TurnEndStatusError
+			// Wave 1 (error-provenance hardening, ADR-051 §RD5 CRIT-001):
+			// never emit raw err.Error() to the assistant-facing bus /
+			// transcript. Build a *ProviderError from the wrapped chain
+			// (best-effort — falls back to substring matching on err.Error()
+			// when no FailoverError is in the chain), route through the
+			// shared translateLLMError, and surface the generic message
+			// instead of the raw provider text. Raw stays in logger.ErrorCF
+			// + the wrapped fmt.Errorf return for operator triage.
+			pe := errorToProviderError(err)
+			llm := TranslateLLMError(pe, err.Error())
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
-					Stage:   "llm",
-					Message: err.Error(),
+					Stage: "llm", ChatID: ts.opts.ChatID,
+					Message:       llm.Message,
+					ProviderError: pe,
 				},
 			)
-			// FR-002: persist the provider error to the transcript (see
-			// appendErrorTranscript docstring for rationale).
+			// FR-002: persist the translated provider error to the transcript
+			// (write choke point — ADR-051 §RD5). pe threaded through so the
+			// classifier sees status/body, not the stringified err.
 			ts.appendErrorTranscript(
 				EventKindError.String(), "runTurn",
-				fmt.Sprintf("LLM call failed after retries: %s", err.Error()),
+				llm.Message,
+				pe,
 			)
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]any{
@@ -7296,6 +7351,7 @@ turnLoop:
 					"iteration": iteration,
 					"model":     llmModel,
 					"error":     err.Error(),
+					"code":      string(llm.Code),
 				})
 			return turnResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
@@ -7475,16 +7531,22 @@ turnLoop:
 					return turnResult{}, fmt.Errorf("turn timed out")
 				}
 				turnStatus = TurnEndStatusError
+				// Wave 1 (error-provenance hardening): translate via the
+				// shared classifier (CRIT-001). Never surface raw err.Error()
+				// to the assistant / bus / transcript.
+				pe := errorToProviderError(err)
+				llm := TranslateLLMError(pe, err.Error())
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "llm_empty_retry", Message: err.Error()},
+					ErrorPayload{Stage: "llm_empty_retry", Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID},
 				)
-				// FR-002: persist this provider error to the transcript (see
-				// appendErrorTranscript docstring for rationale).
+				// FR-002: persist this provider error to the transcript (write
+				// choke point).
 				ts.appendErrorTranscript(
 					EventKindError.String(), "runTurn",
-					fmt.Sprintf("LLM call failed during empty-response retry: %s", err.Error()),
+					llm.Message,
+					pe,
 				)
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
@@ -8399,12 +8461,16 @@ turnLoop:
 		ts.recordPersistedMessage(finalMsg)
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
 			turnStatus = TurnEndStatusError
+			// Wave 1: never surface raw err.Error() (session-save is a
+			// local I/O error, not a provider error, but the same
+			// invariant holds — the classifier emits a generic copy).
+			saveLLM := TranslateLLMError(nil, err.Error())
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
-					Stage:   "session_save",
-					Message: err.Error(),
+					Stage: "session_save", ChatID: ts.opts.ChatID,
+					Message: saveLLM.Message,
 				},
 			)
 			// US-1: persist the session-save failure to the JSONL
@@ -8412,7 +8478,7 @@ turnLoop:
 			// appendErrorTranscript docstring).
 			ts.appendErrorTranscript(
 				EventKindError.String(), "runTurn",
-				fmt.Sprintf("session save failed: %s", err.Error()),
+				saveLLM.Message,
 			)
 			return turnResult{}, err
 		}
@@ -8496,12 +8562,18 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {
 		if err := ts.restoreSession(ts.agent); err != nil {
+			// Wave 1: never surface raw err.Error() — route through the
+			// shared classifier (CRIT-001). Local I/O errors that aren't
+			// provider-shaped still go through the same generic-message
+			// path for consistency.
+			restoreLLM := TranslateLLMError(nil, err.Error())
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("abortTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "session_restore",
-					Message: err.Error(),
+					Message: restoreLLM.Message,
+					ChatID:  ts.opts.ChatID,
 				},
 			)
 			return turnResult{}, err
@@ -8521,15 +8593,31 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 		reason = "no reason provided"
 	}
 	err := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+	// Wave 2 (BLOCK 2 / IMPORTANT 1): system-initiated aborts are
+	// operator-shaped; preserve the original reason verbatim in both the
+	// returned error AND the event payload (a user/operator needs to see
+	// the actionable signal: which policy, which synthetic-floor count,
+	// which hook reason). The classifier's generic copy is the
+	// fall-through for the LIVE wire when the caller did not produce a
+	// curated message; here the caller did. The typed code stamps the
+	// EventPayload so the SPA can render the right banner.
+	abortLLM := TranslateLLMError(nil, err.Error())
+	presented := err.Error()
+	if abortLLM.Code != CodeUnknown {
+		// The classifier recognized a provider-shaped signal in the abort
+		// reason; use the sanitized generic copy instead of the raw text.
+		presented = abortLLM.Message
+	}
 	al.emitEvent(
 		EventKindError,
 		ts.eventMeta("abortTurn", "turn.error"),
 		ErrorPayload{
 			Stage:   stage,
-			Message: err.Error(),
+			Message: presented,
+			ChatID:  ts.opts.ChatID,
 		},
 	)
-	ts.appendErrorTranscript(EventKindError.String(), stage, err.Error())
+	ts.appendErrorTranscript(EventKindError.String(), stage, presented)
 	return turnResult{status: TurnEndStatusAborted}, err
 }
 

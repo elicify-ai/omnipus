@@ -1030,14 +1030,13 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 		agentIDCopy := entry.AgentID
 		frame.AgentId = &agentIDCopy
 	}
-	// Structured payload: for the rate-limit path, decode the trailing
-	// "(retry after Ns)" parenthetical into a typed retry_after_seconds so
-	// the SPA can render the countdown without re-parsing the message text.
-	// Anything beyond that scope is left to the Message field — the typed
-	// payload is intentionally minimal until W2-15 lands a typed Status enum.
-	if frame.Kind == "rate_limit" {
-		if retry := parseRetryAfterSeconds(entry.Content); retry != nil {
-			frame.Payload.RetryAfterSeconds = retry
+	if entry.ErrorCode != "" {
+		frame.Payload = &generated.ReplayErrorPayload{
+			LlmError: generated.LLMErrorReplay{
+				Code:      entry.ErrorCode,
+				Message:   entry.Content,
+				Retryable: entry.ErrorRetryable,
+			},
 		}
 	}
 	return frame

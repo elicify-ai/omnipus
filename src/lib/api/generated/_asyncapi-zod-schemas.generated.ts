@@ -107,11 +107,33 @@ export const DoneFrame = z
   })
   .strict();
 
+export const LLMError = z
+  .object({
+    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "unknown"]),
+    message: z.string().min(1).max(4096),
+    retryable: z.boolean(),
+    detail: z.string().max(2048).optional(),
+  })
+  .strict();
+
+export const LLMErrorReplay = z
+  .object({
+    code: z.enum(["media_unsupported", "provider_rejected", "rate_limited", "network", "content_policy", "context_too_long", "unknown"]),
+    message: z.string().min(1).max(4096),
+    retryable: z.boolean(),
+  })
+  .strict();
+
 export const ErrorFrame = z
   .object({
     type: z.literal("error"),
     session_id: z.string().max(128).optional(),
     message: z.string().min(1).max(4096),
+    payload: z
+    .object({
+      llm_error: LLMError,
+    })
+    .strict().optional(),
   })
   .strict();
 
@@ -242,16 +264,11 @@ export const ReplayErrorFrame = z
     entry_id: z.string(),
     timestamp: z.string(),
     kind: z.enum(["rate_limit", "error"]),
-    message: z.string(),
+    message: z.string().min(1).max(4096),
     agent_id: z.string().optional(),
     payload: z
     .object({
-      retry_after_seconds: z.number().optional(),
-      policy_rule: z.string().optional(),
-      scope: z.string().optional(),
-      resource: z.string().optional(),
-      tool: z.string().optional(),
-      stage: z.string().optional(),
+      llm_error: LLMErrorReplay,
     })
     .strict().optional(),
   })
@@ -569,6 +586,18 @@ export const BrowserCaptureControlFrame = z
     type: z.literal("browser_capture_control"),
     action: z.enum(["recapture", "shutdown", "ping"]),
     reason: z.string().max(512).optional(),
+  })
+  .strict();
+
+export const ErrorPayload = z
+  .object({
+    llm_error: LLMError,
+  })
+  .strict();
+
+export const ReplayErrorPayload = z
+  .object({
+    llm_error: LLMErrorReplay,
   })
   .strict();
 

@@ -8,9 +8,15 @@ import { ModelFooter } from './ModelFooter'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
+
+// ADR-051 — cap on the verbose-only "Technical details" disclosure content.
+// Keeps a runaway provider error payload from blowing out the chat scroll.
+// Matches the cap in ChatScreen.tsx's VirtualAssistantMessageRow (parity).
+const ERROR_DETAIL_MAX_CHARS = 512
 
 interface MessageItemProps {
   message: ChatMessage
@@ -115,6 +121,11 @@ function avatarStyle(isUser: boolean, agentColor: string | undefined): React.CSS
 
 export function MessageItem({ message }: MessageItemProps) {
   const { toolCalls } = useChatStore()
+  // ADR-051 — read once unconditionally at the top (Rules of Hooks: this
+  // component takes no other conditionally-skipped hooks below). The
+  // disclosure is mounted ONLY when verbose is on AND the message carries
+  // typed error fields — see the errorDisclosure block below the footer.
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
@@ -239,6 +250,43 @@ export function MessageItem({ message }: MessageItemProps) {
           )}
           {message.role === 'assistant' && <ModelFooter model={message.model} />}
         </div>
+
+        {/* ADR-051 — verbose-only "Technical details" disclosure for typed
+            LLM errors. Mounted ONLY when all four conditions hold: the
+            bubble is in error status, a typed errorCode was stamped on it
+            (live ErrorFrame with payload.llm_error), verbose chat is on,
+            AND a non-empty errorDetail was carried (legacy frames and replay
+            frames — which strip detail before persisting — never mount this).
+            When verbose is off the disclosure is ABSENT from the DOM, not
+            merely hidden — the user cannot open what isn't there, and the
+            DOM stays clean for screen readers. Native <details> keeps this
+            zero-dependency and keyboard-accessible out of the box. */}
+        {message.status === 'error'
+          && message.errorCode
+          && verboseChatEnabled
+          && message.errorDetail
+          && message.errorDetail.length > 0 && (
+          <details className="px-1 mt-1 group/error-detail" data-testid="error-detail-disclosure">
+            <summary
+              className={cn(
+                'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
+                'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
+              )}
+            >
+              Technical details
+            </summary>
+            <pre
+              className={cn(
+                'mt-1 px-2 py-1.5 rounded-md',
+                'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
+                'font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all',
+                'max-h-40 overflow-y-auto',
+              )}
+            >
+              {message.errorDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}
+            </pre>
+          </details>
+        )}
       </div>
     </div>
   )

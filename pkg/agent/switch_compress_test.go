@@ -451,25 +451,36 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 	require.NoError(t, runErr, "a failed model switch must not fail the turn itself")
 	assert.Equal(t, "Mock response", result, "turn must complete using mockProvider's reply on the OLD model")
 
-	// --- 1. Transcript: a Status="error" system entry must exist and name
-	//        both the requested (unresolvable) model and the model actually used.
+	// --- 1. Transcript: a Status="error" system entry must exist. The
+	//        BLOCK 2 sanitizer removes the model-name identity from the
+	//        persisted content; the entry carries the generic internal-error
+	//        copy and the typed code, NOT the raw unresolvable model slug.
 	entries := readTranscriptEntries(t, store, sessionID)
 	sysEntries := findSystemEntries(entries)
 	var found *session.TranscriptEntry
 	for i := range sysEntries {
-		if sysEntries[i].Status == "error" && strings.Contains(sysEntries[i].Content, typoModel) {
+		if sysEntries[i].Status == "error" &&
+			!strings.Contains(sysEntries[i].Content, typoModel) &&
+			!strings.Contains(sysEntries[i].Content, "Model") {
 			cp := sysEntries[i]
 			found = &cp
 			break
 		}
 	}
 	require.NotNil(t, found,
-		"transcript must contain a Status=\"error\" system entry naming the unresolvable "+
-			"model %q so a session reopen still shows why the switch was ignored; entries: %+v",
-		typoModel, sysEntries)
-	assert.Contains(t, found.Content, oldModel,
-		"the error entry should also name the model the turn actually used, so the user "+
-			"understands what happened")
+		"transcript must contain a Status=\"error\" system entry with the generic "+
+			"internal-error copy (no model-name identity); entries: %+v", sysEntries)
+	// BLOCK 2 / model_switch invariant: the entry must NOT contain the
+	// unresolvable model slug OR the actually-used model. The generic copy
+	// describes the situation without exposing the model name.
+	if strings.Contains(found.Content, typoModel) {
+		t.Fatalf("transcript must NOT contain the unresolvable model %q; entry: %q",
+			typoModel, found.Content)
+	}
+	if strings.Contains(found.Content, oldModel) {
+		t.Fatalf("transcript must NOT contain the actually-used model %q; entry: %q",
+			oldModel, found.Content)
+	}
 
 	// --- 2. Live signal: an EventKindError (persistence-companion, FR-002
 	//        pattern) must have been emitted for this failure. (No notification
@@ -484,7 +495,10 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 			if evt.Kind == EventKindError {
 				if p, ok := evt.Payload.(ErrorPayload); ok && p.Stage == "model_switch" {
 					sawError = true
-					assert.Contains(t, p.Message, typoModel)
+					if strings.Contains(p.Message, typoModel) {
+						t.Fatalf("live model_switch error payload must NOT contain the unresolvable model %q; got %q",
+							typoModel, p.Message)
+					}
 				}
 			}
 		case <-drain:

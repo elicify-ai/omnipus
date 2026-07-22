@@ -433,7 +433,9 @@ func TestExternalDispatch_NoApproverWired_StillAutoApproves(t *testing.T) {
 }
 
 // TestExternalDispatch_ErrorEvent_FailsRun proves a fatal error event from the
-// driver surfaces as an error result.
+// driver surfaces as an error result. ADR-051 B2: the raw error message
+// ("boom") must NOT appear in the surfaced error — only the sanitized generic
+// copy. The raw stays in gateway.log (slog.Warn raw_log_text).
 func TestExternalDispatch_ErrorEvent_FailsRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
@@ -457,8 +459,13 @@ func TestExternalDispatch_ErrorEvent_FailsRun(t *testing.T) {
 	if res == nil || res.Err == nil {
 		t.Fatal("expected ToolResult.Err to be set")
 	}
-	if !strings.Contains(res.Err.Error(), "boom") {
-		t.Errorf("error = %v, want it to contain 'boom'", res.Err)
+	// The error must indicate the run failed, but must NOT carry the raw
+	// "boom" text (ADR-051 B2 LogText-leak fix).
+	if !strings.Contains(res.Err.Error(), "external-cli run failed") {
+		t.Errorf("error = %v, want it to contain 'external-cli run failed'", res.Err)
+	}
+	if strings.Contains(res.Err.Error(), "boom") {
+		t.Errorf("error = %v, must NOT contain raw stderr 'boom' (B2 regression)", res.Err)
 	}
 }
 
@@ -832,4 +839,161 @@ func TestExternalDispatch_G2_NeverAttributesTokens(t *testing.T) {
 	cacheRead, cacheWrite := ts.GetTurnCacheStats()
 	assert.Zero(t, cacheRead, "external-CLI sub-turn must attribute 0 cache-read tokens")
 	assert.Zero(t, cacheWrite, "external-CLI sub-turn must attribute 0 cache-write tokens")
+}
+
+// TestExternalDispatch_SanitizesRunnerError is the Wave 1 regression for
+// ADR-051 §RD5 MAJ-005 (REST-executor in-scope) and the new fail-closed
+// sanitizer. A fatal runner error event with raw stderr text must NOT
+// reach the assistant transcript verbatim — SanitizeRunnerError gates
+// the raw message and emits a generic copy. The structured EventKindError
+// is still emitted on the bus (with the generic copy in its Message
+// field), but the raw stderr stays out of the assistant path.
+func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	al, ts := newExternalTestLoop(t, "claude-code", "")
+
+	// Wire a real UnifiedStore so appendIntermediateAssistantTranscript
+	// actually persists the sanitized message — we read it back below.
+	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
+	require.NoError(t, err)
+	const sessionID = "session_ext_sanitize_test"
+	ts.transcriptStore = store
+	ts.transcriptSessionID = sessionID
+
+	// Subscribe to the bus so we can capture EventKindError events.
+	sub := al.SubscribeEvents(16)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	rawStderr := "fatal: failed to write to /home/user/.config/claude/secrets.json: permission denied"
+	go func() {
+		fr.InjectEvent(runner.RunEvent{
+			Kind: runner.EventKindError,
+			Err: &runner.ErrorEvent{
+				Message: rawStderr,
+				Fatal:   true,
+			},
+		})
+		fr.Cancel()
+	}()
+
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	require.Error(t, err, "fatal error event must surface as a run failure")
+	require.NotNil(t, res)
+	require.NotNil(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "external-cli run failed",
+		"the returned error must indicate the run failed (sanitized)")
+
+	// ADR-051 B2 fix: ForLLM must NOT carry the raw stderr — it flows
+	// directly into the parent agent's tool-result context. Only the
+	// sanitized generic copy is safe for the LLM to see.
+	assert.NotContains(t, res.ForLLM, rawStderr,
+		"ForLLM must NOT contain raw stderr (B2 LogText-leak regression)")
+	assert.NotContains(t, res.Err.Error(), rawStderr,
+		"the returned error string must NOT contain raw stderr (B2 regression)")
+
+	// Read the transcript back. The assistant line written by
+	// appendIntermediateAssistantTranscript must be the SANITIZED
+	// "[external-cli error] <generic>" copy — NOT the raw stderr.
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+
+	var sanitizedAssistant string
+	for _, e := range entries {
+		if e.Role == "assistant" && strings.Contains(e.Content, "[external-cli error]") {
+			sanitizedAssistant = e.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sanitizedAssistant, "an assistant line for the external-cli error must be written")
+	assert.NotContains(t, sanitizedAssistant, rawStderr,
+		"raw stderr must NEVER reach the assistant transcript (sanitizer regression)")
+	assert.Contains(t, sanitizedAssistant, "[external-cli error]",
+		"the marker prefix must be preserved")
+
+	// The bus must have carried an EventKindError (sanitized generic
+	// copy in Message). The structured event is needed for the WS
+	// forwarder so the SPA can render the error live.
+	var foundErrEvent bool
+drain:
+	for i := 0; i < 16; i++ {
+		select {
+		case ev := <-sub.C:
+			if ev.Kind != EventKindError {
+				continue
+			}
+			ep, ok := ev.Payload.(ErrorPayload)
+			if !ok {
+				continue
+			}
+			if ep.Stage != "external_cli" {
+				continue
+			}
+			foundErrEvent = true
+			assert.NotContains(t, ep.Message, rawStderr,
+				"EventKindError Message must also be sanitized (no raw stderr leak)")
+		default:
+			break drain
+		}
+	}
+	assert.True(t, foundErrEvent,
+		"EventKindError for external_cli stage must be emitted on the bus")
+}
+
+// TestExternalDispatch_ForLLM_NoProviderShapedLeak is the ADR-051 B2
+// regression for provider-shaped raw stderr in the fatal-error path.
+// When the runner emits a fatal error whose raw text looks like a provider
+// response body (e.g. the classic "Downloaded response does not contain a
+// valid JPG" body-parse failure), neither ToolResult.ForLLM nor the
+// returned error string may carry that raw text — only the generic
+// classifier copy. The raw stays in gateway.log (slog.Warn raw_log_text).
+func TestExternalDispatch_ForLLM_NoProviderShapedLeak(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	al, ts := newExternalTestLoop(t, "codex", "")
+
+	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
+	require.NoError(t, err)
+	ts.transcriptStore = store
+	ts.transcriptSessionID = "session_ext_provider_leak"
+
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	// Provider-shaped raw text — the kind a CLI stderr carries when the
+	// upstream provider returns a non-JSON body or a malformed image.
+	rawStderr := "Downloaded response does not contain a valid JPG"
+	go func() {
+		fr.InjectEvent(runner.RunEvent{
+			Kind: runner.EventKindError,
+			Err: &runner.ErrorEvent{
+				Message: rawStderr,
+				Fatal:   true,
+			},
+		})
+		fr.Cancel()
+	}()
+
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	require.Error(t, err, "fatal error must surface as a run failure")
+	require.NotNil(t, res)
+
+	// ForLLM reaches the parent agent's context window — raw provider text
+	// must NEVER appear here. Only the sanitized generic copy is safe.
+	assert.NotContains(t, res.ForLLM, rawStderr,
+		"ForLLM must NOT contain provider-shaped raw stderr (B2 LogText-leak regression)")
+	assert.NotContains(t, res.ForLLM, "JPG",
+		"ForLLM must not carry any snippet of the raw provider body")
+	assert.NotContains(t, res.Err.Error(), rawStderr,
+		"returned error string must NOT carry raw provider stderr")
+
+	// Sanity: ForLLM is non-empty and carries the generic "external-cli run
+	// failed" marker so the parent agent knows the run failed.
+	assert.Contains(t, res.ForLLM, "External CLI run",
+		"ForLLM must carry the generic failure marker")
 }

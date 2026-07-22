@@ -1,0 +1,9 @@
+title: ReplayErrorPayload
+description: Structured replay-safe payload for a replay error frame.
+type: object
+required:
+  - llm_error
+additionalProperties: false
+properties:
+  llm_error:
+    $ref: ./LLMErrorReplay.yaml

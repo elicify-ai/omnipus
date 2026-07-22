@@ -386,21 +386,100 @@ func DecodeToolCallArguments(raw json.RawMessage, name string) map[string]any {
 
 // --- HTTP response helpers ---
 
-// HandleErrorResponse reads a non-200 response body and returns an appropriate error.
+// handleErrorBodyCap is the upper bound (in bytes) on the response body
+// the helpers read into memory. 8 KiB is generous enough to capture every
+// real provider error envelope (OpenAI/Anthropic/Google/xAI all stay
+// under 4 KiB even on verbose validation errors) and small enough to be
+// safe against a hostile upstream. Above this we keep the partial bytes
+// the read returned and surface BodyTruncated=true so the caller (and the
+// classifier at the choke point) knows it is partial.
+const handleErrorBodyCap = 8 * 1024
+
+// ProviderError carries the structured provider-error info up the stack so
+// the agent-loop classifier (pkg/agent/translate_error.go) sees status +
+// body instead of a stringified message. Body is the full body when it
+// fit within handleErrorBodyCap; partial bytes otherwise (BodyTruncated
+// is true). BodyPreview is the 512B preview used only for log lines, never
+// for classification.
+//
+// Created by HandleErrorResponse and WrapHTMLResponseError. Converted
+// across the providers → agent boundary via the agent package's own
+// ProviderError (a separate type — this one lives here because it is the
+// provider's view; the agent-package one is the wire-shape seam).
+type ProviderError struct {
+	Status        int
+	Body          string
+	BodyTruncated bool
+	BodyPreview   string
+	ContentType   string
+	Err           error
+}
+
+func (e *ProviderError) Error() string {
+	if e == nil {
+		return "<nil ProviderError>"
+	}
+	preview := e.BodyPreview
+	if preview == "" {
+		preview = e.Body
+	}
+	return fmt.Sprintf(
+		"provider error: status=%d content-type=%s body=%q",
+		e.Status, e.ContentType, preview,
+	)
+}
+
+func (e *ProviderError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// HandleErrorResponse reads a non-200 response body and returns an
+// appropriate error. Wave 1 (ADR-051 §RD5 MAJ-008): reads the FULL body
+// (capped at handleErrorBodyCap for safety) before any 512B log preview
+// so the classifier at the agent-loop choke point sees the entire
+// provider response, not a truncated fragment that could misclassify a
+// media-rejection message. Partial bytes are preserved when the read
+// fails; the returned *ProviderError carries a BodyTruncated flag so the
+// caller knows.
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	contentType := resp.Header.Get("Content-Type")
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, handleErrorBodyCap))
+	truncated := false
 	if readErr != nil {
-		return fmt.Errorf("failed to read response: %w", readErr)
+		// Preserve partial bytes on read failure: keep what was read so the
+		// classifier still has SOMETHING to substring-match on, and surface
+		// the read error on pe.Err so operator triage can see it.
+		truncated = len(body) >= handleErrorBodyCap
+		pe := &ProviderError{
+			Status:        resp.StatusCode,
+			Body:          string(body),
+			BodyTruncated: truncated,
+			BodyPreview:   ResponsePreview(body, 512),
+			ContentType:   contentType,
+			Err:           fmt.Errorf("failed to read response: %w", readErr),
+		}
+		return pe
+	}
+	// Detect a body that hit the cap exactly — that means the read was
+	// truncated by the LimitReader rather than the upstream finishing.
+	if len(body) >= handleErrorBodyCap {
+		truncated = true
 	}
 	if LooksLikeHTML(body, contentType) {
 		return WrapHTMLResponseError(resp.StatusCode, body, contentType, apiBase)
 	}
-	return fmt.Errorf(
-		"API request failed:\n  Status: %d\n  Body:   %s",
-		resp.StatusCode,
-		ResponsePreview(body, 512),
-	)
+	return &ProviderError{
+		Status:        resp.StatusCode,
+		Body:          string(body),
+		BodyTruncated: truncated,
+		BodyPreview:   ResponsePreview(body, 512),
+		ContentType:   contentType,
+		Err: fmt.Errorf("API request failed: status=%d body=%s",
+			resp.StatusCode, ResponsePreview(body, 512)),
+	}
 }
 
 // ReadAndParseResponse peeks at the response body to detect HTML errors,
@@ -436,15 +515,26 @@ func LooksLikeHTML(body []byte, contentType string) bool {
 }
 
 // WrapHTMLResponseError creates a descriptive error for HTML responses.
+// Wave 1 (choke-point unification): returns a *ProviderError (not a
+// plain error) so the agent-loop classifier sees status/body uniformly
+// across every error path — wave-2 choke points consume one shape.
 func WrapHTMLResponseError(statusCode int, body []byte, contentType, apiBase string) error {
 	respPreview := ResponsePreview(body, 128)
-	return fmt.Errorf(
-		"API request failed: %s returned HTML instead of JSON (content-type: %s); check api_base or proxy configuration.\n  Status: %d\n  Body:   %s",
-		apiBase,
-		contentType,
-		statusCode,
-		respPreview,
-	)
+	truncated := len(body) >= handleErrorBodyCap
+	return &ProviderError{
+		Status:        statusCode,
+		Body:          string(body),
+		BodyTruncated: truncated,
+		BodyPreview:   respPreview,
+		ContentType:   contentType,
+		Err: fmt.Errorf(
+			"API request failed: %s returned HTML instead of JSON (content-type: %s); check api_base or proxy configuration.\n  Status: %d\n  Body:   %s",
+			apiBase,
+			contentType,
+			statusCode,
+			respPreview,
+		),
+	}
 }
 
 // ResponsePreview returns a truncated preview of response body for error messages.

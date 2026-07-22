@@ -3350,6 +3350,40 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				rateF.Tool = &tool
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeRateLimit), rateF)
+		case agent.EventKindError:
+			// ADR-051 §RD6: forward translated provider/LLM errors to the
+			// browser so the chat UI can render the typed ErrorFrame inline
+			// (Code/Retryable/Detail) instead of the raw provider text.
+			// `code==rate_limited` is suppressed here — the dedicated
+			// RateLimitFrame above is authoritative for that class and the SPA
+			// would otherwise render two bubbles for the same denial.
+			p, ok := evt.Payload.(agent.ErrorPayload)
+			if !ok {
+				continue
+			}
+			if !matchesChatID(p.ChatID) {
+				continue
+			}
+			le := agent.TranslateLLMError(p.ProviderError, p.Message)
+			if le.Code == agent.CodeRateLimited {
+				continue
+			}
+			errSID := sessionIDForChat(p.ChatID)
+			errF := generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				SessionId: &errSID,
+				Message:   le.Message,
+			}
+			detail := le.Detail
+			errF.Payload = &generated.ErrorPayload{
+				LlmError: generated.LLMError{
+					Code:      string(le.Code),
+					Message:   le.Message,
+					Retryable: le.Retryable,
+					Detail:    &detail,
+				},
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), errF)
 		case agent.EventKindWhatsAppPairing:
 			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
 			// chatID. Delivered only to connections that subscribed to this

@@ -1,0 +1,132 @@
+2026/07/22 07:56:35 WARN credentials: auto-generated master key path=/tmp/adr-051-uat-810/master.key warning="back up this file — losing it makes credentials.json permanently inaccessible"
+Error: error loading config: unsupported config version: 0
+2026/07/22 07:57:44 WARN credentials: auto-generated master key path=/tmp/adr-051-uat-810/master.key warning="back up this file — losing it makes credentials.json permanently inaccessible"
+2026/07/22 07:57:44 WARN Landlock not available. Using application-level enforcement. backend=fallback kernel_version=6.12.91-fly
+2026/07/22 07:57:44 WARN sandbox.degraded reason=kernel_too_old_or_non_linux selected_backend=fallback requested_mode=enforce
+2026/07/22 07:57:44 INFO gateway: sandbox applied applied_mode=enforce backend=fallback landlock_enforced=false seccomp_enforced=false audit_only=false disabled_by=""
+2026/07/22 07:57:44 INFO gateway: inbound schemas pre-compiled successfully
+2026/07/22 07:57:44 INFO heartbeat schedules reconciled desired=0 existing_before=0 reconciled_at=2026-07-22T07:57:44Z
+2026/07/22 07:57:44 INFO sse: session recording disabled (use WebSocket for persistent sessions)
+2026/07/22 07:57:44 INFO rest: default workspace auto-created id=01KY4D98GQ1MBVSBE4VTC8XHVK owner="" team_size=8 edge_count=9
+2026/07/22 07:57:44 INFO gateway listening on 0.0.0.0:8081
+2026/07/22 07:57:44 INFO preview enabled: /preview/ served on the main listener
+2026/07/22 07:57:44 INFO gateway: registered self PID pid=14124 home=/tmp/adr-051-uat-810
+2026/07/22 07:57:44 INFO skills: seeded default skill from embed name=daily-briefing dest=/tmp/adr-051-uat-810/skills/daily-briefing
+2026/07/22 07:57:44 INFO skills: seeded default skill from embed name=plan dest=/tmp/adr-051-uat-810/skills/plan
+2026/07/22 07:57:44 INFO skills: seeded default skill from embed name=skill-authoring dest=/tmp/adr-051-uat-810/skills/skill-authoring
+2026/07/22 07:57:44 INFO skills: seeded default skill from embed name=summarize dest=/tmp/adr-051-uat-810/skills/summarize
+2026/07/22 07:57:44 INFO gateway: seeded default skills from embed seeded="[daily-briefing plan skill-authoring summarize]" skipped=[]
+2026/07/22 07:57:44 INFO gateway: central BuiltinRegistry re-populated with live deps system_tools=35 general_builtins=32 browser_builtins=11 total=78
+2026/07/22 07:57:44 INFO session_end: bootstrap recap pass complete processed=0 errored=0
+2026/07/22 07:57:44 INFO retention_sweep: completed event=retention_sweep removed=0 tool_result_removed=0 task_runs_visited=0 duration_ms=0
+2026/07/22 07:58:07 ERROR auth: login failed error="gateway.users is not an array"
+2026/07/22 07:58:07 WARN AUTH-BYPASS users_count=0 bypass_flag=true has_bearer=false
+2026/07/22 07:58:07 WARN DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.
+2026/07/22 07:59:00 INFO onboarding: completed username=uat
+2026/07/22 07:59:00 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:07 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:07 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:07 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:07 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:07 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:07 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:17 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:47978: i/o timeout"
+2026/07/22 07:59:28 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:35632: i/o timeout"
+2026/07/22 07:59:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 07:59:39 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:39940: i/o timeout"
+2026/07/22 07:59:50 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:57472: i/o timeout"
+2026/07/22 07:59:56 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:00:07 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:58188: i/o timeout"
+2026/07/22 08:00:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:00:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:00:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:00:18 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:35582: i/o timeout"
+2026/07/22 08:00:29 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:40586: i/o timeout"
+2026/07/22 08:00:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:00:40 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:47514: i/o timeout"
+2026/07/22 08:00:51 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:57528: i/o timeout"
+2026/07/22 08:00:53 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:01:04 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:45332: i/o timeout"
+2026/07/22 08:01:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:01:15 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:44158: i/o timeout"
+2026/07/22 08:01:16 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:01:16 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:01:26 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:36914: i/o timeout"
+2026/07/22 08:01:37 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:52946: i/o timeout"
+2026/07/22 08:01:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:01:48 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:36582: i/o timeout"
+2026/07/22 08:01:59 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:38480: i/o timeout"
+2026/07/22 08:02:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:02:10 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:49860: i/o timeout"
+2026/07/22 08:02:21 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:48050: i/o timeout"
+2026/07/22 08:02:22 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:02:22 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:02:32 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:52908: i/o timeout"
+2026/07/22 08:02:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:02:43 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:36502: i/o timeout"
+2026/07/22 08:02:53 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:03:04 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:37520: i/o timeout"
+2026/07/22 08:03:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:03:15 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:38834: i/o timeout"
+2026/07/22 08:03:26 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:55834: i/o timeout"
+2026/07/22 08:03:28 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:03:28 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:03:37 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:51954: i/o timeout"
+2026/07/22 08:03:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:03:48 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:51062: i/o timeout"
+2026/07/22 08:04:00 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:51916: i/o timeout"
+2026/07/22 08:04:02 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:04:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:04:13 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:57344: i/o timeout"
+2026/07/22 08:04:24 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:46358: i/o timeout"
+2026/07/22 08:04:35 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:33168: i/o timeout"
+2026/07/22 08:04:36 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:04:36 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:04:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:04:46 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:42368: i/o timeout"
+2026/07/22 08:04:56 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:05:07 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:46166: i/o timeout"
+2026/07/22 08:05:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:05:18 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:58204: i/o timeout"
+2026/07/22 08:05:29 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:45234: i/o timeout"
+2026/07/22 08:05:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:05:40 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:56808: i/o timeout"
+2026/07/22 08:05:41 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:05:41 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:05:51 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:37782: i/o timeout"
+2026/07/22 08:05:59 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:10 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:51412: i/o timeout"
+2026/07/22 08:06:25 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:43696: i/o timeout"
+2026/07/22 08:06:36 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:52074: i/o timeout"
+2026/07/22 08:06:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:47 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:44464: i/o timeout"
+2026/07/22 08:06:48 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:48 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:57 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:57 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:06:58 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:54276: i/o timeout"
+2026/07/22 08:07:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:07:09 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:49482: i/o timeout"
+2026/07/22 08:07:20 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:33044: i/o timeout"
+2026/07/22 08:07:31 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:33006: i/o timeout"
+2026/07/22 08:07:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:07:42 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:58602: i/o timeout"
+2026/07/22 08:07:44 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:07:44 INFO rest: upload: file stored session_id=adr-051-uat-session filename=tiny.png size=69 content_type=image/png media_ref=media://959b1107-be70-43e2-a8b8-0a28d91573d4
+2026/07/22 08:07:44 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:07:44 INFO rest: upload: file stored session_id=adr-051-uat-session filename=tiny.pdf size=295 content_type=application/pdf media_ref=media://5ca71f6d-c2fd-4f9b-b855-1af33688dc76
+2026/07/22 08:07:44 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:07:44 INFO rest: upload: file stored session_id=adr-051-uat-session filename=tiny.zip size=257 content_type=application/octet-stream media_ref=media://6b76ff2f-25f2-4c52-835b-3bf33adf30fe
+2026/07/22 08:07:53 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:57240: i/o timeout"
+2026/07/22 08:08:04 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:60160: i/o timeout"
+2026/07/22 08:08:08 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:08:15 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:59250: i/o timeout"
+2026/07/22 08:08:26 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:41660: i/o timeout"
+2026/07/22 08:08:37 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:53526: i/o timeout"
+2026/07/22 08:08:38 WARN AUTH-BYPASS users_count=1 bypass_flag=true has_bearer=false
+2026/07/22 08:08:48 WARN ws: auth read failed error="websocket: close 1000 (normal)"
+2026/07/22 08:08:48 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:37562: i/o timeout"
+2026/07/22 08:08:59 WARN ws: auth read failed error="read tcp 127.0.0.1:8081->127.0.0.1:46128: i/o timeout"

@@ -226,6 +226,12 @@ const THINKING_MESSAGES = [
   'Generating…',
 ]
 
+// ADR-051 — cap on the verbose-only "Technical details" disclosure content
+// in VirtualAssistantMessageRow (historical/replay render path). Mirrors
+// MessageItem.tsx's cap (live render path) so live and replay show the same
+// truncated length when a provider's error payload is verbose.
+const ERROR_DETAIL_MAX_CHARS = 512
+
 function ThinkingIndicator() {
   const [msgIndex, setMsgIndex] = useState(0)
 
@@ -983,6 +989,42 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
         {/* Interrupted label */}
         {isInterrupted && (
           <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        )}
+
+        {/* ADR-051 — verbose-only "Technical details" disclosure for typed
+            LLM errors. Parity with MessageItem.tsx's live-render disclosure:
+            mounted ONLY when (status==='error' && errorCode && verbose &&
+            errorDetail), ABSENT from the DOM otherwise. Replay frames carry
+            no errorDetail (gateway strips it before persisting), so on the
+            historical path this effectively fires only when a live error
+            bubble with detail set is still in the ring buffer after a
+            reload. `verboseChatEnabled` is already read at the top of this
+            row (the tool-call visibility gate uses the same hook). */}
+        {message.status === 'error'
+          && message.errorCode
+          && verboseChatEnabled
+          && message.errorDetail
+          && message.errorDetail.length > 0 && (
+          <details className="px-1 mt-1" data-testid="error-detail-disclosure">
+            <summary
+              className={cn(
+                'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
+                'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
+              )}
+            >
+              Technical details
+            </summary>
+            <pre
+              className={cn(
+                'mt-1 px-2 py-1.5 rounded-md',
+                'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
+                'font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all',
+                'max-h-40 overflow-y-auto',
+              )}
+            >
+              {message.errorDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}
+            </pre>
+          </details>
         )}
 
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so

@@ -241,6 +241,23 @@ type turnState struct {
 	// The counter resets per turn (initialized to zero here).
 	syntheticErrorCount int
 
+	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
+	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated
+	// TryMediaDowngrade helper refuses to perform another downgrade — even if
+	// a subsequent LLM call in the same turn returns the same media-rejection
+	// shape. Hoisted here (was a per-iteration reset in the loop retry block)
+	// so a turn can NEVER fire more than one media downgrade-retry, matching
+	// the ADR-051 invariant "at most one media rejection → at most one
+	// downgrade-retry". Initialised to false (zero value of atomic.Bool).
+	mediaRetryDone atomic.Bool
+
+	// imageRetryDone is the per-turn guard for IMAGE-only downgrades. The
+	// pass-2 media-downgrade fix split the per-turn guard into image-class
+	// and pdf-class, so a PDF rejection in a turn with both media types
+	// cannot consume the image-retry budget (and vice versa). Each LLM
+	// call may consume at most one downgrade per media class.
+	imageRetryDone atomic.Bool
+
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
@@ -1138,18 +1155,53 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 // `kind` parameter is the EventKind label that triggered the write
 // ("error" for a provider error, "rate_limit" for a rate-limit denial);
 // `stage` is the loop stage ("runTurn", "hooks", etc.); `message` is the
-// human-readable description.
+// human-readable description; `pe` is the optional structured provider
+// error (status/body) — when present, the classifier runs here (write
+// choke point, ADR-051 §RD5) so raw provider text never lands on disk.
 //
 // Used by recordRateLimitDenial and the LLM-call-error paths in loop.go to
 // satisfy FR-001 (rate_limit → transcript) and FR-002 (provider error →
-// transcript) of docs/internal/specs/phase-1-chat-model-and-errors.md.
+// transcript) of docs/internal/specs/phase-1-chat-model-and-errors.md, plus
+// the translation-at-write invariant of ADR-051 §RD5 (FR-007/008).
+//
+// Rate-limit skip (ADR-051 §RD5 MAJ-001/004): when kind==EventKindRateLimit
+// the caller-supplied message is already friendly (rate_limit: policyRule
+// (retry after Ns)) — passing pe=nil here lets the classifier recognize
+// it via the message substring and emit CodeRateLimited, but the caller
+// message is preserved as-is. Either way, raw provider text never reaches
+// the JSONL.
 //
 // Silently no-ops when the turn has been abandoned or when no transcript
 // store is wired (matches appendAssistantTranscript's failure semantics — a
 // failed transcript write must NOT abort the in-flight turn). Debug-level
 // logging is emitted when the no-op fires so an operator can trace why a
 // transcript entry was suppressed.
-func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
+// trustedInternalStages is the set of stage+kind tuples that the write
+// choke point MUST NOT sanitize. Callers of appendErrorTranscript for
+// these stages produce curated, generic copy that is the actionable
+// signal a user/operator needs to see; sanitizing them would clobber
+// the operator-friendly shape. Provider-originated text NEVER enters
+// these paths (the prior call site is an internal hook, abort, or
+// synthetic-deny source).
+type internalStage struct{ stage, kind string }
+
+var trustedInternalStageSet = map[internalStage]struct{}{
+	{"rate_limit", "rate_limit"}:       {},
+	{"model_switch", "error"}:          {},
+	{"before_llm", "error"}:            {},
+	{"after_llm", "error"}:             {},
+	{"llm_call", "error"}:              {},
+	{"llm_retry_backoff", "error"}:     {},
+	{"turn_loop", "error"}:             {},
+	{"synthetic_error_floor", "error"}: {},
+}
+
+func isTrustedInternalStage(stage, kind string) bool {
+	_, ok := trustedInternalStageSet[internalStage{stage: stage, kind: kind}]
+	return ok
+}
+
+func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*ProviderError) {
 	if ts == nil {
 		return
 	}
@@ -1170,13 +1222,49 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 		)
 		return
 	}
+
+	// ADR-051 §RD5 write choke point: translate the message via the shared
+	// classifier so raw provider text never persists. The classifier reads
+	// pe.Status/pe.Body when present (nil-safe — see classifyByProviderError);
+	// pe nil means "this is not a provider error" (e.g. internal model_switch
+	// failures, hook aborts, rate-limit denials) and the classifier falls
+	// back to substring matching on the caller-supplied message.
+	var providerErr *ProviderError
+	if len(pe) > 0 {
+		providerErr = pe[0]
+	}
+	// Trusted internal-stages bypass (ADR-051 §RD5 IMPORTANT 1):
+	// the caller has produced a curated, generic message for these stages
+	// that does NOT carry raw provider text. Sanitizing them would clobber
+	// the actionable signal the operator relies on (e.g. hook abort reason,
+	// synthetic-error-floor count, model-switch friendly guidance). The
+	// classifier still stamps a typed code on the entry for replay routing,
+	// but the user-visible text is the caller-provided copy verbatim.
+	llm := TranslateLLMError(providerErr, message)
+	written := message
+	if !isTrustedInternalStage(stage, kind) {
+		// Friendly short-circuit for rate-limit messages whose caller-supplied
+		// copy is already generic and safe (rate_limit: policyRule (retry
+		// after Ns)); translation reuses it. This is the ADR-051 §RD5
+		// MAJ-001/004 carve-out — the classifier still RECOGNIZES rate-limit
+		// shape, but the emitted Content is the caller-provided message
+		// verbatim (no double translate, no model-name leak from MAJ-003).
+		if llm.Code == CodeRateLimited {
+			written = message
+		} else if llm.Code != CodeUnknown || providerErr != nil {
+			written = llm.Message
+		}
+	}
+
 	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
-		ID:        uuid.New().String(),
-		Type:      session.EntryTypeSystem,
-		AgentID:   agentID,
-		Content:   message,
-		Timestamp: time.Now().UTC(),
+		ID:             uuid.New().String(),
+		Type:           session.EntryTypeSystem,
+		AgentID:        agentID,
+		Content:        written,
+		Timestamp:      time.Now().UTC(),
+		ErrorCode:      string(llm.Code),
+		ErrorRetryable: llm.Retryable,
 		// Status="error" lets the replay path distinguish error entries from
 		// informational system entries (e.g. compaction summaries) without
 		// parsing the free-text Content.

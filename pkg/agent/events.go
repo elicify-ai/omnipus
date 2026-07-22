@@ -474,9 +474,26 @@ type SubTurnOrphanPayload struct {
 }
 
 // ErrorPayload describes an execution error inside the agent loop.
+//
+// ProviderError (ADR-051 §RD5 CRIT-001) carries the structured
+// *ProviderError — status + body + wrapped error — so the classifier at
+// the two choke points (appendErrorTranscript write + WS-forwarder
+// EventKindError live) sees real provider data instead of a stringified
+// message. Optional: non-provider error paths (hook aborts, internal
+// model_switch failures, rate-limit denials) leave it nil and the
+// classifier falls back to substring matching on Message.
+//
+// Detail is computed live at the forwarder (NEVER persisted); only the
+// WS path surfaces it, behind Verbose Chat (operator Q2).
 type ErrorPayload struct {
-	Stage   string
-	Message string
+	Stage         string
+	Message       string
+	ProviderError *ProviderError
+	// ChatID is needed so the WS event forwarder can route this event to the
+	// right connection via matchesChatID. Mirrors RateLimitPayload's
+	// explicit ChatID field; both are required for the live path to deliver
+	// typed errors to the right user.
+	ChatID string
 }
 
 // TurnTimeoutPayload describes a turn that exceeded its configured timeout.

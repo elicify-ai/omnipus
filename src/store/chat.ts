@@ -16,6 +16,14 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
+import {
+  getLLMErrorDisplay,
+  readEntryIdFromFrame,
+  readLLMErrorFromFrame,
+  readLLMErrorFromReplayFrame,
+  type LLMErrorCode,
+} from '@/lib/llm-error'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 
 // Maximum messages kept in the visible ring buffer per session.
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
@@ -146,6 +154,32 @@ export type ChatMessage = Message & {
    * check); this field covers the entries folded in AFTER that one.
    */
   mergedReplayIds?: string[]
+  /**
+   * ADR-051 — the typed LLM error code carried on a live `ErrorFrame` /
+   * `ReplayErrorFrame` payload (`payload.llm_error.code`). SPA-only display
+   * field (never serialized to the wire — the bubble is rendered from the
+   * translated copy in `llm-error.ts::codeToDisplay`). Used by the
+   * renderers to gate the "Technical details" disclosure; the visible
+   * message text comes from `message.content`, which the reducer sets to
+   * the code's generic display copy.
+   */
+  errorCode?: LLMErrorCode
+  /**
+   * ADR-051 — the verbose-only `payload.llm_error.detail` string. Surfaced
+   * in the "Technical details" disclosure ONLY when `verboseChatEnabled` is
+   * on; otherwise the renderer must omit the disclosure entirely. Replay
+   * frames carry no detail, so this is set only on live error bubbles.
+   */
+  errorDetail?: string
+  /**
+   * ADR-051 — the transcript `entry_id` the live `ErrorFrame` / the
+   * `ReplayErrorFrame` was stamped with, used for live→replay dedup: when a
+   * session is reloaded, the replay of the same error must NOT push a
+   * second bubble if the live bubble carrying the same `errorEntryId` is
+   * still in the ring buffer. `undefined` for legacy frames (no typed
+   * payload) — dedup then falls back to the existing content+role dedup.
+   */
+  errorEntryId?: string
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -3085,6 +3119,37 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'error':
           {
+            // ADR-051 — typed error payload. Live ErrorFrame optionally carries
+            // `payload.llm_error` (a stable, enumerated code + message + an
+            // optional verbose `detail`) and (on the replay sibling) an
+            // `entry_id`. Legacy frames (pre-ADR-051, gateway-synthesized
+            // cancel-acks, etc.) lack the typed payload; for those, fall back
+            // to `frame.message` verbatim — exactly the pre-ADR-051 behavior.
+            // `errorEntryId` powers the live→replay dedup (a reloaded session
+            // must not re-render the same error twice). Read once here at the
+            // top so all three error sub-paths below (kickoff reject, no-bucket
+            // sweep, per-bucket render) see the same values.
+            const llmError = readLLMErrorFromFrame(frame)
+            const errorEntryId = readEntryIdFromFrame(frame)
+            const verboseChatEnabled = useChatPreferencesStore.getState().verboseChatEnabled
+            // Resolve the visible message: translated code→display copy when
+            // the typed payload is present, else the raw `frame.message`
+            // (legacy). `errorDetail` is non-undefined only when verbose is on
+            // AND detail was actually carried — the renderers key off its
+            // presence to decide whether to mount the "Technical details"
+            // disclosure.
+            const { message: translatedMessage, detail: errorDetail } = llmError
+              ? getLLMErrorDisplay(llmError, verboseChatEnabled)
+              : { message: frame.message ?? '', detail: undefined }
+            // ADR-051 — live→replay dedup. If an error bubble carrying the
+            // same `errorEntryId` is already in the foreground bucket (or any
+            // bucket routed below), do not push a second one. Pre-checks the
+            // FOREGROUND bucket here; the per-bucket branch below re-checks
+            // against the routed bucket's own messages so a background-session
+            // duplicate is also caught. (Live error then reload → the replay
+            // path's case 'replay_error' performs the symmetric check.)
+            const errorDedupId = errorEntryId
+
             // A kickoff rejection (duplicate kickoff, unknown
             // workspace, or a server-side kickoff error) is a hard REJECT of
             // a turn that never really started — there is no real session
@@ -3202,6 +3267,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
             withBucket(targetSid, (b) => {
               const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
+              // ADR-051 — live→replay dedup (per-bucket half; the foreground
+              // pre-check ran above). If a bubble carrying the same
+              // `errorEntryId` is already in this bucket, the live error has
+              // already been rendered — skip the toast + bubble push but
+              // STILL close out streaming state (an idempotent re-close is a
+              // no-op on already-closed bubbles), so a replay-late-arriving
+              // live frame doesn't leave a bubble stuck streaming.
+              if (errorDedupId) {
+                const alreadyRendered = getMessages(b).some(
+                  (m) => m.errorEntryId === errorDedupId,
+                )
+                if (alreadyRendered) {
+                  return produce(b, (draft) => {
+                    draft.isStreaming = false
+                    if (clearReplayingNow) draft.isReplaying = false
+                  }) as Partial<SessionChatState>
+                }
+              }
               const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
               // C8 defense-in-depth: close the UNION of {the last assistant
               // message} (unchanged — always closed exactly as before, even
@@ -3223,6 +3306,26 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 const m = b.messagesById[id]
                 if (m?.role !== 'assistant') continue
                 if (id === lastMsgId || m.isStreaming || m.status === 'streaming') {
+                  // ADR-051 — when the incoming frame carries a typed
+                  // payload, do NOT include an already-terminal 'error'
+                  // bubble in the C8 close sweep. The sweep's purpose is to
+                  // finalize in-flight streaming bubbles on a hard error; a
+                  // PRIOR turn's already-error bubble (which lands here only
+                  // because `id === lastMsgId` pulls in the last assistant
+                  // message unconditionally) has nothing to close. Without
+                  // this guard, a second typed ErrorFrame would re-close
+                  // the first's bubble and (via the typed-field stamping
+                  // below) overwrite its errorCode/errorEntryId, breaking
+                  // the per-entry-id dedup contract (different entry_ids
+                  // must yield different bubbles). Legacy frames (no typed
+                  // payload) keep the pre-ADR-051 behavior — re-closing is
+                  // an unobservable no-op for them, so the regression risk
+                  // is zero.
+                  if (
+                    llmError
+                    && m.status === 'error'
+                    && !m.isStreaming
+                  ) continue
                   streamingIds.push(id)
                 }
               }
@@ -3235,12 +3338,44 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
                       ? 'interrupted'
                       : 'error'
+                    // ADR-051: when the typed payload is present, prefer the
+                    // translated code→display copy as the bubble content —
+                    // but only when the bubble has NO partial content yet
+                    // (msg.content is empty). A bubble that already streamed
+                    // narration text keeps that text as its content and just
+                    // gets the typed error fields stamped on for the
+                    // "Technical details" disclosure. Pre-ADR-051 fallback
+                    // (`frame.message`) is preserved when no typed payload.
+                    const fallbackContent = llmError
+                      ? translatedMessage
+                      : frame.message
                     msg.content = (resolvedStatus === 'interrupted')
                       ? msg.content
-                      : (msg.content || frame.message)
+                      : (msg.content || (fallbackContent ?? ''))
                     msg.isStreaming = false
                     msg.status = resolvedStatus
                     msg.pendingTextBoundary = false
+                    // ADR-051 — stamp typed fields on the closed bubble so
+                    // the "Technical details" disclosure renders even when
+                    // we coalesced into a streaming bubble instead of
+                    // pushing a fresh error bubble below. ONLY stamp on the
+                    // transition into 'error' (prevStatus !== 'error'): the
+                    // C8 union sweep unconditionally includes the last
+                    // assistant message even when it's already a finalized
+                    // error bubble, so without this guard a second live
+                    // error frame would overwrite the first's typed fields
+                    // (same id, different entry_id → lost dedup signal).
+                    // Cancel-acks and interrupted resolutions are also
+                    // excluded by the resolvedStatus guard.
+                    if (
+                      resolvedStatus === 'error'
+                      && prevStatus !== 'error'
+                      && llmError
+                    ) {
+                      msg.errorCode = llmError.code
+                      if (errorDetail !== undefined) msg.errorDetail = errorDetail
+                      if (errorEntryId) msg.errorEntryId = errorEntryId
+                    }
                   }
                   draft.isStreaming = false
                   if (clearReplayingNow) {
@@ -3256,13 +3391,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (!isCancelAck) {
                 useConnectionStore.getState().setConnectionError(frame.message)
               }
+              // ADR-051 — fresh error bubble: use the translated copy when
+              // the typed payload is present (matches the streaming-coalesce
+              // branch above), else the legacy `frame.message`. Stamp the
+              // typed fields so the "Technical details" disclosure can render.
               const errMsg: ChatMessage = {
                 id: generateId(),
                 role: 'assistant',
-                content: isCancelAck ? '' : frame.message,
+                content: isCancelAck ? '' : (llmError ? translatedMessage : frame.message),
                 timestamp: new Date().toISOString(),
                 status: isCancelAck ? 'interrupted' : 'error',
                 isStreaming: false,
+                ...(!isCancelAck && llmError
+                  ? {
+                      errorCode: llmError.code,
+                      ...(errorDetail !== undefined ? { errorDetail } : {}),
+                      ...(errorEntryId ? { errorEntryId } : {}),
+                    }
+                  : {}),
               }
               const msgs = [...getMessages(b), errMsg]
               return {
@@ -3724,6 +3870,94 @@ export const useChatStore = create<ChatStore>((set, get) => {
             sessionStore.setActiveSession(switchSid, newAgentId)
           }
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
+          break
+        }
+
+        case 'replay_error': {
+          // ADR-051 — historical (replay) error frame. Mirrors the live
+          // `case 'error'` translation path but with two replay-specific
+          // twists: (1) the typed payload has NO `detail` field (the gateway
+          // strips provider internals before persisting to transcript.jsonl),
+          // so the "Technical details" disclosure will never mount on replay
+          // — `errorCode` is still stamped for code-based styling though;
+          // (2) coalesce into the trailing streaming assistant bubble when
+          // one exists (a partial assistant reply followed by the error in
+          // the same turn is one logical unit), else push a fresh error
+          // bubble. The live `case 'error'` did not coalesce because a live
+          // streaming bubble is closed by the C8 union sweep above; on
+          // replay, bubbles are created finalized (isStreaming:false) so
+          // that sweep is a no-op and we need to explicitly coalesce.
+          if (!targetSid) break
+          const replayEntryId = readEntryIdFromFrame(frame)
+          const replayLlmError = readLLMErrorFromReplayFrame(frame)
+          const replayVerbose = useChatPreferencesStore.getState().verboseChatEnabled
+          const replayDisplay = replayLlmError
+            ? getLLMErrorDisplay(replayLlmError, replayVerbose).message
+            : (frame.message ?? '')
+          withBucket(targetSid, (b) => {
+            // Dedup: if a bubble carrying this entry_id is already in the
+            // bucket (live path stamped it on the same error, or a
+            // reconnect re-replayed the same window), no-op. This is the
+            // symmetric half of the live `case 'error'` dedup.
+            if (replayEntryId) {
+              const alreadyRendered = getMessages(b).some(
+                (m) => m.errorEntryId === replayEntryId,
+              )
+              if (alreadyRendered) return {}
+            }
+            // Coalesce into the trailing streaming assistant bubble when
+            // one exists. The live path closes the bubble via the C8 union
+            // sweep (it iterates isStreaming/status==='streaming'); on
+            // replay, bubbles are created finalized, so find the trailing
+            // assistant message explicitly and stamp it. Same content rule
+            // as the live path: keep existing streamed narration, only use
+            // the translated copy when the bubble is empty.
+            const lastAssistantId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+            if (lastAssistantId) {
+              const lastMsg = b.messagesById[lastAssistantId]
+              // Only coalesce when the trailing assistant bubble was itself
+              // part of THIS error turn — i.e. it's currently marked as
+              // 'streaming' (live-replay hybrid: bubble carried over from
+              // the live side and not yet closed) OR has empty/blank content
+              // (a placeholder that never received tokens before the error
+              // fired). Otherwise push a fresh error bubble (the trailing
+              // assistant message belongs to a PRIOR, healthy turn).
+              const lastContentEmpty = !lastMsg.content || !lastMsg.content.trim()
+              if (lastMsg.isStreaming || lastMsg.status === 'streaming' || lastContentEmpty) {
+                return produce(b, (draft) => {
+                  const m = draft.messagesById[lastAssistantId]
+                  if (!m) return
+                  if (lastContentEmpty) m.content = replayDisplay
+                  m.isStreaming = false
+                  m.status = 'error'
+                  m.pendingTextBoundary = false
+                  if (replayLlmError) {
+                    m.errorCode = replayLlmError.code
+                    if (replayEntryId) m.errorEntryId = replayEntryId
+                  }
+                }) as Partial<SessionChatState>
+              }
+            }
+            // No trailing assistant bubble to coalesce into — push a fresh
+            // error bubble. Matches the live path's errMsg shape (minus the
+            // verbose detail, which the replay payload never carries).
+            const replayErrMsg: ChatMessage = {
+              id: generateId(),
+              role: 'assistant',
+              content: replayDisplay,
+              timestamp: new Date().toISOString(),
+              status: 'error',
+              isStreaming: false,
+              ...(replayLlmError
+                ? {
+                    errorCode: replayLlmError.code,
+                    ...(replayEntryId ? { errorEntryId: replayEntryId } : {}),
+                  }
+                : {}),
+            }
+            const replayMsgs = [...getMessages(b), replayErrMsg]
+            return applyMessageArray(replayMsgs, b)
+          })
           break
         }
 

@@ -10,11 +10,18 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/h2non/filetype"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
 
 	"github.com/elicify-ai/omnipus/pkg/docextract"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -259,71 +266,13 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 	return anyChanged
 }
 
-// isImageInputRejection reports whether err is a provider rejecting image input
-// because the model has no vision capability (e.g. OpenRouter→Bedrock:
-// "'claude-3-5-haiku-...' does not support image input."). Unlike PDFs, images
-// have no text fallback, so the caller turns this into a friendly "switch to a
-// vision-capable model" message rather than surfacing a raw 400.
-//
-// The match is intentionally NARROW. It requires the error to express both the
-// image-input domain and a capability-absence phrase — "does not support image",
-// "image input is not supported", "no image support", etc. Errors that describe
-// a corrupt/oversized image, a content-moderation block, or generic provider
-// failures that happen to mention "image" are NOT matched. Specifically:
-//
-//   - "invalid image data", "corrupt image", "too large" → NOT matched
-//   - "content policy", "moderation", "safety" → NOT matched
-//   - "unable to process image" → NOT matched (ambiguous root cause)
-//
-// Capability-absence phrases that ARE matched (case-insensitive):
-//
-//	"does not support image"   – provider states the model lacks image support
-//	"image input"              – the specific Bedrock phrase ("does not support image input")
-//	"no image support"         – generic capability-absent form
-//	"not support image"        – grammatical variant ("model does not support image…")
-//	"image not supported"      – reversed subject/predicate form
-//	"image input not supported"– variant of the Bedrock phrase
-func isImageInputRejection(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-
-	// Quick pre-filter: must mention "image" at all.
-	if !strings.Contains(lower, "image") {
-		return false
-	}
-
-	// Explicit exclusions — these are NOT vision-capability errors.
-	for _, exclude := range []string{
-		"invalid image",
-		"corrupt",
-		"too large",
-		"moderation",
-		"content policy",
-		"safety",
-		"unable to process",
-	} {
-		if strings.Contains(lower, exclude) {
-			return false
-		}
-	}
-
-	// Capability-absence phrases. Each requires both the "image" domain and an
-	// explicit statement that the model/provider lacks vision support.
-	capabilityPhrases := []string{
-		"image input", // also covers "does not support image input", "image input not supported"
-		"no image support",
-		"not support image", // also covers "does not support image"
-		"image not supported",
-	}
-	for _, phrase := range capabilityPhrases {
-		if strings.Contains(lower, phrase) {
-			return true
-		}
-	}
-	return false
-}
+// isImageInputRejection and its tests were retired in the Wave 1 fix pass
+// (ADR-051 §RD2 / FR-012). The shared classifier in translate_error.go
+// owns the media-class decision now — it covers both capability-absence
+// and format-rejection shapes (incl. the xAI/Grok incident string) and
+// uses status/body when available, not a string substring alone. The
+// media-downgrade helper (media_downgrade.go::TryMediaDowngrade) consumes
+// the classifier and applies the per-turn guard.
 
 // isPDF returns true for files detected as PDF by MIME type or filename extension.
 func isPDF(mime, filename string) bool {
@@ -440,12 +389,15 @@ func detectMIME(localPath string, meta media.MediaMeta) string {
 	return kind.MIME.Value
 }
 
-// encodeImageToDataURL base64-encodes an image file into a data URL.
-// Returns empty string if the file exceeds maxSize or encoding fails.
+const maxImagePixels = 16 * 1024 * 1024
+
+// encodeImageToDataURL normalizes a decodable image to PNG and returns it as a
+// data URL. The pixel budget is checked before full decode to bound memory use.
+// Returns an empty string when the input or normalized PNG exceeds maxSize, the
+// dimensions exceed maxImagePixels, or decoding/encoding fails.
 func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int) string {
 	if info.Size() > int64(maxSize) {
-		logger.WarnCF("agent", "Media file too large, skipping", map[string]any{
-			"path":     localPath,
+		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
 			"size":     info.Size(),
 			"max_size": maxSize,
 		})
@@ -454,31 +406,92 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 
 	f, err := os.Open(localPath)
 	if err != nil {
-		logger.WarnCF("agent", "Failed to open media file", map[string]any{
-			"path":  localPath,
-			"error": err.Error(),
+		logImageNormalizationFailure(localPath, mime, "open-failed", err, nil)
+		return ""
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			logImageNormalizationFailure(localPath, mime, "close-failed", closeErr, nil)
+		}
+	}()
+
+	config, format, err := image.DecodeConfig(f)
+	if err != nil {
+		logImageNormalizationFailure(localPath, mime, "decode-config-failed", err, nil)
+		return ""
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		logImageNormalizationFailure(localPath, mime, "invalid-dimensions", nil, map[string]any{
+			"format": format,
+			"width":  config.Width,
+			"height": config.Height,
 		})
 		return ""
 	}
-	defer f.Close()
-
-	prefix := "data:" + mime + ";base64,"
-	encodedLen := base64.StdEncoding.EncodedLen(int(info.Size()))
-	var buf bytes.Buffer
-	buf.Grow(len(prefix) + encodedLen)
-	buf.WriteString(prefix)
-
-	encoder := base64.NewEncoder(base64.StdEncoding, &buf)
-	if _, err := io.Copy(encoder, f); err != nil {
-		logger.WarnCF("agent", "Failed to encode media file", map[string]any{
-			"path":  localPath,
-			"error": err.Error(),
+	// ADR-051 §RD1 pre-flight: the prior `Width > maxImagePixels/Height`
+	// was integer-division arithmetic and a crafted header (e.g.
+	// Width=10_000_000, Height=2) would slip through and the full
+	// decode below would still allocate ~150 MB. The product check is
+	// order-independent and catches the wide×tall bomb class.
+	pixels := uint64(config.Width) * uint64(config.Height)
+	if pixels > maxImagePixels {
+		logImageNormalizationFailure(localPath, mime, "pixel-budget-exceeded", nil, map[string]any{
+			"format":     format,
+			"width":      config.Width,
+			"height":     config.Height,
+			"max_pixels": maxImagePixels,
 		})
 		return ""
 	}
-	encoder.Close()
 
-	return buf.String()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		logImageNormalizationFailure(localPath, mime, "rewind-failed", err, map[string]any{
+			"format": format,
+		})
+		return ""
+	}
+
+	decoded, decodedFormat, err := image.Decode(f)
+	if err != nil {
+		logImageNormalizationFailure(localPath, mime, "decode-failed", err, map[string]any{
+			"format": format,
+		})
+		return ""
+	}
+
+	var normalized bytes.Buffer
+	if err := png.Encode(&normalized, decoded); err != nil {
+		logImageNormalizationFailure(localPath, mime, "encode-failed", err, map[string]any{
+			"format": decodedFormat,
+		})
+		return ""
+	}
+	if normalized.Len() > maxSize {
+		logImageNormalizationFailure(localPath, mime, "encoded-oversize", nil, map[string]any{
+			"format":       decodedFormat,
+			"encoded_size": normalized.Len(),
+			"max_size":     maxSize,
+		})
+		return ""
+	}
+
+	const prefix = "data:image/png;base64,"
+	return prefix + base64.StdEncoding.EncodeToString(normalized.Bytes())
+}
+
+func logImageNormalizationFailure(localPath, mime, reason string, err error, fields map[string]any) {
+	details := map[string]any{
+		"path":   localPath,
+		"mime":   mime,
+		"reason": reason,
+	}
+	if err != nil {
+		details["error"] = err.Error()
+	}
+	for key, value := range fields {
+		details[key] = value
+	}
+	logger.WarnCF("agent", "Image normalization failed, skipping attachment", details)
 }
 
 // buildPathTag creates a structured tag exposing the local file path.

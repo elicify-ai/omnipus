@@ -257,11 +257,44 @@ type DoneStats struct {
 	TurnFailed               *bool    `json:"turn_failed,omitempty"`
 }
 
-// ErrorFrame — Server → client error notification.
+// ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
+	// Human-readable error description.
+	Message string `json:"message"`
+	// Payload is *ErrorPayload (pointer, not an inline value struct) so that
+	// `json:"payload,omitempty"` actually omits the field when nil. ADR-051 B2:
+	// the AsyncAPI spec keeps the payload inline (the Zod codegen evaluates
+	// schemas eagerly and a $ref forward-reference trips a TDZ error in
+	// generated schemas.ts), so the Go codegen would emit a value struct here
+	// — which encoding/json never omits, serialising `{}` and violating the
+	// LLMError schema (empty code/message fails enum+minLength) and the SPA
+	// Zod validator. Hand-adjusted to *ErrorPayload; the named type already
+	// exists below and matches the inline shape exactly. If `make
+	// gen-contracts` regenerates this file, re-apply this pointer change.
+	Payload   *ErrorPayload `json:"payload,omitempty"`
+	SessionId *string       `json:"session_id,omitempty"`
+	Type      string        `json:"type"`
+}
+
+// ErrorPayload — Structured payload for a live error frame.
+type ErrorPayload struct {
+	LlmError LLMError `json:"llm_error"`
+}
+
+// LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
+type LLMError struct {
+	Code string `json:"code"`
+	// Live-only technical detail; never persisted or replayed.
+	Detail    *string `json:"detail,omitempty"`
 	Message   string  `json:"message"`
-	SessionId *string `json:"session_id,omitempty"`
-	Type      string  `json:"type"`
+	Retryable bool    `json:"retryable"`
+}
+
+// LLMErrorReplay — Replay-safe translated provider/LLM error with live-only detail omitted.
+type LLMErrorReplay struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
 }
 
 // MarshalErrorResult — Sentinel for tool results that failed json.Marshal.
@@ -334,23 +367,28 @@ type RateLimitFrame struct {
 	Type              string  `json:"type"`
 }
 
-// ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). The SPA renders this frame's `kind` discriminant to dispatch to the rate-limit banner or generic error component — without this typed frame the SPA previously rendered rate-limit text as a regular assistant message (Role="" fallback path).
+// ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
 type ReplayErrorFrame struct {
+	// Agent that was active when the error fired.
 	AgentId *string `json:"agent_id,omitempty"`
-	EntryId string  `json:"entry_id"`
-	Kind    string  `json:"kind"`
-	Message string  `json:"message"`
-	Payload struct {
-		PolicyRule        *string  `json:"policy_rule,omitempty"`
-		Resource          *string  `json:"resource,omitempty"`
-		RetryAfterSeconds *float64 `json:"retry_after_seconds,omitempty"`
-		Scope             *string  `json:"scope,omitempty"`
-		Stage             *string  `json:"stage,omitempty"`
-		Tool              *string  `json:"tool,omitempty"`
-	} `json:"payload,omitempty"`
-	SessionId string `json:"session_id"`
+	// Server-assigned transcript entry ID. Matches TranscriptEntry.ID from the JSONL partition so the SPA can dedup against live entries on WS reconnect.
+	EntryId string `json:"entry_id"`
+	// Error category. The SPA renders a different component per kind: "rate_limit" → rate-limit-denial banner with retry-after countdown, "error" → generic error component. Add new kinds here as new error categories are introduced (the enum keeps the wire contract tight).
+	Kind string `json:"kind"`
+	// Human-readable error description (the same text previously written to TranscriptEntry.Content). Kept verbatim for backward compat with the existing replay_message rendering path.
+	Message string `json:"message"`
+	// Payload is *ReplayErrorPayload (pointer) so omitempty works — see the
+	// matching comment on ErrorFrame.Payload for the full ADR-051 B2 rationale.
+	Payload   *ReplayErrorPayload `json:"payload,omitempty"`
+	SessionId string              `json:"session_id"`
+	// ISO-8601 timestamp of the original error event.
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
+}
+
+// ReplayErrorPayload — Structured replay-safe payload for a replay error frame.
+type ReplayErrorPayload struct {
+	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
 // ReplayMessageFrame — Server → client replayed transcript entry.

@@ -6,7 +6,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
@@ -279,7 +278,11 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	response, agent, err := al.processMessage(ctx, msg)
 	activeAgent = agent
 	if err != nil {
-		response = fmt.Sprintf("Error processing message: %v", err)
+		// ADR-051 §RD5: never surface raw err text in the assistant-facing
+		// reply. Route through the classifier so provider-originated body /
+		// status / model identity is replaced with the typed copy. The raw
+		// err stays in worker logging for operator triage.
+		response = TranslateLLMError(nil, err.Error()).Message
 	}
 	finalResponse = response
 

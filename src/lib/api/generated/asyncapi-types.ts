@@ -135,10 +135,26 @@ export interface DoneFrame {
   stats?: DoneStats;
 }
 
+export interface LLMError {
+  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "unknown";
+  message: string;
+  retryable: boolean;
+  detail?: string;
+}
+
+export interface LLMErrorReplay {
+  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "unknown";
+  message: string;
+  retryable: boolean;
+}
+
 export interface ErrorFrame {
   type: "error";
   session_id?: string;
   message: string;
+  payload?: {
+    llm_error: LLMError;
+  };
 }
 
 export interface ToolCallStartFrame {
@@ -250,12 +266,7 @@ export interface ReplayErrorFrame {
   message: string;
   agent_id?: string;
   payload?: {
-    retry_after_seconds?: number;
-    policy_rule?: string;
-    scope?: string;
-    resource?: string;
-    tool?: string;
-    stage?: string;
+    llm_error: LLMErrorReplay;
   };
 }
 
@@ -509,6 +520,14 @@ export interface BrowserCaptureControlFrame {
   type: "browser_capture_control";
   action: "recapture" | "shutdown" | "ping";
   reason?: string;
+}
+
+export interface ErrorPayload {
+  llm_error: LLMError;
+}
+
+export interface ReplayErrorPayload {
+  llm_error: LLMErrorReplay;
 }
 
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────

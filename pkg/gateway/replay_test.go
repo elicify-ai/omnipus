@@ -1423,9 +1423,6 @@ func TestReplay_SystemErrorRateLimit_EmitsReplayErrorFrame(t *testing.T) {
 		"replay_error.kind must be \"rate_limit\" when content starts with \"rate limit:\"")
 	assert.Contains(t, typed.Message, "rate limit",
 		"replay_error.message must carry the original transcript content verbatim")
-	require.NotNil(t, typed.Payload.RetryAfterSeconds,
-		"rate_limit error payload must include retry_after_seconds")
-	assert.InDelta(t, 30.0, *typed.Payload.RetryAfterSeconds, 0.0001)
 }
 
 // TestReplay_SystemErrorGeneric_EmitsReplayErrorFrame verifies that a system

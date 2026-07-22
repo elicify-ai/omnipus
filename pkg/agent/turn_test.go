@@ -440,3 +440,125 @@ func TestTurnState_Abandoned_StreamerWithoutReleaseInterface_DoesNotPanic(t *tes
 	})
 	assert.Equal(t, 0, ms.finalizeCalled)
 }
+
+// --- Suite 8: Wave 1 rate-limit dedup correctness regression ---
+
+// TestRecordRateLimitDenial_DoesNotEmitErrorEvent is the regression for
+// the dual-emit removal. recordRateLimitDenial must emit ONE event
+// (EventKindRateLimit) and ZERO EventKindError events on the bus — the
+// previous "EventKindError + RateLimitPayload + EventKindRateLimit"
+// dual-emit polluted the bus with two frames per condition.
+func TestRecordRateLimitDenial_DoesNotEmitErrorEvent(t *testing.T) {
+	al, ts := newTestAgentLoopForRateLimit(t)
+
+	sub := al.SubscribeEvents(16)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	al.recordRateLimitDenial(
+		ts,
+		"llm_call",
+		RateLimitPayload{
+			Scope:             "llm_call",
+			Resource:          "llm_call",
+			PolicyRule:        "test_policy",
+			RetryAfterSeconds: 30,
+			AgentID:           ts.agentID,
+		},
+		nil,
+	)
+
+	var rateLimitCount, errorCount int
+drain:
+	for i := 0; i < 16; i++ {
+		select {
+		case ev := <-sub.C:
+			switch ev.Kind {
+			case EventKindRateLimit:
+				rateLimitCount++
+				_, ok := ev.Payload.(RateLimitPayload)
+				assert.True(t, ok, "EventKindRateLimit payload must remain RateLimitPayload")
+			case EventKindError:
+				errorCount++
+			}
+		default:
+			break drain
+		}
+	}
+	assert.Equal(t, 1, rateLimitCount,
+		"expected exactly ONE EventKindRateLimit on the bus")
+	assert.Equal(t, 0, errorCount,
+		"recordRateLimitDenial must NOT emit EventKindError — the dual-emit was removed in Wave 1")
+}
+
+// TestRecordRateLimitDenial_PersistsFriendlyRateLimitTranscript locks the
+// FR-001 "rate-limit denial MUST be visible after a page reload" path:
+// the JSONL transcript gets a system entry carrying the friendly
+// "rate limit: <policy> (retry after Ns)" copy (the rate-limit message
+// is preserved verbatim by appendErrorTranscript's MAJ-001/004
+// carve-out — the classifier recognizes it, but the caller-supplied
+// message is preserved).
+func TestRecordRateLimitDenial_PersistsFriendlyRateLimitTranscript(t *testing.T) {
+	al, ts := newTestAgentLoopForRateLimit(t)
+	store, sessionID := newRateLimitTranscript(t, ts)
+
+	al.recordRateLimitDenial(
+		ts,
+		"llm_call",
+		RateLimitPayload{
+			Scope:             "llm_call",
+			Resource:          "llm_call",
+			PolicyRule:        "agent_max_llm_per_hour",
+			RetryAfterSeconds: 60,
+			AgentID:           ts.agentID,
+		},
+		nil,
+	)
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+
+	var found bool
+	for _, e := range entries {
+		if e.Type != session.EntryTypeSystem {
+			continue
+		}
+		// The friendly copy must be present verbatim — a regression
+		// here would re-translate the rate-limit message into a generic
+		// CodeRateLimited shape and lose the policy-rule hint.
+		if e.Content == "rate limit: agent_max_llm_per_hour (retry after 60s)" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"transcript must contain the friendly 'rate limit: ... (retry after Ns)' system entry verbatim (no double-translate)")
+}
+
+// newTestAgentLoopForRateLimit builds a minimal AgentLoop + turnState
+// for recordRateLimitDenial unit tests. Wires the same simpleMockProvider
+// the other turn tests use.
+func newTestAgentLoopForRateLimit(t *testing.T) (*AgentLoop, *turnState) {
+	t.Helper()
+	al, cleanup := newAL(t)
+	t.Cleanup(cleanup)
+	ts := &turnState{
+		agent:               &AgentInstance{ID: "test-agent", Name: "Test"},
+		agentID:             "test-agent",
+		turnID:              "test-turn-rl",
+		transcriptSessionID: "",
+		transcriptStore:     nil,
+	}
+	return al, ts
+}
+
+// newRateLimitTranscript wires a real UnifiedStore + session for the
+// turn so appendErrorTranscript actually persists.
+func newRateLimitTranscript(t *testing.T, ts *turnState) (*session.UnifiedStore, string) {
+	t.Helper()
+	baseDir := t.TempDir()
+	store, err := session.NewUnifiedStore(baseDir)
+	require.NoError(t, err)
+	ts.transcriptStore = store
+	ts.transcriptSessionID = "test-rate-limit-session"
+	return store, ts.transcriptSessionID
+}

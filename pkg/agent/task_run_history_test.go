@@ -606,8 +606,15 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 	if run.Status != task.StatusFailed {
 		t.Errorf("run status = %q, want failed", run.Status)
 	}
-	if !strings.Contains(run.Result, "external CLI crashed for run-history test") {
-		t.Errorf("run result = %q, want it to mention the underlying driver failure", run.Result)
+	// ADR-051 §RD5: the raw driver stderr is now sanitized through
+	// TranslateLLMError before reaching the task run result. The result MUST
+	// carry the generic failure copy, NOT the raw text.
+	if strings.Contains(run.Result, "external CLI crashed for run-history test") {
+		t.Errorf("run result = %q must NOT contain the raw driver stderr (ADR-051 sanitization)",
+			run.Result)
+	}
+	if !strings.Contains(run.Result, "external-cli run failed") {
+		t.Errorf("run result = %q, want it to mention the generic failure wrapper", run.Result)
 	}
 
 	final, err := al.taskStore.Get(tk.ID)

@@ -561,6 +561,44 @@ func (a *restAPI) runExecutorSmokeTest(
 // dropped permission-request event would otherwise fall through to.
 const smokeTestPermissionDeniedErr = "the CLI attempted a tool call, which is denied by default for this test"
 
+// sanitizeSmokeTestErrorMessage is the fail-closed sanitizer between a
+// runner's raw error text and the smoke-test response body. The smoke
+// test's response body is operator-visible (POST /api/v1/agents/executor-smoke-test
+// returns it directly) — Wave 1 (ADR-051 §RD5 MAJ-005) requires it to
+// carry only generic, classifier-routed copy, NEVER raw provider/CLI text.
+//
+// The classifier runs on a synthetic ProviderError carrying only the
+// message (no status — runner ev.Err has no HTTP context); the result's
+// Message is one of the userMessages entries, generic over server text.
+// For the unclassified case (CodeUnknown or empty classifier output) the
+// function emits a fixed, deliberately generic fallback — the load-bearing
+// invariant: the smoke-test response NEVER carries raw provider/CLI text,
+// regardless of classification outcome.
+//
+// Two shapes are short-circuited before the classifier (both indicate
+// smoke-test-internal sentinels, not external provider text):
+//   - the literal smokeTestPermissionDeniedErr passes through verbatim
+//     (deny-by-default — the operator must be told exactly why).
+//   - any message containing "timeout" is emitted as a generic timeout
+//     copy (the prior "The AI service encountered an error." generic
+//     message swallowed the load-bearing timing signal).
+func sanitizeSmokeTestErrorMessage(rawMessage string) string {
+	if rawMessage == "" {
+		return "The external CLI failed. See gateway.log for details."
+	}
+	if rawMessage == smokeTestPermissionDeniedErr {
+		return smokeTestPermissionDeniedErr
+	}
+	if strings.Contains(strings.ToLower(rawMessage), "timeout") {
+		return "The smoke test hit the timeout bound before completing. See gateway.log for details."
+	}
+	llm := agent.TranslateLLMError(&agent.ProviderError{Body: rawMessage, Err: nil}, rawMessage)
+	if llm.Message == "" {
+		return "The external CLI failed. See gateway.log for details."
+	}
+	return llm.Message
+}
+
 // drainSmokeTestRun consumes the CONSENT-ROUTED event stream (ch is the `out`
 // channel runner.ConsentDispatcher forwards to — see runExecutorSmokeTest),
 // concatenating every EventKindOutput chunk into the final response text
@@ -618,7 +656,7 @@ func drainSmokeTestRun(ctx context.Context, ch <-chan runner.RunEvent) (response
 				if ev.Err != nil && ev.Err.Message != "" {
 					msg = ev.Err.Message
 				}
-				return strings.TrimSpace(sb.String()), false, msg
+				return strings.TrimSpace(sb.String()), false, sanitizeSmokeTestErrorMessage(msg)
 			case runner.EventKindPermissionRequest:
 				return strings.TrimSpace(sb.String()), false, smokeTestPermissionDeniedErr
 			}

@@ -476,6 +476,110 @@ func TestContract_ErrorFrame_Edge(t *testing.T) {
 	mustPassAsyncAPI(t, "ErrorFrame", FixtureErrorFrame_Edge())
 }
 
+// ── Structured LLM errors ────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/LLMError.yaml,
+// contracts/components/schemas/LLMErrorReplay.yaml, and their inline payload
+// mirrors in contracts/asyncapi.yaml ErrorFrame and ReplayErrorFrame.
+
+func TestContract_ErrorFrame_LLMErrorInvalidCode(t *testing.T) {
+	frame := map[string]any{
+		"type":    "error",
+		"message": "The provider rejected the request.",
+		"payload": map[string]any{
+			"llm_error": map[string]any{
+				"code":      "invalid_code",
+				"message":   "The provider rejected the request.",
+				"retryable": false,
+			},
+		},
+	}
+	mustFailAsyncAPI(t, "ErrorFrame", frame, "llm_error.code must use the declared enum")
+}
+
+func TestContract_ErrorFrame_LLMErrorMissingRetryable(t *testing.T) {
+	frame := map[string]any{
+		"type":    "error",
+		"message": "The provider rejected the request.",
+		"payload": map[string]any{
+			"llm_error": map[string]any{
+				"code":    "provider_rejected",
+				"message": "The provider rejected the request.",
+			},
+		},
+	}
+	mustFailAsyncAPI(t, "ErrorFrame", frame, "llm_error.retryable is required")
+}
+
+func TestContract_ErrorFrame_LLMErrorUnknownProperty(t *testing.T) {
+	frame := map[string]any{
+		"type":    "error",
+		"message": "The provider rejected the request.",
+		"payload": map[string]any{
+			"llm_error": map[string]any{
+				"code":      "provider_rejected",
+				"message":   "The provider rejected the request.",
+				"retryable": false,
+				"provider":  "raw-provider-name",
+			},
+		},
+	}
+	mustFailAsyncAPI(t, "ErrorFrame", frame, "llm_error rejects undeclared properties")
+}
+
+func TestContract_ErrorFrame_LLMErrorDetailOmitted(t *testing.T) {
+	frame := map[string]any{
+		"type":    "error",
+		"message": "The provider rejected the request.",
+		"payload": map[string]any{
+			"llm_error": map[string]any{
+				"code":      "provider_rejected",
+				"message":   "The provider rejected the request.",
+				"retryable": false,
+			},
+		},
+	}
+	mustPassAsyncAPI(t, "ErrorFrame", frame)
+}
+
+func TestContract_ReplayErrorFrame_LLMErrorDetailRejected(t *testing.T) {
+	frame := map[string]any{
+		"type":       "replay_error",
+		"session_id": "sess-1",
+		"entry_id":   "entry-1",
+		"timestamp":  "2026-07-22T12:00:00Z",
+		"kind":       "error",
+		"message":    "The provider rejected the request.",
+		"payload": map[string]any{
+			"llm_error": map[string]any{
+				"code":      "provider_rejected",
+				"message":   "The provider rejected the request.",
+				"retryable": false,
+				"detail":    "raw provider response",
+			},
+		},
+	}
+	mustFailAsyncAPI(t, "ReplayErrorFrame", frame, "replay llm_error must reject live-only detail")
+}
+
+func TestContract_ReplayErrorFrame_LLMErrorEmptyMessage(t *testing.T) {
+	frame := map[string]any{
+		"type":       "replay_error",
+		"session_id": "sess-1",
+		"entry_id":   "entry-1",
+		"timestamp":  "2026-07-22T12:00:00Z",
+		"kind":       "error",
+		"message":    "The provider rejected the request.",
+		"payload": map[string]any{
+			"llm_error": map[string]any{
+				"code":      "provider_rejected",
+				"message":   "",
+				"retryable": false,
+			},
+		},
+	}
+	mustFailAsyncAPI(t, "ReplayErrorFrame", frame, "replay llm_error.message must not be empty")
+}
+
 // ── TokenFrame ────────────────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.TokenFrame
 
@@ -4070,4 +4174,70 @@ func TestContract_OperationResult_NoValidation_Valid(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), `"validation"`,
 		"an OperationResult with no validation must omit the field")
+}
+
+// TestErrorFrame_PayloadOmitEmpty is the ADR-051 B2 regression: when
+// ErrorFrame.Payload is *ErrorPayload (pointer), encoding/json's omitempty
+// tag must actually OMIT the field for a nil payload. With the old value
+// struct shape, encoding/json serialised every error frame with
+// `payload:{llm_error:{code:"",message:"",retryable:false}}`, violating the
+// LLMError schema (empty code/message fails enum+minLength) and causing the
+// SPA Zod validator to drop the frame silently.
+func TestErrorFrame_PayloadOmitEmpty(t *testing.T) {
+	// Case 1: nil Payload → "payload" key must NOT appear in JSON.
+	nilFrame := ErrorFrame{
+		Type:    "error",
+		Message: "auth failed",
+	}
+	raw, err := json.Marshal(nilFrame)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"payload"`,
+		"nil *ErrorPayload must be omitted (omitempty regression)")
+
+	// Case 2: populated Payload → payload.llm_error.code must be present.
+	popFrame := FixtureErrorFrame_Populated()
+	rawPop, err := json.Marshal(popFrame)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawPop), `"payload"`,
+		"populated payload must serialise")
+	assert.Contains(t, string(rawPop), `"llm_error"`,
+		"payload.llm_error must be present")
+	assert.Contains(t, string(rawPop), `"code":"rate_limited"`,
+		"payload.llm_error.code must carry the classifier code")
+}
+
+// TestReplayErrorFrame_PayloadOmitEmpty is the ADR-051 B2 replay-side
+// counterpart: a ReplayErrorFrame with no ErrorCode must omit payload
+// entirely (the buildReplayErrorFrame producer leaves Payload nil when
+// entry.ErrorCode is empty).
+func TestReplayErrorFrame_PayloadOmitEmpty(t *testing.T) {
+	// Case 1: nil Payload → "payload" must NOT appear.
+	nilFrame := ReplayErrorFrame{
+		Type:      "replay_error",
+		SessionId: "sess-1",
+		EntryId:   "entry-1",
+		Timestamp: "2026-07-22T00:00:00Z",
+		Kind:      "error",
+		Message:   "something went wrong",
+	}
+	raw, err := json.Marshal(nilFrame)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"payload"`,
+		"nil *ReplayErrorPayload must be omitted (omitempty regression)")
+
+	// Case 2: populated Payload → payload.llm_error must be present.
+	popFrame := nilFrame
+	popFrame.Payload = &ReplayErrorPayload{
+		LlmError: LLMErrorReplay{
+			Code:      "rate_limited",
+			Message:   "rate limit hit",
+			Retryable: true,
+		},
+	}
+	rawPop, err := json.Marshal(popFrame)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawPop), `"payload"`,
+		"populated payload must serialise")
+	assert.Contains(t, string(rawPop), `"code":"rate_limited"`,
+		"payload.llm_error.code must carry the classifier code")
 }
