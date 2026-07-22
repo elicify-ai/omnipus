@@ -325,3 +325,51 @@ build_archive() {
   echo "status=$status output=$output"
   [ "$status" -eq 0 ]
 }
+
+# ── Phase 3: macOS / darwin install path (ADR-052 C3 option ii) ──────────────
+#
+# Cannot runtime-test on macOS from this Linux host, but install.sh's OS
+# branching is driven purely by `uname -s`. Stubbing uname to report Darwin
+# exercises the entire darwin code path (chromium sibling lay-down, .app
+# binary resolution, chrome.sha256 beside the .app, host-libs skip) on the
+# Linux test host. This is functional proof for a path shellcheck alone
+# cannot verify.
+
+@test "install.sh: darwin .app chromium installs to ../chromium sibling + SHA verified" {
+  # Stub uname so install.sh takes the Darwin branch.
+  cat > "$SCRUB_BIN/uname" <<'STUB'
+#!/bin/sh
+case "$1" in
+  -s) echo "Darwin" ;;
+  -m) echo "arm64" ;;
+  *) echo "unknown" ;;
+esac
+STUB
+  chmod +x "$SCRUB_BIN/uname"
+
+  # Build a Darwin-style archive: omnipus binary + chromium/ with the .app
+  # layout + chrome.sha256 BESIDE the .app (C3 option ii).
+  mkdir -p "$SANDBOX/dist/chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS"
+  cp "$STAGE_BIN_DIR/omnipus" "$SANDBOX/dist/omnipus"
+  chmod +x "$SANDBOX/dist/omnipus"
+  MAC_BIN="$SANDBOX/dist/chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  cp "$STAGE_BIN_DIR/omnipus" "$MAC_BIN"
+  chmod +x "$MAC_BIN"
+  sha="$(sha256sum "$MAC_BIN" | awk '{print $1}')"
+  # chrome.sha256 beside the .app (at <extract-subdir>/chrome.sha256).
+  printf '%s  chrome\n' "$sha" > "$SANDBOX/dist/chromium/chrome-mac-arm64/chrome.sha256"
+  ( cd "$SANDBOX/dist" && tar -czf "$SANDBOX/dist/omnipus_Darwin_arm64.tar.gz" omnipus chromium )
+  export OMNIPUS_INSTALL_URL="file://$SANDBOX/dist/omnipus_Darwin_arm64.tar.gz"
+  run "$INSTALL_SH"
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -x "$TEST_INSTALL_DIR/omnipus" ]
+  # darwin lays chromium at <INSTALL_DIR>/../chromium (NOT the linux
+  # share/omnipus/chromium path).
+  [ -d "$SANDBOX/bin/../chromium" ]
+  [ ! -d "$SANDBOX/bin/../share/omnipus/chromium" ]
+  # .app binary present + executable in the laid-down location.
+  [ -x "$SANDBOX/bin/../chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ]
+  # chrome.sha256 beside the .app survived the move.
+  [ -f "$SANDBOX/bin/../chromium/chrome-mac-arm64/chrome.sha256" ]
+}

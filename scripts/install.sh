@@ -41,11 +41,17 @@
 #     looks for chromium/<fullChromeBinaryRelPath()> (linux:
 #     chromium/chrome-linux64/chrome) — the install.sh's staged chromium/
 #     dir is laid out to match.
-#   - macOS Phase 1: Chrome is NOT bundled in the Darwin archive (CfT's
-#     mac-arm64 build is real but the macOS .app notarization decision is
-#     deferred to Phase 3 per ADR-052 §2/§3). Runtime falls back to
-#     managed download on Darwin; operators wanting the bundled-chrome
-#     floor on macOS will get it in Phase 3.
+#   - macOS Phase 3 (ADR-052 C3 option ii): Chrome IS bundled in the Darwin
+#     archive as a Google-signed sibling. On macOS the binary lives inside
+#     a .app bundle (Google Chrome for Testing.app/Contents/MacOS/...);
+#     chrome.sha256 sits BESIDE the .app at <extract-subdir>/chrome.sha256
+#     (NOT inside the .app — writing inside would break the bundle's
+#     CodeDirectory signature). The chromium/ dir is laid down at
+#     <INSTALL_DIR>/../chromium so the runtime's packageChromeRoot
+#     candidate <dir(exe)>/../chromium finds it. macOS needs NO host
+#     shared-libraries install — the .app bundle ships its own dylibs per
+#     ADR-052 C2 — so the apt/dnf block below is Linux-only (Darwin skips
+#     it cleanly via the `OS = Linux` gate).
 
 set -eu
 
@@ -195,13 +201,20 @@ tar -xzf "$ARCHIVE_PATH" -C "$WORK_DIR"
 # chromium/chrome-linux-arm64/chrome if CfT published one — see cft-bundle.sh
 # for the per-arch mapping). We accept either layout defensively.
 CHROMIUM_DIR="${WORK_DIR}/chromium"
+# darwin .app inner-binary relative path (matches fullChromeBinaryRelPath()
+# in pkg/tools/browser/installer.go). Spaces are literal — quote every use.
+DARWIN_APP_REL="Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
 if [ -d "$CHROMIUM_DIR" ]; then
-  # Resolve the chrome binary: try the linux CfT layout first, then the
-  # (hypothetical) arm64 CfT layout, then a glob for future darwin/win.
+  # Resolve the chrome binary: linux CfT layouts first, then darwin .app
+  # layouts (Phase 3), then a glob fallback for future/alternate layouts.
   if [ -x "$CHROMIUM_DIR/chrome-linux64/chrome" ]; then
     CHROME_BIN="$CHROMIUM_DIR/chrome-linux64/chrome"
   elif [ -x "$CHROMIUM_DIR/chrome-linux-arm64/chrome" ]; then
     CHROME_BIN="$CHROMIUM_DIR/chrome-linux-arm64/chrome"
+  elif [ -x "$CHROMIUM_DIR/chrome-mac-arm64/$DARWIN_APP_REL" ]; then
+    CHROME_BIN="$CHROMIUM_DIR/chrome-mac-arm64/$DARWIN_APP_REL"
+  elif [ -x "$CHROMIUM_DIR/chrome-mac-x64/$DARWIN_APP_REL" ]; then
+    CHROME_BIN="$CHROMIUM_DIR/chrome-mac-x64/$DARWIN_APP_REL"
   else
     CHROME_BIN="$(find "$CHROMIUM_DIR" -type f \
       \( -name chrome -o -name 'Google Chrome for Testing' -o -name chrome.exe \) \
@@ -211,12 +224,26 @@ if [ -d "$CHROMIUM_DIR" ]; then
   if [ -z "$CHROME_BIN" ] || [ ! -f "$CHROME_BIN" ]; then
     err "bundled chrome binary missing — refusing to install (corrupted archive)"
   fi
-  # chrome.sha256 lives NEXT TO the binary (PERF2-001 / SEC-ADR052-003):
-  # cft-bundle.sh writes <subdir>/chrome.sha256 beside <subdir>/chrome
-  # (e.g. chromium/chrome-linux64/chrome.sha256), and the runtime's
-  # findPackageChrome probes alongside the binary first. Fall back to the
-  # chromium/ root for alternative packagers that place it there.
+  # chrome.sha256 lives at <extract-subdir>/chrome.sha256 (PERF2-001 /
+  # SEC-ADR052-003). On linux the binary is <subdir>/chrome so the manifest
+  # is alongside it (dirname gives <subdir>). On darwin the binary is
+  # inside a .app bundle and the manifest is BESIDE the .app (outside the
+  # signed bundle) at <subdir>/chrome.sha256 — the .app's parent dir.
+  # Probe order: alongside-binary (linux) → beside-.app (darwin) →
+  # chromium/ root (older flat packages).
   SHA_FILE="$(dirname "$CHROME_BIN")/chrome.sha256"
+  if [ ! -f "$SHA_FILE" ]; then
+    # darwin .app layout: binary is at <subdir>/<app>.app/Contents/MacOS/<bin>.
+    # Walk up to the .app then one more level to <subdir>, where cft-bundle.sh
+    # writes chrome.sha256 beside the .app.
+    case "$CHROME_BIN" in
+      *"Google Chrome for Testing.app/Contents/MacOS/"*)
+        MACOS_DIR="$(dirname "$CHROME_BIN")"            # .../MacOS
+        APP_DIR="$(dirname "$(dirname "$MACOS_DIR")")"  # .../<app>.app
+        SHA_FILE="$(dirname "$APP_DIR")/chrome.sha256"  # <subdir>/chrome.sha256
+        ;;
+    esac
+  fi
   if [ ! -f "$SHA_FILE" ]; then
     SHA_FILE="${CHROMIUM_DIR}/chrome.sha256"
   fi
@@ -293,15 +320,20 @@ chmod +x "${TARGET}.new"
 mv -f "${TARGET}.new" "$TARGET"
 
 # ── Lay down chromium/ next to the binary (ADR-052 D2) ───────────────────────
-# Compute the runtime's package-Chrome root via the same arithmetic
-# pkg/tools/browser/exec_resolver.go uses: <dir(binary)>/../chromium.
-# For /usr/local/bin/omnipus → /usr/local/share/omnipus/chromium.
-# For $HOME/.local/bin/omnipus → $HOME/.local/share/omnipus/chromium.
+# Compute the runtime's package-Chrome root. Linux uses the FHS layout
+# <INSTALL_DIR>/../share/omnipus/chromium (packageChromeRootCandidates slot
+# #2); macOS (Phase 3 / C3 option ii) places chromium as a sibling at
+# <INSTALL_DIR>/../chromium (slot #1) — the .app bundle ships its own
+# dylibs so no host-libs install is needed on Darwin.
 if [ -d "$CHROMIUM_DIR" ]; then
   PARENT_DIR="$(dirname "$INSTALL_DIR")"
-  SHARE_DIR="${PARENT_DIR}/share/omnipus"
-  TARGET_CHROMIUM="${SHARE_DIR}/chromium"
-  mkdir -p "$SHARE_DIR" || err "cannot create $SHARE_DIR (you may need sudo)"
+  if [ "$OS" = "Darwin" ]; then
+    TARGET_CHROMIUM="${PARENT_DIR}/chromium"
+  else
+    SHARE_DIR="${PARENT_DIR}/share/omnipus"
+    TARGET_CHROMIUM="${SHARE_DIR}/chromium"
+    mkdir -p "$SHARE_DIR" || err "cannot create $SHARE_DIR (you may need sudo)"
+  fi
   rm -rf "$TARGET_CHROMIUM"
   mv "$CHROMIUM_DIR" "$TARGET_CHROMIUM" \
     || err "cannot move chromium/ to $TARGET_CHROMIUM"
@@ -309,6 +341,9 @@ if [ -d "$CHROMIUM_DIR" ]; then
   # from the tarball, but some filesystems strip the bit during transfer.
   chmod +x "$TARGET_CHROMIUM/chrome-linux64/chrome" 2>/dev/null || true
   chmod +x "$TARGET_CHROMIUM/chrome-linux-arm64/chrome" 2>/dev/null || true
+  # darwin .app inner binary (spaces in path require quoting).
+  chmod +x "$TARGET_CHROMIUM/chrome-mac-arm64/$DARWIN_APP_REL" 2>/dev/null || true
+  chmod +x "$TARGET_CHROMIUM/chrome-mac-x64/$DARWIN_APP_REL" 2>/dev/null || true
   info "bundled chrome installed at $TARGET_CHROMIUM"
 fi
 

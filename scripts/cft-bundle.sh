@@ -5,22 +5,32 @@
 # adds windows.
 #
 # Per-arch invocation:
+#   cft-bundle.sh <ARCH> [GOOS]    (GOOS defaults to linux)
 #   1. Fetch the live CfT "last-known-good-versions-with-downloads.json"
 #      manifest (same URL pkg/tools/browser/installer.go's cftManifestURL
 #      uses at runtime).
 #   2. Pick the Stable channel's "chrome" build for this OS+arch (full
 #      Chrome, NOT chrome-headless-shell — per ADR D2 the bundled build
-#      must be full Chrome).
+#      must be full Chrome). GOOS disambiguates the CfT platform:
+#        linux+amd64 → linux64,  linux+arm64 → linux-arm64,
+#        darwin+arm64 → mac-arm64, darwin+amd64 → mac-x64.
 #   3. Download chrome-<arch>.zip + verify X-Goog-Hash md5 (M2 /
 #      SEC-ADR052-003 — mirrors verifyGoogHashMD5 in
 #      pkg/tools/browser/installer.go).
-#   4. Unzip into dist/chromium/<arch>/ (goreleaser's working dir).
+#   4. Unzip into dist/chromium/<subdir>/ (goreleaser's working dir).
 #   5. Compute SHA-256 of the chrome binary and write
-#      dist/chromium/<arch>/chrome.sha256 — the integrity manifest the
+#      dist/chromium/<subdir>/chrome.sha256 — the integrity manifest the
 #      runtime reads back and verifies at first launch
 #      (chrome.sha256 reader: pkg/tools/browser/chromeintegrity +
 #      cmd/omnipus/internal/doctor/command.go's readChromeSHA — BOM/CRLF/
 #      comment/prefix tolerant per SEC-ADR052-004).
+#
+#   darwin layout (ADR-052 Phase 3 / C3 option ii): on macOS the binary
+#   is inside a Google-signed .app bundle at
+#   <subdir>/Google Chrome for Testing.app/Contents/MacOS/Google Chrome
+#   for Testing. chrome.sha256 is written BESIDE the .app (NOT inside it
+#   — writing inside would break the bundle's signature and Apple
+#   notarization); the runtime + install.sh probe <subdir>/chrome.sha256.
 #
 # Per-binary manifest placement (PERF2-001): the runtime's
 # findPackageChrome probes for chrome.sha256 NEXT TO the binary, i.e.
@@ -37,6 +47,8 @@
 # therefore ship without a chromium/ payload; the runtime falls back to
 # its managed download path on that arch (the install-time
 # `[ -d "$CHROMIUM_DIR" ]` gate skips chrome install cleanly).
+# darwin/arm64 (mac-arm64) and darwin/amd64 (mac-x64) ARE published and
+# bundled as of Phase 3 (ADR-052 C3 option ii — Google-signed sibling).
 #
 # This script is bash (not POSIX sh) because the per-arch mapping + the
 # repeated-header X-Goog-Hash walk read cleaner with bash arrays and
@@ -44,13 +56,21 @@
 
 set -eu
 
+# Args: ARCH (arg 1) + GOOS (arg 2). GOOS defaults to "linux" so the
+# one-arg call from goreleaser's Phase-1 per-arch hook is unchanged
+# (backward compat). Phase 3 adds darwin: pass "darwin" as the second arg,
+# e.g. `cft-bundle.sh arm64 darwin` → mac-arm64. GOOS disambiguates arm64
+# (linux-arm64 vs mac-arm64) and amd64 (linux64 vs mac-x64).
 ARCH="${1:-${GOARCH:-amd64}}"
+GOOS="${2:-${GOOS:-linux}}"
 
-case "$ARCH" in
-  amd64) CFT_PLATFORM="linux64" ;;
-  arm64) CFT_PLATFORM="linux-arm64" ;;
+case "$GOOS:$ARCH" in
+  linux:amd64)  CFT_PLATFORM="linux64" ;;
+  linux:arm64)  CFT_PLATFORM="linux-arm64" ;;
+  darwin:arm64) CFT_PLATFORM="mac-arm64" ;;
+  darwin:amd64) CFT_PLATFORM="mac-x64" ;;
   *)
-    echo "ADR-052: unsupported arch '$ARCH' for chrome bundling" >&2
+    echo "ADR-052: unsupported OS/arch '$GOOS/$ARCH' for chrome bundling" >&2
     exit 1
     ;;
 esac
@@ -88,11 +108,15 @@ require md5sum
 require base64
 require od
 
-# Map CfT platform → on-disk extraction subdir (matches the runtime's
-# fullChromeBinaryRelPath layout for linux64; linux-arm64 is hypothetical).
+# Map CfT platform → on-disk extraction subdir. These match the directory
+# names the CfT zip produces (linux: chrome-linux{64,-arm64}/; darwin:
+# chrome-mac-{arm64,x64}/) and what the runtime's fullChromeBinaryRelPath()
+# in pkg/tools/browser/installer.go expects inside the package root.
 case "$CFT_PLATFORM" in
   linux64)      EXTRACT_SUBDIR="chrome-linux64" ;;
   linux-arm64)  EXTRACT_SUBDIR="chrome-linux-arm64" ;;
+  mac-arm64)    EXTRACT_SUBDIR="chrome-mac-arm64" ;;
+  mac-x64)      EXTRACT_SUBDIR="chrome-mac-x64" ;;
 esac
 
 # Stage under dist/chromium/ so goreleaser's `archives.files: chromium/**/*`
@@ -177,16 +201,38 @@ echo "ADR-052: chrome zip md5 OK" >&2
 
 unzip -q "$ZIP_PATH" -d "$STAGE"
 
-BINARY="$STAGE/$EXTRACT_SUBDIR/chrome"
+# Full Chrome's on-disk layout differs by OS: linux/windows ship a flat
+# `chrome` binary at the extraction-subdir root; darwin ships a .app bundle
+# (Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing)
+# matching fullChromeBinaryRelPath() in pkg/tools/browser/installer.go.
+case "$GOOS" in
+  darwin)
+    BINARY="$STAGE/$EXTRACT_SUBDIR/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    ;;
+  *)
+    BINARY="$STAGE/$EXTRACT_SUBDIR/chrome"
+    ;;
+esac
 if [ ! -x "$BINARY" ]; then
   echo "ADR-052: chrome binary missing after extraction (looked for $BINARY)" >&2
   exit 1
 fi
 
-# Emit chrome.sha256 (sha256sum format) NEXT TO the binary. install.sh's
-# awk + the runtime's Go reader both consume this format. The runtime's
-# findPackageChrome probes <extraction-subdir>/chrome.sha256 first; a
-# root-level chrome.sha256 would silently miss (PERF2-001).
+# Emit chrome.sha256 (sha256sum format) at <extract-subdir>/chrome.sha256.
+# install.sh's awk + the runtime's Go reader both consume this format. The
+# runtime's findPackageChrome probes <extraction-subdir>/chrome.sha256
+# first; a root-level chrome.sha256 would silently miss (PERF2-001).
+#
+# darwin (ADR-052 C3 option ii): the binary lives inside a Google-SIGNED
+# .app bundle; writing chrome.sha256 INSIDE the .app would break the
+# bundle's CodeDirectory signature (Apple notarization rejects a re-sealed
+# bundle). We write it BESIDE the .app at <extract-subdir>/chrome.sha256
+# — OUTSIDE the signed bundle, matching the linux <subdir>/chrome.sha256
+# convention. The runtime's findPackageChrome darwin layout probes this
+# location (the .app's parent = the extract subdir); install.sh's SHA-file
+# resolution also checks here. Both parsers key on the 64-char hex digest,
+# so the filename field (which awk truncates on the .app path's spaces) is
+# cosmetic and harmless.
 SHA_TARGET="$STAGE/$EXTRACT_SUBDIR/chrome.sha256"
 sha256sum "$BINARY" | awk '{printf "%s  %s\n", $1, $2}' > "$SHA_TARGET"
 

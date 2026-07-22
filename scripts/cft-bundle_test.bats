@@ -154,7 +154,7 @@ remove_from_path() {
   run bash "$CFT_BUNDLE_SH" riscv64
   echo "status=$status output=$output"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unsupported arch"* ]]
+  [[ "$output" == *"unsupported OS/arch"* ]]
 }
 
 @test "cft-bundle.sh: amd64 happy path emits chrome.sha256 with correct digest" {
@@ -386,4 +386,103 @@ STUB
   echo "self-verify run status=$status output=$output"
   [ "$status" -ne 0 ]
   [[ "$output" == *"self-test FAILED"* ]]
+}
+
+# ── Phase 3: darwin/macOS cases (ADR-052 C3 option ii) ───────────────────────
+#
+# cft-bundle.sh gained a second GOOS arg (default linux). darwin+arm64 →
+# mac-arm64, darwin+amd64 → mac-x64. On darwin the Chrome binary lives
+# inside a Google-signed .app bundle; chrome.sha256 is written BESIDE the
+# .app (outside the signed bundle) at <extract-subdir>/chrome.sha256.
+#
+# No cft-curl-stub.sh change is needed: the stub already serves any
+# file:// URL (stripping the scheme) and serves $FIX/manifest.json for the
+# CfT manifest URL. Each test adds its mac-* entry to manifest.json via jq
+# and points it at a local file:// zip — the same hermetic pattern the
+# linux-arm64 forward-compat test above uses.
+
+@test "cft-bundle.sh: darwin arm64 maps to mac-arm64 with .app binary + chrome.sha256 beside .app" {
+  # Build a darwin fixture: chrome-mac-arm64/<.app>/Contents/MacOS/<bin>.
+  FIX="$SANDBOX/fixture"
+  MAC_DIR="$FIX/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS"
+  mkdir -p "$MAC_DIR"
+  printf '#!/bin/sh\necho "fake mac arm64 chrome"\n' > "$MAC_DIR/Google Chrome for Testing"
+  chmod +x "$MAC_DIR/Google Chrome for Testing"
+  ( cd "$FIX" && zip -qr chrome-mac-arm64.zip chrome-mac-arm64 )
+  MAC_SHA256_HEX="$(sha256sum "$MAC_DIR/Google Chrome for Testing" | awk '{print $1}')"
+  # Add the mac-arm64 entry to the manifest.
+  cp "$FIX/manifest.json" "$FIX/manifest.json.bak"
+  jq '.channels.Stable.downloads.chrome += [{
+    "platform": "mac-arm64",
+    "url": "file://'"$FIX"'/chrome-mac-arm64.zip"
+  }]' "$FIX/manifest.json.bak" > "$FIX/manifest.json"
+  run bash "$CFT_BUNDLE_SH" arm64 darwin
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  # Extraction subdir is chrome-mac-arm64.
+  [ -d "dist/chromium/chrome-mac-arm64" ]
+  # .app inner binary present + executable.
+  [ -x "dist/chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ]
+  # chrome.sha256 BESIDE the .app (outside the signed bundle), matching the
+  # linux <subdir>/chrome.sha256 convention (PERF2-001 / C3 option ii).
+  [ -f "dist/chromium/chrome-mac-arm64/chrome.sha256" ]
+  # NOT inside the .app (writing inside would break the bundle signature).
+  [ ! -f "dist/chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/chrome.sha256" ]
+  # Manifest contains the correct hash.
+  manifest_contents="$(cat dist/chromium/chrome-mac-arm64/chrome.sha256)"
+  [[ "$manifest_contents" == *"$MAC_SHA256_HEX"* ]]
+}
+
+@test "cft-bundle.sh: darwin amd64 maps to mac-x64" {
+  FIX="$SANDBOX/fixture"
+  MAC_DIR="$FIX/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS"
+  mkdir -p "$MAC_DIR"
+  printf '#!/bin/sh\necho "fake mac x64 chrome"\n' > "$MAC_DIR/Google Chrome for Testing"
+  chmod +x "$MAC_DIR/Google Chrome for Testing"
+  ( cd "$FIX" && zip -qr chrome-mac-x64.zip chrome-mac-x64 )
+  cp "$FIX/manifest.json" "$FIX/manifest.json.bak"
+  jq '.channels.Stable.downloads.chrome += [{
+    "platform": "mac-x64",
+    "url": "file://'"$FIX"'/chrome-mac-x64.zip"
+  }]' "$FIX/manifest.json.bak" > "$FIX/manifest.json"
+  run bash "$CFT_BUNDLE_SH" amd64 darwin
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -d "dist/chromium/chrome-mac-x64" ]
+  [ -x "dist/chromium/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ]
+  [ -f "dist/chromium/chrome-mac-x64/chrome.sha256" ]
+}
+
+@test "cft-bundle.sh: linux arm64 with explicit GOOS=linux maps to linux-arm64 (backward compat)" {
+  # Regression: the two-arg call `arm64 linux` must behave identically to
+  # the one-arg call `arm64` (default GOOS=linux). Build the linux-arm64
+  # fixture (mirrors the forward-compat test) and invoke with the explicit
+  # GOOS arg.
+  FIX="$SANDBOX/fixture"
+  mkdir -p "$FIX/chrome-linux-arm64"
+  printf '#!/bin/sh\necho "fake arm64 chrome"\n' > "$FIX/chrome-linux-arm64/chrome"
+  chmod +x "$FIX/chrome-linux-arm64/chrome"
+  ( cd "$FIX" && zip -qr chrome-arm64.zip chrome-linux-arm64 )
+  cp "$FIX/manifest.json" "$FIX/manifest.json.bak"
+  jq '.channels.Stable.downloads.chrome += [{
+    "platform": "linux-arm64",
+    "url": "file://'"$FIX"'/chrome-arm64.zip"
+  }]' "$FIX/manifest.json.bak" > "$FIX/manifest.json"
+  run bash "$CFT_BUNDLE_SH" arm64 linux
+  echo "status=$status output=$output"
+  [ "$status" -eq 0 ]
+  [ -x "dist/chromium/chrome-linux-arm64/chrome" ]
+  [ -f "dist/chromium/chrome-linux-arm64/chrome.sha256" ]
+  # Must NOT have created a darwin layout.
+  [ ! -d "dist/chromium/chrome-mac-arm64" ]
+}
+
+@test "cft-bundle.sh: unsupported OS/arch combo exits non-zero" {
+  # freebsd/amd64 is not a supported CfT platform for Omnipus bundling.
+  # The script must exit 1 at the platform-mapping case BEFORE touching
+  # any tools (the require checks run after the mapping).
+  run bash "$CFT_BUNDLE_SH" amd64 freebsd
+  echo "status=$status output=$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unsupported OS/arch"* ]]
 }
