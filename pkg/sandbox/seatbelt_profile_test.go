@@ -158,6 +158,34 @@ func TestRenderSeatbeltProfile(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "forbidden character")
 	})
+
+	// Belt-and-suspenders validator (validateSeatbeltPath) must reject control
+	// bytes and backslash too, not just the bare quote/newline the original
+	// check covered. The PRIMARY defense is strconv.Quote at the render site,
+	// but the validator is a complete standalone defense so a path never reaches
+	// the renderer with a byte that could be misread by a buggy consumer.
+	t.Run("rejects backslash and control-byte paths", func(t *testing.T) {
+		tests := []struct {
+			name string
+			path string
+		}{
+			{"trailing backslash", "/tmp/evil" + string(rune(0x5C))},
+			{"embedded tab", "/tmp/evil\tname"},
+			{"embedded newline", "/tmp/evil\nname"},
+			{"embedded carriage return", "/tmp/evil\rname"},
+			{"embedded NUL", "/tmp/evil" + string(rune(0x00)) + "x"},
+			{"embedded DEL (0x7f)", "/tmp/evil" + string(rune(0x7F))},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := renderSeatbeltProfile(SandboxPolicy{
+					FilesystemRules: []PathRule{{Path: tc.path, Access: AccessRead}},
+				})
+				require.Error(t, err, "path %q must be rejected", tc.path)
+				assert.Contains(t, err.Error(), "forbidden character")
+			})
+		}
+	})
 }
 
 // TestRenderSeatbeltProfile_DeterministicOrder verifies that two calls with

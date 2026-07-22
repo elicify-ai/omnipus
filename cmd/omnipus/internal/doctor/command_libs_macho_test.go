@@ -8,6 +8,7 @@ package doctor
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"testing"
 
@@ -423,6 +424,83 @@ func TestParseMachODylibs_OnlyNonDylibCommands(t *testing.T) {
 	dylibs, err := parseMachODylibs(bytesReaderAt(buf))
 	require.NoError(t, err)
 	assert.Nil(t, dylibs, "non-dylib load commands should yield no dylibs")
+}
+
+// TestParseMachODylibs_DylibNameOffInFixedFields verifies that a dylib load
+// command whose name offset points into the fixed header fields (bytes 0..
+// dylibCommandMinSize-1) yields NO dylib name rather than a garbage string
+// carved out of the version/timestamp bytes. A crafted or malformed binary
+// could set nameOff=0; without the lower-bound guard the parser would return
+// the cmd/cmdsize/nameoff/timestamp bytes as a "dependency name".
+func TestParseMachODylibs_DylibNameOffInFixedFields(t *testing.T) {
+	const headerSize = machOHeaderSize64Test
+	// cmdsize large enough that the upper-bound (nameOff < len(cmd)) passes,
+	// so the test actually exercises the lower-bound guard.
+	const cmdsize = 64
+	badOffsets := []uint32{0, 4, 8, 12, 16, 20, 23} // all < dylibCommandMinSize (24)
+
+	for _, nameOff := range badOffsets {
+		t.Run(fmt.Sprintf("nameOff=%d", nameOff), func(t *testing.T) {
+			buf := make([]byte, headerSize+cmdsize)
+			binary.LittleEndian.PutUint32(buf[0:4], 0xFEEDFACF)
+			binary.LittleEndian.PutUint32(buf[4:8], 0x0100000C)
+			binary.LittleEndian.PutUint32(buf[8:12], 0)
+			binary.LittleEndian.PutUint32(buf[12:16], 2)               // MH_EXECUTE
+			binary.LittleEndian.PutUint32(buf[16:20], 1)               // ncmds
+			binary.LittleEndian.PutUint32(buf[20:24], uint32(cmdsize)) // sizeofcmds
+			binary.LittleEndian.PutUint32(buf[24:28], 0)
+			binary.LittleEndian.PutUint32(buf[28:32], 0)
+
+			// LC_LOAD_DYLIB with the crafted name offset pointing into fixed fields.
+			binary.LittleEndian.PutUint32(buf[headerSize:headerSize+4], 0x0c) // LC_LOAD_DYLIB
+			binary.LittleEndian.PutUint32(buf[headerSize+4:headerSize+8], cmdsize)
+			binary.LittleEndian.PutUint32(buf[headerSize+8:headerSize+12], nameOff)
+			// Fill the body with distinctly non-NUL bytes so that WITHOUT the
+			// lower-bound guard the parser would return a non-empty garbage name.
+			for i := headerSize + 12; i < len(buf); i++ {
+				buf[i] = 'A'
+			}
+
+			dylibs, err := parseMachODylibs(bytesReaderAt(buf))
+			require.NoError(t, err)
+			assert.Nil(t, dylibs, "nameOff=%d (into fixed fields) must yield no dylib name", nameOff)
+		})
+	}
+}
+
+// TestParseMachODylibs_DylibNameOffAtMinBoundary is the boundary complement:
+// nameOff == dylibCommandMinSize (24, the first legal name byte) must still
+// extract the name — guards against an off-by-one in the lower-bound check.
+func TestParseMachODylibs_DylibNameOffAtMinBoundary(t *testing.T) {
+	const headerSize = machOHeaderSize64Test
+	const nameOff = 24 // dylibCommandMinSize — first byte after fixed fields
+	dylibName := "/usr/lib/libSystem.B.dylib"
+	nameBytes := []byte(dylibName)
+	rawSize := nameOff + len(nameBytes) + 1
+	cmdsize := rawSize
+	if r := cmdsize % 8; r != 0 {
+		cmdsize += 8 - r
+	}
+
+	buf := make([]byte, headerSize+cmdsize)
+	binary.LittleEndian.PutUint32(buf[0:4], 0xFEEDFACF)
+	binary.LittleEndian.PutUint32(buf[4:8], 0x0100000C)
+	binary.LittleEndian.PutUint32(buf[8:12], 0)
+	binary.LittleEndian.PutUint32(buf[12:16], 2)               // MH_EXECUTE
+	binary.LittleEndian.PutUint32(buf[16:20], 1)               // ncmds
+	binary.LittleEndian.PutUint32(buf[20:24], uint32(cmdsize)) // sizeofcmds
+	binary.LittleEndian.PutUint32(buf[24:28], 0)
+	binary.LittleEndian.PutUint32(buf[28:32], 0)
+
+	binary.LittleEndian.PutUint32(buf[headerSize:headerSize+4], 0x0c) // LC_LOAD_DYLIB
+	binary.LittleEndian.PutUint32(buf[headerSize+4:headerSize+8], uint32(cmdsize))
+	binary.LittleEndian.PutUint32(buf[headerSize+8:headerSize+12], nameOff)
+	copy(buf[headerSize+nameOff:], nameBytes)
+
+	dylibs, err := parseMachODylibs(bytesReaderAt(buf))
+	require.NoError(t, err)
+	require.Len(t, dylibs, 1)
+	assert.Equal(t, dylibName, dylibs[0])
 }
 
 // --- Helper: wrap a []byte in an io.ReaderAt ---

@@ -255,11 +255,18 @@ func isUsablePackageRoot(candidate string) bool {
 	return true
 }
 
+// layoutsGOOS is the test seam for binaryLayoutsForRoot's per-OS branch
+// (mirrors capability.go's goosForCapability). Production uses runtime.GOOS;
+// tests inject "darwin" to exercise the macOS .app layout on a linux CI host
+// (the only way to cover the darwin layout without a macOS runner).
+var layoutsGOOS = runtime.GOOS
+
 // binaryLayoutsForRoot returns the candidate on-disk paths for the
 // bundled Chrome binary, in priority order. Covers the goreleaser
 // extraction subdir (chrome-linux64/), the chrome-headless-shell
 // layout (used for non-video-capable fallbacks), the flat binary
-// layout install.sh may produce, and the Windows .exe variants.
+// layout install.sh may produce, and the Windows .exe variants. The
+// per-OS branch consults layoutsGOOS.
 //
 // Phase 1's package Chrome is always the full "chrome" build (the
 // linux-tabCapture-capable default), but listing the headless-shell
@@ -267,11 +274,6 @@ func isUsablePackageRoot(candidate string) bool {
 // download path already inspects — so a Phase 1 install where
 // goreleaser happens to ship the lighter fallback at chrome-linux64/
 // still resolves cleanly.
-// layoutsGOOS is the test seam for binaryLayoutsForRoot's per-OS branch
-// (mirrors capability.go's goosForCapability). Production uses runtime.GOOS;
-// tests inject "darwin" to exercise the macOS .app layout on a linux CI host
-// (the only way to cover the darwin layout without a macOS runner).
-var layoutsGOOS = runtime.GOOS
 
 // darwinChromeAppRel is the macOS full-Chrome binary's path inside its CfT
 // extract subdir — mirrors fullChromeBinaryRelPath()'s darwin case, inlined

@@ -230,7 +230,14 @@ func extractDylibName(cmd []byte, bo binary.ByteOrder) string {
 		return ""
 	}
 	nameOff := int(bo.Uint32(cmd[8:12]))
-	if nameOff >= len(cmd) {
+	// The name string MUST begin after the dylib load command's fixed
+	// header fields (cmd + cmdsize + name_offset + timestamp +
+	// current_version + compatibility_version = dylibCommandMinSize bytes).
+	// A nameOff pointing into those fixed fields (e.g. a malformed or crafted
+	// binary with nameOff=0) would otherwise yield a garbage "name" carved
+	// out of the version/timestamp bytes. Reject it as unusable so the caller
+	// skips the entry instead of surfacing nonsense as a dependency.
+	if nameOff < dylibCommandMinSize || nameOff >= len(cmd) {
 		return ""
 	}
 	// Walk forward to NUL within the command bounds.

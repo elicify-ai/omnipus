@@ -44,7 +44,6 @@ var darwinSearchPaths = []string{
 	"/System/Library/PrivateFrameworks",
 	"/System/Library/Extensions",
 	"/Library/Frameworks",
-	"/Library/Frameworks/*/Versions/A", // versioned framework fallback
 }
 
 // missingChromeLibsMachO walks binPath's Mach-O LC_LOAD_DYLIB entries and

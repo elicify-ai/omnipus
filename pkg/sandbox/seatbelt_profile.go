@@ -116,10 +116,16 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	return b.String(), nil
 }
 
-// validateSeatbeltPath enforces that a path is safe to embed verbatim in a
-// Seatbelt (subpath ...) filter. Seatbelt paths are literal double-quoted
-// strings; a `"` or newline would break out of the filter and let an attacker
-// inject profile directives (profile injection = full sandbox escape).
+// validateSeatbeltPath enforces that a path is safe to embed in a Seatbelt
+// (subpath ...) filter. This is the belt-and-suspenders validator; the PRIMARY
+// injection defense is at the render site (renderSeatbeltProfile), which emits
+// the path via fmt.Sprintf("%q", filepath.Clean(path)) — i.e. strconv.Quote,
+// which escapes every special byte and wraps the value in double quotes so no
+// attacker-controlled path can break out of the (subpath "...") filter. This
+// validator exists so a path is rejected (with a precise error) BEFORE the
+// renderer is reached, and so the safety of the rendered profile does not
+// depend solely on the render-site quoting staying correct.
+//
 // Relative paths are rejected because (subpath "...") is interpreted relative
 // to the sandbox-exec CWD, which would make the allow non-deterministic.
 func validateSeatbeltPath(p string) error {
@@ -129,8 +135,14 @@ func validateSeatbeltPath(p string) error {
 	if !filepath.IsAbs(p) {
 		return fmt.Errorf("path must be absolute (relative paths resolve against sandbox-exec CWD)")
 	}
-	if strings.ContainsAny(p, "\"\n\r") {
-		return fmt.Errorf("path contains a forbidden character (quote/newline) that could inject profile directives")
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c == '"' || c == '\\' || c < 0x20 || c == 0x7f {
+			return fmt.Errorf(
+				"path contains a forbidden character (byte 0x%02x at offset %d) that could inject profile directives",
+				c, i,
+			)
+		}
 	}
 	return nil
 }

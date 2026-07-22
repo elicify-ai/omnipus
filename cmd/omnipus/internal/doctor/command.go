@@ -260,22 +260,29 @@ var packageChromeRootOverride string
 // packageChromeRootForDoctor computes the on-disk location of the package
 // Chrome (ADR-052 §D2). It is a thin shim around the runtime's
 // packageChromeRoot (pkg/tools/browser/package_chrome.go), which probes the
-// install-path multi-root candidate list (<dir(exe)>/../chromium,
-// ../share/omnipus/chromium, ../libexec/omnipus/chromium) and returns the
-// first existing root. We keep the local helper because:
-//   - the runtime function is package-private (lowercase
-//     packageChromeRoot) and is being exported as
-//     browser.PackageChromeRoot() by the parallel FIX-W5-1 commit
-//     (CORR2-001).
-//   - doctor must stay offline + read-only (no import of the
-//     package-managed flag plumbing from the resolver).
+// install-path multi-root candidate list and returns the first existing root.
+// We keep the local helper (rather than calling browser.PackageChromeRoot)
+// because the runtime's exported helper folds payload validation into the
+// probe (packageChromeRootCandidateStatus requires findPackageChrome to
+// resolve), whereas doctor splits validation in two: this helper returns the
+// first usable ROOT dir, then checkBrowserPackageChrome separately probes for
+// the binary inside it to decide between WARN-BROWSER-005/006/008. Folding
+// payload validation in here would make the "root exists but the chrome
+// binary is missing" case (WARN-BROWSER-008) indistinguishable from "no
+// root at all" and silently skip the warning.
 //
-// TODO(FIX-W5-1): once browser.PackageChromeRoot() lands, replace this
-// function's body with `return browser.PackageChromeRoot(), true`. Until
-// then we inline the same multi-root probe here so the doctor recognizes
-// an install.sh-laid-down chromium/ at ../share/omnipus/chromium — the
-// single-candidate <dir>/../chromium lookup the previous version did
-// silently never fired WARN-BROWSER-005/006 on real install.sh installs.
+// The candidate list mirrors packageChromeRootCandidates()
+// (pkg/tools/browser/package_chrome.go) per GOOS so doctor probes exactly
+// where the runtime looks:
+//   - linux: <exeDir>/../chromium, ../share/omnipus/chromium,
+//     ../libexec/omnipus/chromium (goreleaser / install.sh FHS / nfpm).
+//   - darwin: <exeDir>/../chromium (non-.app parity) and
+//     <exeDir>/../../../chromium (C3 option (ii): the Google-signed sibling
+//     beside the gateway .app — three levels up from Contents/MacOS/).
+//
+// doctor must stay offline + read-only (no import of the package-managed
+// flag plumbing from the resolver), so the candidate list is inlined here
+// rather than imported.
 //
 // TODO(SEC-NEW2-003 follow-up): once findPackageChrome exposes a
 // isHeadlessShell distinction (planned by the parallel review), have the
@@ -302,10 +309,18 @@ func packageChromeRootForDoctor() (root string, ok bool) {
 	}
 	exeDir := filepath.Dir(absExe)
 	// Mirror packageChromeRootCandidates() in pkg/tools/browser/package_chrome.go.
-	candidates := []string{
-		filepath.Join(exeDir, "..", "chromium"),
-		filepath.Join(exeDir, "..", "share", "omnipus", "chromium"),
-		filepath.Join(exeDir, "..", "libexec", "omnipus", "chromium"),
+	var candidates []string
+	if runtimepkg.GOOS == "darwin" {
+		candidates = []string{
+			filepath.Join(exeDir, "..", "chromium"),
+			filepath.Join(exeDir, "..", "..", "..", "chromium"),
+		}
+	} else {
+		candidates = []string{
+			filepath.Join(exeDir, "..", "chromium"),
+			filepath.Join(exeDir, "..", "share", "omnipus", "chromium"),
+			filepath.Join(exeDir, "..", "libexec", "omnipus", "chromium"),
+		}
 	}
 	for _, candidate := range candidates {
 		info, err := os.Lstat(candidate)

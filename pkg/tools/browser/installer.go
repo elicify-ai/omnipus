@@ -286,6 +286,14 @@ func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) stri
 	return ""
 }
 
+// selectDownloadBuildGOOS is the test seam for selectDownloadBuild's per-OS
+// branch (mirrors capability.go's goosForCapability and package_chrome.go's
+// layoutsGOOS). Production uses runtime.GOOS; tests inject a foreign GOOS
+// (e.g. "darwin" or "windows") to exercise both branches of the switch on a
+// linux CI host — the only way to cover the darwin→fullChrome and
+// other→headlessShell cases without a macOS/Windows runner.
+var selectDownloadBuildGOOS = runtime.GOOS
+
 // selectDownloadBuild decides which CfT build the agent's default
 // EnsureChromium download (nothing of either flavor cached yet) should
 // fetch. WebRTC tabCapture (video+audio) requires the full "chrome" build.
@@ -304,9 +312,9 @@ func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) stri
 // separately drops linux/darwin to headlessShellBuild() gracefully when the
 // full build is missing from the manifest or unavailable for the current
 // platform — that's a distinct, later fallback from this initial
-// platform-based selection.
+// platform-based selection. The per-OS switch consults selectDownloadBuildGOOS.
 func selectDownloadBuild() chromiumBuild {
-	switch runtime.GOOS {
+	switch selectDownloadBuildGOOS {
 	case "linux", "darwin":
 		return fullChromeBuild()
 	default:
