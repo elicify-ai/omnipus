@@ -254,6 +254,28 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// D1/D4). Same-workspace FK — validated at the tool/gateway layer, not the
 	// store (the store accepts and persists whatever value it is given).
 	PlanID string `json:"plan_id,omitempty"`
+	// WriteSet is the set of concrete paths this PLAN MEMBER task creates or
+	// edits (ADR-053 §Contract Surface, US-11/G-16/FR-156). plan-lint
+	// (pkg/plan.Lint) reads this at approve to reject overlapping parallel
+	// streams. Empty for an exploratory member whose write footprint is
+	// unknowable up front (D10) — it is exempt from the overlap check and
+	// instead runs in its own isolated checkout at runtime (Phase 2, out of
+	// pkg/plan's scope). Meaningful only when PlanID is set; ignored on a
+	// standalone task.
+	WriteSet []string `json:"write_set,omitempty"`
+	// Stream is the parallel-group id this plan member belongs to (ADR-053
+	// §Contract Surface, US-11/g4). Informational/UI grouping only —
+	// pkg/plan.Lint's actual disjointness/join check is topological
+	// (BlockedBy ordering), not keyed off this field. Absent for a member
+	// not part of a parallel decomposition.
+	Stream string `json:"stream,omitempty"`
+	// IsJoin marks this plan member as an authored join/assemble member
+	// with its own acceptance criteria, converging one or more parallel
+	// streams into a single artifact (ADR-053 §Contract Surface, FR-159, g5
+	// shard+assemble topology). plan-lint (pkg/plan.Lint) rejects a
+	// convergence point (a member depending on >=2 mutually-parallel
+	// predecessors) whose IsJoin is false, or true but with zero Criteria.
+	IsJoin bool `json:"is_join,omitempty"`
 	// Criteria are the task's acceptance criteria / Definition of Done
 	// (ADR-049 D2/D5, FR-3). Agent-created tasks require at least one (enforced
 	// at the tool layer); human/UI creation may leave this empty (SD-A7).

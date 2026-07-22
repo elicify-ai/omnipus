@@ -248,11 +248,14 @@ func validatePlanBounds(b *PlanBounds) error {
 // maxPlanTitleRunes / maxPlanGoalRunes / maxPlanDescriptionRunes bound
 // Plan.Title / Plan.Goal / Plan.Description (spec Part A §A).
 // maxPlanHandoverRunes bounds Plan.HandoverText (Wave 2-B).
+// maxPlanRationaleRunes bounds Plan.Rationale (ADR-053 §Contract Surface,
+// mirrors PlanCreateRequest.yaml/Plan.yaml's `rationale: maxLength: 4000`).
 const (
 	maxPlanTitleRunes       = 200
 	maxPlanGoalRunes        = 2000
 	maxPlanDescriptionRunes = 2000
 	maxPlanHandoverRunes    = 8000
+	maxPlanRationaleRunes   = 4000
 )
 
 // Plan is the on-disk Plan entity stored at
@@ -308,6 +311,16 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	// wind-down summary written on a terminal brake (judge rounds exhausted,
 	// idle expiry, stop). Server-set only; not part of plan authoring.
 	HandoverText string `json:"handover_text,omitempty"`
+	// Rationale is the persisted planning rationale — the "why" behind the
+	// plan's decomposition (e.g. the write-set/stream split chosen and the
+	// join points authored), ADR-053 §Contract Surface. Optional on the wire
+	// (soft tier for human/UI-authored plans, mirrors DoD's own tiering);
+	// the create_plan AGENT TOOL (pkg/tools/plan.go) requires it
+	// unconditionally, since every caller of that tool is an agent — see
+	// PlanCreateTool's type doc for why DoD collapses to the strict tier the
+	// same way. Set-once-at-create: there is no wire path to change it after
+	// creation (PlanUpdateRequest carries no rationale field).
+	Rationale string `json:"rationale,omitempty"`
 
 	// --- attribution + lifecycle timestamps (RFC 3339 UTC) ---
 	Owner       string `json:"owner,omitempty"`
@@ -337,6 +350,9 @@ func (p *Plan) normalize() error {
 	}
 	if len([]rune(p.HandoverText)) > maxPlanHandoverRunes {
 		return verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
+	}
+	if len([]rune(p.Rationale)) > maxPlanRationaleRunes {
+		return verr("rationale must be %d characters or fewer", maxPlanRationaleRunes)
 	}
 	if p.WorkspaceID == "" {
 		return verr("workspace_id is required")
