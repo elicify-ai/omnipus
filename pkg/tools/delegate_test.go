@@ -49,9 +49,18 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	if !ok {
 		t.Fatal("action parameter should be a map")
 	}
+	// ADR-053 §5.1 corrected delegate action set: run|status|inbox|
+	// inbox_ack|steer|respond|cancel|follow_up|peek (grown from the legacy
+	// run|status pair).
+	wantActions := []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek"}
 	enumVals, ok := action["enum"].([]string)
-	if !ok || len(enumVals) != 2 || enumVals[0] != "run" || enumVals[1] != "status" {
-		t.Errorf("action enum should be [run, status], got: %v", action["enum"])
+	if !ok || len(enumVals) != len(wantActions) {
+		t.Fatalf("action enum should have %d entries %v, got: %v", len(wantActions), wantActions, action["enum"])
+	}
+	for i, want := range wantActions {
+		if enumVals[i] != want {
+			t.Errorf("action enum[%d] = %q, want %q (full enum: %v)", i, enumVals[i], want, enumVals)
+		}
 	}
 }
 

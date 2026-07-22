@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -10,8 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/google/uuid"
 )
 
 // ADR-036 / docs/internal/specs/agent-delegation-spec.md — `delegate` is the
@@ -71,6 +75,77 @@ type SubTurnConfig struct {
 	// overridden (#477). nil means "no override — use the spawner's own
 	// default depth resolution."
 	ResolvedMaxDepth *int
+
+	// ContextSnapshot carries the DISCRETIONARY portion of the ADR-053 D1
+	// curated context snapshot (R§8.5) — see ContextSnapshot's own doc
+	// comment. nil means no discretionary snapshot. Mirrors (and is
+	// converted 1:1 into) agent.SubTurnConfig.ContextSnapshot by
+	// AgentLoopSpawner.SpawnSubTurn — the same tools<->agent type-doubling
+	// this whole struct already exists to work around (see this type's own
+	// doc comment above).
+	ContextSnapshot *ContextSnapshot
+
+	// DelegateSessionID, when non-empty, is the ADR-053 durable session_id
+	// (S2) DelegateTool minted and persisted a `queued` LifecycleRecord
+	// under BEFORE calling Spawn — see agent.SubTurnConfig.DelegateSessionID
+	// (the sibling field this converts into) for why reusing this exact
+	// value as the child's turn/steering-queue identity matters.
+	DelegateSessionID string
+}
+
+// ContextSnapshot is the tools-side mirror of agent.ContextSnapshot (ADR-053
+// D1/R§8.5's curated context snapshot, discretionary portion only — parent-
+// named artifact references, not contents, plus optional notes). Kept as a
+// separate type from agent.ContextSnapshot for the identical reason
+// SubTurnConfig itself is duplicated across the two packages: avoiding a
+// tools<->agent import cycle (agent already imports tools).
+type ContextSnapshot struct {
+	References []string
+	Notes      string
+}
+
+// ErrSnapshotOverCap is returned by ValidateContextSnapshot when the
+// DISCRETIONARY portion (references + notes) exceeds its byte or count cap.
+// The MANDATORY core (task prompt + criteria + identity) is NEVER subject
+// to this check (m4) — only what this function is handed.
+var ErrSnapshotOverCap = errors.New("tools: curated context snapshot exceeds the discretionary cap")
+
+// defaultSnapshotMaxBytes/defaultSnapshotMaxRefs mirror
+// agent.defaultSnapshotMaxBytes/defaultSnapshotMaxRefs (ADR §Contract
+// Surface: 8 KiB / 50 refs) — duplicated here for the same
+// tools<->agent-cycle reason as ContextSnapshot itself.
+const (
+	defaultSnapshotMaxBytes = 8 * 1024
+	defaultSnapshotMaxRefs  = 50
+)
+
+// ValidateContextSnapshot enforces R§8.5's deny-by-default, hard-capped
+// curated context snapshot on the DISCRETIONARY portion only. See
+// agent.ValidateContextSnapshot (the byte-for-byte identical sibling
+// function on the agent-package side) for the full contract.
+func ValidateContextSnapshot(snap *ContextSnapshot, maxBytes, maxRefs int) error {
+	if snap == nil {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultSnapshotMaxBytes
+	}
+	if maxRefs <= 0 {
+		maxRefs = defaultSnapshotMaxRefs
+	}
+	if len(snap.References) > maxRefs {
+		return fmt.Errorf("%w: %d references exceeds snapshot_max_refs (%d) — narrow the snapshot",
+			ErrSnapshotOverCap, len(snap.References), maxRefs)
+	}
+	total := len(snap.Notes)
+	for _, ref := range snap.References {
+		total += len(ref)
+	}
+	if total > maxBytes {
+		return fmt.Errorf("%w: %d bytes exceeds snapshot_max_bytes (%d) — narrow the snapshot",
+			ErrSnapshotOverCap, total, maxBytes)
+	}
+	return nil
 }
 
 // DelegateTaskState is the single source of truth for a background
@@ -122,6 +197,41 @@ type DelegateTaskState struct {
 	// transcript snapshot regardless, and instead renders a fixed
 	// no-live-progress note.
 	Is3P bool
+
+	// DelegateSessionID is the ADR-053 durable session_id (S2) this task's
+	// child was spawned under — distinct from SessionID above (which
+	// remains the shared parent transcript session id, unchanged, for
+	// backward compat with recentActivityLines). status/inbox/steer/
+	// respond/cancel/follow_up/peek all address a child by THIS id.
+	DelegateSessionID string
+}
+
+// delegateSessionIDCtxKey is the context key carrying a child turn's own
+// ADR-053 durable session_id (distinct from the shared transcript session
+// id — pkg/tools.ToolTranscriptSessionID). Defined here (not
+// pkg/tools/base.go, outside this wave's write-set) following the exact
+// same WithX/ToolX accessor-pair convention every other per-turn context
+// carrier in this package already uses.
+type delegateSessionIDCtxKey struct{}
+
+// WithDelegateSessionID returns a child context carrying the durable
+// ADR-053 session_id for the turn currently executing. Set by
+// pkg/agent/subturn.go's spawnSubTurn on the child's own turn context, so a
+// child's OWN tool calls (message_parent, and any future session-aware
+// tool) can resolve their own durable identity without conflating it with
+// the shared transcript session id.
+func WithDelegateSessionID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, delegateSessionIDCtxKey{}, id)
+}
+
+// ToolDelegateSessionID extracts the durable ADR-053 session_id from ctx,
+// or "" if unset (a root/non-delegated turn).
+func ToolDelegateSessionID(ctx context.Context) string {
+	v, _ := ctx.Value(delegateSessionIDCtxKey{}).(string)
+	return v
 }
 
 // DelegateAgentRegistry is a minimal interface for resolving whether a
@@ -181,6 +291,10 @@ type DelegateTool struct {
 	mu     sync.Mutex
 	tasks  map[string]*DelegateTaskState
 	nextID int
+	// sessionIndex maps a DelegateSessionID (ADR-053 durable id) back to its
+	// legacy taskID (t.tasks' key), so status/inbox/etc. can resolve either
+	// the legacy task_id or the new session_id to the same DelegateTaskState.
+	sessionIndex map[string]string
 
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
@@ -203,6 +317,47 @@ type DelegateTool struct {
 	// number than the one this gate already authorized (#477). Field name and
 	// setter name are pinned — do not rename (relied on by pkg/agent/loop.go).
 	delegationDepthResolver func(ctx context.Context, targetAgentID string) *int
+
+	// --- ADR-053 §5.1 corrected delegate action set (run|status|inbox|
+	// inbox_ack|steer|respond|cancel|follow_up|peek) ---
+
+	// lifecycle is the durable S2 session-lifecycle store (pkg/session).
+	// Required for every action beyond legacy run/status.
+	lifecycle MessageParentLifecycleStore
+	// inbox is the durable S3 child->parent message inbox (D16, pkg/session).
+	inbox DelegateInboxStore
+	// steering delivers a parent->child steer/respond into the child's
+	// steering-queue scope (generalizes pkg/agent/steering.go's existing
+	// mechanism — see DelegateSteeringSink's doc comment).
+	steering DelegateSteeringSink
+	// cancelSoft/cancelHard mirror pkg/agent's AgentLoop.InterruptSession /
+	// InterruptSessionHard signatures exactly (sessionID, hint) ->
+	// (descendant turn IDs, error) — injected to avoid a tools<->agent
+	// import cycle, matching every other AgentLoop capability this tool
+	// already consumes via a setter (SetSpawner, etc.).
+	cancelSoft func(sessionID, hint string) ([]string, error)
+	cancelHard func(sessionID, hint string) ([]string, error)
+	// cancelGrace is the cooperative-stop grace window before the hard
+	// RequestCancel backstop fires (session_messaging.cancel_grace,
+	// FR-195). Defaults to defaultCancelGrace.
+	cancelGrace time.Duration
+
+	snapshotMaxBytes int
+	snapshotMaxRefs  int
+
+	// steerRateMu/steerRateWindows back the steer/respond rate cap (ADR-053
+	// §Contract Surface "Caps": 6/min, 16 KiB — session_messaging.steer_rate/
+	// steer_body), keyed by target session_id. Mirrors
+	// session.MessageInboxStore's own in-memory sliding-window rate-limiter
+	// pattern exactly, kept local to this tool rather than shared so a
+	// steer-rate breach never touches the durable inbox store's own state.
+	steerRateMu      sync.Mutex
+	steerRateWindows map[string][]time.Time
+	steerRatePerMin  int
+	steerBodyBytes   int
+
+	// now is overridable for deterministic tests.
+	now func() time.Time
 }
 
 // Compile-time check: DelegateTool implements AsyncExecutor.
@@ -213,13 +368,94 @@ var _ AsyncExecutor = (*DelegateTool)(nil)
 // (agent.Model / agent.MaxTokens / agent.Temperature at the call site).
 func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *DelegateTool {
 	return &DelegateTool{
-		defaultModel: defaultModel,
-		maxTokens:    maxTokens,
-		temperature:  temperature,
-		tasks:        make(map[string]*DelegateTaskState),
-		nextID:       1,
+		defaultModel:     defaultModel,
+		maxTokens:        maxTokens,
+		temperature:      temperature,
+		tasks:            make(map[string]*DelegateTaskState),
+		sessionIndex:     make(map[string]string),
+		nextID:           1,
+		cancelGrace:      defaultCancelGrace,
+		now:              time.Now,
+		steerRateWindows: make(map[string][]time.Time),
+		steerRatePerMin:  session.DefaultSteerRatePerMinute,
+		steerBodyBytes:   session.DefaultSteerBodyBytes,
 	}
 }
+
+// SetLifecycleStore installs the durable S2 session-lifecycle store.
+// Required for inbox/inbox_ack/steer/respond/cancel/follow_up/peek — those
+// actions return a clear "not configured" error when this is unset.
+func (t *DelegateTool) SetLifecycleStore(store MessageParentLifecycleStore) {
+	t.lifecycle = store
+}
+
+// SetMessageInbox installs the durable S3 child->parent message inbox.
+func (t *DelegateTool) SetMessageInbox(inbox DelegateInboxStore) {
+	t.inbox = inbox
+}
+
+// SetSteeringSink installs the parent->child steer/respond delivery
+// mechanism (generalizes pkg/agent/steering.go's existing queue).
+func (t *DelegateTool) SetSteeringSink(sink DelegateSteeringSink) {
+	t.steering = sink
+}
+
+// SetCancelHooks installs the soft (cooperative) and hard (RequestCancel
+// backstop) cancel functions, mirroring AgentLoop.InterruptSession /
+// InterruptSessionHard's exact signatures.
+func (t *DelegateTool) SetCancelHooks(
+	soft func(sessionID, hint string) ([]string, error),
+	hard func(sessionID, hint string) ([]string, error),
+) {
+	t.cancelSoft = soft
+	t.cancelHard = hard
+}
+
+// SetCancelGrace overrides the default cooperative-stop grace window
+// (session_messaging.cancel_grace, FR-195).
+func (t *DelegateTool) SetCancelGrace(d time.Duration) {
+	if d > 0 {
+		t.cancelGrace = d
+	}
+}
+
+// SetSnapshotCaps overrides the curated context snapshot's discretionary-
+// portion caps (session_messaging config — snapshot_max_bytes/
+// snapshot_max_refs, R§8.5). Zero/negative values fall back to the ADR
+// §Contract Surface defaults.
+func (t *DelegateTool) SetSnapshotCaps(maxBytes, maxRefs int) {
+	t.snapshotMaxBytes = maxBytes
+	t.snapshotMaxRefs = maxRefs
+}
+
+// SetClock overrides the tool's time source for deterministic tests.
+func (t *DelegateTool) SetClock(now func() time.Time) {
+	if now != nil {
+		t.now = now
+	}
+}
+
+// SetSteerCaps overrides the steer/respond rate (per-minute) and body
+// (bytes) caps (session_messaging.steer_rate/steer_body, FR-195).
+// Zero/negative values fall back to the ADR §Contract Surface defaults.
+func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
+	t.steerRatePerMin = ratePerMinute
+	t.steerBodyBytes = bodyBytes
+}
+
+// DelegateSteeringSink lands a parent->child steer/respond message in the
+// child's steering-queue scope at its next tool boundary. Satisfied by
+// *agent.AgentLoop (via its EnqueueSteeringMessage wrapper — see
+// pkg/agent/steering.go); defined as an interface here (mirroring
+// SubTurnSpawner above) to avoid a tools<->agent import cycle.
+type DelegateSteeringSink interface {
+	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
+}
+
+// defaultCancelGrace is the cooperative-stop grace window before the hard
+// RequestCancel backstop fires when SetCancelGrace is never called
+// (session_messaging.cancel_grace default, FR-195).
+const defaultCancelGrace = 5 * time.Second
 
 // SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
@@ -272,14 +508,20 @@ func (t *DelegateTool) Name() string {
 }
 
 func (t *DelegateTool) Description() string {
-	return "Delegate a task to a subagent. By default this runs in the background " +
-		"(async=true) and returns immediately with a task_id — poll progress with " +
-		"action=\"status\" and that task_id. Set async=false to block this turn and " +
-		"receive the delegated result inline instead. Optionally provide agent_id to " +
-		"target a specific agent from your delegation allowlist; omit it to run a " +
-		"generic subagent under your own agent. Status results are scoped to the " +
-		"current conversation's channel and chat ID; all tasks are listed only when " +
-		"no channel/chat context is injected (e.g. direct programmatic calls)."
+	return "Delegate a task to a subagent, and control/monitor it afterward. " +
+		"action=\"run\" (default) delegates a new task — by default in the background " +
+		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
+		"block and receive the result inline. action=\"status\" checks on a previously-" +
+		"delegated task/session. action=\"inbox\" drains messages the child has pushed " +
+		"back to you (progress/checkpoint/artifact/blocker/question/handback); " +
+		"action=\"inbox_ack\" acknowledges them. action=\"steer\" injects an instruction " +
+		"at the child's next tool boundary; action=\"respond\" answers a child's open " +
+		"question by correlation_id. action=\"cancel\" stops a child (cooperatively by " +
+		"default; hard=true bypasses the grace window). action=\"follow_up\" warm-resumes " +
+		"a finished child with additional instructions. action=\"peek\" reads a child's " +
+		"latest checkpoint/progress without side effects. Optionally provide agent_id to " +
+		"target a specific agent from your delegation allowlist; omit it to run a generic " +
+		"subagent under your own agent."
 }
 
 func (t *DelegateTool) Scope() ToolScope       { return ScopeCore }
@@ -309,20 +551,92 @@ func (t *DelegateTool) Parameters() map[string]any {
 					"result inline.",
 			},
 			"action": map[string]any{
-				"type":        "string",
-				"enum":        []string{"run", "status"},
-				"description": "\"run\" (the default) delegates a new task. \"status\" checks on a previously-delegated task.",
+				"type": "string",
+				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek"},
+				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
+					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
+					"instruction. \"respond\" answers an open question. \"cancel\" stops a child. " +
+					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress.",
 			},
 			"task_id": map[string]any{
 				"type": "string",
 				"description": "The task_id to check (e.g. \"delegate-1\"), used with action=\"status\". " +
-					"When omitted under action=\"status\", all visible tasks are listed instead.",
+					"When omitted under action=\"status\", all visible tasks are listed instead. DEPRECATED " +
+					"alias for session_id — session_id wins when both are present.",
+			},
+			"session_id": map[string]any{
+				"type": "string",
+				"description": "The durable child session to target. Required for status/inbox/inbox_ack/" +
+					"steer/respond/cancel/follow_up/peek.",
+			},
+			"launch_profile": map[string]any{
+				"type": "string",
+				"enum": []string{"utility", "specialist"},
+				"description": "Optional (action=\"run\" only, default \"utility\"): \"utility\" is fire-and-" +
+					"collect (visibility=outcome, no steering, progress-only child messaging — matches today's " +
+					"one-shot spawn). \"specialist\" is a collaborating native worker (checkpoints, steering, " +
+					"full child messaging); a 3P (external-CLI) child on this profile still degrades to fire-" +
+					"and-collect.",
+			},
+			"snapshot": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"references": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Parent-named artifact path/ref strings (not contents) visible to the child.",
+					},
+					"notes": map[string]any{
+						"type":        "string",
+						"description": "Optional parent-authored notes.",
+					},
+				},
+				"description": "Optional (action=\"run\" only): the DISCRETIONARY portion of the curated " +
+					"context snapshot (deny-by-default, hard-capped). Over-cap is rejected, never truncated.",
+			},
+			"timeout_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (5 min).",
+			},
+			"critical": map[string]any{
+				"type":        "boolean",
+				"description": "Optional (action=\"run\" only): continue running after the parent finishes gracefully.",
+			},
+			"allow_blocking_question": map[string]any{
+				"type": "boolean",
+				"description": "Optional (action=\"run\" with wait/async=false only): permit a bounded human-" +
+					"routed wait on a child question instead of the default rejection.",
+			},
+			"message_ids": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Required for action=\"inbox_ack\": the message_ids to acknowledge.",
+			},
+			"since_cursor": map[string]any{
+				"type":        "string",
+				"description": "Optional (action=\"inbox\" only): opaque cursor — return only messages after this point.",
+			},
+			"max": map[string]any{
+				"type":        "integer",
+				"description": "Optional (action=\"inbox\" only): maximum messages to return.",
+			},
+			"text": map[string]any{
+				"type":        "string",
+				"description": "Required for action=\"steer\"/\"respond\": the instruction/answer text.",
+			},
+			"correlation_id": map[string]any{
+				"type":        "string",
+				"description": "Required for action=\"respond\" (optional for \"steer\"): the open question this answers.",
+			},
+			"hard": map[string]any{
+				"type": "boolean",
+				"description": "Optional (action=\"cancel\" only, default false): false is a cooperative soft " +
+					"cancel with grace; true bypasses the grace window immediately.",
 			},
 		},
 		// Nothing is unconditionally required at the schema level — requiredness
-		// is action-dependent (task for action:"run", nothing hard-required for
-		// action:"status", which falls back to listing all visible tasks) and is
-		// enforced at runtime, mirroring ExecTool's action-dispatch pattern.
+		// is action-dependent and is enforced at runtime, mirroring ExecTool's
+		// action-dispatch pattern.
 		"required": []string{},
 	}
 }
@@ -357,8 +671,25 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 		return t.executeRun(ctx, args, cb)
 	case "status":
 		return t.executeStatus(ctx, args)
+	case "inbox":
+		return t.executeInbox(ctx, args)
+	case "inbox_ack":
+		return t.executeInboxAck(ctx, args)
+	case "steer":
+		return t.executeSteer(ctx, args)
+	case "respond":
+		return t.executeRespond(ctx, args)
+	case "cancel":
+		return t.executeCancel(ctx, args)
+	case "follow_up":
+		return t.executeFollowUp(ctx, args, cb)
+	case "peek":
+		return t.executePeek(ctx, args)
 	default:
-		return ErrorResult(fmt.Sprintf("invalid action %q: must be \"run\" or \"status\"", action))
+		return ErrorResult(fmt.Sprintf(
+			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, cancel, follow_up, peek",
+			action,
+		))
 	}
 }
 
@@ -378,6 +709,58 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 			return ErrorResult("async must be a boolean")
 		}
 		async = b
+	}
+
+	// ADR-053 §5.1 launch profile — two published legal profiles; anything
+	// else is rejected AT delegate.run (MAJ-7 illegal-combo scenario), not
+	// silently accepted or defaulted past.
+	launchProfile := "utility"
+	if raw, present := args["launch_profile"]; present && raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return ErrorResult("launch_profile must be a string")
+		}
+		launchProfile = s
+	}
+	if launchProfile != "utility" && launchProfile != "specialist" {
+		return ErrorResult(fmt.Sprintf(
+			`invalid launch_profile %q: must be "utility" or "specialist"`, launchProfile,
+		))
+	}
+
+	// R§8.5 curated context snapshot — deny-by-default, hard-capped
+	// discretionary portion. Rejected here (never silently truncated) if
+	// over cap.
+	var snap *ContextSnapshot
+	if raw, present := args["snapshot"]; present && raw != nil {
+		rawMap, ok := raw.(map[string]any)
+		if !ok {
+			return ErrorResult("snapshot must be an object")
+		}
+		snap = &ContextSnapshot{}
+		if refsRaw, present := rawMap["references"]; present && refsRaw != nil {
+			refsAny, ok := refsRaw.([]any)
+			if !ok {
+				return ErrorResult("snapshot.references must be an array of strings")
+			}
+			for _, r := range refsAny {
+				s, ok := r.(string)
+				if !ok {
+					return ErrorResult("snapshot.references must be an array of strings")
+				}
+				snap.References = append(snap.References, s)
+			}
+		}
+		if notesRaw, present := rawMap["notes"]; present && notesRaw != nil {
+			s, ok := notesRaw.(string)
+			if !ok {
+				return ErrorResult("snapshot.notes must be a string")
+			}
+			snap.Notes = s
+		}
+	}
+	if err := ValidateContextSnapshot(snap, t.snapshotMaxBytes, t.snapshotMaxRefs); err != nil {
+		return ErrorResult(err.Error()).WithError(err)
 	}
 
 	// Delegation policy gate (FR-6.2): trust set + mode + depth, mode selected
@@ -436,10 +819,90 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		resolvedMaxDepth = t.delegationDepthResolver(ctx, agentID)
 	}
 
-	if async {
-		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, cb)
+	// ADR-053 S2 — mint the child's own durable session_id (distinct from
+	// the shared transcript session id, D1) and persist its initial
+	// `queued` lifecycle record BEFORE dispatch, so a crash between here and
+	// the goroutine/spawn call below still leaves a queryable record (the
+	// boot sweep — another wave — will reconcile it to failed(interrupted)).
+	delegateSessionID := uuid.NewString()
+	parentDurableKey := strings.TrimSpace(ToolTranscriptSessionID(ctx))
+	is3P := false
+	if agentID != "" && t.getAgentRegistry != nil {
+		if reg := t.getAgentRegistry(); reg != nil {
+			is3P = reg.IsExternalCLI(agentID)
+		}
 	}
-	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth)
+	launchProfileVal := session.LaunchProfileUtility
+	if launchProfile == "specialist" {
+		launchProfileVal = session.LaunchProfileSpecialist
+	}
+	ownerScopeKind := session.OwnerScopeHuman
+	ownerScopeID := ""
+	if parentDelegateID := strings.TrimSpace(ToolDelegateSessionID(ctx)); parentDelegateID != "" {
+		ownerScopeKind = session.OwnerScopeParentSession
+		ownerScopeID = parentDelegateID
+	}
+	if t.lifecycle != nil {
+		rec := &session.LifecycleRecord{
+			SessionID:        delegateSessionID,
+			Generation:       0,
+			State:            session.LifecycleQueued,
+			OwnerScopeKind:   ownerScopeKind,
+			OwnerScopeID:     ownerScopeID,
+			ParentDurableKey: parentDurableKey,
+			OriginChannel:    ToolChannel(ctx),
+			OriginChatID:     ToolChatID(ctx),
+			WorkspaceID:      ToolWorkspaceID(ctx),
+			AgentID:          agentID,
+			Is3P:             is3P,
+			LaunchProfile:    launchProfileVal,
+		}
+		if err := t.lifecycle.Persist(rec); err != nil {
+			return ErrorResult(fmt.Sprintf("delegate: failed to persist durable session record: %v", err)).WithError(err)
+		}
+	}
+
+	if async {
+		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, snap, cb)
+	}
+	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, snap)
+}
+
+// transitionLifecycle is a small helper that reads the current record for
+// sessionID (when a lifecycle store is configured) and persists it with the
+// given terminal/non-terminal state + optional failedReason, preserving
+// every other field. Errors are logged, not propagated — a durable-record
+// write failure must never fail (or mask the outcome of) the underlying
+// delegation itself.
+// NOTE ON LOCKING: MessageParentLifecycleStore.Load/Persist are EACH
+// individually self-locking (session.LifecycleStore.Load/Persist take the
+// per-session striped mutex internally for their own duration — see that
+// type's doc). This function deliberately does NOT wrap the Load+Persist
+// pair in an additional outer Lock() call: sync.Mutex is not reentrant, and
+// Lock()+Load() on the SAME session_id would self-deadlock (Load's own
+// internal lock call blocks forever waiting for the lock this function is
+// already holding). The narrow race this leaves (a concurrent write to the
+// same session_id landing between this function's Load and Persist) is
+// benign for every caller today — see this function's call sites for why.
+func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
+	if t.lifecycle == nil || sessionID == "" {
+		return
+	}
+
+	rec, err := t.lifecycle.Load(sessionID)
+	if err != nil {
+		slog.Warn("delegate: transitionLifecycle: load failed", "session_id", sessionID, "error", err)
+		return
+	}
+	next := *rec
+	next.State = state
+	next.FailedReason = failedReason
+	if state != session.LifecycleNeedsInput {
+		next.NeedsInput = nil
+	}
+	if err := t.lifecycle.Persist(&next); err != nil {
+		slog.Warn("delegate: transitionLifecycle: persist failed", "session_id", sessionID, "state", state, "error", err)
+	}
 }
 
 // executeAsync runs the background (async=true) delegation path. It records
@@ -450,6 +913,8 @@ func (t *DelegateTool) executeAsync(
 	ctx context.Context,
 	task, label, agentID string,
 	resolvedMaxDepth *int,
+	delegateSessionID string,
+	snap *ContextSnapshot,
 	cb AsyncCallback,
 ) *ToolResult {
 	if t.spawner == nil {
@@ -479,19 +944,25 @@ func (t *DelegateTool) executeAsync(
 	taskID := fmt.Sprintf("delegate-%d", t.nextID)
 	t.nextID++
 	t.tasks[taskID] = &DelegateTaskState{
-		ID:            taskID,
-		Task:          task,
-		Label:         label,
-		AgentID:       agentID,
-		OriginChannel: channel,
-		OriginChatID:  chatID,
-		Status:        "running",
-		Created:       time.Now().UnixMilli(),
-		SessionID:     sessionID,
-		SpawnCallID:   spawnCallID,
-		Is3P:          is3P,
+		ID:                taskID,
+		Task:              task,
+		Label:             label,
+		AgentID:           agentID,
+		OriginChannel:     channel,
+		OriginChatID:      chatID,
+		Status:            "running",
+		Created:           time.Now().UnixMilli(),
+		SessionID:         sessionID,
+		SpawnCallID:       spawnCallID,
+		Is3P:              is3P,
+		DelegateSessionID: delegateSessionID,
+	}
+	if delegateSessionID != "" {
+		t.sessionIndex[delegateSessionID] = taskID
 	}
 	t.mu.Unlock()
+
+	t.transitionLifecycle(delegateSessionID, session.LifecycleRunning, "")
 
 	// The task is the first USER message; the delegate's soul (worker /
 	// configured agent) is resolved inside spawnSubTurn and used as the
@@ -524,17 +995,22 @@ func (t *DelegateTool) executeAsync(
 	// actually finishes). See SubTurnConfig.Critical's doc comment.
 	go func() {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-			Model:            t.defaultModel,
-			Tools:            nil, // Will inherit from parent via context
-			SystemPrompt:     task,
-			TargetAgentID:    agentID,
-			MaxTokens:        t.maxTokens,
-			Temperature:      t.temperature,
-			Async:            true,
-			Critical:         true,
-			TaskLabel:        label,
-			ResolvedMaxDepth: resolvedMaxDepth,
+			Model:             t.defaultModel,
+			Tools:             nil, // Will inherit from parent via context
+			SystemPrompt:      task,
+			TargetAgentID:     agentID,
+			MaxTokens:         t.maxTokens,
+			Temperature:       t.temperature,
+			Async:             true,
+			Critical:          true,
+			TaskLabel:         label,
+			ResolvedMaxDepth:  resolvedMaxDepth,
+			ContextSnapshot:   snap,
+			DelegateSessionID: delegateSessionID,
 		})
+
+		var lifecycleState session.LifecycleState
+		var lifecycleFailedReason string
 
 		t.mu.Lock()
 		if state, ok := t.tasks[taskID]; ok {
@@ -542,17 +1018,22 @@ func (t *DelegateTool) executeAsync(
 			case err != nil && ctx.Err() != nil:
 				state.Status = "canceled"
 				state.Result = "Task canceled during execution"
+				lifecycleState, lifecycleFailedReason = session.LifecycleCancelled, "stopped_by_user"
 			case err != nil:
 				state.Status = "failed"
 				state.Result = fmt.Sprintf("Error: %v", err)
+				lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
 			default:
 				state.Status = "completed"
 				if result != nil {
 					state.Result = result.ForLLM
 				}
+				lifecycleState = session.LifecycleCompleted
 			}
 		}
 		t.mu.Unlock()
+
+		t.transitionLifecycle(delegateSessionID, lifecycleState, lifecycleFailedReason)
 
 		switch {
 		case err != nil:
@@ -606,11 +1087,20 @@ func (t *DelegateTool) executeAsync(
 		}
 	}()
 
+	// NOTE: "(task_id: %s)" must stay its own parenthesized clause, ending in
+	// the FIRST ")" after the id — pkg/tools/delegate_test.go's extractTaskID
+	// helper scans for "task_id: " and stops at the next ")"/"\n", so a
+	// session_id appended INSIDE the same parens would corrupt every test
+	// using that helper (regression: existing one-shot delegate.run compat).
 	msg := fmt.Sprintf("Delegated task for: %s (task_id: %s)", task, taskID)
 	if label != "" {
 		msg = fmt.Sprintf("Delegated task '%s' for: %s (task_id: %s)", label, task, taskID)
 	}
-	msg += fmt.Sprintf(" — running in background; check progress with delegate(action=\"status\", task_id=%q).", taskID)
+	msg += fmt.Sprintf(" (session_id: %s)", delegateSessionID)
+	msg += fmt.Sprintf(
+		" — running in background; check progress with delegate(action=\"status\", session_id=%q), "+
+			"or inbox/steer/respond/cancel/follow_up/peek using the same session_id.", delegateSessionID,
+	)
 	return AsyncResult(msg)
 }
 
@@ -620,21 +1110,27 @@ func (t *DelegateTool) executeSync(
 	ctx context.Context,
 	task, label, agentID string,
 	resolvedMaxDepth *int,
+	delegateSessionID string,
+	snap *ContextSnapshot,
 ) *ToolResult {
 	if t.spawner == nil {
 		return ErrorResult("delegate: no sub-turn spawner configured").WithError(fmt.Errorf("spawner not set"))
 	}
 
+	t.transitionLifecycle(delegateSessionID, session.LifecycleRunning, "")
+
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-		Model:            t.defaultModel,
-		Tools:            nil, // Will inherit from parent via context
-		SystemPrompt:     task,
-		TargetAgentID:    agentID, // "" → parent's own soul; non-empty → named agent's soul
-		TaskLabel:        label,
-		MaxTokens:        t.maxTokens,
-		Temperature:      t.temperature,
-		Async:            false,
-		ResolvedMaxDepth: resolvedMaxDepth,
+		Model:             t.defaultModel,
+		Tools:             nil, // Will inherit from parent via context
+		SystemPrompt:      task,
+		TargetAgentID:     agentID, // "" → parent's own soul; non-empty → named agent's soul
+		TaskLabel:         label,
+		MaxTokens:         t.maxTokens,
+		Temperature:       t.temperature,
+		Async:             false,
+		ResolvedMaxDepth:  resolvedMaxDepth,
+		ContextSnapshot:   snap,
+		DelegateSessionID: delegateSessionID,
 	})
 	// Finding F (A-I4 round 5): only take the generic "Delegate execution
 	// failed" shortcut for a genuine dispatch failure — result == nil (e.g.
@@ -649,7 +1145,17 @@ func (t *DelegateTool) executeSync(
 	// transcript persistence reads to decide whether a session reload shows
 	// "interrupted" (matching live) or "failed" (the bug this closes).
 	if result == nil || (err != nil && !result.Interrupted) {
+		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
 		return ErrorResult(fmt.Sprintf("Delegate execution failed: %v", err)).WithError(err)
+	}
+
+	switch {
+	case result.Interrupted:
+		t.transitionLifecycle(delegateSessionID, session.LifecycleCancelled, "stopped_by_user")
+	case result.IsError:
+		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
+	default:
+		t.transitionLifecycle(delegateSessionID, session.LifecycleCompleted, "")
 	}
 
 	// Format result for display
@@ -696,6 +1202,23 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 			return ErrorResult("task_id must be a string")
 		}
 		taskID = strings.TrimSpace(taskIDStr)
+	}
+	// session_id (ADR-053) wins when both are present (DelegateStatusAction's
+	// documented precedence); task_id survives as a deprecated alias.
+	if rawSessionID, ok := args["session_id"]; ok && rawSessionID != nil {
+		sessionIDStr, ok := rawSessionID.(string)
+		if !ok {
+			return ErrorResult("session_id must be a string")
+		}
+		if sid := strings.TrimSpace(sessionIDStr); sid != "" {
+			t.mu.Lock()
+			resolved, found := t.sessionIndex[sid]
+			t.mu.Unlock()
+			if !found {
+				return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sid))
+			}
+			taskID = resolved
+		}
 	}
 
 	if taskID != "" {
@@ -934,4 +1457,491 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLin
 		lines = lines[len(lines)-maxLines:]
 	}
 	return lines
+}
+
+// ====================== ADR-053 §5.1: inbox/inbox_ack/steer/respond/cancel/follow_up/peek ======================
+
+// DelegateInboxStore is the PARENT-side subset of *session.MessageInboxStore
+// the delegate tool needs: draining/acking a child's messages, reading the
+// per-child unacked ceiling count, and a side-effect-free peek. Distinct
+// from message_parent.go's MessageParentInboxStore (the CHILD-side
+// Append-only view) — least privilege per tool, each only gets the methods
+// it actually calls.
+type DelegateInboxStore interface {
+	Drain(ownerKey, childSessionID, sinceCursor string, max int) ([]generated.SessionMessage, string, bool, error)
+	Ack(ownerKey string, messageIDs []string) error
+	UnackedCount(ownerKey, childSessionID string) (int, error)
+	Peek(ownerKey, childSessionID string) (*session.PeekSnapshot, error)
+}
+
+// checkSteerCaps enforces the steer/respond body-size cap (16 KiB default)
+// and per-target-session rate cap (6/min default) — ADR-053 §Contract
+// Surface "Caps". Returns a clear, typed error naming the exceeded cap;
+// callers surface it as a tool error (never-silent-drop applies to
+// parent->child delivery too — a rejected steer must be visible to the
+// PARENT, not silently dropped).
+func (t *DelegateTool) checkSteerCaps(sessionID, text string) error {
+	bodyCap := t.steerBodyBytes
+	if bodyCap <= 0 {
+		bodyCap = session.DefaultSteerBodyBytes
+	}
+	if len(text) > bodyCap {
+		return fmt.Errorf("steer/respond body (%d bytes) exceeds the %d byte cap", len(text), bodyCap)
+	}
+
+	limit := t.steerRatePerMin
+	if limit <= 0 {
+		limit = session.DefaultSteerRatePerMinute
+	}
+	now := t.now()
+	cutoff := now.Add(-1 * time.Minute)
+
+	t.steerRateMu.Lock()
+	defer t.steerRateMu.Unlock()
+	window := t.steerRateWindows[sessionID]
+	kept := window[:0]
+	for _, ts := range window {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	if len(kept) >= limit {
+		t.steerRateWindows[sessionID] = kept
+		return fmt.Errorf("steer/respond rate exceeded (%d/min) for session %s", limit, sessionID)
+	}
+	t.steerRateWindows[sessionID] = append(kept, now)
+	return nil
+}
+
+// requiredStringArg extracts a required, non-blank string argument, or a
+// descriptive error naming the missing/invalid field.
+func requiredStringArg(args map[string]any, key string) (string, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", fmt.Errorf("%s is required and must be a non-empty string", key)
+	}
+	return s, nil
+}
+
+// callerOwnerKey resolves the CALLING agent's own durable inbox key — the
+// same ToolTranscriptSessionID(ctx) value that was captured as the child's
+// ParentDurableKey at `run` time (D16). Every parent-side action
+// (inbox/inbox_ack/steer/respond/cancel/follow_up/peek) uses this exact
+// resolution so a caller can only ever address inboxes/sessions it itself
+// spawned.
+func callerOwnerKey(ctx context.Context) string {
+	return strings.TrimSpace(ToolTranscriptSessionID(ctx))
+}
+
+// verifyCallerOwnsSession rejects an action whose caller is not the SAME
+// parent who spawned rec (defense in depth — a session_id alone is
+// guessable/loggable; ownership must also match at the handler).
+func verifyCallerOwnsSession(ctx context.Context, rec *session.LifecycleRecord) error {
+	caller := callerOwnerKey(ctx)
+	if caller == "" || rec.ParentDurableKey == "" || caller != rec.ParentDurableKey {
+		return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+	}
+	return nil
+}
+
+func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *ToolResult {
+	if t.inbox == nil {
+		return ErrorResult("delegate: no message inbox configured")
+	}
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	ownerKey := callerOwnerKey(ctx)
+	if ownerKey == "" {
+		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
+	}
+	if t.lifecycle != nil {
+		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil {
+			if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+				return ErrorResult(fmt.Sprintf("delegate: inbox: %v", verr))
+			}
+		}
+	}
+
+	sinceCursor, _ := args["since_cursor"].(string)
+	max := 0
+	if raw, present := args["max"]; present && raw != nil {
+		n, cerr := toIntArg(raw)
+		if cerr != nil {
+			return ErrorResult("max must be an integer")
+		}
+		max = n
+	}
+
+	msgs, nextCursor, hasMore, derr := t.inbox.Drain(ownerKey, sessionID, sinceCursor, max)
+	if derr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
+	}
+
+	resp := generated.DelegateInboxResponse{Messages: msgs, HasMore: hasMore}
+	if nextCursor != "" {
+		resp.NextCursor = &nextCursor
+	}
+	payload, merr := json.Marshal(resp)
+	if merr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox: encode response: %v", merr))
+	}
+	return NewToolResult(string(payload))
+}
+
+func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any) *ToolResult {
+	if t.inbox == nil {
+		return ErrorResult("delegate: no message inbox configured")
+	}
+	if _, err := requiredStringArg(args, "session_id"); err != nil {
+		return ErrorResult(err.Error())
+	}
+	ids, serr := stringSliceArg(args, "message_ids")
+	if serr != nil {
+		return ErrorResult(serr.Error())
+	}
+	if len(ids) == 0 {
+		return ErrorResult("message_ids is required and must be a non-empty array of strings")
+	}
+	ownerKey := callerOwnerKey(ctx)
+	if ownerKey == "" {
+		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
+	}
+	if err := t.inbox.Ack(ownerKey, ids); err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", err)).WithError(err)
+	}
+	return NewToolResult(fmt.Sprintf("Acknowledged %d message(s).", len(ids)))
+}
+
+func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *ToolResult {
+	if t.steering == nil {
+		return ErrorResult("delegate: no steering sink configured")
+	}
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	text, err := requiredStringArg(args, "text")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
+	}
+	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
+	}
+	if rec.Terminal() {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s is terminal (%s) and cannot be steered", sessionID, rec.State))
+	}
+	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+	}
+
+	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
+	}
+	return NewToolResult(fmt.Sprintf(
+		"Steering message queued for session %s; it will apply at the child's next tool boundary.", sessionID,
+	))
+}
+
+func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) *ToolResult {
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	correlationID, err := requiredStringArg(args, "correlation_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	text, err := requiredStringArg(args, "text")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	// NOTE ON LOCKING: see transitionLifecycle's doc comment — Load/Persist
+	// are each individually self-locking; do NOT wrap them in an additional
+	// outer Lock() (self-deadlock, sync.Mutex is not reentrant). The narrow
+	// concurrent-respond race this leaves is documented at this function's
+	// call site.
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", lerr))
+	}
+	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr))
+	}
+	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil || rec.NeedsInput.CorrelationID != correlationID {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: session %s is not parked on correlation_id %q", sessionID, correlationID,
+		))
+	}
+	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", cerr)).WithError(cerr)
+	}
+
+	// R§8.2/FR-132: reject a respond targeting an owner_required question.
+	// PHASE-1 SCOPING: this reads the original question's CHILD-AUTHORED
+	// authority tag directly from the inbox — the runtime content-based
+	// upgrade heuristic (deriveQuestionAuthority, FR-139, Group F/Phase 2)
+	// is not implemented by this wave; see the final report. The mandatory
+	// fail-closed DEFAULT (an omitted tag already resolved to
+	// owner_required at message_parent.go's Append time, FR-131) IS
+	// enforced here.
+	if t.inbox != nil {
+		if msgs, _, _, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, "", 0); derr == nil {
+			for _, m := range msgs {
+				kind, kerr := m.Discriminator()
+				if kerr != nil || kind != "question" {
+					continue
+				}
+				q, qerr := m.AsSessionMessageQuestion()
+				if qerr != nil || q.CorrelationId != correlationID {
+					continue
+				}
+				if q.Authority != nil && string(*q.Authority) == "owner_required" {
+					return ErrorResult(fmt.Sprintf(
+						"delegate: respond: question %q requires owner/human authority and cannot be "+
+							"answered by a parent directly (R§8.2)", correlationID,
+					))
+				}
+			}
+		}
+	}
+
+	next := *rec
+	next.State = session.LifecycleRunning
+	next.NeedsInput = nil
+	if perr := t.lifecycle.Persist(&next); perr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", perr)).WithError(perr)
+	}
+
+	if rec.Is3P {
+		// D5: 3P respond spawns a NEW corrective session — never an
+		// in-place warm resume (external CLIs have no such primitive).
+		return t.spawnCorrectiveFollowUp(ctx, sessionID, rec,
+			fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text), nil)
+	}
+
+	if t.steering == nil {
+		return ErrorResult("delegate: respond: no steering sink configured to deliver the answer")
+	}
+	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: failed to deliver answer: %v", serr)).WithError(serr)
+	}
+
+	resp := generated.DelegateRespondResponse{Acknowledged: true}
+	payload, merr := json.Marshal(resp)
+	if merr != nil {
+		return NewToolResult("Answer delivered; session resumed.")
+	}
+	return NewToolResult(string(payload))
+}
+
+func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *ToolResult {
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	hard := false
+	if raw, present := args["hard"]; present && raw != nil {
+		b, ok := raw.(bool)
+		if !ok {
+			return ErrorResult("hard must be a boolean")
+		}
+		hard = b
+	}
+	if t.lifecycle != nil {
+		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil {
+			if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+				return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
+			}
+		}
+	}
+
+	if hard {
+		if t.cancelHard == nil {
+			return ErrorResult("delegate: no hard-cancel hook configured")
+		}
+		if _, cerr := t.cancelHard(sessionID, "delegate cancel(hard=true)"); cerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
+		}
+		t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+		return NewToolResult(fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID))
+	}
+
+	if t.cancelSoft == nil {
+		return ErrorResult("delegate: no soft-cancel hook configured")
+	}
+	if _, cerr := t.cancelSoft(sessionID, "delegate cancel(hard=false)"); cerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
+	}
+
+	// FR-... cancel = soft cooperative stop + a hard RequestCancel backstop
+	// after the grace window, mirroring InterruptSession/InterruptSessionHard's
+	// existing two-phase escalation (steering.go). The backstop only fires
+	// if the session has NOT already reached a terminal state within grace.
+	if t.cancelHard != nil {
+		grace := t.cancelGrace
+		go func() {
+			time.Sleep(grace)
+			if t.lifecycle != nil {
+				if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && rec.Terminal() {
+					return // cooperative stop already landed — no backstop needed
+				}
+			}
+			if _, cerr := t.cancelHard(sessionID, "delegate cancel(hard=false): grace elapsed"); cerr != nil {
+				slog.Warn("delegate: cancel: hard-cancel backstop failed", "session_id", sessionID, "error", cerr)
+				return
+			}
+			t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+		}()
+	}
+
+	return NewToolResult(fmt.Sprintf(
+		"Session %s cooperatively cancelled; a checkpoint flush is expected within %s, "+
+			"after which a hard cancel backstop fires if it has not stopped on its own.",
+		sessionID, t.cancelGrace,
+	))
+}
+
+func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+	if t.spawner == nil {
+		return ErrorResult("delegate: no sub-turn spawner configured")
+	}
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	task, _ := args["task"].(string)
+
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", lerr))
+	}
+	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", verr))
+	}
+	if !rec.Terminal() {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: follow_up: session %s is not terminal (state=%s) — follow_up only resumes a finished session",
+			sessionID, rec.State,
+		))
+	}
+
+	if task == "" {
+		task = "Continue the previous task."
+	}
+	return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, task, cb)
+}
+
+// spawnCorrectiveFollowUp is the shared mechanics behind `follow_up` (native
+// and 3P) and a 3P `respond` (D5 — a 3P child never warm-resumes; every
+// continuation is a NEW corrective session carrying the prior context).
+// Native follow_up reuses sessionID verbatim (warm resume, same session, new
+// generation — see agent.spawnSubTurn's childID-reuse mechanism); 3P mints a
+// NEW session_id (cold respawn), linked back via ResumedFrom.
+func (t *DelegateTool) spawnCorrectiveFollowUp(
+	ctx context.Context,
+	sessionID string,
+	rec *session.LifecycleRecord,
+	instructions string,
+	cb AsyncCallback,
+) *ToolResult {
+	newSessionID := sessionID
+	if rec.Is3P {
+		newSessionID = uuid.NewString()
+	}
+
+	label := ""
+	t.mu.Lock()
+	if taskID, ok := t.sessionIndex[sessionID]; ok {
+		if st, ok := t.tasks[taskID]; ok {
+			label = st.Label
+			instructions = fmt.Sprintf("Original task: %s\n\n%s", st.Task, instructions)
+		}
+	}
+	t.mu.Unlock()
+
+	newRec := *rec
+	newRec.SessionID = newSessionID
+	newRec.Generation = rec.Generation + 1
+	newRec.ResumedFrom = sessionID
+	newRec.State = session.LifecycleQueued
+	newRec.FailedReason = ""
+	newRec.NeedsInput = nil
+	if err := t.lifecycle.Persist(&newRec); err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
+	}
+
+	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, nil, cb)
+}
+
+func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *ToolResult {
+	if t.inbox == nil {
+		return ErrorResult("delegate: no message inbox configured")
+	}
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	ownerKey := callerOwnerKey(ctx)
+	if ownerKey == "" {
+		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
+	}
+
+	state := "unknown"
+	if t.lifecycle != nil {
+		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil {
+			if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+				return ErrorResult(fmt.Sprintf("delegate: peek: %v", verr))
+			}
+			state = string(rec.State)
+		}
+	}
+
+	snap, perr := t.inbox.Peek(ownerKey, sessionID)
+	if perr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: peek: %v", perr)).WithError(perr)
+	}
+
+	resp := generated.DelegatePeekResponse{
+		SessionId: sessionID,
+		State:     generated.DelegatePeekResponseState(state),
+	}
+	if snap.HasCheckpoint {
+		summary := snap.LatestCheckpointSummary
+		resp.LatestCheckpointSummary = &summary
+	}
+	if snap.HasProgress {
+		text := snap.LatestProgressText
+		resp.LatestProgressText = &text
+		resp.LatestProgressPct = snap.LatestProgressPct
+	}
+	payload, merr := json.Marshal(resp)
+	if merr != nil {
+		return NewToolResult(fmt.Sprintf("session %s: state=%s", sessionID, state))
+	}
+	return NewToolResult(string(payload))
 }

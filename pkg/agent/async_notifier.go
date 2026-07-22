@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // asyncNotifyMaxContentBytes mirrors pkg/tools/session.go's maxOutputBufferSize
@@ -104,13 +105,26 @@ type asyncNotifierImpl struct {
 
 	mu        sync.RWMutex
 	observers []func(AsyncNotifyEvent)
+
+	// wakeMu/wakeWindows back WakeParent's bounded typed-wake debounce/rate
+	// cap (ADR-053 S3 — GENERALIZATION of this file's existing terminal-only
+	// wake to a bounded typed wake for question/blocker/error/handback).
+	// Deliberately a SEPARATE mutex from mu (observers) — WakeParent's hot
+	// path never needs to touch the observer list.
+	wakeMu      sync.Mutex
+	wakeWindows map[string][]time.Time // key = channel + "\x00" + chatID
+	wakeNow     func() time.Time       // overridable for deterministic tests
 }
 
 var _ AsyncNotifier = (*asyncNotifierImpl)(nil)
 
 // newAsyncNotifier constructs the process-wide AsyncNotifier for loop.
 func newAsyncNotifier(loop *AgentLoop) *asyncNotifierImpl {
-	return &asyncNotifierImpl{loop: loop}
+	return &asyncNotifierImpl{
+		loop:        loop,
+		wakeWindows: make(map[string][]time.Time),
+		wakeNow:     time.Now,
+	}
 }
 
 // registerObserver lets one or more observers receive a copy of every Notify
@@ -305,4 +319,120 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 	}
 
 	return nil
+}
+
+// ====================== ADR-053 S3: Bounded Typed Wake ======================
+//
+// GENERALIZATION of this file's existing terminal-only wake (BOM
+// discipline, delivery brief DoD-11): WakeParent is the SAME Notify
+// mechanism above, gated in front by (a) a closed kind allow-list
+// (question/blocker/error/handback only — progress/checkpoint/artifact
+// never wake a new turn; they are inbox-only, read on the parent's own
+// schedule via delegate.inbox/peek) and (b) a debounce (>=15s between wakes
+// for the same parent conversation) + rate cap (<=4/h) so a noisy child
+// cannot flood the parent with a fresh turn per message. A message that is
+// debounced/rate-limited is NOT lost — it is still durably appended to the
+// inbox (pkg/session.MessageInboxStore, by the caller before ever reaching
+// here); only the "wake a new turn right now" side effect is suppressed.
+
+const (
+	// sessionMessageWakeDebounce is the minimum interval between two wakes
+	// for the same parent conversation (ADR-053 §Contract Surface).
+	sessionMessageWakeDebounce = 15 * time.Second
+	// sessionMessageWakeMaxPerHour is the rolling-hour wake cap per parent
+	// conversation.
+	sessionMessageWakeMaxPerHour = 4
+)
+
+// wakeableSessionMessageKinds is the closed set of SessionMessage `kind`
+// values that may trigger a bounded typed wake.
+var wakeableSessionMessageKinds = map[string]bool{ //nolint:gochecknoglobals
+	"question": true,
+	"blocker":  true,
+	"error":    true,
+	"handback": true,
+}
+
+// SetWakeClock overrides WakeParent's time source for deterministic
+// (fake-clock) tests of the debounce/rate cap. Never call this outside
+// tests.
+func (n *asyncNotifierImpl) SetWakeClock(now func() time.Time) {
+	if now != nil {
+		n.wakeNow = now
+	}
+}
+
+// allowWake reports whether a wake for debounceKey (channel+"\x00"+chatID)
+// is currently permitted under the debounce+rate cap, and — if so —
+// records this wake so subsequent calls see it.
+func (n *asyncNotifierImpl) allowWake(debounceKey string) bool {
+	now := n.wakeNow()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	cutoffHour := now.Add(-1 * time.Hour)
+
+	n.wakeMu.Lock()
+	defer n.wakeMu.Unlock()
+
+	window := n.wakeWindows[debounceKey]
+	kept := window[:0]
+	var last time.Time
+	for _, t := range window {
+		if t.After(cutoffHour) {
+			kept = append(kept, t)
+			if t.After(last) {
+				last = t
+			}
+		}
+	}
+	if !last.IsZero() && now.Sub(last) < sessionMessageWakeDebounce {
+		n.wakeWindows[debounceKey] = kept
+		return false
+	}
+	if len(kept) >= sessionMessageWakeMaxPerHour {
+		n.wakeWindows[debounceKey] = kept
+		return false
+	}
+	n.wakeWindows[debounceKey] = append(kept, now)
+	return true
+}
+
+// WakeParent implements tools.MessageParentWaker — the interface
+// pkg/tools/message_parent.go depends on (defined on the tools side to
+// avoid a tools<->agent import cycle; asyncNotifierImpl satisfies it
+// structurally). kind is the originating SessionMessage's discriminator
+// (question/blocker/error/handback — anything else is rejected, since only
+// those four kinds may wake a new turn per the ADR). event carries the
+// already-resolved routing (Channel/ChatID/AgentID/TranscriptSessionID) the
+// caller assembled from the ORIGINAL delegation's own OriginChannel/
+// OriginChatID (DelegateTaskState / the durable SessionLifecycleRecord's
+// owner scope) — this file does not itself resolve "where does the parent
+// live", only whether/when to wake it.
+func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event tools.MessageParentWakeEvent) error {
+	if !wakeableSessionMessageKinds[kind] {
+		return fmt.Errorf(
+			"async notifier: wake parent: kind %q is not wakeable (question/blocker/error/handback only)", kind,
+		)
+	}
+	if event.Channel == "" || event.ChatID == "" {
+		return fmt.Errorf("async notifier: wake parent: refusing to wake with empty destination (channel=%q chatID=%q)",
+			event.Channel, event.ChatID)
+	}
+
+	debounceKey := event.Channel + "\x00" + event.ChatID
+	if !n.allowWake(debounceKey) {
+		logger.DebugCF("agent", "Bounded typed wake suppressed by debounce/rate cap",
+			map[string]any{"kind": kind, "channel": event.Channel, "chat_id": event.ChatID})
+		return nil
+	}
+
+	return n.Notify(ctx, AsyncNotifyEvent{
+		Channel:             event.Channel,
+		ChatID:              event.ChatID,
+		AgentID:             event.AgentID,
+		TranscriptSessionID: event.TranscriptSessionID,
+		SourceKind:          "message_parent:" + kind,
+		Content:             event.Content,
+	})
 }

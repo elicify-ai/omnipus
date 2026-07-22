@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"sync"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -204,6 +207,15 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Media:   append([]string(nil), msg.Media...),
 	}
 	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
+}
+
+// EnqueueSteeringMessage is the exported wrapper around enqueueSteeringMessage
+// for callers outside this package (pkg/tools/delegate.go's `steer` action —
+// tools cannot reach the unexported method directly, mirroring the existing
+// SubTurnSpawner-interface pattern used to avoid a tools<->agent import
+// cycle). Behavior is byte-for-byte identical to the internal method.
+func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+	return al.enqueueSteeringMessage(scope, agentID, msg)
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
@@ -872,4 +884,82 @@ func (al *AgentLoop) InjectFollowUp(msg providers.Message) error {
 // It injects a steering message into the currently running agent loop.
 func (al *AgentLoop) InjectSteering(msg providers.Message) error {
 	return al.Steer(msg)
+}
+
+// ====================== ADR-053 S3: Typed SessionMessage Transport ======================
+//
+// GENERALIZATION, not a new mechanism (BOM discipline, delivery brief
+// DoD-11): a parent->child `steer`/`respond` SessionMessage is translated
+// into the SAME providers.Message this file has always queued and injected
+// into the CHILD's steering-queue scope via the EXISTING
+// enqueueSteeringMessage — same MaxQueueSize, same drain-at-tool-boundary
+// semantics, same skip-remaining-batch behavior (INV-3). No second queue,
+// no second injection path is introduced.
+//
+// Correlation routing for `respond` (INV-4 — answers a parked `question` by
+// correlation_id, out-of-order safe) happens ONE LAYER UP, at the caller
+// (pkg/tools/delegate.go's respond action): it validates correlation_id
+// against the child's parked SessionLifecycleRecord.NeedsInput before ever
+// reaching here, and a native child parked on `question(wait=true)` has
+// exactly one open correlation at a time — so by the time
+// DeliverSessionMessage runs, "which question is this answering" is already
+// resolved; only the answer TEXT needs to reach the child's next turn.
+
+// ErrSessionMessageNotTurnInjectable is returned by DeliverSessionMessage
+// for any SessionMessage kind that is not a parent->child turn injection
+// (steer/respond). Every other kind — child->parent reporting
+// (progress/checkpoint/artifact/blocker/question/decision_request/error/
+// handback) and engine/session_to_ui kinds (revision_entry/goal_status) —
+// is inbox/UI delivery, not a turn injection, and must be routed to the
+// durable inbox (pkg/session.MessageInboxStore) or the bounded typed wake
+// (AsyncNotifier.WakeParent, async_notifier.go) instead. Distinguishable via
+// errors.Is so a bus-consumer wiring (another wave) can branch on it rather
+// than treating it as a hard failure.
+var ErrSessionMessageNotTurnInjectable = errors.New("agent: session message kind is not a turn injection")
+
+// sessionMessageEnvelope is the minimal shape every SessionMessage variant
+// flattens inline (ADR-034 precedent) — used here only to read
+// SessionId/Text for the two turn-injectable kinds without a full
+// per-variant switch.
+type sessionMessageTextEnvelope struct {
+	SessionID string `json:"session_id"`
+	Text      string `json:"text"`
+}
+
+// DeliverSessionMessage is the single entry point that turns a typed
+// ADR-053 SessionMessage into the appropriate EXISTING delivery mechanism.
+// For `kind: steer` and `kind: respond` (both parent->child), it enqueues
+// the message's Text as a providers.Message into the CHILD's steering-queue
+// scope (childSessionKey — the same "agent:<id>:<sid>" scope key runTurn
+// registers the active turn under, mirroring enqueueSteeringFromMessage's
+// own scope resolution) via the existing enqueueSteeringMessage, so it
+// lands at the child's next tool boundary exactly like a chat steer does
+// today. Any other kind returns ErrSessionMessageNotTurnInjectable — it is
+// the caller's job to route those to the inbox/wake mechanisms instead.
+func (al *AgentLoop) DeliverSessionMessage(_ context.Context, childSessionKey, childAgentID string, msg generated.SessionMessage) error {
+	kind, err := msg.Discriminator()
+	if err != nil {
+		return fmt.Errorf("agent: session message: malformed envelope: %w", err)
+	}
+
+	switch kind {
+	case "steer", "respond":
+		raw, merr := msg.MarshalJSON()
+		if merr != nil {
+			return fmt.Errorf("agent: session message: marshal: %w", merr)
+		}
+		var env sessionMessageTextEnvelope
+		if uerr := json.Unmarshal(raw, &env); uerr != nil {
+			return fmt.Errorf("agent: session message: kind %q: %w", kind, uerr)
+		}
+		if strings.TrimSpace(env.Text) == "" {
+			return fmt.Errorf("agent: session message: kind %q: empty text", kind)
+		}
+		return al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
+			Role:    "user",
+			Content: env.Text,
+		})
+	default:
+		return fmt.Errorf("%w: kind %q", ErrSessionMessageNotTurnInjectable, kind)
+	}
 }
