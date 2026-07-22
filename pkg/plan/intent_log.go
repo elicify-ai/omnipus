@@ -438,3 +438,61 @@ func (l *IntentLog) ReplayAllPlans(apply ApplyFunc) ([]ReplayResult, error) {
 	}
 	return results, err
 }
+
+// CommitCorrection transactionally commits a correction via the 4-step
+// write-ahead protocol (FR-148/INV-6/N-8). This is the owner-loop WRITE path
+// the Phase-2 owner-correction handler drives: it sequences the self-contained
+// intent record through AppendIntent → MarkCommitted → Apply → MarkDone as one
+// all-or-nothing operation.
+//
+// Ordering (INV-6):
+//  1. AppendIntent writes the self-contained record at status=uncommitted.
+//  2. MarkCommitted flips it to committed (fsync) — the linearization point.
+//     A Stop/crash before this point leaves an uncommitted intent which boot
+//     discards (delete any partially-written members, wire no edges → exact
+//     pre-append DAG).
+//  3. apply performs the per-file writes (create member tasks, wire edges,
+//     patch the plan record). It MUST be idempotent — boot may replay it.
+//  4. MarkDone flips the intent to done. A crash after commit but before done
+//     leaves a committed-but-not-done intent which boot replays forward
+//     idempotently (the done-marker makes re-apply a no-op).
+//
+// If apply fails AFTER MarkCommitted succeeded, the correction IS durably
+// committed (boot will finish the apply) but this call returns the apply error
+// so the caller knows the in-process apply was incomplete. The caller should
+// NOT attempt to roll back — boot's replay-forward is the correct completion
+// path.
+//
+// apply may be nil for a commit-only intent (no per-file writes to apply —
+// e.g. a supersede that records only a revision entry with no new members);
+// the method skips straight to MarkDone.
+func (l *IntentLog) CommitCorrection(rec IntentRecord, apply ApplyFunc) error {
+	if rec.IntentID == "" {
+		return fmt.Errorf("intent_log: CommitCorrection: intent_id must not be empty")
+	}
+	if rec.PlanID == "" {
+		return fmt.Errorf("intent_log: CommitCorrection: plan_id must not be empty")
+	}
+	// Step 1: write the self-contained intent record (uncommitted).
+	if err := l.AppendIntent(rec); err != nil {
+		return fmt.Errorf("intent_log: CommitCorrection: append: %w", err)
+	}
+	// Step 2: mark committed (fsync — the linearization point).
+	if err := l.MarkCommitted(rec.PlanID, rec.IntentID); err != nil {
+		return fmt.Errorf("intent_log: CommitCorrection: mark committed: %w", err)
+	}
+	// Step 3: apply the per-file writes (idempotent).
+	if apply != nil {
+		if err := apply(rec); err != nil {
+			// The correction is durably committed but the in-process apply
+			// failed — boot will replay-forward idempotently. Return the
+			// error so the caller knows, but do NOT attempt rollback.
+			return fmt.Errorf("intent_log: CommitCorrection: apply (committed; boot will replay): %w", err)
+		}
+	}
+	// Step 4: mark done.
+	if err := l.MarkDone(rec.PlanID, rec.IntentID); err != nil {
+		return fmt.Errorf("intent_log: CommitCorrection: mark done: %w", err)
+	}
+	return nil
+}

@@ -41,6 +41,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -230,6 +231,10 @@ type PlanEngine struct {
 	// before the engine reconciles plans against them. Nil = no replay (the
 	// Phase-2 owner loop that writes intents wires this).
 	intentLog *plan.IntentLog
+	// commitResolver resolves the last boundary commit hash for a plan member
+	// (the gitevidence checkpoint, D13/G-12). Optional; nil = fresh-attempt
+	// fallback when Play resumes a member with no git evidence available.
+	commitResolver commitResolver
 
 	clock        PlanEngineClock
 	tickInterval time.Duration
@@ -269,6 +274,18 @@ type PlanEngine struct {
 	// next tick simply re-judges once more, identical in cost to the
 	// existing PhaseJudging crash-resume path a few lines below.
 	lastUnmetTerminalSignature map[string]string
+
+	// supersededMembers tracks done members whose outcomes have been marked
+	// ignored-by-Judge via a SUPERSEDE correction (FR-143/G-11). planID -> set
+	// of member task IDs. Same lazy-init + mu-guard pattern as
+	// lastUnmetTerminalSignature above. Reconstructed from the intent log's
+	// revision entries at boot (reconstructCorrections).
+	supersededMembers map[string]map[string]bool
+
+	// planGenerations tracks the current owner-session generation per plan
+	// (FR-144/D13/G-12). Generation 0 is the initial run; each Play
+	// increments it. Reconstructed from the intent log at boot.
+	planGenerations map[string]int
 
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
@@ -1149,8 +1166,18 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	// across-restart authority (rehydrated by bootReconcile) — together they
 	// close the standalone-F2 restart gap (C1).
 	pe.recordUnmetTerminalSignature(current.ID, terminalSig)
+	// ADR-053 Phase-2 (D4 superseded): record the durable owner-session
+	// linkage so the boot sweep can exempt this plan's paused owner session
+	// from the failed(interrupted) sweep (FR-118 exemption b, via
+	// OwnerSessionID). The owner session is the persistent plan:<id> chat
+	// context — the same one wakeOwner notifies — re-opened on purpose for
+	// each correction round rather than a fresh one-shot wake.
+	pe.ensureOwnerSessionLocked(current)
 	pe.wakeOwner(current.ID, current.OwnerAgentID, fmt.Sprintf(
-		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s",
+		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s"+
+			"\n\nThe plan is now awaiting your correction. Use the plan skill to re-plan: "+
+			"append tail members, SUPERSEDE a done member whose outcome is wrong, or "+
+			"TARGETED-RETRY a failed member.",
 		current.Title, newRounds, steering,
 	), "plan_judge_unmet")
 }
@@ -1309,6 +1336,14 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 		}
 	}
 	sessions = append(sessions, pe.registry().SessionsFor(units...)...)
+	// ADR-053 Phase-2 (D4 superseded): the persistent owner session (the
+	// plan:<id> correction-loop chat) is cancelled as part of the Stop
+	// fan-out — Stop cancels it like any session. The owner session ID is
+	// the durable OwnerSessionID on the plan record (set when the plan
+	// first entered awaiting-owner-correction).
+	if p.OwnerSessionID != "" {
+		sessions = append(sessions, p.OwnerSessionID)
+	}
 	pe.cancelSessions(ctx, sessions, userID, channel)
 
 	// Item 5: aggregate (never silently discard) any per-member store-write
@@ -1964,6 +1999,649 @@ func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) bool {
 	return false
 }
 
+// --- ADR-053 Phase 2: owner loop + correction (§3/§3b/§3c, G-9..G-12) -----
+
+// CorrectionVerb is the owner-correction verb (FR-143/G-11).
+type CorrectionVerb string
+
+const (
+	CorrectionAppend        CorrectionVerb = CorrectionVerb(plan.RevisionAppend)
+	CorrectionSupersede     CorrectionVerb = CorrectionVerb(plan.RevisionSupersede)
+	CorrectionTargetedRetry CorrectionVerb = CorrectionVerb(plan.RevisionTargetedRetry)
+)
+
+// CorrectionRequest is an owner correction to an unmet DoD (FR-143/G-11). The
+// owner issues one of three verbs; each records a revision entry committed
+// transactionally via the intent-log (INV-6/N-8).
+//
+// not-wire-format: engine-internal type; the REST/tool layer maps its wire
+// type to this.
+type CorrectionRequest struct {
+	Verb                CorrectionVerb `json:"verb"`
+	FalsifiedAssumption string         `json:"falsified_assumption,omitempty"`
+	TailMembers         []task.Task    `json:"tail_members,omitempty"`
+	TailEdges           []IntentEdge   `json:"tail_edges,omitempty"`
+	SupersededMemberID  string         `json:"superseded_member_id,omitempty"`
+	RetriedMemberID     string         `json:"retried_member_id,omitempty"`
+	Reason              string         `json:"reason,omitempty"`
+}
+
+// IntentEdge is re-exported here (alias of plan.IntentEdge) so callers importing
+// pkg/agent get a single-package API for corrections. The authoritative type
+// lives in pkg/plan (intent_log.go) where the intent-log store uses it.
+type IntentEdge = plan.IntentEdge
+
+// CorrectionResult is the outcome of processing a correction.
+//
+// not-wire-format: engine-internal type.
+type CorrectionResult struct {
+	RevisionID    string             `json:"revision_id"`
+	Generation    int                `json:"generation"`
+	RevisionEntry plan.RevisionEntry `json:"revision_entry"`
+	HonestExit    bool               `json:"honest_exit,omitempty"`
+}
+
+// commitResolver resolves the last boundary commit hash for a plan member
+// (the gitevidence checkpoint). Used by Play to resume failed/cancelled
+// members from the last commit (D13/G-12). nil = no git evidence available
+// (Play falls back to fresh attempt, signalled).
+type commitResolver interface {
+	LastMemberCommit(planID, taskID string) (hash string, err error)
+}
+
+// SetCommitResolver installs the gitevidence checkpoint resolver for
+// Play-from-commit (D13/G-12). Optional; nil (the default) means Play falls
+// back to fresh attempt for every failed/cancelled member.
+func (pe *PlanEngine) SetCommitResolver(cr commitResolver) {
+	pe.mu.Lock()
+	pe.commitResolver = cr
+	pe.mu.Unlock()
+}
+
+// --- Owner-session management (D4 superseded) ------------------------------
+
+// ensureOwnerSessionLocked records the durable owner-session linkage on the
+// plan record (OwnerSessionID, m-3/FR-147) if none is set yet. The owner
+// session is the persistent plan:<id> chat context — the same one wakeOwner
+// notifies — re-opened on purpose for each correction round. The boot sweep
+// resolves the awaiting-correction exemption through this field (FR-118
+// exemption b). Caller must hold planDecisionMu.
+func (pe *PlanEngine) ensureOwnerSessionLocked(p *plan.Plan) {
+	if p.OwnerSessionID != "" {
+		return
+	}
+	sessionID := "plan:" + p.ID
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{OwnerSessionID: &sessionID}); err != nil {
+		logger.WarnCF("plan_engine", "could not persist owner_session_id",
+			map[string]any{"plan_id": p.ID, "error": err.Error()})
+		return
+	}
+	logger.InfoCF("plan_engine", "owner session opened for plan",
+		map[string]any{"plan_id": p.ID, "owner_session_id": sessionID})
+}
+
+// --- Superseded-member tracking (FR-143 SUPERSEDE) -------------------------
+
+// markMemberSuperseded records that memberID's outcome is ignored-by-Judge
+// (SUPERSEDE verb). The member's task record stays immutable; only the
+// Judge-weighting changes. Same lazy-init + mu pattern as
+// recordUnmetTerminalSignature.
+func (pe *PlanEngine) markMemberSuperseded(planID, memberID string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.supersededMembers == nil {
+		pe.supersededMembers = make(map[string]map[string]bool)
+	}
+	set := pe.supersededMembers[planID]
+	if set == nil {
+		set = make(map[string]bool)
+		pe.supersededMembers[planID] = set
+	}
+	set[memberID] = true
+}
+
+// isMemberSuperseded reports whether memberID's outcome has been marked
+// ignored-by-Judge via a SUPERSEDE correction.
+func (pe *PlanEngine) isMemberSuperseded(planID, memberID string) bool {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	return pe.supersededMembers[planID][memberID]
+}
+
+// supersededMemberSet returns a copy of the superseded-member set for planID
+// (nil if none). Used by evidence-building to exclude superseded done members
+// from the Judge's view.
+func (pe *PlanEngine) supersededMemberSet(planID string) map[string]bool {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	src := pe.supersededMembers[planID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+// --- Plan-generation tracking (D13/G-12) -----------------------------------
+
+// planGeneration returns the current generation number for planID (0 on first
+// run, incremented by each Play). Same lazy-init pattern.
+func (pe *PlanEngine) planGeneration(planID string) int {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.planGenerations == nil {
+		pe.planGenerations = make(map[string]int)
+	}
+	return pe.planGenerations[planID]
+}
+
+// incrementPlanGeneration bumps planID's generation and returns the new value.
+func (pe *PlanEngine) incrementPlanGeneration(planID string) int {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.planGenerations == nil {
+		pe.planGenerations = make(map[string]int)
+	}
+	pe.planGenerations[planID]++
+	return pe.planGenerations[planID]
+}
+
+// newRevisionID mints a deterministic-enough revision identifier.
+func (pe *PlanEngine) newRevisionID(planID string) string {
+	return fmt.Sprintf("rev-%s-%d-%d", planID, pe.clock.Now().UnixNano(), pe.planGeneration(planID))
+}
+
+// --- AppendCorrection (FR-143/G-11, the main correction handler) -----------
+
+// AppendCorrection processes an owner correction to an unmet DoD (FR-143/G-11).
+// The plan MUST be in awaiting_owner_correction. The correction commits
+// transactionally via the intent-log (INV-6/N-8): AppendIntent →
+// MarkCommitted → Apply → MarkDone. After the commit:
+//   - For append/supersede: auto-reset ALL live-round failed members (excludes
+//     frozen/done members — G-10).
+//   - For targeted_retry: reset ONLY the specified failed member (no full
+//     Stop/Play — D4).
+//   - Tails depend only on done outcomes; an unreachable DoD takes the
+//     honest-exit path (G-10).
+//   - The durable unmet signature is cleared (INV-7: correction = new activity).
+//   - The DoD stays immutable (G-11).
+func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, req CorrectionRequest) (*CorrectionResult, error) {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+
+	p, err := pe.planStore.Get(planID)
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: AppendCorrection: get plan %q: %w", planID, err)
+	}
+	if p.State != plan.StateRunning {
+		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is %s, not running", planID, p.State)
+	}
+	if p.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
+		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is in phase %q, not awaiting_owner_correction",
+			planID, p.EffectivePlanPhase())
+	}
+	if err := pe.validateCorrection(planID, p, req); err != nil {
+		return nil, err
+	}
+
+	gen := pe.planGeneration(planID)
+	revID := pe.newRevisionID(planID)
+	tailAddIDs := make([]string, 0, len(req.TailMembers))
+	for i := range req.TailMembers {
+		tailAddIDs = append(tailAddIDs, req.TailMembers[i].ID)
+	}
+	now := pe.clock.Now().UTC()
+	rev := plan.RevisionEntry{
+		RevisionID:          revID,
+		PlanID:              planID,
+		Generation:          gen,
+		Verb:                plan.RevisionVerb(req.Verb),
+		FalsifiedAssumption: req.FalsifiedAssumption,
+		TailAdds:            tailAddIDs,
+		SupersededMemberID:  req.SupersededMemberID,
+		RetriedMemberID:     req.RetriedMemberID,
+		Reason:              req.Reason,
+		CreatedAt:           now,
+	}
+	rec := plan.IntentRecord{
+		IntentID: revID,
+		PlanID:   planID,
+		Members:  req.TailMembers,
+		Edges:    req.TailEdges,
+		Revision: rev,
+		Patch: plan.IntentRecordPatch{
+			ClearLastUnmetTerminalSignature: true,
+			PlanPhase:                       plan.PhaseDispatching,
+		},
+		CreatedAt: now,
+	}
+	apply := pe.buildCorrectionApplyFunc(planID, req)
+
+	// Transactional commit via the intent-log (INV-6/N-8). When no intent log
+	// is wired (tests/degraded), apply directly with no transactional guarantee.
+	if pe.intentLog != nil {
+		if err := pe.intentLog.CommitCorrection(rec, apply); err != nil {
+			return nil, fmt.Errorf("plan_engine: AppendCorrection: commit: %w", err)
+		}
+	} else if err := apply(rec); err != nil {
+		return nil, fmt.Errorf("plan_engine: AppendCorrection: apply (no intent log): %w", err)
+	}
+
+	// Record supersession in-memory (for Judge evidence building).
+	if req.Verb == CorrectionSupersede {
+		pe.markMemberSuperseded(planID, req.SupersededMemberID)
+	}
+	// Clear the in-memory durable unmet signature (correction = new activity,
+	// INV-7). The persisted field was cleared by the apply func's plan patch.
+	pe.clearUnmetTerminalSignature(planID)
+	pe.touchActivity(planID)
+
+	// Auto-reset + honest-exit check (G-10).
+	tasks, _ := pe.taskStore.List(task.Filter{PlanID: planID})
+	if req.Verb != CorrectionTargetedRetry {
+		// append/supersede: auto-reset ALL live-round failed members
+		// (excludes frozen/done members).
+		pe.autoResetLiveRoundFailedMembers(planID, tasks)
+		tasks, _ = pe.taskStore.List(task.Filter{PlanID: planID})
+	}
+	// Honest exit: if after the correction + auto-reset the plan still cannot
+	// make progress, fail it honestly (no livelock, G-10).
+	if planCannotProgress(tasks) {
+		handover := buildUnreachableDoDHandover(p, tasks)
+		pe.failPlanLocked(planID, plan.FailedReasonJudgeRoundsExhausted, handover)
+		return &CorrectionResult{
+			RevisionID: revID, Generation: gen, RevisionEntry: rev,
+			HonestExit: true,
+		}, nil
+	}
+	// Re-dispatch ready members.
+	pe.dispatchReadyMembers(ctx, planID, tasks)
+	return &CorrectionResult{RevisionID: revID, Generation: gen, RevisionEntry: rev}, nil
+}
+
+// validateCorrection checks the verb-specific preconditions (member exists,
+// correct status, belongs to this plan).
+func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req CorrectionRequest) error {
+	switch req.Verb {
+	case CorrectionSupersede:
+		if req.SupersededMemberID == "" {
+			return fmt.Errorf("plan_engine: supersede requires superseded_member_id")
+		}
+		t, err := pe.taskStore.Get(req.SupersededMemberID)
+		if err != nil {
+			return fmt.Errorf("plan_engine: superseded member %q: %w", req.SupersededMemberID, err)
+		}
+		if t.Status != task.StatusDone {
+			return fmt.Errorf("plan_engine: member %q is %s, not done (only done members can be superseded)",
+				req.SupersededMemberID, t.Status)
+		}
+		if t.PlanID != planID {
+			return fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
+				req.SupersededMemberID, t.PlanID, planID)
+		}
+	case CorrectionTargetedRetry:
+		if req.RetriedMemberID == "" {
+			return fmt.Errorf("plan_engine: targeted_retry requires retried_member_id")
+		}
+		t, err := pe.taskStore.Get(req.RetriedMemberID)
+		if err != nil {
+			return fmt.Errorf("plan_engine: retried member %q: %w", req.RetriedMemberID, err)
+		}
+		if t.Status != task.StatusFailed {
+			return fmt.Errorf("plan_engine: member %q is %s, not failed (only failed members can be targeted-retried)",
+				req.RetriedMemberID, t.Status)
+		}
+		if t.PlanID != planID {
+			return fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
+				req.RetriedMemberID, t.PlanID, planID)
+		}
+	case CorrectionAppend:
+		if len(req.TailMembers) == 0 {
+			return fmt.Errorf("plan_engine: append requires at least one tail member")
+		}
+	default:
+		return fmt.Errorf("plan_engine: unknown correction verb %q", req.Verb)
+	}
+	return nil
+}
+
+// buildCorrectionApplyFunc returns the idempotent ApplyFunc for a correction.
+// It performs the per-file writes: create tail-member tasks, wire edges, reset
+// the targeted-retry member, apply auto-reset for targeted_retry, and patch
+// the plan record (clear unmet signature, set phase to dispatching). Every
+// operation is idempotent — boot's replay-forward may call it on a plan whose
+// writes partially landed.
+func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequest) plan.ApplyFunc {
+	return func(rec plan.IntentRecord) error {
+		// Create tail-member tasks (idempotent: skip if the task already exists).
+		for i := range rec.Members {
+			m := &rec.Members[i]
+			if m.ID == "" {
+				continue
+			}
+			if existing, err := pe.taskStore.Get(m.ID); err == nil && existing != nil {
+				continue // already created (idempotent replay)
+			}
+			if m.PlanID == "" {
+				m.PlanID = planID
+			}
+			if m.WorkspaceID == "" {
+				m.WorkspaceID = ""
+			}
+			if err := pe.taskStore.Create(m); err != nil {
+				return fmt.Errorf("create tail member %q: %w", m.ID, err)
+			}
+		}
+		// Wire tail edges (AddDependency is idempotent: returns added=false,
+		// nil when the edge already exists — safe for replay).
+		for _, e := range rec.Edges {
+			if _, _, err := pe.taskStore.AddDependency(e.ToTaskID, e.FromTaskID); err != nil {
+				return fmt.Errorf("wire edge %s->%s: %w", e.FromTaskID, e.ToTaskID, err)
+			}
+		}
+		// Targeted-retry: reset the specific failed member (idempotent:
+		// RestartReset errors on non-failed, which is the correct no-op).
+		if req.Verb == CorrectionTargetedRetry && req.RetriedMemberID != "" {
+			if _, err := pe.taskStore.RestartReset(req.RetriedMemberID); err != nil {
+				// Already reset (idempotent replay) — not fatal.
+				logger.DebugCF("plan_engine", "targeted-retry reset (may be idempotent no-op)",
+					map[string]any{"task_id": req.RetriedMemberID, "error": err.Error()})
+			}
+		}
+		// Patch the plan record (clear unmet signature, set phase).
+		dispatching := plan.PhaseDispatching
+		clearSig := ""
+		if _, err := pe.planStore.Update(planID, plan.Patch{
+			PlanPhase:                  &dispatching,
+			LastUnmetTerminalSignature: &clearSig,
+		}); err != nil {
+			return fmt.Errorf("patch plan phase: %w", err)
+		}
+		return nil
+	}
+}
+
+// --- Auto-reset + honest exit (G-10) ---------------------------------------
+
+// autoResetLiveRoundFailedMembers resets every failed member back to `next`
+// (via RestartReset) EXCEPT done members (frozen — preserved) and members
+// explicitly superseded (handled by the correction verb). This gives the
+// failed members another chance after the owner's correction landed.
+// Caller must hold planDecisionMu.
+func (pe *PlanEngine) autoResetLiveRoundFailedMembers(planID string, tasks []task.Task) {
+	superseeded := pe.supersededMemberSet(planID)
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Status != task.StatusFailed {
+			continue // only reset failed members; done/next/blocked/in_progress untouched
+		}
+		if superseeded[t.ID] {
+			continue // superseded members are not auto-reset
+		}
+		if _, err := pe.taskStore.RestartReset(t.ID); err != nil {
+			logger.WarnCF("plan_engine", "auto-reset: could not reset failed member",
+				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
+		}
+	}
+}
+
+// planCannotProgress reports whether the plan can make NO further progress
+// after a correction + auto-reset (the honest-exit condition, G-10). True when:
+//   - No member is `next` or `in_progress` (nothing to dispatch/run).
+//   - Every remaining non-done member is `failed` (auto-reset already tried
+//     and they re-failed, or were not reset) or `blocked` behind a dependency
+//     that is itself a dead-end (failed, not done).
+//
+// This mirrors planStuckAfterMemberCancel's dead-end analysis but is
+// correction-scoped: it evaluates the post-correction, post-auto-reset state.
+func planCannotProgress(tasks []task.Task) bool {
+	hasDispatchable := false
+	for i := range tasks {
+		s := tasks[i].Status
+		if s == task.StatusNext || s == task.StatusInProgress {
+			hasDispatchable = true
+			break
+		}
+	}
+	if hasDispatchable {
+		return false
+	}
+	// No dispatchable members — check if every non-done member is a dead-end.
+	byID := make(map[string]*task.Task, len(tasks))
+	for i := range tasks {
+		byID[tasks[i].ID] = &tasks[i]
+	}
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Status == task.StatusDone {
+			continue
+		}
+		if !memberIsDeadEnd(t, byID, make(map[string]bool)) {
+			return false // at least one non-done member could still progress
+		}
+	}
+	return true
+}
+
+// buildUnreachableDoDHandover renders the honest-exit handover for a plan
+// whose DoD is structurally unreachable after correction + auto-reset.
+func buildUnreachableDoDHandover(p *plan.Plan, tasks []task.Task) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Plan %q cannot reach its Definition of Done: after the latest correction "+
+		"and auto-reset, no member can make further progress (every non-done member is "+
+		"failed or blocked behind a failed member).\n\nMember outcomes:\n", p.Title)
+	for i := range tasks {
+		t := &tasks[i]
+		fmt.Fprintf(&sb, "- %s (%s)\n", t.Title, t.Status)
+	}
+	sb.WriteString("\nThe plan has been marked failed. Review the DoD and member outcomes.")
+	return sb.String()
+}
+
+// --- Play = resumed_from generation (D13/G-12) -----------------------------
+
+// PlayResult is the outcome of a Play (resume) operation.
+//
+// not-wire-format: engine-internal type.
+type PlayResult struct {
+	NewGeneration int    `json:"new_generation"`
+	ResumedFrom   string `json:"resumed_from,omitempty"`
+	PlanID        string `json:"plan_id"`
+}
+
+// PlayPlan resumes a stopped/failed plan as a new owner-session generation
+// (FR-144/D13/G-12). Transitions the plan cancelled/failed → approved (the
+// restart transition, which zeroes JudgeRounds), preserves done members,
+// resets failed/cancelled members to `next` (resumed from the last git commit
+// if a commitResolver is wired; fresh attempt otherwise), clears the durable
+// unmet signature, and increments the generation. The plan then re-enters
+// the normal approved→running admission path on the next tick.
+func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult, error) {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+
+	p, err := pe.planStore.Get(planID)
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: PlayPlan: get plan %q: %w", planID, err)
+	}
+	if p.State != plan.StateFailed {
+		return nil, fmt.Errorf("plan_engine: PlayPlan: plan %q is %s, not failed (Play resumes a stopped/failed plan)",
+			planID, p.State)
+	}
+	// The restart transition validates failed_reason == stopped_by_user
+	// (plan.ValidateRestartTransition). This is the same gate the REST
+	// /restart endpoint uses.
+	approved := plan.StateApproved
+	if _, err := pe.planStore.Update(planID, plan.Patch{State: &approved}); err != nil {
+		return nil, fmt.Errorf("plan_engine: PlayPlan: restart transition: %w", err)
+	}
+
+	// Reset failed/cancelled members to `next`; preserve done members.
+	// Resume from last git commit if available (D13); fresh attempt otherwise.
+	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err != nil {
+		return nil, fmt.Errorf("plan_engine: PlayPlan: list member tasks: %w", err)
+	}
+	for i := range tasks {
+		t := &tasks[i]
+		if task.IsTerminal(t.Status) && t.Status != task.StatusDone {
+			// Failed/cancelled member — reset for re-dispatch.
+			if _, rerr := pe.taskStore.RestartReset(t.ID); rerr != nil {
+				logger.WarnCF("plan_engine", "PlayPlan: could not reset member",
+					map[string]any{"plan_id": planID, "task_id": t.ID, "error": rerr.Error()})
+			}
+			pe.recordMemberResumePoint(planID, t.ID)
+		}
+	}
+
+	// Clear the durable unmet signature (fresh round on the new generation).
+	pe.clearUnmetTerminalSignature(planID)
+	clearSig := ""
+	if _, err := pe.planStore.Update(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); err != nil {
+		logger.WarnCF("plan_engine", "PlayPlan: could not clear unmet signature",
+			map[string]any{"plan_id": planID, "error": err.Error()})
+	}
+
+	// Mint a new generation (D13/G-12).
+	prevGen := pe.planGeneration(planID)
+	newGen := pe.incrementPlanGeneration(planID)
+
+	logger.InfoCF("plan_engine", "plan played: new generation",
+		map[string]any{"plan_id": planID, "generation": newGen, "resumed_from": prevGen})
+
+	return &PlayResult{
+		NewGeneration: newGen,
+		ResumedFrom:   fmt.Sprintf("gen-%d", prevGen),
+		PlanID:        planID,
+	}, nil
+}
+
+// recordMemberResumePoint resolves and logs the gitevidence checkpoint for a
+// member being resumed via Play (D13: "resume from last git commit"). If no
+// commitResolver is wired, the resume is a fresh attempt (signalled in the
+// log). The actual work-tree restore happens at dispatch time in the
+// gitevidence layer — the engine records the intent here.
+func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
+	pe.mu.Lock()
+	cr := pe.commitResolver
+	pe.mu.Unlock()
+	if cr == nil {
+		logger.InfoCF("plan_engine", "member resume: fresh attempt (no commit resolver)",
+			map[string]any{"plan_id": planID, "task_id": taskID})
+		return
+	}
+	hash, err := cr.LastMemberCommit(planID, taskID)
+	if err != nil || hash == "" {
+		logger.InfoCF("plan_engine", "member resume: fresh attempt (no boundary commit)",
+			map[string]any{"plan_id": planID, "task_id": taskID, "error": fmt.Sprintf("%v", err)})
+		return
+	}
+	logger.InfoCF("plan_engine", "member resume: from commit",
+		map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash})
+}
+
+// --- Owner-gaming-DoD guards (N-2) -----------------------------------------
+
+// gamingGuardEvidence annotates a member-outcome snapshot for the Judge with
+// gaming-guard metadata (N-2). The ladder weights deterministic rungs (check/
+// behavior) over prose; artifacts produced AFTER the unmet verdict are flagged
+// post-hoc so the Judge can weight them appropriately. This is a pure helper
+// the Judge-input builder calls — it does NOT alter the verdict itself.
+//
+// postUnmetMemberIDs is the set of member IDs whose artifacts were produced
+// after the plan entered awaiting_owner_correction (detected by comparing the
+// member's CompletedAt against the plan's last unmet-verdict timestamp). The
+// guard flags them in the extra-context text the Judge receives.
+func gamingGuardEvidence(tasks []task.Task, superseded map[string]bool, postUnmetMemberIDs map[string]bool) string {
+	if len(postUnmetMemberIDs) == 0 && len(superseded) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\n## Gaming-guard (N-2)\n")
+	sb.WriteString("The evidence ladder weights deterministic rungs (machine checks, behavior ")
+	sb.WriteString("scans) over prose self-attestation. The following caveats apply:\n")
+	if len(superseded) > 0 {
+		sb.WriteString("- Superseded members (outcome ignored-by-Judge, record immutable): ")
+		var ids []string
+		for id := range superseded {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		sb.WriteString(strings.Join(ids, ", "))
+		sb.WriteString("\n")
+	}
+	if len(postUnmetMemberIDs) > 0 {
+		sb.WriteString("- Artifacts produced AFTER the unmet verdict (flagged post-hoc): ")
+		var ids []string
+		for id := range postUnmetMemberIDs {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		sb.WriteString(strings.Join(ids, ", "))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// --- Boot reconstruction of corrections ------------------------------------
+
+// reconstructCorrections rebuilds the in-memory superseded-member sets and
+// plan-generation counters from the intent log's persisted revision entries.
+// Called from bootReconcile after the intent-log replay but before
+// processPlan, so the engine's correction state is consistent with the
+// durable record. No-ops cleanly when no intent log is wired.
+func (pe *PlanEngine) reconstructCorrections() {
+	if pe.intentLog == nil {
+		return
+	}
+	entries, err := os.ReadDir(pe.intentLog.Dir())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.WarnCF("plan_engine", "reconstructCorrections: read intent dir failed",
+				map[string]any{"error": err.Error()})
+		}
+		return
+	}
+	superCount := 0
+	genCount := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		planID := strings.TrimSuffix(e.Name(), ".jsonl")
+		records, err := pe.intentLog.List(planID)
+		if err != nil {
+			continue
+		}
+		maxGen := 0
+		for _, rec := range records {
+			if rec.Revision.Verb == plan.RevisionSupersede && rec.Revision.SupersededMemberID != "" {
+				pe.markMemberSuperseded(planID, rec.Revision.SupersededMemberID)
+				superCount++
+			}
+			if rec.Revision.Generation > maxGen {
+				maxGen = rec.Revision.Generation
+			}
+		}
+		if maxGen > 0 {
+			pe.mu.Lock()
+			if pe.planGenerations == nil {
+				pe.planGenerations = make(map[string]int)
+			}
+			pe.planGenerations[planID] = maxGen
+			pe.mu.Unlock()
+			genCount++
+		}
+	}
+	if superCount > 0 || genCount > 0 {
+		logger.InfoCF("plan_engine", "correction state reconstructed",
+			map[string]any{"superseded_members": superCount, "plans_with_generations": genCount})
+	}
+}
+
 // --- Boot reconciliation (FR-061/062) ---------------------------------------
 
 // bootReconcile rebuilds in-flight state from the plan+task stores at Start:
@@ -1987,6 +2665,10 @@ func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) bool {
 // unmetTerminalSignatureUnchanged sees the rehydrated entry and skips,
 // identical to the in-process behavior, and INV-7 holds across INV-9.
 func (pe *PlanEngine) bootReconcile(ctx context.Context) {
+	// ADR-053 Phase-2: reconstruct correction state (superseded members +
+	// plan generations) from the intent log before reconciling plans.
+	pe.reconstructCorrections()
+
 	plans, err := pe.planStore.List(plan.Filter{})
 	if err != nil {
 		logger.ErrorCF("plan_engine", "boot reconcile: list plans failed", map[string]any{"error": err.Error()})
