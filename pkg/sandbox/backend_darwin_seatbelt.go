@@ -48,6 +48,14 @@ import (
 // FallbackBackend.
 const seatbeltEnableEnv = "OMNIPUS_SANDBELT_ENABLE"
 
+// seatbeltExecPath is the signed Apple binary used to launch a child inside a
+// Seatbelt profile. Shelling out to it is the documented viable no-CGo path to
+// apply Seatbelt (the C sandbox_init(3) API would require CGo, forbidden by
+// CLAUDE.md hard constraint #2). This is distinct from the "no ldd/os-exec
+// for diagnostics" rule — sandbox-exec is the enforcement primitive. Defined
+// in this darwin-only file so the linux build carries no unused constant.
+const seatbeltExecPath = "/usr/bin/sandbox-exec"
+
 // SeatbeltBackend applies a SandboxPolicy on macOS by rendering a Seatbelt
 // `.sb` profile and launching each hardened-exec child under
 // `/usr/bin/sandbox-exec -f <profile>`.

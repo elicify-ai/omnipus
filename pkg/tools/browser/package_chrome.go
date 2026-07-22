@@ -402,7 +402,8 @@ func findPackageChrome(root string) (binaryPath, shaPath string) {
 		// stays fail-closed regardless of which candidate supplies the
 		// manifest.
 		if rel, relErr := filepath.Rel(root, bin); relErr == nil {
-			if parts := strings.SplitN(filepath.ToSlash(rel), "/", 2); len(parts) > 1 && parts[0] != "" && parts[0] != "." {
+			if parts := strings.SplitN(filepath.ToSlash(rel), "/", 2); len(parts) > 1 && parts[0] != "" &&
+				parts[0] != "." {
 				manifestCandidates = append(manifestCandidates, filepath.Join(root, parts[0], "chrome.sha256"))
 			}
 		}

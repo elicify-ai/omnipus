@@ -44,8 +44,10 @@ func buildMachO64WithDylibs(t *testing.T, dylibs []string) []byte {
 	t.Helper()
 	const headerSize = machOHeaderSize64Test
 
-	// Build the load-command region first so we know sizeofcmds.
-	var lcRegion []byte
+	// Build the load-command region first so we know sizeofcmds. Preallocate:
+	// each LC_LOAD_DYLIB is well under 64 bytes (name + fixed fields, 8-byte
+	// aligned), so this is a generous upper bound that avoids regrowth.
+	lcRegion := make([]byte, 0, len(dylibs)*64)
 	for _, name := range dylibs {
 		lc := buildLoadDylibCommand(name, 8) // 8-byte alignment for 64-bit
 		lcRegion = append(lcRegion, lc...)

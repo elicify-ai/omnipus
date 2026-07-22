@@ -24,6 +24,11 @@ import (
 	"testing"
 )
 
+// fakeDarwinChromeSHAHex is a placeholder sha256sum-format line for the staged
+// chrome.sha256 manifest. findPackageChrome only Lstat's the manifest (it does
+// not hash), so the digest need not match the fake binary.
+const fakeDarwinChromeSHAHex = "0000000000000000000000000000000000000000000000000000000000000000  chrome\n"
+
 // withDarwinLayouts flips the layoutsGOOS seam to "darwin" for one test and
 // restores it on cleanup.
 func withDarwinLayouts(t *testing.T) {
@@ -48,7 +53,7 @@ func seedDarwinPackageChrome(t *testing.T, root, subdir string) (binPath, shaPat
 		t.Fatalf("write fake chrome binary: %v", err)
 	}
 	shaPath = filepath.Join(root, subdir, "chrome.sha256")
-	if err := os.WriteFile(shaPath, []byte("0000000000000000000000000000000000000000000000000000000000000000  chrome\n"), 0o644); err != nil {
+	if err := os.WriteFile(shaPath, []byte(fakeDarwinChromeSHAHex), 0o644); err != nil {
 		t.Fatalf("write chrome.sha256: %v", err)
 	}
 	return binPath, shaPath
@@ -61,10 +66,18 @@ func TestFindPackageChrome_DarwinAppBundledLayout_Found(t *testing.T) {
 
 	gotBin, gotSha := findPackageChrome(root)
 	if gotBin != wantBin {
-		t.Errorf("binary: got %q, want %q (must reach the .app nested under the chrome-mac-arm64 extract subdir)", gotBin, wantBin)
+		t.Errorf(
+			"binary: got %q, want %q (must reach the .app nested under the chrome-mac-arm64 extract subdir)",
+			gotBin,
+			wantBin,
+		)
 	}
 	if gotSha != wantSha {
-		t.Errorf("manifest: got %q, want %q (must be beside the .app at <root>/chrome-mac-arm64/chrome.sha256)", gotSha, wantSha)
+		t.Errorf(
+			"manifest: got %q, want %q (must be beside the .app at <root>/chrome-mac-arm64/chrome.sha256)",
+			gotSha,
+			wantSha,
+		)
 	}
 }
 
@@ -98,7 +111,11 @@ func TestFindPackageChrome_DarwinApp_ManifestBesideApp_NotAtRoot(t *testing.T) {
 		t.Fatalf("binary: got %q, want %q", gotBin, binPath)
 	}
 	if gotSha != shaPath {
-		t.Errorf("manifest must resolve to the beside-.app location %q, got %q — the runtime would miss the producer's manifest and fall through to a managed download", shaPath, gotSha)
+		t.Errorf(
+			"manifest must resolve to the beside-.app location %q, got %q — the runtime would miss the producer's manifest and fall through to a managed download",
+			shaPath,
+			gotSha,
+		)
 	}
 }
 

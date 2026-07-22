@@ -1,4 +1,6 @@
-// Package doctor - OS-agnostic Mach-O parser for ADR-052 Phase 3 (macOS).
+package doctor
+
+// command_libs_macho.go - OS-agnostic Mach-O parser for ADR-052 Phase 3 (macOS).
 //
 // This file contains the pure byte-level Mach-O LC_LOAD_DYLIB walker. It
 // has NO build tag so it compiles on every platform - the parser is
@@ -28,7 +30,6 @@
 // load-command region (a few KB) via io.ReaderAt.ReadAt - the binary
 // body (hundreds of MB) is never touched. Mirrors the ELF parser's
 // discipline of never slurping the full binary into the Go heap.
-package doctor
 
 import (
 	"encoding/binary"
@@ -174,7 +175,13 @@ func parseMachODylibs(r io.ReaderAt) ([]string, error) {
 			return nil, fmt.Errorf("load command %d has implausible cmdsize %d", i, cmdsize)
 		}
 		if off+cmdsize > len(lcRegion) {
-			return nil, fmt.Errorf("load command %d extends past region (off=%d cmdsize=%d region=%d)", i, off, cmdsize, len(lcRegion))
+			return nil, fmt.Errorf(
+				"load command %d extends past region (off=%d cmdsize=%d region=%d)",
+				i,
+				off,
+				cmdsize,
+				len(lcRegion),
+			)
 		}
 
 		if isDylibLoadCommand(cmd) {

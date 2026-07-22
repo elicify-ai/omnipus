@@ -26,14 +26,6 @@ import (
 // stays on FallbackBackend until a macOS integration test + adversarial review
 // land. See backend_darwin_seatbelt.go.
 
-// seatbeltExecPath is the signed Apple binary used to launch a child inside a
-// Seatbelt profile. Shelling out to it is the documented viable no-CGo path to
-// apply Seatbelt (the C sandbox_init(3) API would require CGo, which is
-// forbidden by CLAUDE.md hard constraint #2). This is distinct from the
-// "no ldd/os-exec for diagnostics" rule — sandbox-exec is the security
-// enforcement primitive, not a diagnostic helper.
-const seatbeltExecPath = "/usr/bin/sandbox-exec"
-
 // renderSeatbeltProfile translates a SandboxPolicy into a Seatbelt `.sb`
 // profile string. The posture mirrors the LinuxBackend (Landlock): default-
 // deny with explicit allows derived from the policy.
@@ -67,7 +59,9 @@ const seatbeltExecPath = "/usr/bin/sandbox-exec"
 // policy→profile mapper that is fully unit-testable on Linux.
 func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	if len(policy.FilesystemRules) == 0 && len(policy.BindPortRules) == 0 && len(policy.ConnectPortRules) == 0 {
-		return "", fmt.Errorf("seatbelt: refusing to render a default-deny profile with zero allows (would brick any child); policy must enumerate at least the workspace path")
+		return "", fmt.Errorf(
+			"seatbelt: refusing to render a default-deny profile with zero allows (would brick any child); policy must enumerate at least the workspace path",
+		)
 	}
 
 	var b strings.Builder
