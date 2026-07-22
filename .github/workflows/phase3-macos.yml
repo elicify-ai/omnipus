@@ -186,10 +186,29 @@ jobs:
             sleep 1
           done
           echo "gateway: $(curl -s "http://${HP}/health" || echo down)"
-      - name: AC-1 — record audio-spike outcome
+      - name: AC-1 — empirical audio-spike measurement (host audio device count)
+        # The closest CI-runnable measurement of whether headless mac Chrome
+        # could produce audio is the host audio-device count — Chrome can't
+        # capture audio from a device that doesn't exist. ADR-047 §13.4 says
+        # headless macOS has no loopback audio device; we verify that here
+        # and emit AUDIO-WORKS / AUDIO-ABSENT as a workflow output. (A full
+        # tabCapture + non-zero-PCM measurement requires a Chrome extension
+        # + the capture extension on a Mac with real audio hardware — out of
+        # scope for this CI image; the goal doc §7 defers that to a real
+        # mac host.)
         shell: bash
         run: |
-          echo "::notice::AC-1 audio spike — outcome recorded in logs. ADR-047 §13.4 expects AUDIO-ABSENT on headless macOS (no CoreAudio loopback). A full WebRTC tabCapture harness needs the capture extension + SFU + viewer; this step proves the bundled Chrome runs natively (AC-10 smoke) and records the spike as a tracked, repeatable CI signal."
+          set +e
+          AUDIO_DEVICES=$(ioreg -l 2>/dev/null | grep -c -i "IOAudioDevice\|IOAudioEngine" || true)
+          set -e
+          if [ -z "$AUDIO_DEVICES" ]; then AUDIO_DEVICES=0; fi
+          if [ "$AUDIO_DEVICES" = "0" ]; then
+            echo "ac1_outcome=AUDIO-ABSENT" >> "$GITHUB_OUTPUT"
+            echo "::notice::AC-1 audio spike: AUDIO-ABSENT — 0 audio devices on the GH macos-latest runner (ioreg IOAudioDevice/IOAudioEngine count = 0). Matches ADR-047 §13.4 expectation: headless macOS has no loopback audio device. A full tabCapture + non-zero-PCM measurement requires a real mac host with audio HW + the Chrome capture extension (out of scope for this CI image; goal doc §7)."
+          else
+            echo "ac1_outcome=AUDIO-WORKS" >> "$GITHUB_OUTPUT"
+            echo "::notice::AC-1 audio spike: AUDIO-WORKS — $AUDIO_DEVICES audio device(s) on the GH macos-latest runner. A real tabCapture + non-zero-PCM measurement still requires the Chrome capture extension (not on this CI image; goal doc §7)."
+          fi
           kill "$(cat gateway.pid)" 2>/dev/null || true
 
   # ── AC-3 notarization: ad-hoc sign smoke (or Developer-ID if secrets set) ─
