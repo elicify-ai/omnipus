@@ -63,7 +63,11 @@ jobs:
           BIN="dist/chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
           EXPECTED="$(awk '{print $1}' dist/chromium/chrome-mac-arm64/chrome.sha256)"
           ACTUAL="$(shasum -a 256 "$BIN" | awk '{print $1}')"
-          [ "$EXPECTED" = "$ACTUAL" ] && echo "chrome.sha256 matches real binary ✓" || { echo "::error::SHA mismatch"; exit 1; }
+          if [ "$EXPECTED" = "$ACTUAL" ]; then
+            echo "chrome.sha256 matches real binary ✓"
+          else
+            echo "::error::SHA mismatch"; exit 1
+          fi
 
       - name: run.sh macOS install path — AC-3 install
         shell: bash
@@ -90,7 +94,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export OMNIPUS_HOME="$(mktemp -d)"
+          OMNIPUS_HOME="$(mktemp -d)"
+          export OMNIPUS_HOME
           export OMNIPUS_MASTER_KEY="0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
           ./omnipus start --allow-empty > gateway.log 2>&1 &
           PID=$!
@@ -142,11 +147,12 @@ jobs:
           npm ci && npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa
           go build -tags goolm,stdjson -o omnipus ./cmd/omnipus/
           bash scripts/cft-bundle.sh arm64 darwin || true
-          export OMNIPUS_HOME="$(mktemp -d)"
+          OMNIPUS_HOME="$(mktemp -d)"
+          export OMNIPUS_HOME
           export OMNIPUS_MASTER_KEY="0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
           ./omnipus start --allow-empty > gateway.log 2>&1 &
           echo $! > gateway.pid
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             HP=$(grep -oE 'Gateway started on [^[:space:]]+:[0-9]+' gateway.log | sed 's/^Gateway started on //' | head -1 || true)
             [ -n "$HP" ] && curl -sf "http://${HP}/health" >/dev/null 2>&1 && break
             sleep 1
