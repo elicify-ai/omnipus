@@ -422,11 +422,21 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 		}
 	}
 
+	// Correctness-MAJOR-1 (drain cursor): the pagination cursor MUST be the
+	// ENTRY index in `entries` of the last EMITTED candidate + 1, NOT an
+	// output-count offset (sinceIdx + max). Candidates skip acked /
+	// wrong-session / non-message lines, so an output-count cursor under-
+	// points and the next Drain re-scans (and re-delivers) the skipped tail
+	// of the prior page until those lines get acked. candidateEntryIdx[i]
+	// records the index in `entries` that produced candidates[i], letting
+	// the truncation cursor resume scanning immediately AFTER the entry that
+	// yielded the last emitted message.
 	var candidates []generated.SessionMessage
-	lastIdx := sinceIdx
+	var candidateEntryIdx []int
+	lastScanned := sinceIdx - 1
 	for i := sinceIdx; i < len(entries); i++ {
+		lastScanned = i
 		e := entries[i]
-		lastIdx = i + 1
 		if e.Kind != InboxEntryMessage || e.Message == nil {
 			continue
 		}
@@ -438,12 +448,18 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 			continue
 		}
 		candidates = append(candidates, *e.Message)
+		candidateEntryIdx = append(candidateEntryIdx, i)
 	}
 
 	if len(candidates) > max {
-		return candidates[:max], strconv.Itoa(sinceIdx + max), true, nil
+		lastEmittedEntryIdx := candidateEntryIdx[max-1]
+		return candidates[:max], strconv.Itoa(lastEmittedEntryIdx + 1), true, nil
 	}
-	return candidates, strconv.Itoa(lastIdx), false, nil
+	// Exhausted — cursor points just past the final scanned entry so the next
+	// Drain does not re-scan it. lastScanned stays sinceIdx-1 when the loop
+	// never ran (sinceIdx already past the end), so the cursor does not move
+	// backwards.
+	return candidates, strconv.Itoa(lastScanned + 1), false, nil
 }
 
 // UnackedCount returns the current open question+blocker count for

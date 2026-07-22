@@ -275,3 +275,85 @@ func TestMessageInboxStore_Peek_NoSideEffects(t *testing.T) {
 		t.Errorf("expected Peek to have no side effects on the unacked inbox, got %d messages", len(msgs))
 	}
 }
+
+// TestMessageInboxStore_DrainCursor_NoRedeliveryAcrossPages proves
+// Correctness-MAJOR-1: the Drain pagination cursor MUST be the entry index of
+// the last emitted candidate + 1, NOT an output-count offset (sinceIdx+max).
+// An inbox shaped [ack,ack,msg1,msg2,msg3] with max=2 must page as
+// [msg1,msg2] then [msg3] with NO redelivery. The prior sinceIdx+max cursor
+// under-pointed (skipped acked lines don't advance an output-count cursor), so
+// page 2 re-delivered msg1+msg2 until they were acked.
+func TestMessageInboxStore_DrainCursor_NoRedeliveryAcrossPages(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.ChildSendRatePerMinute = 1000 // isolate from the rate cap
+
+	// Build the entry sequence [ack, ack, msg1, msg2, msg3] for child-1.
+	// The two leading acks reference ids that aren't in this inbox — they're
+	// "skip me" non-message lines the cursor must hop over without
+	// under-pointing.
+	if err := s.Ack("owner-drain", []string{"acked-early-1"}); err != nil {
+		t.Fatalf("ack#1: %v", err)
+	}
+	if err := s.Ack("owner-drain", []string{"acked-early-2"}); err != nil {
+		t.Fatalf("ack#2: %v", err)
+	}
+	m1 := progressMsg(t, "child-1", "drain-1")
+	m2 := progressMsg(t, "child-1", "drain-2")
+	m3 := progressMsg(t, "child-1", "drain-3")
+	for _, m := range []generated.SessionMessage{m1, m2, m3} {
+		if _, err := s.Append("owner-drain", m); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	// Page 1: max=2 → [drain-1, drain-2], hasMore=true.
+	page1, cursor, hasMore, err := s.Drain("owner-drain", "child-1", "", 2)
+	if err != nil {
+		t.Fatalf("Drain page1: %v", err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1: expected 2 messages, got %d", len(page1))
+	}
+	if !hasMore {
+		t.Fatal("page1: expected hasMore=true (3 total, max 2)")
+	}
+	if id := messageIDOf(t, page1[0]); id != "drain-1" || messageIDOf(t, page1[1]) != "drain-2" {
+		t.Errorf("page1 ids = [%s, %s], want [drain-1, drain-2]", messageIDOf(t, page1[0]), messageIDOf(t, page1[1]))
+	}
+
+	// Page 2: resume from cursor → MUST be exactly [drain-3], NOT a
+	// redelivery of drain-1/drain-2.
+	page2, cursor2, hasMore2, err := s.Drain("owner-drain", "child-1", cursor, 2)
+	if err != nil {
+		t.Fatalf("Drain page2: %v", err)
+	}
+	if len(page2) != 1 || messageIDOf(t, page2[0]) != "drain-3" {
+		ids := make([]string, len(page2))
+		for i, m := range page2 {
+			ids[i] = messageIDOf(t, m)
+		}
+		t.Fatalf("page2: expected exactly [drain-3], got %v (REDelivery of page1 — the sinceIdx+max cursor bug)", ids)
+	}
+	if hasMore2 {
+		t.Error("page2: expected hasMore=false after draining all 3 messages")
+	}
+
+	// A third page from the exhausted cursor must return nothing (no
+	// backwards motion, no redelivery).
+	page3, _, hasMore3, err := s.Drain("owner-drain", "child-1", cursor2, 2)
+	if err != nil {
+		t.Fatalf("Drain page3: %v", err)
+	}
+	if len(page3) != 0 || hasMore3 {
+		t.Errorf("page3: expected empty/no-more, got %d messages hasMore=%v", len(page3), hasMore3)
+	}
+}
+
+func messageIDOf(t *testing.T, msg generated.SessionMessage) string {
+	t.Helper()
+	p, _, err := peekEnvelope(msg)
+	if err != nil {
+		t.Fatalf("peekEnvelope: %v", err)
+	}
+	return p.MessageID
+}
