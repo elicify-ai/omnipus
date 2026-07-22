@@ -1,6 +1,7 @@
 import { memo, useCallback } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'framer-motion'
+import { GitMerge, FolderSimple } from '@phosphor-icons/react'
 import { getIconComponent } from '@/lib/agentIcons'
 import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
@@ -36,6 +37,18 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
   const AgentIcon = getIconComponent(agentIcon)
   const hasAgent = Boolean(agentName)
   const avatarColor = agentColor ?? 'var(--color-muted)'
+
+  // ADR-053 FE-2 §7 (D7) — plan-member DAG signals on the Graph node.
+  // `is_join` marks the authored convergence member that folds one or more
+  // parallel `stream`s into a single artifact (g5 shard+assemble); `write_set`
+  // is the lint-disjoint write footprint plan-lint checks at approve. Both
+  // are meaningful only alongside `plan_id` (see Task.yaml) — rendering on
+  // presence keeps a standalone-task node clean. Empty write_set on an
+  // exploratory member (D10) renders no chip, by design.
+  const isJoin = Boolean(task.is_join)
+  const writeSet = task.write_set ?? []
+  const writeSetLabel = writeSet.join(', ')
+  const hasPlanMeta = isJoin || writeSet.length > 0
 
   // GraphView marks every node `focusable: false` so React Flow's own node
   // wrapper (role="group", tabIndex=0 by default) drops out of the tab
@@ -151,6 +164,34 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         <p className="font-headline text-[13px] font-semibold leading-snug text-[var(--color-secondary)] line-clamp-2">
           {task.title}
         </p>
+
+        {/* ADR-053 FE-2 §7 (D7) — plan-member DAG signals. The join member
+            (gold GitMerge pill) is the authored convergence point that folds
+            parallel `stream`s into one artifact; the write_set chip lists the
+            lint-disjoint paths this member creates/edits. Standalone-task
+            nodes (no plan_id) carry neither and skip this row entirely. */}
+        {hasPlanMeta && (
+          <div className="flex flex-col gap-1" data-testid={`task-node-planmeta-${task.id}`}>
+            {isJoin && (
+              <span
+                className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--color-accent)]"
+                title="Join member — converges one or more parallel streams into a single artifact"
+              >
+                <GitMerge size={10} weight="bold" />
+                Join
+              </span>
+            )}
+            {writeSetLabel && (
+              <span
+                className="inline-flex w-fit max-w-full items-center gap-1 text-[10px] leading-none text-[var(--color-muted)]"
+                title={`Writes: ${writeSetLabel}`}
+              >
+                <FolderSimple size={10} weight="fill" className="flex-shrink-0" />
+                <span className="truncate">{writeSetLabel}</span>
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Bottom row: assigned agent avatar + name. */}
         {hasAgent && (

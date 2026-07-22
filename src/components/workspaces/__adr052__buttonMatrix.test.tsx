@@ -229,7 +229,7 @@ describe('ADR-052 §6.8 button matrix — taskActionFor (task-row data table, re
     ['done', undefined, undefined, null, 'standalone done -> no button'],
     ['failed', undefined, undefined, 'run', 'standalone GENUINE failure -> Run (fresh attempt loop, FR-019)'],
     ['failed', undefined, 'stopped_by_user', 'restart', 'standalone CANCELLED -> restart (Play label, FR-028)'],
-    ['in_progress', 'plan-1', undefined, 'stop', 'in-plan member running -> Stop ONLY (FR-025)'],
+    ['in_progress', 'plan-1', undefined, null, 'in-plan member -> status only, no Stop (ADR-053 FE-4/D7, FR-145)'],
     ['inbox', 'plan-1', undefined, null, 'in-plan, not running -> plan drives start (G4)'],
     ['next', 'plan-1', undefined, null, 'in-plan, not running -> plan drives start'],
     ['blocked', 'plan-1', undefined, null, 'in-plan, not running -> plan drives start'],
@@ -328,14 +328,16 @@ describe('ADR-052 US-11 Acceptance 3 / FR-020 — TaskActionButton: confirm-moda
     expect(restartTaskMock).not.toHaveBeenCalled()
   })
 
-  it('running in-plan member: confirming Stop calls stopTask(task.id) — member-level Stop only (FR-025)', async () => {
-    const user = userEvent.setup()
-    renderWithClient(<TaskActionButton task={baseTask({ id: 'task-15', status: 'in_progress', plan_id: 'plan-1' })} />)
-
-    await user.click(screen.getByRole('button', { name: 'Stop task Fix the widget' }))
-    await user.click(screen.getByRole('button', { name: 'Stop' }))
-
-    await waitFor(() => expect(stopTaskMock).toHaveBeenCalledWith('task-15'))
+  it('running in-plan member renders NO Stop button — status only (ADR-053 FE-4/D7, FR-145)', () => {
+    // FE-4/D7 supersedes the old ADR-052 "Stop only while in_progress" member
+    // exception: plan members carry no per-member controls in ANY status. The
+    // plan owns lifecycle (a per-member cancel with dependents bricks the
+    // plan). To adjust a member: Stop the plan → change → continue.
+    const { container } = renderWithClient(
+      <TaskActionButton task={baseTask({ id: 'task-15', status: 'in_progress', plan_id: 'plan-1' })} />,
+    )
+    expect(container.querySelectorAll('button').length).toBe(0)
+    expect(stopTaskMock).not.toHaveBeenCalled()
   })
 
   it('an in-plan member that is NOT running renders no action button — the plan drives its start/restart (G4/FR-025)', () => {

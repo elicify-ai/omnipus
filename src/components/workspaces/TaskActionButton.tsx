@@ -10,15 +10,21 @@ import { cn } from '@/lib/utils'
 export type TaskAction = 'run' | 'restart' | 'stop'
 
 /**
- * ADR-052 §6.8 button matrix — which single action (if any) a task offers.
+ * ADR-052 §6.8 + ADR-053 FE-4/D7 (US-14/AS-4, FR-145) button matrix — which
+ * single action (if any) a task offers.
+ *
+ * In-plan task (`plan_id` set) — STATUS ONLY, ALWAYS null: no ▶/■/Play. The
+ * plan owns its members' whole lifecycle (start, restart, cancel); a per-
+ * member cancel with dependents would brick the plan (D7). To adjust a
+ * member: Stop the plan → change → continue. This holds for EVERY status,
+ * `in_progress` included — the previous "Stop only while in_progress"
+ * exception was removed by FE-4 because even that per-member Stop is a
+ * per-member lifecycle control D7 forbids.
  *
  * Standalone task (no `plan_id`) — idle (inbox/next/failed/cancelled) → Play;
  * in_progress → Stop (chat-send toggle: the SAME slot morphs). `blocked` is
  * backend-managed (an unmet dependency) and `done` is terminal — neither
  * offers a manual action.
- *
- * In-plan task (`plan_id` set) — Stop ONLY while `in_progress`; nothing
- * otherwise (the plan drives its start and its restart — G4/FR-025).
  *
  * Within the idle bucket, WHICH tool to call depends on why it's idle: a
  * cancelled task (`failed` + `cancel_reason: stopped_by_user`) restarts via
@@ -27,9 +33,11 @@ export type TaskAction = 'run' | 'restart' | 'stop'
  * fresh via `runTask` (the full attempt loop — FR-019).
  */
 export function taskActionFor(task: Pick<Task, 'status' | 'plan_id' | 'cancel_reason'>): TaskAction | null {
-  if (task.plan_id) {
-    return task.status === 'in_progress' ? 'stop' : null
-  }
+  // FE-4/D7 (FR-145): plan members show STATUS ONLY — no per-member controls.
+  // Gate is `task.plan_id != null` (truthy). Must short-circuit BEFORE the
+  // standalone-status ladder below so an in_plan in_progress member renders
+  // no Stop button (the case the old matrix special-cased to 'stop').
+  if (task.plan_id) return null
   if (task.status === 'in_progress') return 'stop'
   if (task.status === 'inbox' || task.status === 'next') return 'run'
   if (task.status === 'failed') {

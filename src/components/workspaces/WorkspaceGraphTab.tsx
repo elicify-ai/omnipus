@@ -19,7 +19,8 @@ import {
   tasksQueryKeys,
   plansQueryKeys,
 } from '@/lib/api'
-import { planDisplayColor, planDisplayLabel } from '@/lib/planStateColors'
+import { planDisplayColor, planDisplayLabel, planPhaseChip } from '@/lib/planStateColors'
+import { cn } from '@/lib/utils'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { planDependencyReconnect } from './dependencyReconnect'
@@ -250,6 +251,37 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
             >
               {planDisplayLabel(activePlan)}
             </span>
+
+            {/* ADR-053 FE-2 §7 (D7) — the plan's runtime sub-phase. The
+                re-planning hold (`plan_phase: awaiting_owner_correction`) is
+                the durable, operator-actionable signal: the plan reached
+                all-terminal-but-unmet and is waiting on an owner correction
+                (tail / supersede / targeted-retry) to continue — rendered as
+                a warning chip so it can't blend into the gold Running badge.
+                The other non-idle sub-phases (dispatching/judging/synthesizing)
+                render as a quieter info chip — a live-progress hint. */}
+            {(() => {
+              const chip = planPhaseChip(activePlan)
+              if (!chip) return null
+              return (
+                <span
+                  data-testid={`plan-phase-chip-${activePlan.id}`}
+                  className={cn(
+                    'flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none',
+                    chip.tone === 'warning'
+                      ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+                  )}
+                  title={
+                    chip.tone === 'warning'
+                      ? 'This plan is waiting on an owner correction (append a tail, supersede a done member, or targeted-retry a frozen member) to continue.'
+                      : undefined
+                  }
+                >
+                  {chip.label}
+                </span>
+              )
+            })()}
             {activePlan.goal && (
               <p
                 className="flex-1 min-w-0 truncate text-xs text-[var(--color-muted)]"

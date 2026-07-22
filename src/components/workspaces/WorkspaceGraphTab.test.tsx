@@ -194,6 +194,45 @@ describe('WorkspaceGraphTab — active-plan header', () => {
   })
 })
 
+// ADR-053 FE-2 §7 (D7) — the Graph view surfaces the active plan's runtime
+// sub-phase as a chip beside the state badge, so an operator landing on the
+// Graph (after a plan tile auto-switches to it) sees the durable re-planning
+// hold without leaving the canvas.
+describe('WorkspaceGraphTab — plan-phase chip (ADR-053 FE-2 §7)', () => {
+  it('renders the re-planning warning chip when the active plan is awaiting owner correction', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-rp', title: 'Launch', state: 'running', plan_phase: 'awaiting_owner_correction' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-rp' })
+    renderTab()
+
+    const chip = await screen.findByTestId('plan-phase-chip-plan-rp')
+    expect(chip).toHaveTextContent('Re-planning — awaiting owner correction')
+  })
+
+  it('renders a quieter capitalized sub-phase chip while judging', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-j', title: 'Launch', state: 'running', plan_phase: 'judging' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-j' })
+    renderTab()
+
+    const chip = await screen.findByTestId('plan-phase-chip-plan-j')
+    expect(chip).toHaveTextContent('Judging')
+  })
+
+  it('renders no phase chip for a running plan on the idle sub-phase', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-i', title: 'Launch', state: 'running', plan_phase: 'idle' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-i' })
+    renderTab()
+
+    await screen.findByTestId('graph-view-stub')
+    expect(screen.queryByTestId('plan-phase-chip-plan-i')).not.toBeInTheDocument()
+  })
+})
+
 // ── Plan-scope guard against an unresolvable plan (review-gate fix #3) ──────
 
 describe('WorkspaceGraphTab — plan-scope guard', () => {
