@@ -121,7 +121,7 @@ Each behavior is wired to **real messaging (Phase 1 transport)** and **real git 
 |-----------|----------|------------------------|-----------------|
 | **Triggers / pause / pills** | §1, §2, "verifier triggers", "idle settlement" | claim-or-idle adjudication (event-driven timers + ~60 s quiet-window debounce, per goal-id); `GOAL_STATUS: waiting_on_user` pause (typed marker, no prose classifier) → no verdict/round; bounce economics (1st bare-claim free, 2nd costs); pill states drive the UI feed | **G-1/G-2/G-3/G-4/G-5** |
 | **Judge evidence feed** | §2, §6, BOM | Judge fires per the trigger table; deterministic rungs first, AND-combine; **blocked-check fix — Judge returns "unable to verify" when a machine check could not run, NEVER scored as absent evidence**; idle/plan Judge reads real write-set-scoped diffs (Phase 1 git) | §9.1 t0/t2 |
-| **Owner loop + correction** | §3, §3b | persistent owner session (supersedes ADR-049 D4 — re-opened on purpose); auto-reset + re-dispatch of live-round failed members (excludes frozen); **append-only correction + SUPERSEDE + TARGETED RETRY** (D4) with a revision entry; **transactional tail append** (all-or-nothing, N-8); **owner-gaming-DoD guards** (ladder weights deterministic rungs, post-unmet artifacts flagged post-hoc — N-2); Play = new `resumed_from` generation, resume failed/cancelled members from **last git commit** (D13); **no per-member start/cancel/resume** (D7) | **G-9/G-10/G-11/G-12** |
+| **Owner loop + correction** | §3, §3b | persistent owner session (supersedes ADR-049 D4 — re-opened on purpose); **planning/re-planning behavior carried by EXTENDING the existing `pkg/skills/embedded/plan/SKILL.md`** with the §3b checklists + §3c parallelization chain-of-thought (BOM reuse, not a new agent); **planning ingests prompt + goal + reference documents** → DAG + per-member criteria + DoD + persisted `rationale` (delegable research/decomposition, §3b Step 1); auto-reset + re-dispatch of live-round failed members (excludes frozen); **append-only correction + SUPERSEDE + TARGETED RETRY** (D4) with a revision entry; **transactional tail append** (all-or-nothing, N-8); **owner-gaming-DoD guards** (ladder weights deterministic rungs, post-unmet artifacts flagged post-hoc — N-2); Play = new `resumed_from` generation, resume failed/cancelled members from **last git commit** (D13); **no per-member start/cancel/resume** (D7) | **G-9/G-10/G-11/G-12** |
 | **Goal compilation + budget** | §1, §6 | engine-invoked SMART compiler (schema-validated turn, co-located parser); **feasibility gate vets reachability AND semantic judgeability** (D9, no runtime `criterion_unverifiable`); echo-&-confirm in chat (D11); **re-statement = diffed amendment, never silent recompile** (N-6); `/goal clear` cancels compilation + verifier + inerts claim trigger (N-12); **app-level OVERALL token budget** debits all workloads, ignores `IsPrivilegedAgent`, brake = `failed(budget_exhausted)` (D12) | **G-7/G-8/G-14** |
 
 ### 4.6 Phase 3 — Whole-system conformance (integrate + prove + land)
@@ -332,7 +332,7 @@ Every design §8 acceptance criterion has a provable home. (Audit found G-6/G-8/
 | **G-13** | boot sweep (= A-17): kill -9 → `failed(interrupted)` within N s; plan recovers; idle fires | **Phase 1 boot-sweep** | §5 boot sweep |
 | **G-14** | app-level token budget debits owner+member+verifier+Judge; exhaustion brakes every scope | Phase 2 budget **on** §6 budget + **§7 FE-6** | live E2E |
 | **G-15** | boundary commit write-set-scoped; `.git` deny by operation; HEAD-divergence → integrity lost | **Phase 1 git** | g4 |
-| **G-16** | plan-lint rejects overlapping write-sets + join-less plans; merge conflict → correction event | **Phase 1 plan-lint** | g4/g5 |
+| **G-16** | plan-lint rejects overlapping write-sets + join-less plans (Phase 1); merge conflict → correction event (Phase 2 owner loop consumes it) | **Phase 1 plan-lint** + Phase 2 correction | g4/g5 |
 
 ## 13. Folded-findings traceability appendix — homeless findings → layer
 
@@ -349,6 +349,8 @@ DoD-2 requires **every** normative grill/architect/third-pass finding folded int
 | **OBS-3** | go-git Apache-2.0 NOTICE ride-along + auto-commit size guard (skip/warn above N files/MB) | Phase 0 (NOTICE) / Phase 1 (size guard) |
 | **P2M-14 / MIN-3** | sync-delegate `wait=true` question rejected with a clear tool error; human-route only via explicit launch-flag opt-in with a bounded wait | Phase 1 messaging |
 | **O-1** | board task ↔ session is 1:N with aggregate status ("failed if any required session failed") | Phase 1 messaging (records) |
+| **F5 / N-3 / N-11** | goal-bearing cardinality: the plan owner is **excluded from the task-level idle trigger** (owner-idleness and plan-all-terminal never both fire a DoD adjudication); the verifier's own turn **counts as activity** so a running adjudication never races a second verdict; delegate children are **not goal-bearing** — one verdict per goal-bearing scope | Phase 2 triggers (with G-2) |
+| **MAJ-13** | compiled machine checks **execute at runtime under the agent's own tool policy + kernel sandbox** — never a privileged bypass (the compile-time gate is G-7; this is the runtime property) | Phase 2 Judge feed (Constraint #6) |
 
 ## 14. Risk register (mitigations baked in)
 
