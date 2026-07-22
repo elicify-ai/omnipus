@@ -124,14 +124,19 @@ func IsValidLaunchProfile(p LaunchProfile) bool {
 
 // OwnerScopeKind discriminates LifecycleRecord.OwnerScopeID's meaning (N-9 —
 // a bare oneOf of untagged strings has no discriminator, so this mirrors the
-// generated SessionLifecycleRecordOwnerScopeKind split).
+// generated SessionLifecycleRecordOwnerScopeKind split). The domain string
+// values are PINNED to the generated wire enum one-for-one
+// (parent_session/plan/human) so a natural cast (OwnerScopeKind →
+// generated.SessionLifecycleRecordOwnerScopeKind) produces schema-valid JSON
+// without an explicit conversion (MAJOR-4 / DoD-11). TestOwnerScopeKind_
+// MirrorsWireEnum pins this correspondence.
 type OwnerScopeKind string
 
 const (
 	// OwnerScopeParentSession — OwnerScopeID names the parent session_id.
-	OwnerScopeParentSession OwnerScopeKind = "parent_session_id"
+	OwnerScopeParentSession OwnerScopeKind = "parent_session"
 	// OwnerScopePlan — OwnerScopeID names the owning plan_id.
-	OwnerScopePlan OwnerScopeKind = "plan_id"
+	OwnerScopePlan OwnerScopeKind = "plan"
 	// OwnerScopeHuman — no single owning id; a top-level chat-goal session
 	// owned by the human/chat-principal. OwnerScopeID is empty.
 	OwnerScopeHuman OwnerScopeKind = "human"

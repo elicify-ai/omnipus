@@ -34,8 +34,10 @@ func TestGitEvidence_Open_InitializesFreshRepoIdempotently(t *testing.T) {
 	}
 
 	// Second Open() on the SAME dir must succeed by reopening (not
-	// re-initializing) — the idempotency FR-151 requires.
-	r2, err := Open(dir)
+	// re-initializing) — the idempotency FR-151 requires. The no-op redactor
+	// satisfies Commit's MIN-5 fail-closed guard (MAJOR-3) since this test
+	// exercises the reopen mechanics, not secret scanning.
+	r2, err := Open(dir, WithRedactor(noOpRedactor))
 	if err != nil {
 		t.Fatalf("second Open() (idempotent reopen) = %v, want nil error", err)
 	}

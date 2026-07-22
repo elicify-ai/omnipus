@@ -13,6 +13,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -251,7 +254,12 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
-	_ = inbox // question authority lookup degrades gracefully with an empty inbox
+	// Seed the question the respond will answer with a self_ok authority so
+	// the fail-closed authority check (MAJOR-2) can positively verify it.
+	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-z", "q-1", "corr-1",
+		generated.SelfOk)); err != nil {
+		t.Fatalf("seed question message failed: %v", err)
+	}
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-z", "correlation_id": "corr-1", "text": "yes, go ahead",
@@ -534,4 +542,202 @@ func progressMsgForDelegateTest(t *testing.T, sessionID, messageID string) gener
 		t.Fatalf("FromSessionMessageProgress failed: %v", err)
 	}
 	return sm
+}
+
+// questionMsgForDelegateTest builds a SessionMessage of kind=question with the
+// given authority tag — used to seed an inbox for respond-action fail-closed
+// authority tests (MAJOR-2).
+func questionMsgForDelegateTest(
+	t *testing.T, sessionID, messageID, correlationID string,
+	authority generated.SessionMessageQuestionAuthority,
+) generated.SessionMessage {
+	t.Helper()
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageQuestion(generated.SessionMessageQuestion{
+		MessageId:      messageID,
+		SessionId:      sessionID,
+		CorrelationId:  correlationID,
+		CreatedAt:      time.Now(),
+		Depth:          1,
+		Direction:      generated.SessionMessageQuestionDirectionChildToParent,
+		Kind:           generated.SessionMessageQuestionKindQuestion,
+		SenderIdentity: "child",
+		Text:           "can I proceed?",
+		Authority:      &authority,
+		Wait:           true,
+	}); err != nil {
+		t.Fatalf("FromSessionMessageQuestion failed: %v", err)
+	}
+	return sm
+}
+
+// failingDrainInbox implements DelegateInboxStore; its Drain always returns an
+// error, used to prove respond's authority check is fail-closed on a Drain
+// error (MAJOR-2) rather than silently skipping.
+type failingDrainInbox struct{}
+
+func (failingDrainInbox) Drain(string, string, string, int) ([]generated.SessionMessage, string, bool, error) {
+	return nil, "", false, errors.New("simulated inbox read failure")
+}
+func (failingDrainInbox) Ack(string, []string) error { return nil }
+func (failingDrainInbox) UnackedCount(string, string) (int, error) {
+	return 0, nil
+}
+func (failingDrainInbox) Peek(string, string) (*session.PeekSnapshot, error) {
+	return &session.PeekSnapshot{}, nil
+}
+
+// MAJOR-1: cancel MUST be denied (not executed) when the lifecycle Load
+// errors — the caller-ownership check can no longer be skipped by an induced
+// read error (cross-tenant DoS). Previously cancel fell through to
+// cancelHard/cancelSoft on ANY Load error.
+func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
+	tool, lc, _, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	// Seed a record owned by parent-1, then CORRUPT its JSONL tail so Load
+	// errors (the exact fail-open trigger MAJOR-1 targets).
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-corrupt", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	// Overwrite the lifecycle file with garbage so tail() scan-errors.
+	if err := os.WriteFile(filepath.Join(lc.Dir(), "child-corrupt.jsonl"), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt lifecycle file: %v", err)
+	}
+
+	cancelCalled := false
+	tool.SetCancelHooks(
+		func(string, string) ([]string, error) { cancelCalled = true; return nil, nil },
+		func(string, string) ([]string, error) { cancelCalled = true; return nil, nil },
+	)
+
+	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-corrupt", "hard": true})
+	if !result.IsError {
+		t.Fatal("expected cancel to be DENIED on a lifecycle Load error, got success (fail-open regression)")
+	}
+	if cancelCalled {
+		t.Fatal("cancel hook was called despite the Load error — the cancel must NOT proceed")
+	}
+}
+
+// MAJOR-1: cancel MUST be denied when the lifecycle store is not configured
+// at all (can't verify ownership without it).
+func TestDelegateTool_Cancel_DeniedWhenLifecycleUnconfigured(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
+	tool.SetSpawner(&mockDelegateSpawner{})
+	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
+	tool.SetCancelHooks(
+		func(string, string) ([]string, error) { t.Fatal("soft hook must not fire"); return nil, nil },
+		func(string, string) ([]string, error) { t.Fatal("hard hook must not fire"); return nil, nil },
+	)
+	result := tool.Execute(context.Background(), map[string]any{"action": "cancel", "session_id": "any", "hard": true})
+	if !result.IsError {
+		t.Fatal("expected cancel to be DENIED when no lifecycle store is configured, got success (fail-open)")
+	}
+}
+
+// MAJOR-2: respond MUST be denied when the inbox Drain errors — the
+// owner_required authority check can no longer be skipped by a Drain error.
+func TestDelegateTool_Respond_DeniedOnInboxDrainError(t *testing.T) {
+	tool, lc, _, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-drain-err", State: session.LifecycleNeedsInput,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	// Swap in an inbox whose Drain always errors — simulates a corrupt
+	// tail / I/O failure on the durable inbox. The fail-open bug would have
+	// let the respond proceed (skipping the authority check); fail-closed
+	// MUST deny it.
+	tool.SetMessageInbox(failingDrainInbox{})
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-drain-err", "correlation_id": "corr-1", "text": "x",
+	})
+	if !result.IsError {
+		t.Fatal("expected respond to be DENIED on an inbox Drain error, got success (fail-open regression)")
+	}
+	// The record must still be parked at needs_input (not resumed).
+	rec, err := lc.Load("child-drain-err")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if rec.State != session.LifecycleNeedsInput {
+		t.Errorf("state after denied respond = %q, want still %q (must not resume)", rec.State, session.LifecycleNeedsInput)
+	}
+}
+
+// MAJOR-2: an owner_required question MUST NOT be answerable by respond even
+// if the parent inbox_ack'd it first. Previously Drain("",0) excluded acked
+// messages, so the owner_required check silently passed on an acked question.
+// Fail-closed now denies it (the question can't be positively verified safe).
+func TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked(t *testing.T) {
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-owner", State: session.LifecycleNeedsInput,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		NeedsInput: &session.NeedsInput{CorrelationID: "corr-owner", TTLDeadline: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	// Seed an owner_required question, then ACK it — the exact sequence that
+	// used to bypass the authority check (Drain excludes acked messages).
+	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-owner", "q-owner",
+		"corr-owner", generated.OwnerRequired)); err != nil {
+		t.Fatalf("seed owner_required question failed: %v", err)
+	}
+	if err := inbox.Ack("parent-1", []string{"q-owner"}); err != nil {
+		t.Fatalf("ack failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-owner", "correlation_id": "corr-owner", "text": "x",
+	})
+	if !result.IsError {
+		t.Fatal("expected respond on an acked owner_required question to be DENIED, got success (fail-open regression)")
+	}
+	rec, err := lc.Load("child-owner")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if rec.State != session.LifecycleNeedsInput {
+		t.Errorf("state after denied respond = %q, want still %q (owner_required must not resume)", rec.State, session.LifecycleNeedsInput)
+	}
+}
+
+// MAJOR-2 regression: a self_ok question that IS present in the drain (not
+// acked) MUST still be answerable — the fail-closed change must not break the
+// legitimate happy path.
+func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-selfok", State: session.LifecycleNeedsInput,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		NeedsInput: &session.NeedsInput{CorrelationID: "corr-selfok", TTLDeadline: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-selfok", "q-selfok",
+		"corr-selfok", generated.SelfOk)); err != nil {
+		t.Fatalf("seed self_ok question failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-selfok", "correlation_id": "corr-selfok", "text": "go",
+	})
+	if result.IsError {
+		t.Fatalf("respond on a present, unacked self_ok question should succeed, got: %s", result.ForLLM)
+	}
 }

@@ -97,6 +97,28 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 		return result, nil
 	}
 
+	// MAJOR-3 / MIN-5 (fail-closed): REFUSE to commit when NO secret guard
+	// is configured. Previously fileHasSecret returned (false, "") on a nil
+	// scanner AND nil redactor, so a Commit with no guard wired would stage
+	// every file unconditionally — letting any secret pass straight into
+	// history, which is the exact fail-open defect MIN-5 requires us to
+	// refuse. Commit is the chokepoint that enforces the invariant: a
+	// Phase-2 caller wiring this Repo can't "forget" the scanner, because
+	// Commit itself rejects the call. Callers that legitimately want a
+	// no-op scan (e.g. test harnesses, or an environment with no registered
+	// secrets) pass WithRedactor(func(s string) string { return s }) — an
+	// identity redactor that always reports "no secret" — which is a
+	// deliberate, visible opt-in rather than a silent nil default.
+	// WithSecretScanner still supersedes WithRedactor when both are set
+	// (see fileHasSecret); this guard only requires that AT LEAST ONE be
+	// non-nil.
+	if r.scanner == nil && r.redact == nil {
+		return nil, fmt.Errorf(
+			"gitevidence: commit refused: no secret scanner or redactor configured (MIN-5 fail-closed) " +
+				"— pass WithSecretScanner or WithRedactor to Open",
+		)
+	}
+
 	expanded, err := expandWriteSet(r.dir, writeSet)
 	if err != nil {
 		return nil, err

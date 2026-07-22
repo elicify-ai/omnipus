@@ -328,3 +328,35 @@ func TestGitEvidence_Commit_SerializesConcurrentCallers(t *testing.T) {
 		}
 	}
 }
+
+// MAJOR-3 / MIN-5 (fail-closed): a Commit with NO secret guard wired (neither
+// WithSecretScanner nor WithRedactor) MUST refuse rather than let a potential
+// secret pass into history. Previously fileHasSecret returned (false, "") on
+// a nil scanner+redactor, so every file was staged unconditionally. The
+// guard is in Commit itself (defense-in-depth) so a Phase-2 caller can't
+// forget the scanner.
+func TestGitEvidence_Commit_NoGuardConfiguredRefuses(t *testing.T) {
+	// Open WITHOUT any scanner/redactor option — must NOT use newTestRepo,
+	// which prepends a no-op redactor default.
+	dir := t.TempDir()
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open(%s) = %v, want nil error", dir, err)
+	}
+	writeFile(t, dir, "x.txt", "harmless content")
+
+	res, err := r.Commit(BoundaryTask, CommitMeta{TaskID: "t1"}, []string{"x.txt"})
+	if err == nil {
+		t.Fatalf("Commit with no guard configured = %+v nil error, want a non-nil error (MIN-5 fail-closed)", res)
+	}
+	if !strings.Contains(err.Error(), "no secret scanner") {
+		t.Errorf("error = %q, want it to mention no secret scanner configured", err.Error())
+	}
+	head, herr := r.Head()
+	if herr != nil {
+		t.Fatalf("Head: %v", herr)
+	}
+	if head != "" {
+		t.Fatalf("Head() = %q after a refused commit, want still unborn (nothing committed)", head)
+	}
+}
