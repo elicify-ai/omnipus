@@ -37,6 +37,8 @@ import { WebServeBlock } from './tools/WebServeUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
+import { GoalPillTray } from './GoalPillTray'
+import { GoalThreadTailCards } from './GoalThreadTailCards'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
@@ -2626,9 +2628,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
-  // ADR-049 D6/US-12/SD-C9: goal/loop indicator state, same session-scoped
-  // foreground fields as rateLimitEvent above.
-  const goalStatus = useChatStore((s) => s.goalStatus ?? null)
+  // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
+  // foreground field as rateLimitEvent above. (Goal pill state is read
+  // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
@@ -2787,20 +2789,34 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             </div>
           )}
 
-          {/* Goal/loop indicator — ADR-049 D6/US-12/SD-C9: same non-scrolling
-              slot as RateLimitIndicator above, persistent (no dismiss) while
-              a goal/loop is active. GoalIndicator itself renders nothing
-              when both are absent/cleared. */}
-          {(goalStatus || loopStatus) && (
+          {/* Goal/loop indicator — ADR-049 D6/US-12/SD-C9: the goal pill was
+              RELOCATED to the bottom-right GoalPillTray (FE-1, ADR-053 US-14);
+              this above-composer slot now carries LOOP status only. Pass
+              goalStatus=null so GoalIndicator's goal branch is dormant.
+              GoalIndicator renders nothing when loopStatus is also absent. */}
+          {loopStatus && (
             <div className="px-4 space-y-2 pb-2">
-              <GoalIndicator goalStatus={goalStatus} loopStatus={loopStatus} />
+              <GoalIndicator goalStatus={null} loopStatus={loopStatus} />
             </div>
           )}
+
+          {/* Goal echo / amendment cards — ADR-053 FE-8: the compiled goal is
+              echoed IN CHAT (no form/modal) when a pill is in `queued` state
+              (newly compiled, awaiting the user's chat confirmation). Renders
+              nothing when no queued pills exist. */}
+          <GoalThreadTailCards />
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /
               below the card); only the input surface reads as a card. */}
           <div className="relative w-full">
+            {/* Goal pill tray — ADR-053 FE-1: bottom-right pills, one per
+                goal-id, click-to-expand. Renders nothing when no goals are
+                active (the tray component early-returns null on an empty
+                map). Positioned just above the composer, right-aligned,
+                pointer-events-none on the tray wrapper so it never blocks
+                composer interaction (each pill re-enables pointer events). */}
+            <GoalPillTray />
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
             <div className="w-full max-w-3xl mx-auto px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">

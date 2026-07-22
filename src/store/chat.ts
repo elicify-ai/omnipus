@@ -336,6 +336,19 @@ export interface SessionChatState {
    * (`emptySessionState`, the store's initial state) sets it explicitly.
    */
   goalStatus?: GoalStatusFrame | null
+  /**
+   * ADR-053 FE-1 / US-14: per-goal-id pill-state map. Each active goal in the
+   * session gets its own entry (keyed by `GoalStatusFrame.goal_id`, falling
+   * back to `'_default'` when the frame omits one), so a session carrying 2
+   * goals renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
+   * this map; the legacy single `goalStatus` (above) is still maintained as a
+   * derived "latest frame" for back-compat with any reader that hasn't
+   * migrated yet. Optional for the same fixture-compat reason as
+   * `toolCallOwnerMessageId` above — pre-existing test fixtures construct a
+   * `SessionChatState`-shaped bucket by hand; every read site falls back to
+   * `{}` and every write site initializes it.
+   */
+  goalPills?: Record<string, GoalStatusFrame>
   /** ADR-049 D6/US-12: latest `loop_status` frame for this session. Same session-scoped/store-verbatim/optional-for-fixture-compat pattern as `goalStatus`. */
   loopStatus?: LoopStatusFrame | null
 }
@@ -361,6 +374,7 @@ function emptySessionState(): SessionChatState {
     spanByParentCallId: {},
     mergedReplayMessageIds: {},
     goalStatus: null,
+    goalPills: {},
     loopStatus: null,
   }
 }
@@ -754,6 +768,13 @@ interface ChatStore {
   rateLimitEvent: RateLimitEventData | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
+  /**
+   * ADR-053 FE-1 / US-14: active session's per-goal-id pill-state map.
+   * Drives `GoalPillTray` (bottom-right, one pill per goal-id). Each entry
+   * is the latest `goal_status` frame for that goal-id. Empty object when
+   * no goals are active. Optional — see SessionChatState.goalPills (fixture-compat).
+   */
+  goalPills?: Record<string, GoalStatusFrame>
   /** ADR-049 D6/US-12: active session's latest `loop_status` frame, or null/undefined. */
   loopStatus?: LoopStatusFrame | null
   lastUserMessageAt: number | null
@@ -1286,6 +1307,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     sessionCost: 0,
     rateLimitEvent: null,
     goalStatus: null,
+    goalPills: {},
     loopStatus: null,
     lastUserMessageAt: null,
     cancelStage: null,
@@ -4195,14 +4217,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
 
         case 'goal_status': {
-          // ADR-049 D6/US-12: session-scoped (in SESSION_SCOPED_FRAME_TYPES
-          // above) — targetSid is already resolved/dropped per the routing
-          // rules at the top of handleFrame. Store the frame verbatim;
-          // GoalIndicator (SD-C9) decides whether/how to render each state,
-          // including 'cleared' (indicator removed) — no special-casing here.
+          // ADR-049 D6/US-12 + ADR-053 FE-1/US-14: session-scoped (in
+          // SESSION_SCOPED_FRAME_TYPES above) — targetSid is already
+          // resolved/dropped per the routing rules at the top of handleFrame.
+          //
+          // PER-GOAL-ID pill map (FE-1): the frame carries `goal_id` (optional
+          // — the §6 compat shim may omit it for a single-goal session). Key
+          // the pill map by goal_id (falling back to '_default' when absent) so
+          // a session with 2 goals shows 2 pills. Also maintain the legacy
+          // single `goalStatus` (latest frame across all goals) for back-compat
+          // with GoalIndicator's loop-only rendering path. The tray/pill
+          // components decide whether/how to render each state — no
+          // special-casing here.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
-          withBucket(targetSid, () => ({ goalStatus: goalFrame }))
+          const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
+          withBucket(targetSid, (b) => ({
+            goalStatus: goalFrame,
+            goalPills: { ...(b.goalPills ?? {}), [pillKey]: goalFrame },
+          }))
           break
         }
 
