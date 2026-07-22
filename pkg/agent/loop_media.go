@@ -391,10 +391,36 @@ func detectMIME(localPath string, meta media.MediaMeta) string {
 
 const maxImagePixels = 16 * 1024 * 1024
 
+// isImageFormatUnsupportedByGo reports whether the given mime is a real image
+// format that Go's stdlib + golang.org/x/image still cannot decode (the stdlib
+// covers PNG/JPEG/GIF, x/image adds BMP/TIFF/WebP; SVG, AVIF, HEIC, HEIF
+// have no bundled decoder). For these, the D2 path applies: the original
+// bytes are sent through as-is, the provider is expected to reject them, and
+// the media-retry code strips the block on the next attempt.
+//
+// FR-001 (ADR-051 spec): "AVIF/HEIC/SVG → fall through to D2 provider-rejection
+// downgrade/retry (the LLM call happens, provider rejects, we strip the
+// offending block, retry)." The prior implementation returned "" on decode
+// failure, which made the caller drop the attachment before the LLM call
+// ever happened — contradicting the FR-001 contract.
+func isImageFormatUnsupportedByGo(mime string) bool {
+	switch mime {
+	case "image/svg+xml",
+		"image/avif",
+		"image/heic",
+		"image/heif",
+		"image/x-icon":
+		return true
+	}
+	return false
+}
+
 // encodeImageToDataURL normalizes a decodable image to PNG and returns it as a
 // data URL. The pixel budget is checked before full decode to bound memory use.
-// Returns an empty string when the input or normalized PNG exceeds maxSize, the
-// dimensions exceed maxImagePixels, or decoding/encoding fails.
+// For formats Go cannot decode (SVG, AVIF, HEIC), the original bytes are
+// returned as-is (FR-001 D2 path) so the LLM call still happens and the
+// provider's rejection triggers the media-retry strip. Returns an empty
+// string only when the input exceeds maxSize or the file is unreadable.
 func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int) string {
 	if info.Size() > int64(maxSize) {
 		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
@@ -414,6 +440,26 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 			logImageNormalizationFailure(localPath, mime, "close-failed", closeErr, nil)
 		}
 	}()
+
+	// FR-001 D2 path: pass through formats Go cannot decode so the LLM
+	// call still happens and the media-retry code can strip the block on
+	// the next attempt. We bound the read to maxSize to prevent OOM.
+	if isImageFormatUnsupportedByGo(mime) {
+		data := make([]byte, info.Size())
+		n, readErr := io.ReadFull(io.LimitReader(f, int64(maxSize)+1), data)
+		if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+			logImageNormalizationFailure(localPath, mime, "unsupported-format-read-failed", readErr, nil)
+			return ""
+		}
+		if int64(n) > int64(maxSize) {
+			logImageNormalizationFailure(localPath, mime, "unsupported-format-oversize", nil, map[string]any{
+				"size":     n,
+				"max_size": maxSize,
+			})
+			return ""
+		}
+		return fmt.Sprintf("data:%s;base64,%s", mime, base64.StdEncoding.EncodeToString(data[:n]))
+	}
 
 	config, format, err := image.DecodeConfig(f)
 	if err != nil {

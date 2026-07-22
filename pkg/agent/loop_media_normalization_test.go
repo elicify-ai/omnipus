@@ -101,12 +101,22 @@ func TestEncodeImageToDataURL_NormalizesTIFFToPNG(t *testing.T) {
 }
 
 func TestEncodeImageToDataURL_NonDecodableReturnsEmpty(t *testing.T) {
+	// ADR-051 FR-001 (D2 path): SVG/AVIF/HEIC are NOT decoded by Go's stdlib
+	// + x/image. They must NOT be dropped before the LLM call — they pass
+	// through as-is so the provider's rejection triggers the media-retry
+	// strip on the next attempt. The prior behavior returned "" here, which
+	// made resolveMediaRefs drop the attachment entirely — exactly the bug
+	// the spec says to avoid. Assert the passthrough: the original bytes come
+	// back as a data URL carrying the ORIGINAL mime (not re-encoded as PNG).
 	path := filepath.Join(t.TempDir(), "image.svg")
 	require.NoError(t, os.WriteFile(path, []byte("<svg><not-an-image/></svg>"), 0o600))
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 
-	require.Empty(t, encodeImageToDataURL(path, "image/svg+xml", info, 1<<20))
+	dataURL := encodeImageToDataURL(path, "image/svg+xml", info, 1<<20)
+	require.NotEmpty(t, dataURL, "SVG must pass through to the LLM (D2 path), not be dropped")
+	require.True(t, strings.HasPrefix(dataURL, "data:image/svg+xml;base64,"),
+		"passthrough must carry the original svg mime, got prefix of %q", dataURL[:48])
 }
 
 func TestEncodeImageToDataURL_PixelBomb_Rejected(t *testing.T) {
