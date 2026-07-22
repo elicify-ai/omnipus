@@ -41,6 +41,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -186,6 +187,28 @@ type PlanEngine struct {
 	// nil-derefs.
 	verifierRegistry VerifierSessionRegistry
 
+	// lastUnmetTerminalSignature is the F2 round-burn gate (a live shipped
+	// defect fixed standalone, ahead of and independent from the
+	// goal/plan/subagent redesign; acceptance G-9): planID -> the
+	// planTerminalSignature of the all-terminal member state most recently
+	// judged UNMET by THIS engine instance. Before processPlan re-invokes
+	// beginPlanJudgeRound on an all-terminal plan, it compares the CURRENT
+	// signature against this map (unmetTerminalSignatureUnchanged) — a match
+	// means the same unchanged evidence would just be re-judged for no
+	// reason, so the round is skipped entirely rather than debited again.
+	// "One round then wait; no re-judge of unchanged state." The entry is
+	// cleared whenever the plan (re)enters running (tryStartApprovedPlan —
+	// covers both a fresh admission and a restart/Play-resume), so a
+	// material correction or an owner-initiated resume always gets a fresh
+	// round regardless of whether the member outcomes end up identical.
+	// In-memory only (no wire/persisted-state change) and guarded by mu,
+	// lazily initialized by its own accessors exactly like verifierRegistry
+	// above — a bare struct-literal test engine never nil-map-panics. A
+	// process restart naturally drops this map, which is safe: the very
+	// next tick simply re-judges once more, identical in cost to the
+	// existing PhaseJudging crash-resume path a few lines below.
+	lastUnmetTerminalSignature map[string]string
+
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
 	// for all plans, not per-plan) — a deliberate simplicity trade-off: the
@@ -272,6 +295,86 @@ func (pe *PlanEngine) registry() VerifierSessionRegistry {
 // doc for the full registration contract.
 func (pe *PlanEngine) VerifierRegistry() VerifierSessionRegistry {
 	return pe.registry()
+}
+
+// --- F2 round-burn gate (lastUnmetTerminalSignature) ----------------------
+
+// unmetTerminalSignatureUnchanged reports whether sig — the CURRENT
+// all-terminal member-state signature for planID — matches the signature
+// most recently recorded as judged UNMET for that plan. A true result means
+// nothing has changed since that round: no member was added/removed and no
+// member's terminal outcome changed, so processPlan must skip re-invoking
+// beginPlanJudgeRound rather than burn another JudgeRound re-judging
+// identical evidence. Uses the two-value map read (not a "" sentinel) so a
+// plan that legitimately has zero members (signature == "") is still gated
+// correctly once recorded.
+func (pe *PlanEngine) unmetTerminalSignatureUnchanged(planID, sig string) bool {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	last, ok := pe.lastUnmetTerminalSignature[planID]
+	return ok && last == sig
+}
+
+// recordUnmetTerminalSignature saves sig as the most recently judged-UNMET
+// all-terminal signature for planID. Lazily initializes the backing map
+// (same pattern as registry() above) so a bare struct-literal test engine,
+// which omits NewPlanEngine's construction, never nil-map-panics on write.
+func (pe *PlanEngine) recordUnmetTerminalSignature(planID, sig string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.lastUnmetTerminalSignature == nil {
+		pe.lastUnmetTerminalSignature = make(map[string]string)
+	}
+	pe.lastUnmetTerminalSignature[planID] = sig
+}
+
+// clearUnmetTerminalSignature drops any recorded signature for planID. Called
+// whenever the plan (re)enters running (tryStartApprovedPlan), so a fresh
+// dispatch cycle — a brand-new plan's first run, or an owner's restart/Play
+// resume of a previously-failed plan — is never blocked by a signature
+// recorded during a prior life of the same plan ID, even if the member
+// outcomes happen to end up identical again.
+func (pe *PlanEngine) clearUnmetTerminalSignature(planID string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	delete(pe.lastUnmetTerminalSignature, planID)
+}
+
+// planTerminalSignature builds a deterministic signature of tasks' terminal
+// state: each member's id + status + cancel reason, sorted by id and joined
+// with ASCII field/record separators (never appearing in an id/status/reason
+// value) so no delimiter collision can alias two distinct member sets onto
+// the same string. Two calls return an identical signature iff the member
+// id set and every member's terminal outcome are identical — this is
+// intentionally narrower than "the evidence text is unchanged": editing a
+// done task's Result/Prompt without changing its id set or status does NOT
+// change the signature (per this fix's spec: "member ids + their terminal
+// outcomes + DAG generation" — evidence content is not part of the DAG
+// shape). An owner who wants a genuine re-judge without adding/removing a
+// member resets that member's status (through a non-terminal state and back)
+// or restarts/resumes the plan (which clears the gate outright via
+// clearUnmetTerminalSignature).
+func planTerminalSignature(tasks []task.Task) string {
+	type entry struct {
+		id     string
+		status task.Status
+		reason task.CancelReason
+	}
+	entries := make([]entry, 0, len(tasks))
+	for i := range tasks {
+		entries = append(entries, entry{tasks[i].ID, tasks[i].Status, tasks[i].CancelReason})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	var b strings.Builder
+	for _, e := range entries {
+		b.WriteString(e.id)
+		b.WriteByte('\x1f') // unit separator
+		b.WriteString(string(e.status))
+		b.WriteByte('\x1f')
+		b.WriteString(string(e.reason))
+		b.WriteByte('\x1e') // record separator
+	}
+	return b.String()
 }
 
 // --- Lifecycle -----------------------------------------------------------
@@ -473,6 +576,13 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 			map[string]any{"plan_id": planID, "error": err.Error()})
 		return
 	}
+	// F2 round-burn gate (acceptance G-9): a fresh admission, and equally an
+	// owner's restart/Play resume of a previously-failed plan (ADR-052 §6.7,
+	// same planID), must always get a genuinely fresh judge round rather than
+	// being silently gated by a signature recorded during a prior life of
+	// this plan ID — clear it here, the sole approved->running transition
+	// point.
+	pe.clearUnmetTerminalSignature(planID)
 	logger.InfoCF("plan_engine", "plan admitted: approved->running", map[string]any{"plan_id": planID})
 
 	tasks, lerr := pe.taskStore.List(task.Filter{PlanID: updated.ID})
@@ -522,7 +632,13 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 		// Unavailable/crash" contract), so resuming from scratch is safe.
 		logger.InfoCF("plan_engine", "resuming plan judge round interrupted by a prior crash/restart",
 			map[string]any{"plan_id": p.ID})
-		pe.beginPlanJudgeRound(p)
+		resumeTasks, terr := pe.taskStore.List(task.Filter{PlanID: p.ID})
+		if terr != nil {
+			logger.WarnCF("plan_engine", "processPlan: list member tasks for judge-round resume failed",
+				map[string]any{"plan_id": p.ID, "error": terr.Error()})
+			resumeTasks = nil
+		}
+		pe.beginPlanJudgeRound(p, resumeTasks)
 		return
 	case plan.PhaseSynthesizing:
 		return // terminal hand-off already in progress
@@ -563,7 +679,7 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 	}
 
 	if allMembersTerminal(tasks) {
-		pe.beginPlanJudgeRound(p)
+		pe.beginPlanJudgeRound(p, tasks)
 	}
 }
 
@@ -632,11 +748,26 @@ func allMembersTerminal(tasks []task.Task) bool {
 // beginPlanJudgeRound starts (or, per the boot/crash-resume case above,
 // restarts) one plan-level judge round for p. Caller must hold
 // planDecisionMu. Checks the round ceiling first (fails the plan closed if
-// exhausted); otherwise claims a judgeSema lane (skips this tick — retried
-// next pass — if the lane is full) and launches the actual judge call in its
-// own goroutine, decoupled from the tick/event cycle (planJudgeRoundTimeout)
-// so a slow-but-alive judge call never blocks dispatch of other plans.
-func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan) {
+// exhausted) — that check always runs, unconditionally, even on an unchanged
+// all-terminal state: an already-exhausted plan must still terminate, this
+// is not itself a "re-judge" (no judge call happens, no round is debited).
+// Only once the ceiling has NOT been reached does the F2 round-burn gate
+// (acceptance G-9) apply: if tasks is the plan's current all-terminal member
+// snapshot and its signature matches the one already recorded as judged
+// UNMET for this plan, the round is skipped entirely — "one round then
+// wait; no re-judge of unchanged state." Otherwise claims a judgeSema lane
+// (skips this tick — retried next pass — if the lane is full) and launches
+// the actual judge call in its own goroutine, decoupled from the tick/event
+// cycle (planJudgeRoundTimeout) so a slow-but-alive judge call never blocks
+// dispatch of other plans.
+//
+// tasks is the caller's already-fetched member-task snapshot (processPlan's
+// normal path) or the crash-resume snapshot (may be nil on a resume-time
+// list failure — allMembersTerminal(nil) is vacuously true with signature
+// "", but the in-memory gate map is guaranteed unpopulated for p.ID at that
+// point in a freshly-booted process, so this can never spuriously block a
+// genuine crash-resume; see this file's package doc on lastUnmetTerminalSignature).
+func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan, tasks []task.Task) {
 	cfg := pe.planningConfig()
 	var boundsOverride *int
 	if p.Bounds != nil {
@@ -646,6 +777,16 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan) {
 	if p.JudgeRounds >= maxRounds {
 		pe.failPlanLocked(p.ID, plan.FailedReasonJudgeRoundsExhausted, buildPlanRoundsExhaustedHandover(p, maxRounds))
 		return
+	}
+
+	if allMembersTerminal(tasks) {
+		sig := planTerminalSignature(tasks)
+		if pe.unmetTerminalSignatureUnchanged(p.ID, sig) {
+			logger.DebugCF("plan_engine",
+				"plan judge round skipped: all-terminal state unchanged since last UNMET verdict (awaiting owner correction)",
+				map[string]any{"plan_id": p.ID})
+			return
+		}
 	}
 
 	acquired, release := pe.judgeSema.TryAcquire()
@@ -703,6 +844,11 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 			map[string]any{"plan_id": planID, "error": err.Error()})
 		return
 	}
+	// F2 round-burn gate (acceptance G-9): the signature of the EXACT
+	// all-terminal member state this round is about to judge. If the round
+	// ends UNMET, applyJudgeRoundOutcomeLocked records this so a later
+	// unchanged idle tick's processPlan skips re-judging it.
+	terminalSig := planTerminalSignature(tasks)
 
 	criteria := p.DoD
 	if len(criteria) == 0 {
@@ -718,7 +864,9 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		// taskStore.List call above just as easily as during a real judge
 		// call, so this short-circuit gets the SAME atomicity guarantee as
 		// the real-verdict path below, not a bespoke unlocked shortcut.
-		pe.applyJudgeRoundOutcomeLocked(planID, JudgeCriteriaResult{}, true)
+		// nothingToJudge always trusts completion (never UNMET), so
+		// terminalSig is passed through but never recorded.
+		pe.applyJudgeRoundOutcomeLocked(planID, JudgeCriteriaResult{}, true, terminalSig)
 		return
 	}
 
@@ -744,7 +892,7 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// instant this call returns. Delegate to applyJudgeRoundOutcomeLocked,
 	// which re-checks State==running and applies the outcome as ONE atomic
 	// critical section under planDecisionMu.
-	pe.applyJudgeRoundOutcomeLocked(planID, result, false)
+	pe.applyJudgeRoundOutcomeLocked(planID, result, false, terminalSig)
 }
 
 // applyJudgeRoundOutcomeLocked applies a just-computed plan-level judge
@@ -773,7 +921,13 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 //
 // nothingToJudge is true for the SD-A7 soft-tier-empty short-circuit
 // (completePlan), in which case result is ignored.
-func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCriteriaResult, nothingToJudge bool) {
+//
+// terminalSig is the planTerminalSignature (F2 round-burn gate, acceptance
+// G-9) of the all-terminal member state runPlanJudgeRound actually judged —
+// on an UNMET verdict it is recorded as this plan's "already judged this,
+// don't re-judge until it changes" marker so a later unchanged idle tick's
+// processPlan skips re-invoking beginPlanJudgeRound.
+func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCriteriaResult, nothingToJudge bool, terminalSig string) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
 
@@ -828,6 +982,12 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 			map[string]any{"plan_id": current.ID, "error": uerr.Error()})
 		return
 	}
+	// F2 round-burn gate (acceptance G-9): this exact all-terminal state has
+	// now been judged UNMET — record it so processPlan's next idle tick(s)
+	// wait instead of re-judging the same evidence again. Recorded only
+	// after the store write above actually succeeds, so a persist failure
+	// (round effectively didn't happen) never blocks a legitimate retry.
+	pe.recordUnmetTerminalSignature(current.ID, terminalSig)
 	pe.wakeOwner(current.ID, current.OwnerAgentID, fmt.Sprintf(
 		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s",
 		current.Title, newRounds, steering,

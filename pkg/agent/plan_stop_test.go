@@ -312,7 +312,7 @@ func TestApplyJudgeRoundOutcomeLocked_UnmetWrite_DroppedAfterConcurrentStop(t *t
 			Met:          false,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: "c1", Met: false, Reason: "not done yet"}},
 		},
-	}, false)
+	}, false, "")
 
 	got, err := h.plans.Get("p1")
 	if err != nil {
@@ -352,7 +352,7 @@ func TestApplyJudgeRoundOutcomeLocked_MetWrite_DroppedAfterConcurrentStop(t *tes
 
 	h.pe.applyJudgeRoundOutcomeLocked("p1", JudgeCriteriaResult{
 		Verdict: &task.JudgeVerdict{Met: true},
-	}, false)
+	}, false, "")
 
 	got, err := h.plans.Get("p1")
 	if err != nil {
@@ -383,7 +383,7 @@ func TestApplyJudgeRoundOutcomeLocked_AppliesWhenStillRunning(t *testing.T) {
 			Met:          false,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: "c1", Met: false, Reason: "not done yet"}},
 		},
-	}, false)
+	}, false, "")
 
 	got, err := h.plans.Get("p1")
 	if err != nil {

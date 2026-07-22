@@ -516,6 +516,96 @@ func TestPlanEngine_JudgeRoundsExhausted_FailsPlan(t *testing.T) {
 	}
 }
 
+// TestPlanEngine_UnmetAllTerminal_NoReJudgeOnUnchangedIdleTick is the F2
+// regression test (ADR-052 plan engine round-burn defect, acceptance G-9):
+// on a plan whose members are ALL terminal but whose plan-level DoD is
+// judged UNMET, repeated idle ticks over the SAME unchanged state must NOT
+// re-invoke the plan judge or re-debit JudgeRounds — "one round then wait;
+// no re-judge of unchanged state." The gate must still reopen once the
+// all-terminal state materially changes (here: a member is added, mirroring
+// an owner correction) or the plan resumes (TestPlanEngine_ApprovedAutoTicksToRunning
+// covers the Play/resume clear path via tryStartApprovedPlan separately).
+func TestPlanEngine_UnmetAllTerminal_NoReJudgeOnUnchangedIdleTick(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "p1", Title: "Plan 1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
+		DoD: []task.AcceptanceCriterion{planProseCriterion("The thing is done")},
+	})
+	mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone,
+	})
+	h.judge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
+			Met:          false,
+			PerCriterion: []task.CriterionVerdict{{CriterionID: in.Criteria[0].ID, Met: false, Reason: "not yet"}},
+		}}
+	}
+
+	// Round 1: the plan is all-terminal but DoD unmet -> consumes exactly one
+	// JudgeRound, same as TestPlanEngine_JudgeUnmet_StoresSteeringAndWakesOwnerWithoutTerminal.
+	h.pe.processPlan(context.Background(), "p1")
+	h.pe.judgeWG.Wait()
+
+	mid, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mid.State != plan.StateRunning || mid.JudgeRounds != 1 {
+		t.Fatalf("after round 1: state=%q judge_rounds=%d, want running/1", mid.State, mid.JudgeRounds)
+	}
+	if h.judge.callCount() != 1 {
+		t.Fatalf("after round 1: judge called %d times, want 1", h.judge.callCount())
+	}
+
+	// N (>=3) idle ticks over the exact same unchanged all-terminal state.
+	// PRE-FIX: each of these silently re-invoked beginPlanJudgeRound and
+	// burned another JudgeRound while nothing about the plan had changed.
+	// POST-FIX: none of them may call the judge or touch JudgeRounds at all.
+	const idleTicks = 5
+	for i := 0; i < idleTicks; i++ {
+		h.pe.processPlan(context.Background(), "p1")
+		h.pe.judgeWG.Wait()
+	}
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JudgeRounds != 1 {
+		t.Fatalf("after %d unchanged idle ticks: judge_rounds = %d, want 1 (round-burn gate must hold)",
+			idleTicks, got.JudgeRounds)
+	}
+	if h.judge.callCount() != 1 {
+		t.Fatalf("judge called %d times after %d unchanged idle ticks, want exactly 1 (not re-judged)",
+			h.judge.callCount(), idleTicks)
+	}
+	if got.State != plan.StateRunning {
+		t.Fatalf("state = %q, want still running (awaiting owner correction, not rounds-exhausted)", got.State)
+	}
+
+	// A material state change (here: an owner adds a member) must reopen the
+	// gate — the engine re-judges once the all-terminal signature actually
+	// changes, exactly as the spec's "member is added/reset" carve-out
+	// requires.
+	mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member2", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone,
+	})
+
+	h.pe.processPlan(context.Background(), "p1")
+	h.pe.judgeWG.Wait()
+
+	final, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.JudgeRounds != 2 {
+		t.Fatalf("after owner correction (member added): judge_rounds = %d, want 2 (gate must reopen)", final.JudgeRounds)
+	}
+	if h.judge.callCount() != 2 {
+		t.Fatalf("judge called %d times after owner correction, want exactly 2", h.judge.callCount())
+	}
+}
+
 func TestPlanEngine_JudgeUnavailable_ConsumesNoRoundAndRevertsToDispatching(t *testing.T) {
 	h := newTestPlanEngine(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
