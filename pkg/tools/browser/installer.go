@@ -288,20 +288,30 @@ func zipURLForPlatform(downloads []cftManifestDownloadRef, platform string) stri
 
 // selectDownloadBuild decides which CfT build the agent's default
 // EnsureChromium download (nothing of either flavor cached yet) should
-// fetch. WebRTC tabCapture (video+audio) requires the full "chrome" build
-// and is only ever video-capable on linux (ClassifyVideoCapability) — so
-// linux defaults to fullChromeBuild(), and every other platform (which will
-// never be video-capable) defaults to the lighter headlessShellBuild()
-// rather than paying for a full-Chrome download it can't use for capture.
-// EnsureChromiumBuild's own fallback separately drops linux to
-// headlessShellBuild() gracefully when the full build is missing from the
-// manifest or unavailable for the current platform — that's a distinct,
-// later fallback from this initial platform-based selection.
+// fetch. WebRTC tabCapture (video+audio) requires the full "chrome" build.
+// linux defaults to fullChromeBuild() (the only platform the managed
+// full-Chrome capture path is validated against — ClassifyVideoCapability).
+// darwin ALSO defaults to fullChromeBuild() per ADR-052 Phase 3 / C3 option
+// (ii): the Google-signed full Chrome ships as the bundled sibling helper
+// beside the gateway .app, and the capture-capable build must be in
+// position for the AC-4 gate relaxation once the darwinAudioVerified audio
+// spike (AC-1) proves audio. This download choice does NOT by itself flip
+// capability — ClassifyVideoCapability's videoCapableOS gate still requires
+// darwinAudioVerified=true before advertising Capable, so a darwin host
+// with the full build installed but the spike still pending correctly stays
+// not-capable (AC-5). Windows and every other platform stay on the lighter
+// headlessShellBuild() until Phase 4. EnsureChromiumBuild's own fallback
+// separately drops linux/darwin to headlessShellBuild() gracefully when the
+// full build is missing from the manifest or unavailable for the current
+// platform — that's a distinct, later fallback from this initial
+// platform-based selection.
 func selectDownloadBuild() chromiumBuild {
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux", "darwin":
 		return fullChromeBuild()
+	default:
+		return headlessShellBuild()
 	}
-	return headlessShellBuild()
 }
 
 // findInstalledBinary scans installRoot's version directories for an

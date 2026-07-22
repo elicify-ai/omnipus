@@ -51,6 +51,33 @@ type VideoCapability struct {
 // process, which must never be faked.
 var goosForCapability = runtime.GOOS
 
+// darwinAudioVerified is the Phase-3 AC-1 spike result. It is false until a
+// real darwin --headless chrome.tabCapture run proves audio (ADR-047 §13.4 /
+// ADR-052 Phase 3). While false, darwin stays not-capable for video per
+// M3/M6: the per-OS gate relaxes only after per-OS audio verification.
+// Flipped to true only by the macOS spike; tests set it via this seam. This
+// is the single AC-4-vs-AC-5 flip point — when the spike records
+// AUDIO-WORKS, flipping this var (consumed by videoCapableOS) lets darwin
+// advertise Capable; until then, darwin stays not-capable with a clear
+// operator Reason. HC #6: this explicit, documented default (false) is the
+// reason darwin is not-capable by default — there is no silent fallback.
+var darwinAudioVerified = false
+
+// videoCapableOS reports whether a GOOS may advertise video+audio capture
+// capability. linux is video-capable unconditionally (the only platform the
+// managed full-Chrome capture path is validated against). darwin is
+// video-capable only when the Phase-3 AC-1 audio spike has proven
+// --headless chrome.tabCapture audio (darwinAudioVerified); until then the
+// M3/M6 gate keeps darwin not-capable so the classifier never advertises
+// Capable when capture cannot succeed (ADR-048 condition 3). Windows and
+// every other OS stay not-capable until their own Phase-4 spike. This is
+// the single helper both ClassifyVideoCapability and
+// ClassifyVideoCapabilityWithExec consult — the one place to change when a
+// per-OS spike completes.
+func videoCapableOS(goos string) bool {
+	return goos == "linux" || (goos == "darwin" && darwinAudioVerified)
+}
+
 // ClassifyVideoCapability implements the WebRTC live-view video-capability
 // decision (supersedes the ADR-044 WebCodecs-relay Option A2 framing this
 // package originally shipped): video-capable means linux + a full-Chrome
@@ -69,22 +96,27 @@ var goosForCapability = runtime.GOOS
 // before classifying not-capable. The package Chrome IS video-capable when
 // its sha256 verifies (installer.go's findInstalledBuild, which this
 // function calls, now verifies chrome.sha256 when present — M2). The
-// linux-only gate itself stays strict: per ADR-052 M3/M6, "only after
-// per-OS audio verification" — macOS / Windows Phase 3/4 work; the
-// classifier must not advertise Capable when capture cannot succeed.
+// per-OS gate itself defaults strict: per ADR-052 M3/M6, "only after
+// per-OS audio verification" — macOS (Phase 3) and Windows (Phase 4). The
+// videoCapableOS helper is the AC-4 flip point for darwin: it stays
+// not-capable until the Phase-3 AC-1 audio spike proves darwin
+// --headless chrome.tabCapture audio and darwinAudioVerified is flipped.
+// The classifier must not advertise Capable when capture cannot succeed.
 //
 // This is the BASE classification only — it does not know about the
 // ADR-048 preconditions (capture extension seeded, shared-default-context
 // capture enabled). See CaptureVideoCapability (manager.go/this file) for
 // the full ADR-048 condition-3 check every gateway call site must use.
-// Non-linux hosts, hosts with only chrome-headless-shell installed (no full
-// Chrome — selectDownloadBuild never chooses full Chrome off-linux, and the
+// Non-video-capable hosts (videoCapableOS is false — every non-linux GOOS
+// today, plus darwin until darwinAudioVerified is flipped by the Phase-3
+// spike), hosts with only chrome-headless-shell installed (no full Chrome —
+// selectDownloadBuild chooses headless-shell on windows/other and the
 // manifest/platform fallback can leave a linux host on headless-shell too),
 // and hosts with neither build installed all classify not-capable.
 func ClassifyVideoCapability(installRoot string) VideoCapability {
-	if goosForCapability != "linux" {
+	if !videoCapableOS(goosForCapability) {
 		return notCapable(fmt.Sprintf(
-			"live-view video requires a linux full-Chrome build; this host is %s",
+			"live-view video requires a linux full-Chrome build, or darwin once the ADR-052 Phase 3 audio spike (AC-1) proves audio; this host is %s",
 			goosForCapability,
 		))
 	}
@@ -144,18 +176,18 @@ func ClassifyVideoCapability(installRoot string) VideoCapability {
 // panel stays on the JPEG fallback tier (ADR-047 D3), exactly like any other
 // capture-path failure.
 //
-// ADR-052 Phase 1: PreferPackaged true still does NOT relax the linux-only
-// gate here — only the Resolution-order priority in exec_resolver.go changes
-// when the toggle is set. The capability classifier keeps its
-// "linux + non-headless-shell" contract unchanged in Phase 1 (M3/M6: gate
-// relaxes only after per-OS audio verification, which lands in Phase 3/4).
+// ADR-052 Phase 3: the per-OS gate now consults videoCapableOS — darwin
+// passes only when the AC-1 audio spike (darwinAudioVerified) proves audio;
+// otherwise the "linux + non-headless-shell" contract is unchanged. Windows
+// and every other non-linux GOOS stay not-capable until their own Phase-4
+// spike (M3/M6).
 func ClassifyVideoCapabilityWithExec(execPath, installRoot string) VideoCapability {
 	if execPath == "" {
 		return ClassifyVideoCapability(installRoot)
 	}
-	if goosForCapability != "linux" {
+	if !videoCapableOS(goosForCapability) {
 		return notCapable(fmt.Sprintf(
-			"live-view video requires a linux full-Chrome build; this host is %s",
+			"live-view video requires a linux full-Chrome build, or darwin once the ADR-052 Phase 3 audio spike (AC-1) proves audio; this host is %s",
 			goosForCapability,
 		))
 	}

@@ -27,6 +27,12 @@ package browser
 //                                                    (FHS-ish `share/`).
 //   - <dir(exe)>/../libexec/omnipus/chromium       — deb/rpm nfpms
 //                                                    `files:` mapping.
+//   - <dir(exe)>/../chromium  [darwin]             — non-.app parity
+//                                                    (homebrew / dev build,
+//                                                    or Contents/chromium).
+//   - <dir(exe)>/../../../chromium  [darwin]       — C3 option (ii):
+//                                                    Google-signed sibling
+//                                                    beside the gateway .app.
 //
 // Per-root binary layouts inspected, in priority order:
 //
@@ -38,6 +44,8 @@ package browser
 //   - chrome-headless-shell                            (flat fallback)
 //   - chrome.exe                                       (Windows full)
 //   - chrome-headless-shell.exe                        (Windows fallback)
+//   - Google Chrome for Testing.app/Contents/MacOS/   (macOS .app bundle,
+//     Google Chrome for Testing                         C3 option ii)
 //
 // SEC-ADR052-005/006 hardening lives here (symlinked-root rejection,
 // world-writable-root rejection, symlinked-binary rejection). The
@@ -82,6 +90,23 @@ func packageChromeRootCandidates() []string {
 		return nil
 	}
 	exeDir := filepath.Dir(exe)
+	if runtime.GOOS == "darwin" {
+		// ADR-052 Phase 3 / C3 option (ii): on macOS the Google-signed full
+		// Chrome ships as a sibling helper OUTSIDE the signed gateway .app
+		// (re-signing Chrome would break Google's signature and Apple
+		// notarization — see ADR-052-C3). The gateway binary lives at
+		// <Gateway.app>/Contents/MacOS/<bin>, so the sibling chromium/ dir
+		// beside the .app is three levels up from exeDir. The first
+		// candidate (<exeDir>/../chromium) keeps parity with the linux
+		// first candidate for non-.app darwin installs (homebrew, dev
+		// builds) and an in-bundle Contents/chromium layout. install.sh's
+		// macOS slice places the sibling Chrome at one of these so the
+		// runtime multi-root probe finds it exactly as on linux.
+		return []string{
+			filepath.Join(exeDir, "..", "chromium"),
+			filepath.Join(exeDir, "..", "..", "..", "chromium"),
+		}
+	}
 	return []string{
 		filepath.Join(exeDir, "..", "chromium"),
 		filepath.Join(exeDir, "..", "share", "omnipus", "chromium"),
@@ -242,7 +267,7 @@ func isUsablePackageRoot(candidate string) bool {
 // goreleaser happens to ship the lighter fallback at chrome-linux64/
 // still resolves cleanly.
 func binaryLayoutsForRoot(root string) []string {
-	return []string{
+	layouts := []string{
 		filepath.Join(root, "chrome-linux64", "chrome"),
 		filepath.Join(root, "chrome-headless-shell-linux64", "chrome-headless-shell"),
 		filepath.Join(root, "chrome"),
@@ -250,6 +275,16 @@ func binaryLayoutsForRoot(root string) []string {
 		filepath.Join(root, "chrome.exe"),                // Windows
 		filepath.Join(root, "chrome-headless-shell.exe"), // Windows
 	}
+	if runtime.GOOS == "darwin" {
+		// macOS .app bundle layout (C3 option ii): the Google-signed full
+		// Chrome sits at <root>/Google Chrome for Testing.app/Contents/
+		// MacOS/Google Chrome for Testing — fullChromeBinaryRelPath()
+		// encodes that darwin-specific relpath. Appended on darwin only:
+		// on linux/windows fullChromeBinaryRelPath returns the flat binary
+		// name already covered above, so no duplicate is appended there.
+		layouts = append(layouts, filepath.Join(root, fullChromeBinaryRelPath()))
+	}
+	return layouts
 }
 
 // findPackageChrome inspects root for a pinned full Chrome-for-Testing
@@ -328,12 +363,21 @@ func findPackageChrome(root string) (binaryPath, shaPath string) {
 		// Manifest candidates per binary: try alongside the binary first
 		// (the canonical goreleaser/cft-bundle layout), then one level up
 		// (the older root-level layout retained for hand-cp and flat
-		// installs). cft-bundle writes chrome.sha256 next to the binary;
-		// accepting the parent location preserves compatibility with older
-		// packages while keeping integrity verification fail-closed.
+		// installs), then the package root. cft-bundle writes chrome.sha256
+		// next to the binary; accepting the parent location preserves
+		// compatibility with older packages; the package-root location is
+		// required on macOS, where the .app bundle nests the binary three
+		// levels deep (.../Google Chrome for Testing.app/Contents/MacOS/
+		// <bin>) so neither Dir(bin) nor Dir(Dir(bin)) reaches the root
+		// where chrome.sha256 lives (beside the .app, per C3 option ii).
+		// The root candidate collapses to a harmless duplicate of an
+		// earlier candidate on the flat linux/windows layouts. Integrity
+		// verification stays fail-closed regardless of which candidate
+		// supplies the manifest.
 		manifestCandidates := []string{
 			filepath.Join(filepath.Dir(bin), "chrome.sha256"),
 			filepath.Join(filepath.Dir(filepath.Dir(bin)), "chrome.sha256"),
+			filepath.Join(root, "chrome.sha256"),
 		}
 		for _, sha := range manifestCandidates {
 			shaInfo, shaErr := os.Lstat(sha)
