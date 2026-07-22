@@ -320,6 +320,15 @@ type AgentLoop struct {
 	rateLimiter *security.RateLimiterRegistry
 	costTracker *security.CostTracker
 
+	// tokenBudget is the ADR-053 Phase-2 / D12 app-level OVERALL token budget
+	// (R§8.3): ONE atomic pool debited by ALL workloads (owner/member/verifier/
+	// Judge) from provider-reported usage, deliberately NOT honoring
+	// IsPrivilegedAgent (FR-172). Default cap 0 = unbounded (FR-175). The
+	// ceiling is restart-gated (FR-177). Always non-nil after NewAgentLoop so
+	// the debit path is a unconditional no-op when unbounded. The persisted
+	// consumed counter is reconciled at boot from system/token_budget.json.
+	tokenBudget *TokenBudget
+
 	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
 	// scoped by (session_id, agent_id, tool_name). Always non-nil after
 	// NewAgentLoop. Fixes the tool-consent-boundary bug: the grant used to
@@ -869,6 +878,13 @@ func NewAgentLoop(
 	costPath := filepath.Join(homePath, "system", "cost.json")
 	al.costTracker = security.NewCostTracker(costPath)
 	al.costTracker.LoadIntoRegistry(al.rateLimiter)
+
+	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget. The ceiling
+	// is restart-gated (FR-177) — read ONCE at boot from PlanningConfig and never
+	// live-reloaded; the live spend lever is Stop/cancel. The persister reconciles
+	// the consumed counter across restarts. cap 0 = unbounded (FR-175).
+	tbPath := filepath.Join(homePath, "system", "token_budget.json")
+	al.tokenBudget = NewTokenBudget(cfg.Planning.EffectiveTokenBudget(), NewTokenBudgetPersister(tbPath))
 	logger.InfoCF("agent", "Rate limiter initialized",
 		map[string]any{
 			"daily_cost_cap_usd":              cfg.Sandbox.RateLimits.DailyCostCapUSD,
@@ -1052,6 +1068,17 @@ func (al *AgentLoop) RateLimiter() *security.RateLimiterRegistry {
 		return nil
 	}
 	return al.rateLimiter
+}
+
+// TokenBudget returns the ADR-053 Phase-2 app-level OVERALL token budget
+// (D12/R§8.3). Always non-nil after NewAgentLoop (a nil AgentLoop returns
+// nil). Used by the goal loop's graceful-wind-down brake (checkGoalLoopAfterTurn)
+// and by gateway Usage handlers that report spend / set the restart-gated ceiling.
+func (al *AgentLoop) TokenBudget() *TokenBudget {
+	if al == nil {
+		return nil
+	}
+	return al.tokenBudget
 }
 
 // ApprovalGrants returns the session-scoped "Always Allow" tool-approval
@@ -7733,6 +7760,16 @@ turnLoop:
 		if al.rateLimiter != nil && response != nil && response.Usage != nil {
 			callCost := estimateLLMCallCost(llmModel, response.Usage)
 			al.rateLimiter.RecordSpend(callCost, ts.agent.AgentType)
+			// ADR-053 Phase-2 / D12 (R§8.3d/FR-171/FR-172/FR-173): debit the ONE
+			// app-level OVERALL token pool from provider-reported usage. Agent-agnostic
+			// by design (no agentType arg) — the IsPrivilegedAgent exemption is removed
+			// so core-agent turns debit the same pool. Atomic RMW under one lock; the
+			// graceful-wind-down gate (Exhausted) is consulted at the next turn/
+			// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
+			// even when unbounded (cap 0) so Usage accounting stays correct.
+			if al.tokenBudget != nil && response.Usage.TotalTokens > 0 {
+				al.tokenBudget.Debit(int64(response.Usage.TotalTokens))
+			}
 			// Accumulate turn-level stats so the "done" WS frame can surface
 			// real token counts and cost to the chat UI (issue #12).
 			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)

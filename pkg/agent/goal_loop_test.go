@@ -121,18 +121,41 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	al.applyGoalCommandPrompt(context.Background(),
+	// ADR-053 Phase-2 (N-6/D11): a `/goal <new intent>` while a goal is ALREADY
+	// active is diffed as an amendment and confirmed — never silently recompiled.
+	// So /goal condition B produces an amendment echo (handled=true) and leaves
+	// the active goal A untouched, with a pending amendment stored.
+	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition B", UserInitiated: true}, agentInst, &opts)
+	if !matched || !handled {
+		t.Fatalf("re-state: matched=%v handled=%v, want matched=true handled=true (amendment echo)", matched, handled)
+	}
+	if !strings.Contains(reply, "amendment") {
+		t.Fatalf("re-state reply = %q, want an amendment echo", reply)
+	}
+	afterAmend, _ := store.GetMeta(sid)
+	if afterAmend.GoalCondition != "condition A" {
+		t.Fatalf("condition after re-state = %q, want condition A still active (no silent recompile, N-6)", afterAmend.GoalCondition)
+	}
+	if afterAmend.GoalPendingJSON == "" {
+		t.Fatal("GoalPendingJSON must hold the proposed amendment until confirm (N-6)")
+	}
 
+	// /goal confirm applies the amendment: condition B, rounds reset (new generation).
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, &opts)
 	after, err := store.GetMeta(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if after.GoalCondition != "condition B" {
-		t.Fatalf("condition = %q, want replaced to condition B (FR-068)", after.GoalCondition)
+		t.Fatalf("condition = %q, want condition B after confirm (FR-113/N-6)", after.GoalCondition)
 	}
 	if after.GoalRoundsUsed != 0 {
-		t.Fatalf("rounds_used = %d, want reset to 0 on replace", after.GoalRoundsUsed)
+		t.Fatalf("rounds_used = %d, want reset to 0 on amend (new generation)", after.GoalRoundsUsed)
+	}
+	if after.GoalPendingJSON != "" {
+		t.Fatal("GoalPendingJSON must clear on confirm")
 	}
 }
 
@@ -322,6 +345,13 @@ func TestGoalLoop_MetVerdict_ClearsGoalAndWritesVerdict(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	// Phase-2 compile stored a UUID-IDed criteria ladder; the canned met-judge
+	// provider echoes the legacy "goal-condition" ID, so exercise the back-compat
+	// fallback (compiledGoalCriteriaFor with empty GoalCriteriaJSON).
+	emptyCriteria := ""
+	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
+		t.Fatal(err)
+	}
 
 	judgeInst.Provider = metJudgeProvider("tests pass")
 
@@ -367,6 +397,15 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	// Phase-2 compile produced a UUID-IDed criteria ladder in GoalCriteriaJSON.
+	// The canned judge providers below echo the legacy "goal-condition" ID, so
+	// exercise the back-compat fallback (compiledGoalCriteriaFor with empty
+	// GoalCriteriaJSON → single "goal-condition" prose criterion) — this tests
+	// the pre-Phase-2 session path that checkGoalLoopAfterTurn still serves.
+	emptyCriteria := ""
+	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
+		t.Fatal(err)
+	}
 
 	judgeInst.Provider = unmetJudgeProvider("3 tests still failing")
 
