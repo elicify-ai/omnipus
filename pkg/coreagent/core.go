@@ -296,7 +296,7 @@ var allStaticToolNames = []string{
 	"search_web", "fetch_url",
 	"send_message", "hand_off", "return_to_default", "send_file",
 	"find_skills", "install_skill",
-	"delegate",
+	"delegate", "message_parent",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
@@ -523,6 +523,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["update_task"] = allow
 			overrides["list_tasks"] = allow
 			overrides["delegate"] = allow
+			overrides["message_parent"] = allow
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -699,6 +700,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// (delegate → many workers/Researcher) and poll them, then synthesize.
 			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
 			"delegate": allow,
+			// message_parent (ADR-053 §5.1): only actually callable when Ray
+			// himself is running as a delegated child session, but seeded
+			// allow here to mirror delegate's posture exactly.
+			"message_parent": allow,
 			// Present / route / share an artifact.
 			"send_message":      allow,
 			"hand_off":          allow,
@@ -752,8 +757,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"set_todos":           allow,
 			// Delegation — delegate to subagents, poll them, list who's available.
 			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
-			"delegate":    allow,
-			"list_agents": allow,
+			"delegate": allow,
+			// message_parent (ADR-053 §5.1): only actually callable when Jim
+			// himself is running as a delegated child session, but seeded
+			// allow here to mirror delegate's posture exactly.
+			"message_parent": allow,
+			"list_agents":    allow,
 			// Task management (current workspace).
 			"create_task": allow,
 			"list_tasks":  allow,
@@ -1468,7 +1477,7 @@ func Jim() *CoreAgent {
 			"search_web", "fetch_url",
 			"send_message", "send_file",
 			"create_task", "update_task", "list_tasks",
-			"cron", "delegate",
+			"cron", "delegate", "message_parent",
 			"hand_off", "return_to_default",
 		},
 	}
@@ -1573,7 +1582,7 @@ func Planner() *CoreAgent {
 		DefaultTools: []string{
 			"read_file", "list_directory",
 			"create_task", "update_task", "list_tasks",
-			"delegate",
+			"delegate", "message_parent",
 			"remember", "recall_memory",
 			"send_message",
 		},

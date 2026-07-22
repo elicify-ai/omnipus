@@ -6833,6 +6833,23 @@ export interface components {
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             plan_id?: string;
+            /**
+             * @description ADR-053 §Contract Surface. Replacement set of concrete paths this plan member creates/edits — see `Task.write_set`. Meaningful only alongside `plan_id`; empty/absent for an exploratory member (D10) or a standalone task.
+             * @example [
+             *       "pkg/plan/plan_lint.go"
+             *     ]
+             */
+            write_set?: string[];
+            /**
+             * @description ADR-053 §Contract Surface — the parallel-group id this member belongs to.
+             * @example stream-schema
+             */
+            stream?: string;
+            /**
+             * @description ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
+             * @example false
+             */
+            is_join?: boolean;
             /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. */
             criteria?: components["schemas"]["AcceptanceCriterion"][];
             /**

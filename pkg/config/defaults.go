@@ -296,6 +296,7 @@ func DefaultConfig() *Config {
 				"find_skills":         "allow",
 				"install_skill":       "allow",
 				"delegate":            "allow",
+				"message_parent":      "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",
 				"update_task":         "allow",

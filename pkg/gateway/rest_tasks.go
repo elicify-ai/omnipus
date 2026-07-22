@@ -199,6 +199,16 @@ func (a *restAPI) toWireTask(t task.Task) gen.Task {
 	if t.PlanID != "" {
 		out.PlanId = ptr(t.PlanID)
 	}
+	if len(t.WriteSet) > 0 {
+		ws := append([]string{}, t.WriteSet...)
+		out.WriteSet = &ws
+	}
+	if t.Stream != "" {
+		out.Stream = ptr(t.Stream)
+	}
+	if t.IsJoin {
+		out.IsJoin = ptr(t.IsJoin)
+	}
 	if len(t.Tags) > 0 {
 		tags := append([]string{}, t.Tags...)
 		out.Tags = &tags
@@ -870,6 +880,15 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.PlanID = *req.PlanId
 	}
+	if req.WriteSet != nil {
+		t.WriteSet = *req.WriteSet
+	}
+	if req.Stream != nil {
+		t.Stream = *req.Stream
+	}
+	if req.IsJoin != nil {
+		t.IsJoin = *req.IsJoin
+	}
 	if req.Tags != nil {
 		t.Tags = *req.Tags
 	}
@@ -1065,6 +1084,15 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			}
 		}
 		patch.PlanID = req.PlanId
+	}
+	if req.WriteSet != nil {
+		patch.WriteSet = req.WriteSet
+	}
+	if req.Stream != nil {
+		patch.Stream = req.Stream
+	}
+	if req.IsJoin != nil {
+		patch.IsJoin = req.IsJoin
 	}
 	if req.Tags != nil {
 		patch.Tags = req.Tags
