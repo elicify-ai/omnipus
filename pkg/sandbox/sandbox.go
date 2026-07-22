@@ -710,13 +710,20 @@ func canonicalizePath(p string) (string, error) {
 	}
 }
 
-// pathIsUnder checks if child is under or equal to parent directory.
+// pathIsUnder checks if child is under or equal to parent directory. It is
+// robust to trailing separators on EITHER argument: a future caller that
+// forgets to filepath.Clean must not trip the equality check (all current
+// callers Clean their inputs, so this is latent — kept correct anyway).
 func pathIsUnder(child, parent string) bool {
-	parentDir := parent
-	if !strings.HasSuffix(parentDir, string(filepath.Separator)) {
-		parentDir += string(filepath.Separator)
+	// Tolerate trailing separators without a full filepath.Clean — cheap:
+	// TrimSuffix does not allocate when there is nothing to trim, and this
+	// keeps the hot path (callers already pass Clean paths) branch-free.
+	child = strings.TrimSuffix(child, string(filepath.Separator))
+	parent = strings.TrimSuffix(parent, string(filepath.Separator))
+	if child == parent {
+		return true
 	}
-	return child == parent || strings.HasPrefix(child, parentDir)
+	return strings.HasPrefix(child, parent+string(filepath.Separator))
 }
 
 // Status describes the active sandbox configuration for operator reporting.

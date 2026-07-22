@@ -459,10 +459,11 @@ func (g *GitGuard) matchesProtectedGit(resolved string) (bool, string) {
 // determines the effective repo dir and subcommand verb, and applies D17.
 //
 // Global options handled (per git(1)): -C <path> (repeatable, cumulative),
-// --git-dir[=]<path>, --work-tree[=]<path>, -c <name=value> / -c=<..>,
-// --no-pager / -p / --paginate, --bare, --no-replace-objects, --literal-pathspecs,
-// --exec-path[=], --namespace[=], --config-env[=]. Unknown leading options are
-// skipped conservatively; the first non-option token is the verb.
+// --git-dir[=]<path>, --work-tree[=]<path>, -c <name=value> / -c=<..> / -c<name=value>
+// (the last is git's glued short form, one token), --no-pager / -p / --paginate,
+// --bare, --no-replace-objects, --literal-pathspecs, --exec-path[=], --namespace[=],
+// --config-env[=]. Unknown leading options are skipped conservatively; the first
+// non-option token is the verb.
 func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 	effCwd := cwd
 	if effCwd == "" {
@@ -500,10 +501,15 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 			// Option that consumes the next token; skip both.
 			i += 2
 		case strings.HasPrefix(a, "--work-tree=") ||
-			strings.HasPrefix(a, "-c=") ||
 			strings.HasPrefix(a, "--namespace=") ||
 			strings.HasPrefix(a, "--exec-path=") ||
 			strings.HasPrefix(a, "--config-env="):
+			i++
+		case strings.HasPrefix(a, "-c") && strings.Contains(a, "="):
+			// git's -c accepts the glued short form too: "-c<name>=<value>"
+			// (one token, no space) is a single-token config override per
+			// git(1), as is "-c=<name>=<value>". The bare "-c" (no "=")
+			// consumes the NEXT token and is handled by the case above.
 			i++
 		case a == "-p" || a == "--paginate" || a == "--no-pager" ||
 			a == "--bare" || a == "--no-replace-objects" ||

@@ -235,9 +235,12 @@ func lineOf(content []byte, offset int) int {
 	return bytes.Count(content[:offset], []byte{'\n'}) + 1
 }
 
-// ScanReader is a convenience wrapper that scans an io.Reader-backed file in one
-// shot (small commit blobs only; the engine commits diffs, not large binaries).
-// It is line-oriented so callers streaming a file get accurate line numbers.
+// ScanReader is a convenience wrapper that buffers an io.Reader-backed file in
+// one shot (small commit blobs only; the engine commits diffs, not large
+// binaries). It is NOT a streaming / constant-memory reader — buf.ReadFrom
+// reads the entire file into memory — but the line numbers it reports ARE
+// accurate, because ScanBytes derives them by counting '\n' bytes over the
+// buffered content (see lineOf).
 func (s *SecretScanner) ScanReader(path string, r *bufio.Reader) ([]SecretFinding, error) {
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(r); err != nil {
