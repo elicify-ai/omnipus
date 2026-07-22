@@ -84,6 +84,7 @@ properties:
       - judging
       - synthesizing
       - idle
+      - awaiting_owner_correction
     default: idle
     description: >
       Runtime-only sub-phase while `state == running` (R1) — NOT itself a
@@ -91,17 +92,50 @@ properties:
       the `blocked_by` DAG. `judging` the plan-level judge is evaluating the
       DoD. `synthesizing` writing the completion/handover summary. `idle`
       no active phase (default; also the value while `state != running`).
+      `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan
+      reached all-terminal-but-unmet; it durably holds here (persisting
+      `last_unmet_terminal_signature`) until the owner appends a correction
+      or a budget is spent. The engine does NOT re-judge unchanged state
+      while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's
+      owner session — sitting at durable lifecycle `paused` — from the
+      `failed(interrupted)` sweep while this phase holds (INV-9). This does
+      NOT add a 9th session-lifecycle state — it is a plan condition only.
     example: "idle"
+  last_unmet_terminal_signature:
+    type: string
+    readOnly: true
+    description: >
+      ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member
+      outcomes at the moment the plan last entered
+      `plan_phase: awaiting_owner_correction`. Persisted (not in-memory
+      only, closing the standalone-F2 restart gap) so the engine can tell
+      an unchanged all-terminal-but-unmet state from a genuinely new one
+      after a restart, and skip re-judging it (no JudgeRound burned).
+      Empty/absent when the plan has never entered
+      `awaiting_owner_correction`.
+    example: "sha256:3b1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a2b"
+  owner_session_id:
+    type: string
+    description: >
+      ADR-053 m-3/FR-147 — the durable session that owns this plan (the
+      reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan
+      is `awaiting_owner_correction`, this session sits at lifecycle
+      `paused`, legitimately idle awaiting the owner, and is exempt from
+      the boot-sweep `failed(interrupted)` transition (INV-9).
+    example: "550e8400-e29b-41d4-a716-446655440000"
   failed_reason:
     type: string
     enum:
       - judge_rounds_exhausted
       - stopped_by_user
       - idle_expired
+      - budget_exhausted
     description: >
       Set only when `state == failed` (R1) — distinguishes
-      judge-rounds-exhausted vs user-stopped vs idle-expired so the three
-      don't collapse to one generic "Failed" badge.
+      judge-rounds-exhausted vs user-stopped vs idle-expired vs the
+      ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted`
+      — added §Contract Surface "Budget / bounds") so the four don't
+      collapse to one generic "Failed" badge.
     example: "judge_rounds_exhausted"
   owner_agent_id:
     type: string
@@ -119,6 +153,17 @@ properties:
       Required (non-empty) before `draft -> approved` for agent-authored
       plans (strict tier); may be empty for human/UI-authored plans (soft
       tier — the judge then evaluates against `title` + `goal`, ADR D5).
+  rationale:
+    type: string
+    maxLength: 4000
+    description: >
+      ADR-053 §Contract Surface — persisted planning rationale (see
+      `PlanCreateRequest.rationale`). Plan-lint and the owner-loop
+      correction flow read this alongside member `write_set`/`stream`/
+      `is_join`.
+    example: >
+      Split into two lint-disjoint worktree streams (schema + client) that
+      converge at a single merge member, per the shard+assemble topology.
   bounds:
     type: object
     additionalProperties: false

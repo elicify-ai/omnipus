@@ -4,9 +4,12 @@
  * `goal_status` is session-scoped (the frame always carries `session_id`,
  * `SESSION_SCOPED_FRAME_TYPES` in chat.ts) — asserts the reducer stores the
  * frame verbatim per-session (mirrors `chat.multisession.test.ts`'s bucket
- * pattern), including the paused/brake/cleared states, and that a frame for
- * a NON-active session does not leak into the foreground `goalStatus`
- * selector.
+ * pattern), including every pill state in the ADR-053 8-value enum
+ * (queued/active/waiting_on_user/judge_unavailable/re-planning/judging/
+ * done/failed — superseding the original 4-value active/
+ * paused_judge_unavailable/brake_fired/cleared set, no back-compat), and
+ * that a frame for a NON-active session does not leak into the foreground
+ * `goalStatus` selector.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -72,9 +75,13 @@ describe('chat handleFrame — goal_status (ADR-049 D6)', () => {
   })
 
   it.each([
-    'paused_judge_unavailable',
-    'brake_fired',
-    'cleared',
+    'queued',
+    'waiting_on_user',
+    'judge_unavailable',
+    're-planning',
+    'judging',
+    'done',
+    'failed',
   ] as const)('stores the %s state verbatim (no special-casing in the reducer)', (state) => {
     act(() => {
       useSessionStore.setState({ activeSessionId: SID_A })

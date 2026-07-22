@@ -1,0 +1,58 @@
+type: object
+title: DelegateStatusResponse
+description: >
+  Response to `delegate` `action: status` (ADR-053 §5.1) — the
+  event-driven V-1 payload assembled from checkpoints + messages (no
+  transcript poll-scrape). Wraps the durable `SessionLifecycleRecord`
+  rather than re-declaring its fields (DoD-11).
+required:
+  - session
+  - unacked_count
+additionalProperties: false
+properties:
+  session:
+    $ref: './SessionLifecycleRecord.yaml'
+  last_checkpoint:
+    type: object
+    additionalProperties: false
+    description: >
+      The most recent checkpoint, if any (absent when none — no schema
+      `nullable: true`; see `SessionLifecycleRecord.needs_input` for why
+      an optional nested object stays plain-optional in this contract
+      set).
+    properties:
+      summary:
+        type: string
+        example: "Wrote the write-set-scoped diff extractor; tests pending."
+      result_so_far:
+        type: string
+        example: "3 of 5 write-set files updated."
+      commit_ref:
+        type: string
+        example: "8f3a1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a"
+      created_at:
+        type: string
+        format: date-time
+        example: "2026-07-22T10:00:00Z"
+  last_progress:
+    type: object
+    additionalProperties: false
+    description: The most recent progress narration, if any (absent when none).
+    properties:
+      text:
+        type: string
+        example: "Scanning pkg/plan for the write-set boundary..."
+      pct:
+        type: integer
+        minimum: 0
+        maximum: 100
+        example: 40
+      created_at:
+        type: string
+        format: date-time
+        example: "2026-07-22T10:00:00Z"
+  unacked_count:
+    type: integer
+    minimum: 0
+    description: Open question+blocker count against this child's per-child ceiling (D15, max 20).
+    example: 1

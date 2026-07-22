@@ -1,8 +1,11 @@
 // GoalIndicator.test.tsx — ADR-049 D6/US-12/FR-094/SD-C9.
 //
 // Pure presentational component, driven entirely by props (goalStatus/
-// loopStatus) — mirrors the BDD "Goal indicator states" scenario outline
-// exactly: active/paused_judge_unavailable/brake_fired/cleared.
+// loopStatus). Covers the ADR-053 8-value pill enum (queued/active/
+// waiting_on_user/judge_unavailable/re-planning/judging/done/failed) —
+// superseding the original 4-value active/paused_judge_unavailable/
+// brake_fired/cleared set, no back-compat. There is no `cleared` literal
+// any more; "renders nothing" is instead covered by `goalStatus === null`.
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -56,27 +59,59 @@ describe('GoalIndicator — active state', () => {
   })
 })
 
-describe('GoalIndicator — paused_judge_unavailable state', () => {
+describe('GoalIndicator — queued state', () => {
+  it('shows a queued summary line and does not show the round line', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} />)
+    expect(screen.getByTestId('goal-indicator-queued')).toHaveTextContent('queued — waiting for a free loop slot')
+    expect(screen.queryByTestId('goal-indicator-round')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — waiting_on_user state', () => {
+  it('shows "waiting on you"', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'waiting_on_user' })} />)
+    expect(screen.getByTestId('goal-indicator-waiting')).toHaveTextContent('waiting on you')
+  })
+})
+
+describe('GoalIndicator — judge_unavailable state', () => {
   it('shows "paused — waiting on judge" and does not show the round line', () => {
-    render(<GoalIndicator goalStatus={makeGoal({ state: 'paused_judge_unavailable' })} />)
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_unavailable' })} />)
     expect(screen.getByTestId('goal-indicator-paused')).toHaveTextContent('paused — waiting on judge')
     expect(screen.queryByTestId('goal-indicator-round')).not.toBeInTheDocument()
   })
 })
 
-describe('GoalIndicator — brake_fired state', () => {
-  it('shows "winding down (bound reached)"', () => {
-    render(<GoalIndicator goalStatus={makeGoal({ state: 'brake_fired' })} />)
-    expect(screen.getByTestId('goal-indicator-brake')).toHaveTextContent('winding down (bound reached)')
+describe('GoalIndicator — re-planning state', () => {
+  it('shows a re-planning summary line', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 're-planning' })} />)
+    expect(screen.getByTestId('goal-indicator-replanning')).toHaveTextContent('re-planning — awaiting your correction')
   })
 })
 
-describe('GoalIndicator — cleared state', () => {
-  it('renders nothing (indicator removed)', () => {
-    const { container } = render(<GoalIndicator goalStatus={makeGoal({ state: 'cleared' })} />)
-    expect(container).toBeEmptyDOMElement()
+describe('GoalIndicator — judging state', () => {
+  it('shows "judging…"', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'judging' })} />)
+    expect(screen.getByTestId('goal-indicator-judging')).toHaveTextContent('judging…')
   })
+})
 
+describe('GoalIndicator — done state', () => {
+  it('shows "done" and still surfaces the latest judge reason', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'done' })} />)
+    expect(screen.getByTestId('goal-indicator-done')).toHaveTextContent('done')
+    expect(screen.getByText('tests still failing')).toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — failed state', () => {
+  it('shows "failed"', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'failed' })} />)
+    expect(screen.getByTestId('goal-indicator-failed')).toHaveTextContent('failed')
+  })
+})
+
+describe('GoalIndicator — no frame', () => {
   it('renders nothing when goalStatus is null and there is no loop either', () => {
     const { container } = render(<GoalIndicator goalStatus={null} />)
     expect(container).toBeEmptyDOMElement()

@@ -2230,21 +2230,24 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 				Status PlanListResponsePlansDodStatus `json:"status"`
 				Text   string                         `json:"text"`
 			} `json:"dod,omitempty"`
-			FailedReason   *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
-			Goal           *string                            `json:"goal,omitempty"`
-			Id             string                             `json:"id"`
-			JudgeRounds    *int                               `json:"judge_rounds,omitempty"`
-			LastActivityAt *time.Time                         `json:"last_activity_at,omitempty"`
-			Owner          *string                            `json:"owner,omitempty"`
-			OwnerAgentId   string                             `json:"owner_agent_id"`
-			PausedReason   *string                            `json:"paused_reason,omitempty"`
-			PlanPhase      *PlanListResponsePlansPlanPhase    `json:"plan_phase,omitempty"`
-			Progress       *float32                           `json:"progress,omitempty"`
-			StartedAt      *time.Time                         `json:"started_at,omitempty"`
-			State          PlanListResponsePlansState         `json:"state"`
-			Title          string                             `json:"title"`
-			UpdatedAt      time.Time                          `json:"updated_at"`
-			WorkspaceId    string                             `json:"workspace_id"`
+			FailedReason               *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
+			Goal                       *string                            `json:"goal,omitempty"`
+			Id                         string                             `json:"id"`
+			JudgeRounds                *int                               `json:"judge_rounds,omitempty"`
+			LastActivityAt             *time.Time                         `json:"last_activity_at,omitempty"`
+			LastUnmetTerminalSignature *string                            `json:"last_unmet_terminal_signature,omitempty"`
+			Owner                      *string                            `json:"owner,omitempty"`
+			OwnerAgentId               string                             `json:"owner_agent_id"`
+			OwnerSessionId             *string                            `json:"owner_session_id,omitempty"`
+			PausedReason               *string                            `json:"paused_reason,omitempty"`
+			PlanPhase                  *PlanListResponsePlansPlanPhase    `json:"plan_phase,omitempty"`
+			Progress                   *float32                           `json:"progress,omitempty"`
+			Rationale                  *string                            `json:"rationale,omitempty"`
+			StartedAt                  *time.Time                         `json:"started_at,omitempty"`
+			State                      PlanListResponsePlansState         `json:"state"`
+			Title                      string                             `json:"title"`
+			UpdatedAt                  time.Time                          `json:"updated_at"`
+			WorkspaceId                string                             `json:"workspace_id"`
 		}{
 			{
 				Id:           "01J3ZQK8N2H8VXNRP5T7C9M4WE",

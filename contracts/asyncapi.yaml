@@ -85,6 +85,10 @@ channels:
         $ref: '#/components/messages/ToolCallResultFrame'
       SubagentStartFrame:
         $ref: '#/components/messages/SubagentStartFrame'
+      SubagentMessageFrame:
+        $ref: '#/components/messages/SubagentMessageFrame'
+      SubagentStateFrame:
+        $ref: '#/components/messages/SubagentStateFrame'
       SubagentEndFrame:
         $ref: '#/components/messages/SubagentEndFrame'
       TaskStatusChangedFrame:
@@ -362,6 +366,31 @@ operations:
       collapsible span container in the assistant message.
     messages:
       - $ref: '#/channels/chat/messages/SubagentStartFrame'
+
+  receiveSubagentMessage:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      ADR-053 §Contract Surface — "Mid-span subagent frames". A mid-span
+      typed-message ping (progress/checkpoint/artifact/blocker/question/
+      decision_request/error/handback/steer/respond) riding between the
+      subagent_start/subagent_end brackets. Feeds pill/panel/board live;
+      full-fidelity data is fetched via delegate.inbox/peek.
+    messages:
+      - $ref: '#/channels/chat/messages/SubagentMessageFrame'
+
+  receiveSubagentState:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      ADR-053 §Contract Surface — "Mid-span subagent frames". A mid-span
+      live lifecycle ping (SessionLifecycleRecord.state projection) plus
+      optional steering-receipt acknowledgement, riding between the
+      subagent_start/subagent_end brackets.
+    messages:
+      - $ref: '#/channels/chat/messages/SubagentStateFrame'
 
   receiveSubagentEnd:
     action: receive
@@ -881,6 +910,26 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SubagentStartFrame'
+
+    SubagentMessageFrame:
+      name: SubagentMessageFrame
+      title: subagent_message
+      summary: >
+        Mid-span typed-message ping within an open subagent span (server →
+        client, ADR-053).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SubagentMessageFrame'
+
+    SubagentStateFrame:
+      name: SubagentStateFrame
+      title: subagent_state
+      summary: >
+        Mid-span live lifecycle ping within an open subagent span (server →
+        client, ADR-053).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SubagentStateFrame'
 
     SubagentEndFrame:
       name: SubagentEndFrame
@@ -1832,6 +1881,122 @@ components:
           type: string
         message:
           type: string
+
+    SubagentMessageFrame:
+      title: SubagentMessageFrame
+      description: >
+        Server → client (ADR-053 §Contract Surface — "Mid-span subagent
+        frames"). A flat, UI-facing PROJECTION of the underlying
+        SessionMessage riding between subagent_start/subagent_end — see
+        components/schemas/SubagentMessageFrame.yaml for the full shape-
+        decision rationale (why this is not a full embedded SessionMessage
+        oneOf). Canonical copy — keep in sync by hand.
+      type: object
+      required:
+        - type
+        - session_id
+        - span_id
+        - message_id
+        - kind
+        - sender_identity
+        - untrusted_origin
+        - created_at
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: subagent_message
+        session_id:
+          type: string
+          minLength: 1
+        span_id:
+          type: string
+          minLength: 1
+        message_id:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum:
+            - progress
+            - checkpoint
+            - artifact
+            - blocker
+            - question
+            - decision_request
+            - error
+            - handback
+            - steer
+            - respond
+        text:
+          type: string
+        pct:
+          type: integer
+          minimum: 0
+          maximum: 100
+        correlation_id:
+          type: string
+        sender_identity:
+          type: string
+          minLength: 1
+        untrusted_origin:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    SubagentStateFrame:
+      title: SubagentStateFrame
+      description: >
+        Server → client (ADR-053 §Contract Surface — "Mid-span subagent
+        frames"). A flat projection of SessionLifecycleRecord.state riding
+        between subagent_start/subagent_end, plus an optional steering-
+        receipt. Canonical copy — keep in sync by hand.
+      type: object
+      required:
+        - type
+        - session_id
+        - span_id
+        - state
+        - created_at
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: subagent_state
+        session_id:
+          type: string
+          minLength: 1
+        span_id:
+          type: string
+          minLength: 1
+        state:
+          type: string
+          enum:
+            - queued
+            - running
+            - needs_input
+            - paused
+            - completed
+            - failed
+            - cancelled
+            - timed_out
+        steering_receipt:
+          type: object
+          nullable: true
+          required:
+            - correlation_id
+            - applied_at
+          additionalProperties: false
+          properties:
+            correlation_id:
+              type: string
+            applied_at:
+              type: string
+              format: date-time
+        created_at:
+          type: string
+          format: date-time
 
     TaskStatusChangedFrame:
       title: TaskStatusChangedFrame
@@ -3037,9 +3202,11 @@ components:
       title: GoalStatusFrame
       description: >
         Server → client. Status push for a session's active /goal loop
-        (ADR-049 D6/D7/US-8). Emitted on round completion, state change,
-        and clear/stop. Session-scoped (registered in
-        SESSION_SCOPED_FRAME_TYPES).
+        (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053
+        §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round
+        completion, state change, and clear/stop. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep
+        in sync by hand with components/schemas/GoalStatusFrame.yaml.
       type: object
       required:
         - type
@@ -3059,11 +3226,22 @@ components:
         session_id:
           type: string
           minLength: 1
+        goal_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-053 R§8.11 — the specific goal-id this pill/timer/round-
+            budget belongs to (a session may carry multiple independent
+            goals). Optional — see components/schemas/GoalStatusFrame.yaml
+            for the shape decision.
         condition:
           type: string
         round:
           type: integer
           minimum: 0
+          description: >
+            Adjudications consumed so far (ADR-053 R§8.9 — one round = one
+            adjudication, claim-triggered OR idle-settled).
         max_rounds:
           type: integer
           minimum: 1
@@ -3078,10 +3256,20 @@ components:
         state:
           type: string
           enum:
+            - queued
             - active
-            - paused_judge_unavailable
-            - brake_fired
-            - cleared
+            - waiting_on_user
+            - judge_unavailable
+            - re-planning
+            - judging
+            - done
+            - failed
+          description: >
+            ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
+            (8 states, superseding the original 4-value
+            active/paused_judge_unavailable/brake_fired/cleared set — no
+            back-compat). See components/schemas/GoalStatusFrame.yaml for
+            the full per-state crosswalk description.
 
     LoopStatusFrame:
       title: LoopStatusFrame

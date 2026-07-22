@@ -1,0 +1,81 @@
+type: object
+title: SessionMessageRespond
+description: >
+  SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract
+  Surface). Parent -> child. Answers a `question`/`decision_request` by
+  `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The
+  runtime validator REJECTS a `respond` whose target question's derived
+  authority is `owner_required` (R§8.2) — that rejection is a runtime
+  business rule, not schema-expressible; this schema only shapes the
+  request. Envelope fields are duplicated inline (ADR-034 precedent, see
+  SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+  - correlation_id
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WW"
+  session_id:
+    type: string
+    minLength: 1
+    description: The CHILD session being answered.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    description: The parent session issuing the response.
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - parent_to_child
+    example: "parent_to_child"
+  kind:
+    type: string
+    enum:
+      - respond
+    example: "respond"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "jim"
+  untrusted_origin:
+    type: boolean
+    description: False — parent-authored, trusted content.
+    example: false
+  text:
+    type: string
+    maxLength: 16384
+    description: >
+      The answer. For a `decision_request`, names the chosen option
+      verbatim from its `options[]`.
+    example: "Yes, overwrite it — the backup is stale."
+  correlation_id:
+    type: string
+    minLength: 1
+    description: The `correlation_id` of the `question`/`decision_request` being answered.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"

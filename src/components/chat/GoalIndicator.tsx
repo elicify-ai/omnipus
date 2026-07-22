@@ -4,20 +4,33 @@
 // by `goal_status` WS frames (the chat store just stores the frame
 // verbatim — see chat.ts's `case 'goal_status'`). Renders in the SAME
 // non-scrolling composer slot as RateLimitIndicator (SD-C9), directly above
-// the composer: persistent (no dismiss control) while a goal is active,
-// collapses to nothing when cleared — mirroring ActivityBar's
-// `empty:hidden` precedent rather than inventing a new one.
+// the composer: persistent (no dismiss control) while the session bucket
+// holds a frame, collapses to nothing once the bucket goes back to null
+// (session switch/reset) — mirroring ActivityBar's `empty:hidden` precedent
+// rather than inventing a new one.
 //
 // Also renders a compact `/loop` status line (mode/run/next-delay) when a
 // `loop_status` frame has arrived for the session — LoopStatusFrame.state is
 // an UNCONSTRAINED string on the wire (unlike GoalStatusFrame.state's closed
-// 4-value enum), so there is no literal this component can compare against
-// to auto-hide a "stopped"/cleared loop the way it does for a goal; it
-// simply renders whenever `loopStatus` is non-null. Flagged in this wave's
-// report as a contract asymmetry for Wave 2 backend to reconcile.
+// enum), so there is no literal this component can compare against to
+// auto-hide a "stopped" loop the way it once did for a goal; it simply
+// renders whenever `loopStatus` is non-null. Flagged in this wave's report
+// as a contract asymmetry for Wave 2 backend to reconcile.
 //
-// `aria-live="polite"` on the root announces state transitions (active →
-// paused → brake-fired → cleared) to screen readers without stealing focus.
+// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10: `GoalStatusFrame.state`
+// is now an 8-value pill enum (queued/active/waiting_on_user/
+// judge_unavailable/re-planning/judging/done/failed), superseding the
+// original 4-value active/paused_judge_unavailable/brake_fired/cleared set
+// — NO back-compat, and no `cleared` literal survives. This is a MINIMAL
+// compat fix to render all 8 states sanely; it deliberately does NOT do the
+// FE-1 pill redesign (bottom-right relocation, per-goal-id multi-pill,
+// click-to-expand criteria) — that remains a Phase-2 deliverable. Since
+// there is no `cleared` state to compare against any more, this component
+// renders whenever a non-null `goalStatus` frame is present; the store
+// clears the bucket (session switch / reset) rather than a state literal.
+//
+// `aria-live="polite"` on the root announces state transitions to screen
+// readers without stealing focus.
 
 import { Target, Repeat } from '@phosphor-icons/react'
 import type { GoalStatusFrame, LoopStatusFrame } from '@/lib/api/generated/asyncapi-types'
@@ -48,12 +61,74 @@ function formatNextDelay(seconds: number): string {
   return rem > 0 ? `${m}m ${rem}s` : `${m}m`
 }
 
+type GoalPillState = GoalStatusFrame['state']
+
+interface StatusLineConfig {
+  testId: string
+  text: string
+  className: string
+}
+
+// Non-`active` states each render a single summary line (no condition/round
+// detail) — mirrors the prior paused/brake-fired convention. Exhaustive
+// switch with a `never` default so a future 9th enum value fails typecheck
+// here instead of silently rendering nothing.
+function describeNonActiveState(state: Exclude<GoalPillState, 'active'>): StatusLineConfig {
+  switch (state) {
+    case 'queued':
+      return {
+        testId: 'goal-indicator-queued',
+        text: 'queued — waiting for a free loop slot',
+        className: 'text-[var(--color-muted)]',
+      }
+    case 'waiting_on_user':
+      return {
+        testId: 'goal-indicator-waiting',
+        text: 'waiting on you',
+        className: 'text-[color:var(--color-warning)]',
+      }
+    case 'judge_unavailable':
+      return {
+        testId: 'goal-indicator-paused',
+        text: 'paused — waiting on judge',
+        className: 'text-[color:var(--color-warning)]',
+      }
+    case 're-planning':
+      return {
+        testId: 'goal-indicator-replanning',
+        text: 're-planning — awaiting your correction',
+        className: 'text-[color:var(--color-warning)]',
+      }
+    case 'judging':
+      return {
+        testId: 'goal-indicator-judging',
+        text: 'judging…',
+        className: 'text-[var(--color-muted)]',
+      }
+    case 'done':
+      return {
+        testId: 'goal-indicator-done',
+        text: 'done',
+        className: 'text-[color:var(--color-success)]',
+      }
+    case 'failed':
+      return {
+        testId: 'goal-indicator-failed',
+        text: 'failed',
+        className: 'text-[color:var(--color-error)]',
+      }
+    default: {
+      const exhaustiveCheck: never = state
+      throw new Error(`GoalIndicator: unhandled goal pill state ${String(exhaustiveCheck)}`)
+    }
+  }
+}
+
 export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
-  // BDD "Goal indicator states": `cleared` → indicator removed. The store
-  // keeps the frame verbatim (see chat.ts) so a later re-render still has
-  // access to the last-known reason etc.; this component is the one place
-  // that decides 'cleared' means "render nothing".
-  const showGoal = !!goalStatus && goalStatus.state !== 'cleared'
+  // No `cleared` literal survives in the 8-value pill enum (ADR-053) — the
+  // store clears the session bucket rather than this component matching a
+  // state value, so any non-null frame renders.
+  const showGoal = !!goalStatus
   const showLoop = !!loopStatus
 
   if (!showGoal && !showLoop) return null
@@ -88,16 +163,21 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
                 )}
               </>
             )}
-            {goalStatus.state === 'paused_judge_unavailable' && (
-              <p className="text-[color:var(--color-warning)]" data-testid="goal-indicator-paused">
-                paused — waiting on judge
-              </p>
-            )}
-            {goalStatus.state === 'brake_fired' && (
-              <p className="text-[var(--color-muted)]" data-testid="goal-indicator-brake">
-                winding down (bound reached)
-              </p>
-            )}
+            {goalStatus.state !== 'active' && (() => {
+              const { testId, text, className } = describeNonActiveState(goalStatus.state)
+              return (
+                <>
+                  <p className={className} data-testid={testId}>
+                    {text}
+                  </p>
+                  {goalStatus.latest_reason && (
+                    <p className="text-[var(--color-muted)] mt-0.5 italic truncate" title={goalStatus.latest_reason}>
+                      {goalStatus.latest_reason}
+                    </p>
+                  )}
+                </>
+              )
+            })()}
           </div>
         </div>
       )}

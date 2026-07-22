@@ -1,0 +1,27 @@
+type: object
+title: DelegateStatusAction
+description: >
+  `delegate` tool call, `action: status` (ADR-053 §5.1). Event-driven V-1
+  payload assembled from checkpoints + messages — no longer a
+  poll-scrape of the child transcript.
+required:
+  - action
+  - session_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - status
+    example: "status"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session to query.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  task_id:
+    type: string
+    description: >
+      DEPRECATED compat alias for `session_id` (pre-ADR-053 callers).
+      When both are present, `session_id` wins.
+    example: "task-456"

@@ -1,0 +1,98 @@
+type: object
+title: SessionMessageHandback
+description: >
+  SessionMessage `oneOf` variant, `kind: handback` (ADR-053 §Contract
+  Surface). Child -> parent. The terminal or pause-boundary message; feeds
+  the rung-0 evidence gate. `mode: final` is a completed/terminal session;
+  `mode: pause` is the auto-handback the engine fires on a `needs_input`
+  TTL expiry (G-6, INV-5) or a cooperative cancel-soft. Envelope fields are
+  duplicated inline (ADR-034 precedent, see SessionMessageProgress for the
+  rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - result_so_far
+  - artifacts
+  - open_questions
+  - mode
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WQ"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - handback
+    example: "handback"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    example: true
+  result_so_far:
+    type: string
+    maxLength: 50000
+    description: Accumulated result text at handback time. May be empty on an early pause.
+    example: "Extracted the write-set diff for 3 of 5 declared paths."
+  artifacts:
+    type: array
+    items:
+      type: string
+    description: Paths to output files / artifact references. May be empty.
+    example:
+      - "work/report.pdf"
+  open_questions:
+    type: array
+    items:
+      type: string
+    description: >
+      Untrusted, unresolved questions the child had outstanding at
+      handback time. May be empty (a clean final handback).
+    example:
+      - "Should the merge member also update the changelog?"
+  mode:
+    type: string
+    enum:
+      - final
+      - pause
+    description: >
+      `final` — terminal handback, no further work expected from this
+      generation. `pause` — cooperative pause (TTL auto-handback or
+      cancel-soft grace); the session may warm-resume via `follow_up`.
+    example: "final"

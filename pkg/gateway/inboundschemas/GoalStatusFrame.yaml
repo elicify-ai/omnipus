@@ -1,12 +1,14 @@
 title: GoalStatusFrame
 description: >
   Server → client. Status push for a session's active `/goal` loop
-  (ADR-049 D6/D7/US-8). Emitted on round completion, state change, and
-  clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
-  Canonical copy lives inline in contracts/asyncapi.yaml
-  components.schemas (AsyncAPI does not resolve cross-file $ref for its own
-  codegen) — this file exists for the Constraint #8 5-step process and the
-  inboundschemas sync; keep both in sync by hand.
+  (ADR-049 D6/D7/US-8; `state` enum + `goal_id` extended by ADR-053
+  §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round
+  completion, state change, and clear/stop. Session-scoped (registered in
+  SESSION_SCOPED_FRAME_TYPES). Canonical copy lives inline in
+  contracts/asyncapi.yaml components.schemas (AsyncAPI does not resolve
+  cross-file $ref for its own codegen) — this file exists for the
+  Constraint #8 5-step process and the inboundschemas sync; keep both in
+  sync by hand.
 type: object
 required:
   - type
@@ -27,6 +29,19 @@ properties:
     type: string
     minLength: 1
     description: Session this goal loop belongs to.
+  goal_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-053 R§8.11 — the specific goal-id this pill/timer/round-budget
+      belongs to. A session may carry multiple independent goals, each
+      rendering its own pill; `goal_id` disambiguates which one this
+      frame updates. OPTIONAL (SHAPE DECISION, flagged for review) —
+      absent means the session's single (legacy, pre-multi-goal) goal;
+      kept optional rather than required so this purely-additive field
+      does not force every existing GoalStatusFrame construction site to
+      change in the same pass as the state-enum replacement below.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
   condition:
     type: string
     description: The proof-driven condition text set by `/goal <condition>`.
@@ -35,8 +50,11 @@ properties:
     type: integer
     minimum: 0
     description: >
-      Rounds consumed so far (ADR D7 — one round = one worker turn plus its
-      judge evaluation).
+      Adjudications consumed so far (ADR-053 R§8.9 — one round = one
+      adjudication, claim-triggered OR idle-settled; supersedes the
+      original ADR D7 "one worker turn plus its judge evaluation"
+      definition — the stored integer is preserved unchanged across the
+      upgrade, only the increment site moved).
     example: 3
   max_rounds:
     type: integer
@@ -65,14 +83,32 @@ properties:
   state:
     type: string
     enum:
+      - queued
       - active
-      - paused_judge_unavailable
-      - brake_fired
-      - cleared
+      - waiting_on_user
+      - judge_unavailable
+      - re-planning
+      - judging
+      - done
+      - failed
     description: >
-      Current state of this goal loop (Part C `GoalIndicator` render
-      states). `active` iterating normally. `paused_judge_unavailable` the
-      judge call is temporarily unavailable; no round increment while
-      paused. `brake_fired` a bound (rounds/idle) was reached; winding
-      down. `cleared` the goal was explicitly cleared/stopped.
+      ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (8
+      states, superseding the original 4-value
+      active/paused_judge_unavailable/brake_fired/cleared set — no
+      back-compat). `queued` admitted to the global cap, not yet
+      dispatched (lifecycle). `active` iterating normally (lifecycle
+      default overlay). `waiting_on_user` a typed `GOAL_STATUS:
+      waiting_on_user` pause, OR `needs_input`/`paused` for any other
+      reason — cancel-soft grace, etc. (lifecycle). `judge_unavailable`
+      the Judge is rate-limited/down; no round increment while this holds
+      (ephemeral engine-phase signal, pill-only — no lifecycle
+      counterpart). `re-planning` the DURABLE `plan_phase =
+      awaiting_owner_correction` condition over a `paused` owner session
+      (C1 — survives restart, so the pill reconstructs correctly as
+      `re-planning`, not `waiting_on_user`, after a boot sweep).
+      `judging` a verifier turn is in flight (ephemeral engine-phase
+      signal, pill-only). `done` terminal success (lifecycle `completed`).
+      `failed` terminal failure — `failed`/`cancelled`/`timed_out`
+      lifecycle states collapse here; the reason distinguishes
+      stopped/timeout/budget/rounds-exhausted.
     example: "active"

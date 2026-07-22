@@ -216,6 +216,32 @@ export interface SubagentEndFrame {
   message?: string;
 }
 
+export interface SubagentMessageFrame {
+  type: "subagent_message";
+  session_id: string;
+  span_id: string;
+  message_id: string;
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond";
+  text?: string;
+  pct?: number;
+  correlation_id?: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  created_at: string;
+}
+
+export interface SubagentStateFrame {
+  type: "subagent_state";
+  session_id: string;
+  span_id: string;
+  state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+  steering_receipt?: {
+    correlation_id: string;
+    applied_at: string;
+  };
+  created_at: string;
+}
+
 export interface TaskStatusChangedFrame {
   type: "task_status_changed";
   session_id: string;
@@ -509,13 +535,14 @@ export interface BrowserCaptureControlFrame {
 export interface GoalStatusFrame {
   type: "goal_status";
   session_id: string;
+  goal_id?: string;
   condition: string;
   round: number;
   max_rounds: number;
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "active" | "paused_judge_unavailable" | "brake_fired" | "cleared";
+  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed";
 }
 
 export interface LoopStatusFrame {
@@ -573,6 +600,8 @@ export type WsFrame =
   | ToolCallResultFrame
   | SubagentStartFrame
   | SubagentEndFrame
+  | SubagentMessageFrame
+  | SubagentStateFrame
   | TaskStatusChangedFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
@@ -644,6 +673,8 @@ export type ServerFrame =
   | ToolCallResultFrame
   | SubagentStartFrame
   | SubagentEndFrame
+  | SubagentMessageFrame
+  | SubagentStateFrame
   | TaskStatusChangedFrame
   | ReplayMessageFrame
   | ReplayErrorFrame

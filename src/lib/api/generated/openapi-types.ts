@@ -5400,6 +5400,29 @@ export interface components {
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             plan_id?: string;
+            /**
+             * @description ADR-053 §Contract Surface — "write_sets + rationale on create_plan" (US-11/G-16). Concrete paths this plan MEMBER task creates/edits. Plan-lint reads this at approve to reject overlapping parallel `stream`s and join-less convergence points. Empty for an exploratory member whose write footprint is unknowable up front — it runs in its own isolated checkout at the highest available isolation rung (worktree -> go-git clone -> subdir, FR-154) rather than declaring a write-set (D10). Meaningful only when `plan_id` is set; ignored on a standalone task.
+             * @example [
+             *       "pkg/plan/plan_lint.go",
+             *       "pkg/plan/plan_lint_test.go"
+             *     ]
+             */
+            write_set?: string[];
+            /**
+             * @description ADR-053 §Contract Surface — the parallel-group id this plan member belongs to (US-11/g4). Members sharing a `stream` run serially within it; different streams may run concurrently provided their `write_set`s are disjoint (plan-lint invariant). Absent for a member not part of a parallel decomposition.
+             * @example stream-schema
+             */
+            stream?: string;
+            /**
+             * @description ADR-053 §Contract Surface — true marks this plan member as an authored join/assemble member with its own criteria, converging one or more parallel `stream`s into a single artifact (g5 shard+assemble topology). Plan-lint rejects a convergence point with no authored join member (join-less plan, US-11 AS-2). Absent/false is the common case (not a join member) — deliberately no schema `default:` alongside this optional field (see the `priority`/`surface` convention note in this file's `required` comment: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as NON-optional in the plain TS type regardless of the `required` list, which would make `is_join` falsely mandatory on every existing `Task` literal across the SPA test suite).
+             * @example false
+             */
+            is_join?: boolean;
+            /**
+             * @description ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
+             * @example 0
+             */
+            readonly judge_rounds?: number;
             /** @description Acceptance criteria (Definition of Done) for this task (ADR-049 D2/D5/FR-3). Agent-created tasks require at least one; UI/human creation is soft (falls back to judging title+description when empty). Immutable once a recurring Trigger run has started (per-run snapshot). */
             criteria?: components["schemas"]["AcceptanceCriterion"][];
             /**
@@ -6694,6 +6717,23 @@ export interface components {
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             plan_id?: string;
+            /**
+             * @description ADR-053 §Contract Surface. Concrete paths this plan member creates/ edits — see `Task.write_set`. Meaningful only alongside `plan_id`; empty/absent for an exploratory member (D10) or a standalone task.
+             * @example [
+             *       "pkg/plan/plan_lint.go"
+             *     ]
+             */
+            write_set?: string[];
+            /**
+             * @description ADR-053 §Contract Surface — the parallel-group id this member belongs to.
+             * @example stream-schema
+             */
+            stream?: string;
+            /**
+             * @description ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
+             * @example false
+             */
+            is_join?: boolean;
             /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). */
             criteria?: components["schemas"]["AcceptanceCriterion"][];
             /**
@@ -7792,18 +7832,28 @@ export interface components {
              */
             state: "draft" | "approved" | "running" | "done" | "failed";
             /**
-             * @description Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+             * @description Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
              * @default idle
              * @example idle
              * @enum {string}
              */
-            plan_phase: "dispatching" | "judging" | "synthesizing" | "idle";
+            plan_phase: "dispatching" | "judging" | "synthesizing" | "idle" | "awaiting_owner_correction";
             /**
-             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+             * @description ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+             * @example sha256:3b1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a2b
+             */
+            readonly last_unmet_terminal_signature?: string;
+            /**
+             * @description ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            owner_session_id?: string;
+            /**
+             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
              * @example judge_rounds_exhausted
              * @enum {string}
              */
-            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired";
+            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "budget_exhausted";
             /**
              * @description Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
              * @example jim
@@ -7811,6 +7861,11 @@ export interface components {
             owner_agent_id: string;
             /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5). */
             dod?: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
+             * @example Split into two lint-disjoint worktree streams (schema + client) that converge at a single merge member, per the shard+assemble topology.
+             */
+            rationale?: string;
             /** @description Per-plan overrides of the global `PlanningConfig` bounds (FR-9). Absent fields inherit the global default. */
             bounds?: {
                 /**
@@ -7923,6 +7978,11 @@ export interface components {
             owner_agent_id: string;
             /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). */
             dod?: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
+             * @example Split into two lint-disjoint worktree streams (schema + client) that converge at a single merge member, per the shard+assemble topology.
+             */
+            rationale?: string;
             /** @description Per-plan overrides of the global `PlanningConfig` bounds (FR-9). */
             bounds?: {
                 /** @example 20 */
@@ -8324,6 +8384,1574 @@ export interface components {
              * @example 1000
              */
             total: number;
+        };
+        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
+        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageDecisionRequest"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
+        /**
+         * SessionMessageProgress
+         * @description SessionMessage `oneOf` variant, `kind: progress` (ADR-053 §Contract Surface — SessionMessage). Child -> parent. A lightweight in-flight narration line; never a claim, never a checkpoint. Envelope fields are duplicated inline on every variant (ADR-034 precedent — oapi-codegen inlines `oneOf` members that are direct component refs into named `As*`/`From*` accessors; a shared base composed via `allOf` across files does not receive the same treatment, so each variant is flat, matching `AgentCreateRequestMain`/`AgentCreateRequestSubagent`).
+         */
+        SessionMessageProgress: {
+            /**
+             * @description Dedupe key. At-least-once delivery over the existing `pkg/bus`; the runtime dedupes repeated deliveries of the same `message_id`.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            message_id: string;
+            /**
+             * @description The durable session this message belongs to (SessionLifecycleRecord.session_id).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The parent session this child reports to. Null for a top-level session.
+             * @example 660e8400-e29b-41d4-a716-446655440000
+             */
+            parent_session_id?: string | null;
+            /**
+             * @description Session generation this message was emitted under (resumed_from lineage) — a message from a stale generation is inert.
+             * @example 0
+             */
+            generation?: number;
+            /**
+             * @description M8 — the unused `human` value is dropped. `progress` is always child -> parent.
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description Discriminator for the SessionMessage `oneOf`. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            kind: "progress";
+            /**
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/subturn.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @example 0
+             */
+            depth: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this message was created.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * @description Agent ID (or "human") that authored this message.
+             * @example ray
+             */
+            sender_identity: string;
+            /**
+             * @description True when this message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12) — plain text or sanctioned markdown only, no raw HTML, non-clickable links.
+             * @example true
+             */
+            untrusted_origin: boolean;
+            /**
+             * @description Untrusted narration text. Capped at the 32 KiB child-send body cap (session_messaging.child_send_body).
+             * @example Scanning pkg/plan for the write-set boundary...
+             */
+            text: string;
+            /**
+             * @description Optional completion percentage estimate.
+             * @example 40
+             */
+            pct?: number;
+        };
+        /**
+         * SessionMessageCheckpoint
+         * @description SessionMessage `oneOf` variant, `kind: checkpoint` (ADR-053 §Contract Surface). Child -> parent. The durable checkpoint that powers Play-from- commit (D13) and the boot-sweep recover-to-checkpoint (§5). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageCheckpoint: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "checkpoint";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description 1-3 sentence checkpoint summary.
+             * @example Wrote the write-set-scoped diff extractor; tests pending.
+             */
+            summary: string;
+            /**
+             * @description Accumulated result text at this checkpoint, if any.
+             * @example 3 of 5 write-set files updated.
+             */
+            result_so_far?: string;
+            /**
+             * @description The go-git boundary commit hash this checkpoint corresponds to (rung-1 evidence, R§8.4). Absent when the runtime degraded below the worktree/clone isolation rungs (no boundary commit taken).
+             * @example 8f3a1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a
+             */
+            commit_ref?: string;
+        };
+        /**
+         * SessionMessageArtifact
+         * @description SessionMessage `oneOf` variant, `kind: artifact` (ADR-053 §Contract Surface). Child -> parent. References output files the child produced. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageArtifact: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WG */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "artifact";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description Paths to output files / artifact references produced by the child.
+             * @example [
+             *       "work/report.pdf"
+             *     ]
+             */
+            paths: string[];
+            /**
+             * @description Untrusted free-text note about the artifact.
+             * @example Draft v1 — pending review.
+             */
+            note?: string;
+        };
+        /**
+         * SessionMessageBlocker
+         * @description SessionMessage `oneOf` variant, `kind: blocker` (ADR-053 §Contract Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageBlocker: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WH */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "blocker";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description Untrusted description of what is blocking progress.
+             * @example The sandbox denied `go test` — awaiting policy review.
+             */
+            text: string;
+            /**
+             * @description Blocker severity, used to prioritize the parent's response.
+             * @example medium
+             * @enum {string}
+             */
+            severity: "low" | "medium" | "high";
+            /**
+             * @description Optional. A blocker counts toward the per-child unacked ceiling (D15) like a question; a `correlation_id` lets a subsequent `inbox_ack`/`respond` reference it precisely.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WJ
+             */
+            correlation_id?: string;
+        };
+        /**
+         * SessionMessageQuestion
+         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageQuestion: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WK */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "question";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description Untrusted question text.
+             * @example Should I overwrite the existing config.json backup?
+             */
+            text: string;
+            /**
+             * @description True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
+             * @example true
+             */
+            wait: boolean;
+            /**
+             * @description Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id: string;
+            /**
+             * @description Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
+             * @example self_ok
+             * @enum {string}
+             */
+            authority?: "self_ok" | "owner_required";
+        };
+        /**
+         * SessionMessageDecisionRequest
+         * @description SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageDecisionRequest: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WM */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "decision_request";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description Untrusted decision prompt.
+             * @example Which lint profile should the plan-lint gate use?
+             */
+            text: string;
+            /**
+             * @description The enumerated choices. The answering `respond.text` names the chosen option verbatim.
+             * @example [
+             *       "strict",
+             *       "soft"
+             *     ]
+             */
+            options: string[];
+            /**
+             * @description Routes the eventual `respond` back to this decision request.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WN
+             */
+            correlation_id: string;
+            /**
+             * @description Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
+             * @example owner_required
+             * @enum {string}
+             */
+            authority?: "self_ok" | "owner_required";
+        };
+        /**
+         * SessionMessageError
+         * @description SessionMessage `oneOf` variant, `kind: error` (ADR-053 §Contract Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageError: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WP */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "error";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description Untrusted error description.
+             * @example go-git worktree add failed: disk quota exceeded.
+             */
+            text: string;
+            /**
+             * @description True when the child cannot continue (the session will terminate); false for a recoverable error the child is still working past.
+             * @example false
+             */
+            fatal: boolean;
+        };
+        /**
+         * SessionMessageHandback
+         * @description SessionMessage `oneOf` variant, `kind: handback` (ADR-053 §Contract Surface). Child -> parent. The terminal or pause-boundary message; feeds the rung-0 evidence gate. `mode: final` is a completed/terminal session; `mode: pause` is the auto-handback the engine fires on a `needs_input` TTL expiry (G-6, INV-5) or a cooperative cancel-soft. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageHandback: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WQ */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example 660e8400-e29b-41d4-a716-446655440000 */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example child_to_parent
+             * @enum {string}
+             */
+            direction: "child_to_parent";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "handback";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example ray */
+            sender_identity: string;
+            /** @example true */
+            untrusted_origin: boolean;
+            /**
+             * @description Accumulated result text at handback time. May be empty on an early pause.
+             * @example Extracted the write-set diff for 3 of 5 declared paths.
+             */
+            result_so_far: string;
+            /**
+             * @description Paths to output files / artifact references. May be empty.
+             * @example [
+             *       "work/report.pdf"
+             *     ]
+             */
+            artifacts: string[];
+            /**
+             * @description Untrusted, unresolved questions the child had outstanding at handback time. May be empty (a clean final handback).
+             * @example [
+             *       "Should the merge member also update the changelog?"
+             *     ]
+             */
+            open_questions: string[];
+            /**
+             * @description `final` — terminal handback, no further work expected from this generation. `pause` — cooperative pause (TTL auto-handback or cancel-soft grace); the session may warm-resume via `follow_up`.
+             * @example final
+             * @enum {string}
+             */
+            mode: "final" | "pause";
+        };
+        /**
+         * SessionMessageRevisionEntry
+         * @description SessionMessage `oneOf` variant, `kind: revision_entry` (ADR-053 §Contract Surface). Direction `engine` (M8 — engine/owner-emitted control kinds use `engine`, not `child_to_parent`/`parent_to_child`).
+         *     SHAPE DECISION (flagged for review): every other SessionMessage variant flattens its payload fields directly onto the envelope (matching the `AgentCreateRequestMain`/`Subagent` precedent). This variant instead nests the full `RevisionEntry` record under a `revision` key. Reason: the envelope's own `generation` field (SessionMessage lineage — which session generation emitted this message) and RevisionEntry's own `generation` field (which PLAN generation this correction was recorded against) are two different counters that the design's field table lists under the identical name `generation` for this row. Flattening them would either collide (two properties named `generation` is not representable in JSON Schema) or silently conflate two distinct concepts. Nesting resolves the collision and keeps `RevisionEntry` the single canonical schema for a revision record wherever it appears (SessionMessage transport now; any future direct persistence read later) — consistent with DoD-11 anti-drift.
+         */
+        SessionMessageRevisionEntry: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WS */
+            message_id: string;
+            /**
+             * @description The plan-owner session this revision was recorded under.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /** @example null */
+            parent_session_id?: string | null;
+            /**
+             * @description SessionMessage lineage generation (the owner SESSION's generation — NOT the plan's generation; see `revision.generation` for that).
+             * @example 0
+             */
+            generation?: number;
+            /**
+             * @example engine
+             * @enum {string}
+             */
+            direction: "engine";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "revision_entry";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * @description Owner agent ID that authored this correction.
+             * @example jim
+             */
+            sender_identity: string;
+            /**
+             * @description False for an owner-authored revision entry (trusted, not child free-text) — included for envelope uniformity.
+             * @example false
+             */
+            untrusted_origin: boolean;
+            revision: components["schemas"]["RevisionEntry"];
+        };
+        /**
+         * SessionMessageGoalStatus
+         * @description SessionMessage `oneOf` variant, `kind: goal_status` (ADR-053 §Contract Surface). Direction `session_to_ui`. This is the typed, engine-internal propagation of the parsed `GOAL_STATUS:` marker (US-2) — DISTINCT from the existing `GoalStatusFrame` WS frame (`contracts/asyncapi.yaml`), which carries the 8-state DISPLAY pill (queued/active/waiting_on_user/ judge_unavailable/re-planning/judging/done/failed, R§8.10) plus round/max_rounds/cap accounting. `SessionMessageGoalStatus.condition` is the raw two-value marker outcome (`met`/`waiting_on_user`) the claim-or- idle trigger consumes to decide whether to adjudicate or pause — it feeds the pill, it is not the pill itself. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageGoalStatus: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WT */
+            message_id: string;
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /** @example null */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example session_to_ui
+             * @enum {string}
+             */
+            direction: "session_to_ui";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "goal_status";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example jim */
+            sender_identity: string;
+            /** @example false */
+            untrusted_origin: boolean;
+            /**
+             * @description The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+             * @example met
+             * @enum {string}
+             */
+            condition: "met" | "waiting_on_user";
+            /**
+             * @description The goal this condition applies to (R§8.11 — a session may carry multiple independent goals, each keyed by goal-id).
+             * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
+             */
+            goal_id: string;
+        };
+        /**
+         * SessionMessageSteer
+         * @description SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageSteer: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WV */
+            message_id: string;
+            /**
+             * @description The CHILD session being steered.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The parent session issuing the steer.
+             * @example 660e8400-e29b-41d4-a716-446655440000
+             */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example parent_to_child
+             * @enum {string}
+             */
+            direction: "parent_to_child";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "steer";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example jim */
+            sender_identity: string;
+            /**
+             * @description False — parent-authored, trusted content.
+             * @example false
+             */
+            untrusted_origin: boolean;
+            /**
+             * @description Steering instruction injected at the child's next tool boundary.
+             * @example Skip the xlsx shard for now, prioritize the CSV export.
+             */
+            text: string;
+            /**
+             * @description Optional — set when this steer is issued alongside/answering a specific open question or blocker.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+        };
+        /**
+         * SessionMessageRespond
+         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         */
+        SessionMessageRespond: {
+            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WW */
+            message_id: string;
+            /**
+             * @description The CHILD session being answered.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The parent session issuing the response.
+             * @example 660e8400-e29b-41d4-a716-446655440000
+             */
+            parent_session_id?: string | null;
+            /** @example 0 */
+            generation?: number;
+            /**
+             * @example parent_to_child
+             * @enum {string}
+             */
+            direction: "parent_to_child";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "respond";
+            /** @example 0 */
+            depth: number;
+            /**
+             * Format: date-time
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /** @example jim */
+            sender_identity: string;
+            /**
+             * @description False — parent-authored, trusted content.
+             * @example false
+             */
+            untrusted_origin: boolean;
+            /**
+             * @description The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+             * @example Yes, overwrite it — the backup is stale.
+             */
+            text: string;
+            /**
+             * @description The `correlation_id` of the `question`/`decision_request` being answered.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id: string;
+        };
+        /**
+         * RevisionEntry
+         * @description A single owner-loop plan correction record (ADR-053 §Contract Surface — "Revision entry"). Committed transactionally with the tail members + edges it introduces via the write-ahead intent-log (INV-6/N-8) — the intent record, the tail members, their edges, and the plan-record patch land all-or-nothing. This is the single canonical shape for a revision record; `SessionMessageRevisionEntry` (the SessionMessage transport variant, `kind: revision_entry`) nests this same schema under a `revision` key rather than duplicating its fields — see that file's description for why the two `generation` concepts cannot be flattened into one object.
+         */
+        RevisionEntry: {
+            /**
+             * @description Unique identifier for this revision entry.
+             * @example rev_01J3ZQK8N2H8VXNRP5T7C9M4WR
+             */
+            revision_id: string;
+            /**
+             * @description The plan this revision corrects.
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            plan_id: string;
+            /**
+             * @description The plan's generation this revision was recorded against.
+             * @example 1
+             */
+            generation: number;
+            /**
+             * @description `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+             * @example append
+             * @enum {string}
+             */
+            verb: "append" | "supersede" | "targeted_retry";
+            /**
+             * @description The owner's stated reason the prior plan state was wrong — the assumption the correction falsifies.
+             * @example Assumed the shard schema was stable; it changed upstream.
+             */
+            falsified_assumption: string;
+            /**
+             * @description Member IDs + their dependency edges this revision adds to the DAG. May be empty for a pure `supersede`/`targeted_retry` that adds no new tail.
+             * @example []
+             */
+            tail_adds: {
+                /**
+                 * @description ID of the new tail member task this revision adds.
+                 * @example 550e8400-e29b-41d4-a716-446655440099
+                 */
+                member_id: string;
+                /**
+                 * @description Dependency edges for the new tail member (DAG ordering only).
+                 * @example [
+                 *       "550e8400-e29b-41d4-a716-446655440001"
+                 *     ]
+                 */
+                blocked_by?: string[];
+            }[];
+            /**
+             * @description Present iff `verb == supersede` — the `done` member being superseded.
+             * @example 550e8400-e29b-41d4-a716-446655440002
+             */
+            superseded_member_id?: string;
+            /**
+             * @description Present iff `verb == targeted_retry` — the frozen-transient member being retried.
+             * @example 550e8400-e29b-41d4-a716-446655440003
+             */
+            retried_member_id?: string;
+            /**
+             * @description Human-readable rationale for this correction.
+             * @example Shard schema drifted; re-run the shard member against the new schema.
+             */
+            reason: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this revision was recorded.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * SessionLifecycleRecord
+         * @description The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         */
+        SessionLifecycleRecord: {
+            /**
+             * @description Unique durable session identifier.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+             * @example 0
+             */
+            generation: number;
+            /**
+             * @description The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+             * @example null
+             */
+            resumed_from?: string | null;
+            /**
+             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @example running
+             * @enum {string}
+             */
+            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            /**
+             * @description Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+             * @example false
+             */
+            readonly terminal: boolean;
+            /**
+             * @description SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
+             * @example human
+             * @enum {string}
+             */
+            owner_scope_kind: "parent_session" | "plan" | "human";
+            /**
+             * @description The `parent_session_id` or `plan_id` this session's ownership resolves to, per `owner_scope_kind`. Absent/empty when `owner_scope_kind == human`.
+             * @example
+             */
+            owner_scope_id?: string;
+            /**
+             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+             * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
+             */
+            owns_plan_id?: string;
+            /**
+             * @description The goal-id this session is servicing, when it is goal-bearing.
+             * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
+             */
+            goal_ref?: string;
+            /**
+             * @description Workspace this session belongs to.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            workspace_id: string;
+            /**
+             * @description The agent running this session.
+             * @example ray
+             */
+            agent_id: string;
+            /**
+             * @description True when this session dispatches via an external CLI runner (subagent_3p: claude-code/codex/opencode) rather than natively. 3P sessions never advertise `question`/`needs_input`/warm-resume (D5).
+             * @example false
+             */
+            is_3p: boolean;
+            /**
+             * @description `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
+             * @example specialist
+             * @enum {string}
+             */
+            launch_profile: "utility" | "specialist";
+            /**
+             * @description The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            last_checkpoint_ref?: string;
+            /**
+             * @description `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
+             * @example []
+             */
+            undelivered_message_ids: string[];
+            /** @description Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value. */
+            needs_input?: {
+                /**
+                 * @description The open question/decision_request this session is parked on.
+                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+                 */
+                correlation_id: string;
+                /**
+                 * Format: date-time
+                 * @description When this park auto-`handback(pause)`s if unanswered (default 24h, INV-5).
+                 * @example 2026-07-23T10:00:00Z
+                 */
+                ttl_deadline: string;
+                /**
+                 * @description Park-time hint (m5) — NOT authoritative. See description above.
+                 * @example true
+                 */
+                reconstructable: boolean;
+            };
+            /**
+             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed 3-value enum, so this field is left open rather than guessing at a complete set (flagged for review).
+             * @example interrupted
+             */
+            failed_reason?: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this session record was created.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp of the last state transition or persist.
+             * @example 2026-07-22T10:05:00Z
+             */
+            updated_at: string;
+        };
+        /**
+         * Goal
+         * @description The unified goal / criteria record (ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal`, a standalone Task's criteria, and a Plan's DoD are all judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit`/`plan_dod` (explicit at task/plan creation).
+         */
+        Goal: {
+            /**
+             * @description Unique goal identifier.
+             * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
+             */
+            goal_id: string;
+            /**
+             * @description SHAPE DECISION (flagged for review): the spec describes `binding` as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of untagged strings has no discriminator, so it is split into this enum tag plus `binding_id` below — mirrors the same pattern used for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
+             * @example session
+             * @enum {string}
+             */
+            binding_kind: "session" | "task" | "plan";
+            /**
+             * @description The session/task/plan id this goal is bound to, per `binding_kind`.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            binding_id: string;
+            /**
+             * @description How this goal's criteria were authored.
+             * @example chat_compiled
+             * @enum {string}
+             */
+            source: "chat_compiled" | "task_explicit" | "plan_dod";
+            /**
+             * @description The raw user intent this goal was set/compiled from.
+             * @example make the tests pass and the linter clean
+             */
+            prompt: string;
+            /**
+             * @description The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit`/`plan_dod` sources, which have no separate compile step.
+             * @example All pkg/plan tests pass and golangci-lint reports zero issues.
+             */
+            definition?: string;
+            /** @description REUSED unchanged (S1) — `kind: check` is the machine-checkable ladder rung ("machine" = `check`), `behavior` the deterministic tool-call-log rung, `prose` the subjective Judge rung. */
+            criteria: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description Attempt ceiling before the goal loop wakes the owner (3 native / 6 default per session_messaging config, restart-gated).
+             * @example 3
+             */
+            attempts_max: number;
+            /**
+             * @description Adjudication-round ceiling (R§8.9 — one round = one adjudication, claim-triggered or idle-settled).
+             * @example 20
+             */
+            judge_rounds_max: number;
+            /**
+             * @description Adjudications consumed so far (R§8.9). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved.
+             * @example 0
+             */
+            readonly round: number;
+            /**
+             * @description SHAPE DECISION (flagged for review): the spec lists a bare `state` field with no enumerated values. This 4-value set is the persisted GOAL record's OWN lifecycle (active while iterating; done on a met verdict; failed on rounds/attempts/budget exhaustion; cleared via `/goal clear`) — deliberately narrower than and distinct from the 8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which derives its richer display states from this state PLUS the session's own lifecycle PLUS ephemeral engine-phase signals. Do not conflate the two.
+             * @example active
+             * @enum {string}
+             */
+            state: "active" | "done" | "failed" | "cleared";
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this goal was set/created.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * TokenBudgetStatus
+         * @description App-level OVERALL token budget status for the Usage screen (ADR-053 §Contract Surface, D12/R§8.3, FE-6). ONE shared pool across the whole install — no per-plan budgets, no money caps, no `IsPrivilegedAgent` exemption (D12 deliberately removes the core-agent exemption). Debited by owner + member + verifier + Judge turns from provider-reported usage via a single atomic `debitTokenBudget(n)` critical section (INV-8).
+         */
+        TokenBudgetStatus: {
+            /**
+             * @description The operator-set overall token budget. `0` is the unbounded sentinel (R§8.3a — default on a fresh install) — the Usage screen shows `advisory` persistently while this is 0.
+             * @example 5000000
+             */
+            budget: number;
+            /**
+             * @description Total tokens debited so far this budget period, reconciled from the persisted counter at boot. May overshoot `budget` by up to the sum of in-flight turn costs at the moment of exhaustion (INV-8 — post-turn provider-reported debit, graceful wind-down, never a mid-tool hard cut).
+             * @example 1250000
+             */
+            consumed: number;
+            /**
+             * @description `budget - consumed`, floored at 0. Meaningless (ignore) when `budget == 0` (unbounded).
+             * @example 3750000
+             */
+            remaining: number;
+            /**
+             * @description True once the pool has crossed zero. Every running scope brakes to `failed(budget_exhausted)` at its next turn/adjudication boundary (INV-8) — never mid-tool.
+             * @example false
+             */
+            exhausted: boolean;
+            /**
+             * @description Present (non-empty) only when `budget == 0` — the persistent "unbounded — set a budget" Usage-screen advisory (R§8.3a). Also used for the one-time token≠dollar-cap warning surfaced when an operator first sets a budget (R§8.3b).
+             * @example unbounded — set a budget
+             */
+            advisory?: string;
+            /** @description Per-scope spend accounting (owner/member/verifier/Judge turns each debit the SAME shared pool — this breakdown is display-only, not a separate budget per scope). */
+            by_scope: {
+                /**
+                 * @description Tokens consumed by plan-owner / goal-owner turns.
+                 * @example 200000
+                 */
+                owner: number;
+                /**
+                 * @description Tokens consumed by plan-member / delegated-child turns.
+                 * @example 900000
+                 */
+                member: number;
+                /**
+                 * @description Tokens consumed by verifier/Judge-adjacent worker turns.
+                 * @example 100000
+                 */
+                verifier: number;
+                /**
+                 * @description Tokens consumed by the Judge's own adjudication calls.
+                 * @example 50000
+                 */
+                judge: number;
+            };
+        };
+        /**
+         * PlanRestartResponse
+         * @description ADR-053 §Contract Surface — "Cancel / restart". The Play route mints a new owner-session generation via `resumed_from` (cancelled -> approved edge) rather than mutating the terminal owner session in place; done members are preserved, failed/cancelled members resume from the last git boundary commit (no-commit -> fresh attempt, D13), and JudgeRounds reset to 0.
+         *     NOT YET WIRED (flagged for review, Phase-0 scope): this schema is authored and added to `components.schemas` for codegen per the 5-step process, but the EXISTING `POST /plans/{id}/restart` path's 200 response is left unchanged (`$ref: '#/components/schemas/Plan'`) in this contracts-only pass — that endpoint already ships and is consumed by live Go/TS code (ADR-052 FR-026); swapping its response shape is Phase-1/2 consuming-code work, not Phase-0 contract authoring. Phase 1 wires this schema onto that path (or a `generation`-aware successor) alongside the owner-loop implementation.
+         */
+        PlanRestartResponse: {
+            plan: components["schemas"]["Plan"];
+            /**
+             * @description The plan-owner session id for the newly-minted generation (may equal the prior owner session's id if the owner session itself warm-resumes; a new id when a fresh owner session was spawned).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            new_session_id: string;
+            /**
+             * @description The new owner-session generation this Play minted.
+             * @example 2
+             */
+            generation: number;
+            /**
+             * @description The prior owner-session id this generation resumed from. Null only if this is somehow generation 0 (should not occur for a restart — present for schema symmetry with `SessionLifecycleRecord.resumed_from`).
+             * @example 660e8400-e29b-41d4-a716-446655440000
+             */
+            resumed_from?: string | null;
+        };
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone. */
+        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
+        /**
+         * DelegateRunAction
+         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/ `steering` combinations are rejected at the handler (not schema- expressible beyond the enum itself) — see `launch_profile`'s description for the two published legal profiles.
+         */
+        DelegateRunAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "run";
+            /**
+             * @description The agent to delegate to. Its own soul/tools/model/policy apply (ADR-032).
+             * @example ray
+             */
+            target_agent_id: string;
+            /**
+             * @description The task prompt handed to the child as its first user message.
+             * @example Summarize the last 7 days of gateway logs and flag anomalies.
+             */
+            task: string;
+            /**
+             * @description Human-readable label for the spawned span (subagent_start.task_label).
+             * @example Log anomaly scan
+             */
+            label?: string;
+            /**
+             * @description `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
+             * @example specialist
+             * @enum {string}
+             */
+            launch_profile: "utility" | "specialist";
+            /**
+             * @description True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
+             * @example false
+             */
+            wait?: boolean;
+            /**
+             * @description Explicit opt-in (only meaningful with `wait: true`) permitting a bounded human-routed wait on a child `question` instead of the default rejection (P2M-14/MIN-3).
+             * @example false
+             */
+            allow_blocking_question?: boolean;
+            /**
+             * @description Continue running after the parent finishes gracefully.
+             * @example false
+             */
+            critical?: boolean;
+            /**
+             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+             * @example 300
+             */
+            timeout_seconds?: number;
+            /** @description The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated. */
+            snapshot?: {
+                /**
+                 * @description Parent-named artifact path/ref strings (not contents) visible to the child.
+                 * @example [
+                 *       "work/report-schema.json"
+                 *     ]
+                 */
+                references?: string[];
+                /**
+                 * @description Optional parent-authored notes, counted against `snapshot_max_bytes`.
+                 * @example Focus on anomalies after 2026-07-15.
+                 */
+                notes?: string;
+            };
+        };
+        /**
+         * DelegateStatusAction
+         * @description `delegate` tool call, `action: status` (ADR-053 §5.1). Event-driven V-1 payload assembled from checkpoints + messages — no longer a poll-scrape of the child transcript.
+         */
+        DelegateStatusAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "status";
+            /**
+             * @description The child session to query.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description DEPRECATED compat alias for `session_id` (pre-ADR-053 callers). When both are present, `session_id` wins.
+             * @example task-456
+             */
+            task_id?: string;
+        };
+        /**
+         * DelegateInboxAction
+         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+         */
+        DelegateInboxAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "inbox";
+            /**
+             * @description The child session whose inbox to drain.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description Opaque cursor — return only messages after this point (since-cursor replay).
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            since_cursor?: string;
+            /**
+             * @description Maximum messages to return (inbox unacked ceiling is 200/session).
+             * @example 50
+             */
+            max?: number;
+        };
+        /**
+         * DelegateInboxAckAction
+         * @description `delegate` tool call, `action: inbox_ack` (ADR-053 §5.1). Explicit ack; the runtime dedupes by `message_id` before surfacing and persists acked messages in the audit log.
+         */
+        DelegateInboxAckAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "inbox_ack";
+            /**
+             * @description The child session whose inbox entries are being acked.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The `message_id`s to ack.
+             * @example [
+             *       "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+             *     ]
+             */
+            message_ids: string[];
+        };
+        /**
+         * DelegateSteerAction
+         * @description `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
+         */
+        DelegateSteerAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "steer";
+            /**
+             * @description The child session to steer.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description Steering instruction.
+             * @example Skip the xlsx shard for now, prioritize the CSV export.
+             */
+            text: string;
+            /**
+             * @description Optional — set when this steer accompanies a specific open question/blocker.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+        };
+        /**
+         * DelegateRespondAction
+         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+         */
+        DelegateRespondAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "respond";
+            /**
+             * @description The child session being answered.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The answer. For a `decision_request`, names the chosen option verbatim.
+             * @example Yes, overwrite it — the backup is stale.
+             */
+            text: string;
+            /**
+             * @description The `correlation_id` of the question/decision_request being answered.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id: string;
+        };
+        /**
+         * DelegateCancelAction
+         * @description `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+         */
+        DelegateCancelAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "cancel";
+            /**
+             * @description The child session to cancel.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
+             * @example false
+             */
+            hard?: boolean;
+        };
+        /**
+         * DelegateFollowUpAction
+         * @description `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
+         */
+        DelegateFollowUpAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "follow_up";
+            /**
+             * @description The (terminal) child session to follow up on.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description Optional additional instructions for the resumed/new session.
+             * @example Also cross-check the anomalies against last month's baseline.
+             */
+            task?: string;
+        };
+        /**
+         * DelegatePeekAction
+         * @description `delegate` tool call, `action: peek` (ADR-053 §5.1). AGENT-callable, read-only Agent-View parity read WITHOUT attach — inspects the child's latest checkpoint/progress without steering, without consuming the child's unacked ceiling, and without enqueuing anything on the child's steering queue (m8). Distinct from the human-facing FE-5 `ActivityPanel -> Agent-View` render surface, which is a separate UI concept, not this tool action.
+         */
+        DelegatePeekAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "peek";
+            /**
+             * @description The child session to peek at.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+        };
+        /**
+         * DelegateSessionResponse
+         * @description Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+         */
+        DelegateSessionResponse: {
+            /**
+             * @description The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The generation this response corresponds to.
+             * @example 1
+             */
+            generation: number;
+            /**
+             * @description The prior session id this generation resumed from, when applicable.
+             * @example 660e8400-e29b-41d4-a716-446655440000
+             */
+            resumed_from?: string | null;
+            /**
+             * @description True when this session dispatches via an external CLI runner.
+             * @example false
+             */
+            is_3p: boolean;
+            /**
+             * @description The newly-spawned/resumed session's initial lifecycle state.
+             * @example queued
+             * @enum {string}
+             */
+            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+        };
+        /**
+         * DelegateStatusResponse
+         * @description Response to `delegate` `action: status` (ADR-053 §5.1) — the event-driven V-1 payload assembled from checkpoints + messages (no transcript poll-scrape). Wraps the durable `SessionLifecycleRecord` rather than re-declaring its fields (DoD-11).
+         */
+        DelegateStatusResponse: {
+            session: components["schemas"]["SessionLifecycleRecord"];
+            /** @description The most recent checkpoint, if any (absent when none — no schema `nullable: true`; see `SessionLifecycleRecord.needs_input` for why an optional nested object stays plain-optional in this contract set). */
+            last_checkpoint?: {
+                /** @example Wrote the write-set-scoped diff extractor; tests pending. */
+                summary?: string;
+                /** @example 3 of 5 write-set files updated. */
+                result_so_far?: string;
+                /** @example 8f3a1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a */
+                commit_ref?: string;
+                /**
+                 * Format: date-time
+                 * @example 2026-07-22T10:00:00Z
+                 */
+                created_at?: string;
+            };
+            /** @description The most recent progress narration, if any (absent when none). */
+            last_progress?: {
+                /** @example Scanning pkg/plan for the write-set boundary... */
+                text?: string;
+                /** @example 40 */
+                pct?: number;
+                /**
+                 * Format: date-time
+                 * @example 2026-07-22T10:00:00Z
+                 */
+                created_at?: string;
+            };
+            /**
+             * @description Open question+blocker count against this child's per-child ceiling (D15, max 20).
+             * @example 1
+             */
+            unacked_count: number;
+        };
+        /** @description Response to `delegate` `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox. `messages` reuses the SAME `SessionMessage` discriminated union used everywhere else a SessionMessage crosses a boundary (DoD-11 — never a second, narrower message shape here). */
+        DelegateInboxResponse: {
+            /** @description Messages after since_cursor, oldest first, capped at the request's max. */
+            messages: components["schemas"]["SessionMessage"][];
+            /**
+             * @description True when more undelivered messages remain beyond this page.
+             * @example false
+             */
+            has_more: boolean;
+            /**
+             * @description Opaque cursor to pass as since_cursor on the next drain.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            next_cursor?: string;
+        };
+        /**
+         * DelegateRespondResponse
+         * @description Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+         */
+        DelegateRespondResponse: {
+            /**
+             * @description True when the response was accepted and routed by `correlation_id`.
+             * @example true
+             */
+            acknowledged: boolean;
+            corrective_session?: components["schemas"]["DelegateSessionResponse"];
+        };
+        /**
+         * DelegatePeekResponse
+         * @description Response to `delegate` `action: peek` (ADR-053 §5.1). Read-only Agent-View parity snapshot — does not ack, steer, or consume the child's unacked ceiling (m8).
+         */
+        DelegatePeekResponse: {
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            session_id: string;
+            /**
+             * @example running
+             * @enum {string}
+             */
+            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            /**
+             * @description The most recent checkpoint summary, if any.
+             * @example Wrote the write-set-scoped diff extractor; tests pending.
+             */
+            latest_checkpoint_summary?: string;
+            /**
+             * @description The most recent progress narration text, if any.
+             * @example Scanning pkg/plan for the write-set boundary...
+             */
+            latest_progress_text?: string;
+            /**
+             * @description The most recent progress percentage estimate, if any.
+             * @example 40
+             */
+            latest_progress_pct?: number;
+        };
+        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal). */
+        MessageParentRequest: components["schemas"]["MessageParentProgress"] | components["schemas"]["MessageParentCheckpoint"] | components["schemas"]["MessageParentArtifact"] | components["schemas"]["MessageParentBlocker"] | components["schemas"]["MessageParentQuestion"] | components["schemas"]["MessageParentHandback"];
+        /**
+         * MessageParentProgress
+         * @description `message_parent` child tool call, `kind: progress` (ADR-053 §5.1). The first-class child-side tool a delegated child uses to push a typed message into its parent's inbox. Payload-only (no envelope fields) — the runtime assigns `message_id` (unless the child supplies one for its own dedupe purposes), `session_id`, `parent_session_id`, `sender_identity`, `created_at`, and `untrusted_origin` from the execution context; the corresponding `SessionMessageProgress` is the full envelope+payload record this call produces once received (see that file — the two are deliberately separate schemas for the two pipeline stages, mirroring the existing `ToolApprovalActionRequest`/`ToolApprovalRequiredFrame` precedent).
+         */
+        MessageParentProgress: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "progress";
+            /**
+             * @description Optional child-supplied dedupe key. Server-generated when absent.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            message_id?: string;
+            /**
+             * @description Untrusted narration text (child send body cap 32 KiB).
+             * @example Scanning pkg/plan for the write-set boundary...
+             */
+            text: string;
+            /**
+             * @description Optional completion percentage estimate.
+             * @example 40
+             */
+            pct?: number;
+        };
+        /**
+         * MessageParentCheckpoint
+         * @description `message_parent` child tool call, `kind: checkpoint` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
+         */
+        MessageParentCheckpoint: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "checkpoint";
+            /**
+             * @description Optional child-supplied dedupe key.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            message_id?: string;
+            /**
+             * @description 1-3 sentence checkpoint summary.
+             * @example Wrote the write-set-scoped diff extractor; tests pending.
+             */
+            summary: string;
+            /**
+             * @description Accumulated result text at this checkpoint, if any.
+             * @example 3 of 5 write-set files updated.
+             */
+            result_so_far?: string;
+            /**
+             * @description The go-git boundary commit hash this checkpoint corresponds to, if any.
+             * @example 8f3a1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a
+             */
+            commit_ref?: string;
+        };
+        /**
+         * MessageParentArtifact
+         * @description `message_parent` child tool call, `kind: artifact` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
+         */
+        MessageParentArtifact: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "artifact";
+            /**
+             * @description Optional child-supplied dedupe key.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WG
+             */
+            message_id?: string;
+            /**
+             * @description Paths to output files / artifact references produced by the child.
+             * @example [
+             *       "work/report.pdf"
+             *     ]
+             */
+            paths: string[];
+            /**
+             * @description Untrusted free-text note about the artifact.
+             * @example Draft v1 — pending review.
+             */
+            note?: string;
+        };
+        /**
+         * MessageParentBlocker
+         * @description `message_parent` child tool call, `kind: blocker` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker).
+         */
+        MessageParentBlocker: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "blocker";
+            /**
+             * @description Optional child-supplied dedupe key.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WH
+             */
+            message_id?: string;
+            /**
+             * @description Untrusted description of what is blocking progress.
+             * @example The sandbox denied `go test` — awaiting policy review.
+             */
+            text: string;
+            /**
+             * @description Blocker severity, used to prioritize the parent's response.
+             * @example medium
+             * @enum {string}
+             */
+            severity: "low" | "medium" | "high";
+        };
+        /**
+         * MessageParentQuestion
+         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+         */
+        MessageParentQuestion: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "question";
+            /**
+             * @description Optional child-supplied dedupe key.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WK
+             */
+            message_id?: string;
+            /**
+             * @description Untrusted question text.
+             * @example Should I overwrite the existing config.json backup?
+             */
+            text: string;
+            /**
+             * @description True parks the calling child in `needs_input` awaiting a `respond`.
+             * @example true
+             */
+            wait: boolean;
+            /**
+             * @description Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
+             * @example self_ok
+             * @enum {string}
+             */
+            authority?: "self_ok" | "owner_required";
+            /**
+             * @description Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+        };
+        /**
+         * MessageParentHandback
+         * @description `message_parent` child tool call, `kind: handback` (ADR-053 §5.1). The terminal or pause-boundary call; feeds the rung-0 evidence gate. Payload-only — see `MessageParentProgress` for the request/record split rationale.
+         */
+        MessageParentHandback: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "handback";
+            /**
+             * @description Optional child-supplied dedupe key.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WQ
+             */
+            message_id?: string;
+            /**
+             * @description Accumulated result text at handback time. May be empty on an early pause.
+             * @example Extracted the write-set diff for 3 of 5 declared paths.
+             */
+            result_so_far: string;
+            /**
+             * @description Paths to output files / artifact references. May be omitted (treated as empty).
+             * @example [
+             *       "work/report.pdf"
+             *     ]
+             */
+            artifacts?: string[];
+            /**
+             * @description Untrusted, unresolved questions outstanding at handback time. May be omitted.
+             * @example [
+             *       "Should the merge member also update the changelog?"
+             *     ]
+             */
+            open_questions?: string[];
+            /**
+             * @description `final` — terminal handback. `pause` — cooperative pause; the session may warm-resume via `delegate.follow_up`.
+             * @example final
+             * @enum {string}
+             */
+            mode: "final" | "pause";
+        };
+        /**
+         * MessageParentResponse
+         * @description Response to the child's `message_parent` tool call (ADR-053 §5.1). A never-silent-drop back-pressure contract — a rejection (per-child ceiling exceeded, content-egress policy block, etc.) is surfaced here as `accepted: false` + `error`, never a silent drop (no-silent-drop invariant).
+         */
+        MessageParentResponse: {
+            /**
+             * @description True when the message was enqueued into the parent's inbox. False on back-pressure (e.g. the per-child unacked ceiling, D15) or a content-egress policy block (N-10) — `error` explains why.
+             * @example true
+             */
+            accepted: boolean;
+            /**
+             * @description The (possibly server-generated) `message_id` assigned to this message.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            message_id?: string;
+            /**
+             * @description Echoes/assigns the `correlation_id` for a `question` call, so the child can track its own open questions.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+            /**
+             * @description Human-readable rejection reason. Present only when `accepted == false` (e.g. "await answers — per-child unacked ceiling reached").
+             * @example await answers — per-child unacked ceiling reached
+             */
+            error?: string;
         };
         /**
          * ExternalCliTool
@@ -13814,3 +15442,44 @@ export type PlanApproveError = components["schemas"]["PlanApproveError"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];
 export type ModelTokens = components["schemas"]["ModelTokens"];
+export type SessionMessage = components["schemas"]["SessionMessage"];
+export type SessionMessageProgress = components["schemas"]["SessionMessageProgress"];
+export type SessionMessageCheckpoint = components["schemas"]["SessionMessageCheckpoint"];
+export type SessionMessageArtifact = components["schemas"]["SessionMessageArtifact"];
+export type SessionMessageBlocker = components["schemas"]["SessionMessageBlocker"];
+export type SessionMessageQuestion = components["schemas"]["SessionMessageQuestion"];
+export type SessionMessageDecisionRequest = components["schemas"]["SessionMessageDecisionRequest"];
+export type SessionMessageError = components["schemas"]["SessionMessageError"];
+export type SessionMessageHandback = components["schemas"]["SessionMessageHandback"];
+export type SessionMessageRevisionEntry = components["schemas"]["SessionMessageRevisionEntry"];
+export type SessionMessageGoalStatus = components["schemas"]["SessionMessageGoalStatus"];
+export type SessionMessageSteer = components["schemas"]["SessionMessageSteer"];
+export type SessionMessageRespond = components["schemas"]["SessionMessageRespond"];
+export type RevisionEntry = components["schemas"]["RevisionEntry"];
+export type SessionLifecycleRecord = components["schemas"]["SessionLifecycleRecord"];
+export type Goal = components["schemas"]["Goal"];
+export type TokenBudgetStatus = components["schemas"]["TokenBudgetStatus"];
+export type PlanRestartResponse = components["schemas"]["PlanRestartResponse"];
+export type DelegateActionRequest = components["schemas"]["DelegateActionRequest"];
+export type DelegateRunAction = components["schemas"]["DelegateRunAction"];
+export type DelegateStatusAction = components["schemas"]["DelegateStatusAction"];
+export type DelegateInboxAction = components["schemas"]["DelegateInboxAction"];
+export type DelegateInboxAckAction = components["schemas"]["DelegateInboxAckAction"];
+export type DelegateSteerAction = components["schemas"]["DelegateSteerAction"];
+export type DelegateRespondAction = components["schemas"]["DelegateRespondAction"];
+export type DelegateCancelAction = components["schemas"]["DelegateCancelAction"];
+export type DelegateFollowUpAction = components["schemas"]["DelegateFollowUpAction"];
+export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
+export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];
+export type DelegateStatusResponse = components["schemas"]["DelegateStatusResponse"];
+export type DelegateInboxResponse = components["schemas"]["DelegateInboxResponse"];
+export type DelegateRespondResponse = components["schemas"]["DelegateRespondResponse"];
+export type DelegatePeekResponse = components["schemas"]["DelegatePeekResponse"];
+export type MessageParentRequest = components["schemas"]["MessageParentRequest"];
+export type MessageParentProgress = components["schemas"]["MessageParentProgress"];
+export type MessageParentCheckpoint = components["schemas"]["MessageParentCheckpoint"];
+export type MessageParentArtifact = components["schemas"]["MessageParentArtifact"];
+export type MessageParentBlocker = components["schemas"]["MessageParentBlocker"];
+export type MessageParentQuestion = components["schemas"]["MessageParentQuestion"];
+export type MessageParentHandback = components["schemas"]["MessageParentHandback"];
+export type MessageParentResponse = components["schemas"]["MessageParentResponse"];

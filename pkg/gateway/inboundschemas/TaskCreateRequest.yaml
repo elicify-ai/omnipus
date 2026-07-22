@@ -100,6 +100,29 @@ properties:
       Optional Plan to group this task under (ADR-049 D1/D4). Same-workspace
       FK — rejected 400 if the plan is in a different workspace.
     example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  write_set:
+    type: array
+    items:
+      type: string
+    description: >
+      ADR-053 §Contract Surface. Concrete paths this plan member creates/
+      edits — see `Task.write_set`. Meaningful only alongside `plan_id`;
+      empty/absent for an exploratory member (D10) or a standalone task.
+    example:
+      - "pkg/plan/plan_lint.go"
+  stream:
+    type: string
+    description: ADR-053 §Contract Surface — the parallel-group id this member belongs to.
+    example: "stream-schema"
+  is_join:
+    type: boolean
+    description: >
+      ADR-053 §Contract Surface — true marks this member as an authored
+      join/assemble member with its own criteria. Absent/false is the
+      common case — no schema `default:` (see `Task.yaml`'s `is_join` for
+      why: combining `default:` with an absent-from-`required` field
+      makes openapi-typescript emit it as non-optional regardless).
+    example: false
   criteria:
     type: array
     items:

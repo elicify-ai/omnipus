@@ -170,6 +170,60 @@ properties:
       FK — referencing a plan in a different workspace is rejected 400.
       Absent for tasks not grouped under a plan.
     example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  write_set:
+    type: array
+    items:
+      type: string
+    description: >
+      ADR-053 §Contract Surface — "write_sets + rationale on create_plan"
+      (US-11/G-16). Concrete paths this plan MEMBER task creates/edits.
+      Plan-lint reads this at approve to reject overlapping parallel
+      `stream`s and join-less convergence points. Empty for an
+      exploratory member whose write footprint is unknowable up front —
+      it runs in its own isolated checkout at the highest available
+      isolation rung (worktree -> go-git clone -> subdir, FR-154) rather
+      than declaring a write-set (D10). Meaningful only when `plan_id` is
+      set; ignored on a standalone task.
+    example:
+      - "pkg/plan/plan_lint.go"
+      - "pkg/plan/plan_lint_test.go"
+  stream:
+    type: string
+    description: >
+      ADR-053 §Contract Surface — the parallel-group id this plan member
+      belongs to (US-11/g4). Members sharing a `stream` run serially
+      within it; different streams may run concurrently provided their
+      `write_set`s are disjoint (plan-lint invariant). Absent for a
+      member not part of a parallel decomposition.
+    example: "stream-schema"
+  is_join:
+    type: boolean
+    description: >
+      ADR-053 §Contract Surface — true marks this plan member as an
+      authored join/assemble member with its own criteria, converging one
+      or more parallel `stream`s into a single artifact (g5 shard+assemble
+      topology). Plan-lint rejects a convergence point with no authored
+      join member (join-less plan, US-11 AS-2). Absent/false is the
+      common case (not a join member) — deliberately no schema `default:`
+      alongside this optional field (see the `priority`/`surface`
+      convention note in this file's `required` comment: combining
+      `default:` with an absent-from-`required` field makes
+      openapi-typescript emit it as NON-optional in the plain TS type
+      regardless of the `required` list, which would make `is_join`
+      falsely mandatory on every existing `Task` literal across the SPA
+      test suite).
+    example: false
+  judge_rounds:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication
+      rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal
+      scope (R§8.9 — one round = one adjudication, claim-triggered or
+      idle-settled). Distinct from `attempt_count`, which tracks retry
+      attempts, not adjudications.
+    example: 0
   criteria:
     type: array
     items:

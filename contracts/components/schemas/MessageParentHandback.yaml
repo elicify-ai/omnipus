@@ -1,0 +1,50 @@
+type: object
+title: MessageParentHandback
+description: >
+  `message_parent` child tool call, `kind: handback` (ADR-053 §5.1). The
+  terminal or pause-boundary call; feeds the rung-0 evidence gate.
+  Payload-only — see `MessageParentProgress` for the request/record split
+  rationale.
+required:
+  - kind
+  - result_so_far
+  - mode
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - handback
+    example: "handback"
+  message_id:
+    type: string
+    description: Optional child-supplied dedupe key.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WQ"
+  result_so_far:
+    type: string
+    maxLength: 50000
+    description: Accumulated result text at handback time. May be empty on an early pause.
+    example: "Extracted the write-set diff for 3 of 5 declared paths."
+  artifacts:
+    type: array
+    items:
+      type: string
+    description: Paths to output files / artifact references. May be omitted (treated as empty).
+    example:
+      - "work/report.pdf"
+  open_questions:
+    type: array
+    items:
+      type: string
+    description: Untrusted, unresolved questions outstanding at handback time. May be omitted.
+    example:
+      - "Should the merge member also update the changelog?"
+  mode:
+    type: string
+    enum:
+      - final
+      - pause
+    description: >
+      `final` — terminal handback. `pause` — cooperative pause; the
+      session may warm-resume via `delegate.follow_up`.
+    example: "final"

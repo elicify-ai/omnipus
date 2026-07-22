@@ -1,0 +1,28 @@
+type: object
+title: DelegateFollowUpAction
+description: >
+  `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm
+  resume of the SAME session with retained context. 3P: cold — spawns a
+  new session carrying the prior result. A terminal record is never
+  mutated in place; this always mints a new `generation` via
+  `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
+required:
+  - action
+  - session_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - follow_up
+    example: "follow_up"
+  session_id:
+    type: string
+    minLength: 1
+    description: The (terminal) child session to follow up on.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  task:
+    type: string
+    maxLength: 10000
+    description: Optional additional instructions for the resumed/new session.
+    example: "Also cross-check the anomalies against last month's baseline."

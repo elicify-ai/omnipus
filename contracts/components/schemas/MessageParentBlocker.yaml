@@ -1,0 +1,36 @@
+type: object
+title: MessageParentBlocker
+description: >
+  `message_parent` child tool call, `kind: blocker` (ADR-053 §5.1).
+  Payload-only — see `MessageParentProgress` for the request/record split
+  rationale. Counts toward the per-child unacked ceiling (D15, max 20
+  open question+blocker).
+required:
+  - kind
+  - text
+  - severity
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - blocker
+    example: "blocker"
+  message_id:
+    type: string
+    description: Optional child-supplied dedupe key.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WH"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 32768
+    description: Untrusted description of what is blocking progress.
+    example: "The sandbox denied `go test` — awaiting policy review."
+  severity:
+    type: string
+    enum:
+      - low
+      - medium
+      - high
+    description: Blocker severity, used to prioritize the parent's response.
+    example: "medium"

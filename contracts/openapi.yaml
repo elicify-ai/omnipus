@@ -556,6 +556,255 @@ components:
       $ref: ./components/schemas/TokenUsageSummary.yaml
     ModelTokens:
       $ref: ./components/schemas/ModelTokens.yaml
+
+    # ── ADR-053 unified goal/plan/subagent system — §6 wire-contract set ────
+    # docs/internal/specs/unified-goal-plan-subagent-spec.md §Contract
+    # Surface is the field-level source of truth. SessionMessage,
+    # DelegateActionRequest, and MessageParentRequest are discriminated
+    # unions hosted INLINE here (not in a schema file) — same ADR-034
+    # pattern as AgentCreateRequest above: oapi-codegen only generates
+    # named variant types + As/From accessors when the oneOf members are
+    # internal component refs; external file refs inside a oneOf are
+    # inlined as anonymous structs and the generated code does not
+    # compile. The variant files remain the single source of truth for
+    # each member's field set.
+    SessionMessage:
+      description: >
+        The typed, schema-validated envelope carried over the existing
+        pkg/bus MessageBus (no new transport) that derives every
+        control/visibility surface of the session-control plane (ADR-053
+        S6/US-6). Discriminated by `kind` — 12 variants covering
+        child->parent reporting (progress/checkpoint/artifact/blocker/
+        question/decision_request/error/handback), engine-emitted control
+        (revision_entry), session->UI propagation (goal_status), and
+        parent->child control (steer/respond). `direction` is one of
+        `child_to_parent | parent_to_child | session_to_ui | engine` — the
+        historical `human` value is dropped (M8); every kind variant maps
+        to exactly one of the four. Every field/kind/direction pairing is
+        the ratified shape from the spec's Contract Surface table — see
+        the individual variant files for full per-kind documentation and
+        caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16
+        KiB for steer; per-child unacked ceiling 20 open question+blocker,
+        D15).
+      oneOf:
+        - $ref: '#/components/schemas/SessionMessageProgress'
+        - $ref: '#/components/schemas/SessionMessageCheckpoint'
+        - $ref: '#/components/schemas/SessionMessageArtifact'
+        - $ref: '#/components/schemas/SessionMessageBlocker'
+        - $ref: '#/components/schemas/SessionMessageQuestion'
+        - $ref: '#/components/schemas/SessionMessageDecisionRequest'
+        - $ref: '#/components/schemas/SessionMessageError'
+        - $ref: '#/components/schemas/SessionMessageHandback'
+        - $ref: '#/components/schemas/SessionMessageRevisionEntry'
+        - $ref: '#/components/schemas/SessionMessageGoalStatus'
+        - $ref: '#/components/schemas/SessionMessageSteer'
+        - $ref: '#/components/schemas/SessionMessageRespond'
+      discriminator:
+        propertyName: kind
+        mapping:
+          progress: '#/components/schemas/SessionMessageProgress'
+          checkpoint: '#/components/schemas/SessionMessageCheckpoint'
+          artifact: '#/components/schemas/SessionMessageArtifact'
+          blocker: '#/components/schemas/SessionMessageBlocker'
+          question: '#/components/schemas/SessionMessageQuestion'
+          decision_request: '#/components/schemas/SessionMessageDecisionRequest'
+          error: '#/components/schemas/SessionMessageError'
+          handback: '#/components/schemas/SessionMessageHandback'
+          revision_entry: '#/components/schemas/SessionMessageRevisionEntry'
+          goal_status: '#/components/schemas/SessionMessageGoalStatus'
+          steer: '#/components/schemas/SessionMessageSteer'
+          respond: '#/components/schemas/SessionMessageRespond'
+    SessionMessageProgress:
+      $ref: ./components/schemas/SessionMessageProgress.yaml
+    SessionMessageCheckpoint:
+      $ref: ./components/schemas/SessionMessageCheckpoint.yaml
+    SessionMessageArtifact:
+      $ref: ./components/schemas/SessionMessageArtifact.yaml
+    SessionMessageBlocker:
+      $ref: ./components/schemas/SessionMessageBlocker.yaml
+    SessionMessageQuestion:
+      $ref: ./components/schemas/SessionMessageQuestion.yaml
+    SessionMessageDecisionRequest:
+      $ref: ./components/schemas/SessionMessageDecisionRequest.yaml
+    SessionMessageError:
+      $ref: ./components/schemas/SessionMessageError.yaml
+    SessionMessageHandback:
+      $ref: ./components/schemas/SessionMessageHandback.yaml
+    SessionMessageRevisionEntry:
+      $ref: ./components/schemas/SessionMessageRevisionEntry.yaml
+    SessionMessageGoalStatus:
+      $ref: ./components/schemas/SessionMessageGoalStatus.yaml
+    SessionMessageSteer:
+      $ref: ./components/schemas/SessionMessageSteer.yaml
+    SessionMessageRespond:
+      $ref: ./components/schemas/SessionMessageRespond.yaml
+    RevisionEntry:
+      $ref: ./components/schemas/RevisionEntry.yaml
+    SessionLifecycleRecord:
+      $ref: ./components/schemas/SessionLifecycleRecord.yaml
+    Goal:
+      $ref: ./components/schemas/Goal.yaml
+    TokenBudgetStatus:
+      $ref: ./components/schemas/TokenBudgetStatus.yaml
+    PlanRestartResponse:
+      $ref: ./components/schemas/PlanRestartResponse.yaml
+    # NOTE: SubagentMessageFrame/SubagentStateFrame are deliberately NOT
+    # listed here. Like GoalStatusFrame/SubagentStartFrame/SubagentEndFrame,
+    # they are WS-only frames whose canonical generated types come from
+    # asyncapi.yaml; the components/schemas/SubagentMessageFrame.yaml and
+    # SubagentStateFrame.yaml FILES still exist (referenced from
+    # asyncapi.yaml's inline copies' sibling documentation and synced to
+    # pkg/gateway/inboundschemas/ by gen-contracts.sh Step 5) but are not
+    # ALSO referenced here — doing so produces two independent TS
+    # declarations of the same exported name (one per generator pass) and
+    # a "Cannot redeclare block-scoped variable" compile error.
+
+    # Delegate action set (ADR-053 §5.1) — DelegateActionRequest is a
+    # discriminated union hosted INLINE, same ADR-034 pattern as
+    # SessionMessage above.
+    DelegateActionRequest:
+      description: >
+        The `delegate` tool call's argument shape, discriminated by
+        `action` — the corrected 9-action set (ADR-053 §5.1) replacing
+        the legacy `run | status` pair. `run` spawns a new child;
+        `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces;
+        `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two
+        published launch profiles (`utility`/`specialist`, see
+        `DelegateRunAction.launch_profile`) govern visibility/steering/
+        child_messaging; illegal combinations are rejected at the
+        handler, not by this schema alone.
+      oneOf:
+        - $ref: '#/components/schemas/DelegateRunAction'
+        - $ref: '#/components/schemas/DelegateStatusAction'
+        - $ref: '#/components/schemas/DelegateInboxAction'
+        - $ref: '#/components/schemas/DelegateInboxAckAction'
+        - $ref: '#/components/schemas/DelegateSteerAction'
+        - $ref: '#/components/schemas/DelegateRespondAction'
+        - $ref: '#/components/schemas/DelegateCancelAction'
+        - $ref: '#/components/schemas/DelegateFollowUpAction'
+        - $ref: '#/components/schemas/DelegatePeekAction'
+      discriminator:
+        propertyName: action
+        mapping:
+          run: '#/components/schemas/DelegateRunAction'
+          status: '#/components/schemas/DelegateStatusAction'
+          inbox: '#/components/schemas/DelegateInboxAction'
+          inbox_ack: '#/components/schemas/DelegateInboxAckAction'
+          steer: '#/components/schemas/DelegateSteerAction'
+          respond: '#/components/schemas/DelegateRespondAction'
+          cancel: '#/components/schemas/DelegateCancelAction'
+          follow_up: '#/components/schemas/DelegateFollowUpAction'
+          peek: '#/components/schemas/DelegatePeekAction'
+    DelegateRunAction:
+      $ref: ./components/schemas/DelegateRunAction.yaml
+    DelegateStatusAction:
+      $ref: ./components/schemas/DelegateStatusAction.yaml
+    DelegateInboxAction:
+      $ref: ./components/schemas/DelegateInboxAction.yaml
+    DelegateInboxAckAction:
+      $ref: ./components/schemas/DelegateInboxAckAction.yaml
+    DelegateSteerAction:
+      $ref: ./components/schemas/DelegateSteerAction.yaml
+    DelegateRespondAction:
+      $ref: ./components/schemas/DelegateRespondAction.yaml
+    DelegateCancelAction:
+      $ref: ./components/schemas/DelegateCancelAction.yaml
+    DelegateFollowUpAction:
+      $ref: ./components/schemas/DelegateFollowUpAction.yaml
+    DelegatePeekAction:
+      $ref: ./components/schemas/DelegatePeekAction.yaml
+    DelegateSessionResponse:
+      $ref: ./components/schemas/DelegateSessionResponse.yaml
+    DelegateStatusResponse:
+      $ref: ./components/schemas/DelegateStatusResponse.yaml
+    # DelegateInboxResponse is hosted INLINE here (not in a schema file) for
+    # the same reason SessionMessage/DelegateActionRequest/MessageParentRequest
+    # are: its `messages` array items need an internal same-document `$ref`
+    # to `#/components/schemas/SessionMessage`. A separate external file
+    # cannot express that pointer — `#/components/schemas/...` only resolves
+    # within the SAME document, and a cross-file form
+    # (`../../openapi.yaml#/components/schemas/SessionMessage`) satisfies
+    # redocly's bundler but oapi-codegen rejects it outright ("unrecognized
+    # external reference ... please provide the known import for this
+    # reference using option --import-mapping") — confirmed empirically
+    # during Phase-0 authoring (flagged for review).
+    DelegateInboxResponse:
+      description: >
+        Response to `delegate` `action: inbox` (ADR-053 §5.1). Drains the
+        child->parent typed inbox. `messages` reuses the SAME
+        `SessionMessage` discriminated union used everywhere else a
+        SessionMessage crosses a boundary (DoD-11 — never a second,
+        narrower message shape here).
+      type: object
+      required:
+        - messages
+        - has_more
+      additionalProperties: false
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionMessage'
+          description: Messages after since_cursor, oldest first, capped at the request's max.
+        has_more:
+          type: boolean
+          description: True when more undelivered messages remain beyond this page.
+          example: false
+        next_cursor:
+          type: string
+          description: Opaque cursor to pass as since_cursor on the next drain.
+          example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+    DelegateRespondResponse:
+      $ref: ./components/schemas/DelegateRespondResponse.yaml
+    DelegatePeekResponse:
+      $ref: ./components/schemas/DelegatePeekResponse.yaml
+
+    # message_parent child tool (ADR-053 §5.1) — MessageParentRequest is a
+    # discriminated union hosted INLINE, same ADR-034 pattern as
+    # SessionMessage above. Payload-only variants (no envelope fields) —
+    # see MessageParentProgress.yaml for the request/record split
+    # rationale versus the SessionMessage* family.
+    MessageParentRequest:
+      description: >
+        The first-class child-side `message_parent` tool's argument
+        shape, discriminated by `kind` (ADR-053 §5.1). A child uses this
+        exactly ONE tool to push a typed message into its parent's inbox
+        — `progress | checkpoint | artifact | blocker | question |
+        handback`. `decision_request`/`error`/`revision_entry`/
+        `goal_status`/`steer`/`respond` are SessionMessage kinds the
+        child tool does NOT expose (decision_request is reserved for
+        future use; the other four are engine/parent-only or session-
+        internal).
+      oneOf:
+        - $ref: '#/components/schemas/MessageParentProgress'
+        - $ref: '#/components/schemas/MessageParentCheckpoint'
+        - $ref: '#/components/schemas/MessageParentArtifact'
+        - $ref: '#/components/schemas/MessageParentBlocker'
+        - $ref: '#/components/schemas/MessageParentQuestion'
+        - $ref: '#/components/schemas/MessageParentHandback'
+      discriminator:
+        propertyName: kind
+        mapping:
+          progress: '#/components/schemas/MessageParentProgress'
+          checkpoint: '#/components/schemas/MessageParentCheckpoint'
+          artifact: '#/components/schemas/MessageParentArtifact'
+          blocker: '#/components/schemas/MessageParentBlocker'
+          question: '#/components/schemas/MessageParentQuestion'
+          handback: '#/components/schemas/MessageParentHandback'
+    MessageParentProgress:
+      $ref: ./components/schemas/MessageParentProgress.yaml
+    MessageParentCheckpoint:
+      $ref: ./components/schemas/MessageParentCheckpoint.yaml
+    MessageParentArtifact:
+      $ref: ./components/schemas/MessageParentArtifact.yaml
+    MessageParentBlocker:
+      $ref: ./components/schemas/MessageParentBlocker.yaml
+    MessageParentQuestion:
+      $ref: ./components/schemas/MessageParentQuestion.yaml
+    MessageParentHandback:
+      $ref: ./components/schemas/MessageParentHandback.yaml
+    MessageParentResponse:
+      $ref: ./components/schemas/MessageParentResponse.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
