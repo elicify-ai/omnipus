@@ -410,6 +410,21 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
+				// Explicit ContextWindow so the PROACTIVE budget check (loop.go
+				// isOverContextBudget, the preferred compression path per
+				// docs/internal/agent-refactor/context.md §"Compression paths")
+				// does NOT pre-empt the first LLM call. The default heuristic
+				// (MaxTokens*4 = 16384) is smaller than the seeded builtin tool
+				// catalog's ~12100 estimated tool-def tokens + this MaxTokens
+				// (4096), so without this override the proactive trim fires
+				// before the provider ever sees the request, emitting a
+				// `proactive_budget` compress event that shadows the
+				// `llm_retry` event this test exists to exercise. 32768 leaves
+				// the assembled request comfortably under budget on paper, so
+				// the mockProvider's context-limit error drives the REACTIVE
+				// retry-compress path — the documented fallback for when the
+				// estimate undershoots reality.
+				ContextWindow: 32768,
 			},
 		},
 	}
