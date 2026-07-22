@@ -190,9 +190,17 @@ func ScanBehaviorCriterionEntries(
 // Plan-scope behavior criteria have no single session to scan and fail
 // CLOSED with an explicit reason (a plan's DoD should express behavioral
 // requirements on its member tasks instead).
-func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCriterion) task.CriterionVerdict {
-	failClosed := func(reason string) task.CriterionVerdict {
-		return task.CriterionVerdict{CriterionID: c.ID, Met: false, Reason: reason}
+func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCriterion) (task.CriterionVerdict, NonVerdictClass) {
+	failClosed := func(reason string) (task.CriterionVerdict, NonVerdictClass) {
+		return task.CriterionVerdict{CriterionID: c.ID, Met: false, Reason: reason}, NonVerdictNone
+	}
+	// G-3/FR-116: the behavior-scan MECHANISM is "read the session's tool-call
+	// log". When that read cannot happen (no store, task unreadable, no
+	// session, transcript read error) the mechanism could NOT run →
+	// unable_to_verify, re-run, never scored as absent evidence. The old path
+	// fail-closed these to unmet (the blind-judge bug).
+	mechanismBlocked := func(reason string) (task.CriterionVerdict, NonVerdictClass) {
+		return task.CriterionVerdict{CriterionID: c.ID, Met: false, Reason: reason}, NonVerdictUnableToVerify
 	}
 	if c.Behavior == nil {
 		return failClosed("behavior criterion missing payload (fail-closed)")
@@ -203,11 +211,11 @@ func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCri
 	case in.TaskID != "":
 		ts := GetTaskStore(al)
 		if ts == nil {
-			return failClosed("behavior criterion: no task store available (fail-closed)")
+			return mechanismBlocked("behavior criterion: no task store available (unable_to_verify)")
 		}
 		t, err := ts.Get(in.TaskID)
 		if err != nil || t == nil {
-			return failClosed("behavior criterion: task not readable (fail-closed)")
+			return mechanismBlocked("behavior criterion: task not readable (unable_to_verify)")
 		}
 		sessionID = t.SessionID
 		if criterionScopeIsAttempt(*c.Behavior) && t.StartedAt != "" {
@@ -242,18 +250,19 @@ func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCri
 		return failClosed("behavior criterion has no session scope to scan — plan-level behavior criteria are not scannable; attach them to member tasks (fail-closed)")
 	}
 	if sessionID == "" || in.AssigneeAgentID == "" {
-		return failClosed("behavior criterion: no session recorded to scan (fail-closed)")
+		return mechanismBlocked("behavior criterion: no session recorded to scan (unable_to_verify)")
 	}
 	store := al.GetAgentStore(in.AssigneeAgentID)
 	if store == nil {
-		return failClosed("behavior criterion: no session store for assignee (fail-closed)")
+		return mechanismBlocked("behavior criterion: no session store for assignee (unable_to_verify)")
 	}
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
-		return failClosed(fmt.Sprintf("behavior criterion: could not read session transcript (fail-closed): %s", err))
+		return mechanismBlocked(fmt.Sprintf("behavior criterion: could not read session transcript (unable_to_verify): %s", err))
 	}
+	// Mechanism ran → deterministic count → a real judgment (NonVerdictNone).
 	res := ScanBehaviorCriterionEntries(entries, *c.Behavior, attemptStart)
-	return task.CriterionVerdict{CriterionID: c.ID, Met: res.Met, Reason: res.Reason}
+	return task.CriterionVerdict{CriterionID: c.ID, Met: res.Met, Reason: res.Reason}, NonVerdictNone
 }
 
 // criterionScopeIsAttempt reports whether the payload requests attempt-only

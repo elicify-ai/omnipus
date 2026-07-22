@@ -31,13 +31,16 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/gitevidence"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // verifierWindowTokensDefault is ADR-052 FR-032's confirmed default transcript
@@ -610,6 +613,152 @@ func recordVerifierAvailabilityOutcome(unitID string, unavailable bool) {
 	}
 }
 
+// --- Blocked-check honesty seams (FR-116/FR-137/FR-138, R§8.1) --------------
+//
+// classifyNonVerdict (the named M1 predicate) + UnableToVerifyTracker (the
+// re-run bound m-4) + UnjudgeableEscalationGate (the escalate-once FR-138) are
+// ALL defined in goal_compile.go — this file WIRES them into the live Judge
+// path via process-wide instances + setter seams (mirrors this file's own
+// verifierUnavailabilityStreak pattern). DoD-11: extend/wire, never redefine.
+
+var (
+	verifierTrackerMu sync.RWMutex
+	//nolint:gochecknoglobals // process-wide seams, see the setters' doc comments.
+	verifierUnableToVerifyTracker = NewUnableToVerifyTracker(UnableToVerifyMaxRerunsDefault)
+	verifierUnjudgeableGate       = NewUnjudgeableEscalationGate()
+)
+
+// currentUnableToVerifyTracker returns the active unable_to_verify tracker
+// under its own lock so a concurrent setter never races a reader.
+func currentUnableToVerifyTracker() *UnableToVerifyTracker {
+	verifierTrackerMu.RLock()
+	defer verifierTrackerMu.RUnlock()
+	return verifierUnableToVerifyTracker
+}
+
+// currentUnjudgeableEscalationGate returns the active escalate-once gate.
+func currentUnjudgeableEscalationGate() *UnjudgeableEscalationGate {
+	verifierTrackerMu.RLock()
+	defer verifierTrackerMu.RUnlock()
+	return verifierUnjudgeableGate
+}
+
+// SetVerifierUnableToVerifyTracker overrides the process-wide unable_to_verify
+// tracker. Intended for tests that need a deterministic K bound or a spy;
+// passing nil restores the default (UnableToVerifyMaxRerunsDefault).
+func SetVerifierUnableToVerifyTracker(t *UnableToVerifyTracker) {
+	verifierTrackerMu.Lock()
+	defer verifierTrackerMu.Unlock()
+	if t == nil {
+		t = NewUnableToVerifyTracker(UnableToVerifyMaxRerunsDefault)
+	}
+	verifierUnableToVerifyTracker = t
+}
+
+// SetVerifierUnjudgeableEscalationGate overrides the process-wide escalate-
+// once gate. Intended for tests; nil restores the default.
+func SetVerifierUnjudgeableEscalationGate(g *UnjudgeableEscalationGate) {
+	verifierTrackerMu.Lock()
+	defer verifierTrackerMu.Unlock()
+	if g == nil {
+		g = NewUnjudgeableEscalationGate()
+	}
+	verifierUnjudgeableGate = g
+}
+
+// unableToVerifyEscalateFn fires when a check crosses the K consecutive
+// unable_to_verify bound (persistently-blocked, FR-116/m-4), and again on
+// every subsequent occurrence — the signal must stay loud for as long as the
+// block persists (mirrors verifierUnavailabilityEscalateFn). Overridable in
+// tests so the escalation is verifiable without scraping process logs.
+var unableToVerifyEscalateFn = func(unitKey, criterionID string, streak int) {
+	logger.ErrorCF("agent",
+		fmt.Sprintf(
+			"verifier: check %q persistently blocked — verification mechanism could not run "+
+				"(%d consecutive unable_to_verify) for %s; escalated to owner",
+			criterionID, streak, unitKey,
+		),
+		map[string]any{"unit_key": unitKey, "criterion_id": criterionID, "consecutive_unable_to_verify": streak},
+	)
+}
+
+// unjudgeableEscalateFn fires exactly once per adjudication-unit when a
+// criterion resolves criterion_unjudgeable (the verifier turn RAN but formed
+// no judgment, FR-115/FR-138). The escalation SURFACES the mis-compile — it
+// does not itself halt round consumption (M2). Overridable in tests.
+var unjudgeableEscalateFn = func(unitKey, criterionID string) {
+	logger.ErrorCF("agent",
+		fmt.Sprintf(
+			"verifier: criterion %q unjudgeable for %s — the verifier turn ran but formed no judgment; "+
+				"owner should re-state the goal (amendment) or /goal clear",
+			criterionID, unitKey,
+		),
+		map[string]any{"unit_key": unitKey, "criterion_id": criterionID},
+	)
+}
+
+// --- Workspace diff evidence feed (G-3/G-15, FR-144) ------------------------
+//
+// resolveVerifierDiffText returns the write-set-scoped workspace diff text for
+// the prose Judge's user message (the real file changes, not a transcript
+// window alone). It opens the Phase-1 git evidence repo at the work-under-
+// review's work/ dir and reads AttemptDiff. Best-effort throughout: an unbound
+// goal (no WorkspaceID), a nested user repo, an unborn HEAD, or any gitevidence
+// error returns "" — the Judge degrades to machine evidence + transcript
+// window + claim, never a hard failure (mirrors windowText's own contract).
+func (al *AgentLoop) resolveVerifierDiffText(in JudgeCriteriaInput) string {
+	wsID := strings.TrimSpace(in.WorkspaceID)
+	if wsID == "" {
+		return "" // unbound chat goal — no work-under-review workspace to diff
+	}
+	home := config.OmnipusHomeDir()
+	if home == "" {
+		return ""
+	}
+	dir, err := workspace.SafeWorkDir(home, wsID)
+	if err != nil {
+		return "" // invalid workspace id — not a diff-feed concern
+	}
+	repo, err := gitevidence.Open(dir)
+	if err != nil {
+		// Nested user repo (ErrNestedRepo) or any other Open error: the git
+		// layer degrades for this workspace (MIN-6). Logged at WARN inside
+		// gitevidence.Open/EnsureWorkDir already; here it is a silent skip.
+		return ""
+	}
+	ev, err := repo.AttemptDiff(nil) // unscoped: the whole latest boundary commit
+	if err != nil {
+		logger.WarnCF("agent", "verifier: could not read workspace diff evidence",
+			map[string]any{"workspace_id": wsID, "error": err.Error()})
+		return ""
+	}
+	return renderDiffEvidence(ev)
+}
+
+// renderDiffEvidence formats a DiffEvidence as the concise text block the prose
+// Judge consumes. Empty (no files / unborn HEAD) → "". The patch text is
+// capped per-file so a single huge diff cannot blow the verifier's context.
+func renderDiffEvidence(ev *gitevidence.DiffEvidence) string {
+	if ev == nil || len(ev.Files) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "(from %q to %q; %d of %d changed paths in scope)\n",
+		ev.FromHash, ev.ToHash, ev.Matched, ev.Total)
+	for _, f := range ev.Files {
+		patch := f.Patch
+		if len(patch) > diffPatchCap {
+			patch = patch[:diffPatchCap] + "\n…[diff truncated]"
+		}
+		fmt.Fprintf(&sb, "--- %s (%s) ---\n%s\n", f.Path, f.Kind, patch)
+	}
+	return sb.String()
+}
+
+// diffPatchCap bounds each file's unified-diff text fed to the prose Judge, so
+// one very large change cannot crowd out the rest of the evidence.
+const diffPatchCap = 16 * 1024
+
 // --- The verifier turn itself (ADR-052 FR-011) ------------------------------
 
 // runVerifierAdjudication adjudicates proseCriteria by running ONE real
@@ -654,7 +803,8 @@ func (al *AgentLoop) runVerifierAdjudication(
 	in JudgeCriteriaInput,
 	proseCriteria []task.AcceptanceCriterion,
 	evidence []task.EvidenceRecord,
-) (verdicts []task.CriterionVerdict, model, judgeAgentID string, unavailable bool, reason string) {
+	diffText string,
+) (verdicts []task.CriterionVerdict, model, judgeAgentID string, unavailable bool, reason string, unjudgeableIDs []string) {
 	unitID := verifierUnitID(in)
 	registry := currentVerifierSessionRegistry()
 	sessionKey := fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
@@ -682,7 +832,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 
 	for attempt := 0; ; attempt++ {
 		if ctx.Err() != nil {
-			return nil, "", "", true, ctx.Err().Error()
+			return nil, "", "", true, ctx.Err().Error(), nil
 		}
 
 		judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
@@ -690,7 +840,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			const notConfiguredReason = "judge_not_configured: Judge System Agent is not registered"
 			logger.WarnCF("agent", "verifier: Judge System Agent not resolvable; pausing (D7 unavailability)", nil)
 			if waitErr := al.judgeBackoffWait(ctx, attempt, notConfiguredReason); waitErr != nil {
-				return nil, "", "", true, notConfiguredReason
+				return nil, "", "", true, notConfiguredReason, nil
 			}
 			continue
 		}
@@ -700,17 +850,17 @@ func (al *AgentLoop) runVerifierAdjudication(
 			logger.WarnCF("agent", "verifier: SEC-26 gate denied verifier LLM call; pausing (D7 unavailability)",
 				map[string]any{"reason": denyReason, "retry_after_s": retryAfter.Seconds()})
 			if waitErr := al.judgeBackoffWait(ctx, attempt, denyReason); waitErr != nil {
-				return nil, "", "", true, denyReason
+				return nil, "", "", true, denyReason, nil
 			}
 			continue
 		}
 
 		ensureVerifierSoul(judgeInst)
 
-		prompt, buildErr := buildJudgeUserContent(proseCriteria, evidence, in.ClaimText, in.ExtraContext, windowText)
+		prompt, buildErr := buildJudgeUserContent(proseCriteria, evidence, in.ClaimText, in.ExtraContext, windowText, diffText)
 		if buildErr != nil {
 			return failClosedProseVerdicts(proseCriteria, "internal error building verifier prompt: "+buildErr.Error()),
-				"", "", false, "build_error"
+				"", "", false, "build_error", nil
 		}
 
 		if !registered {
@@ -771,39 +921,62 @@ func (al *AgentLoop) runVerifierAdjudication(
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
 				map[string]any{"error": callErr.Error()})
 			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
-				return nil, "", "", true, callErr.Error()
+				return nil, "", "", true, callErr.Error(), nil
 			}
 			continue
 		}
 
 		if strings.TrimSpace(content) == "" {
-			// Ran but produced nothing -> fail-closed unmet (NFR-2), NOT
-			// unavailable — the turn itself completed.
-			return failClosedProseVerdicts(proseCriteria, "verifier turn produced no final content"),
-				judgeInst.Model, judgeInst.ID, false, ""
+			// R§8.1/FR-138: the verifier turn RAN to completion but formed no
+			// judgment → criterion_unjudgeable (NOT unavailable — the turn did
+			// complete; NOT a clean verdict either). The criteria resolve unmet
+			// for this adjudication AND each is flagged unjudgeable so
+			// JudgeCriteria emits the escalate-once (M1 predicate: mechanism
+			// ran, no judgment). Old path fail-closed silently (the bug).
+			return failClosedProseVerdicts(proseCriteria,
+					"criterion_unjudgeable: verifier turn ran but produced no content"),
+				judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria)
 		}
 
 		parsed, parseErr := parseJudgeResponse(content)
 		if parseErr != nil {
+			// R§8.1/FR-138: ran but returned no parseable judgment →
+			// criterion_unjudgeable for every criterion (same M1 predicate).
 			return failClosedProseVerdicts(
-				proseCriteria, "verifier response could not be parsed as valid JSON: "+parseErr.Error(),
-			), judgeInst.Model, judgeInst.ID, false, ""
+				proseCriteria, "criterion_unjudgeable: verifier response could not be parsed: "+parseErr.Error(),
+			), judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria)
 		}
 
 		byID := dedupeJudgeCriteriaAnyUnmetWins(parsed.Criteria)
 		out := make([]task.CriterionVerdict, 0, len(proseCriteria))
+		var missing []string // criteria the verifier RAN on but omitted → unjudgeable
 		for _, c := range proseCriteria {
 			if pc, found := byID[c.ID]; found {
 				out = append(out, task.CriterionVerdict{CriterionID: c.ID, Met: pc.Met, Reason: pc.Reason})
 			} else {
+				// The verifier turn ran and judged OTHER criteria but returned
+				// no verdict for THIS one → criterion_unjudgeable (ran, no
+				// judgment for this criterion), FR-138.
+				missing = append(missing, c.ID)
 				out = append(out, task.CriterionVerdict{
 					CriterionID: c.ID, Met: false,
-					Reason: "verifier did not return a verdict for this criterion (fail-closed, NFR-2)",
+					Reason: "criterion_unjudgeable: verifier did not return a verdict for this criterion",
 				})
 			}
 		}
-		return out, judgeInst.Model, judgeInst.ID, false, ""
+		return out, judgeInst.Model, judgeInst.ID, false, "", missing
 	}
+}
+
+// allProseCriterionIDs returns the id of every criterion in cs — used when the
+// verifier turn ran but formed no judgment AT ALL (empty / unparseable), so
+// JudgeCriteria can flag every prose criterion criterion_unjudgeable.
+func allProseCriterionIDs(cs []task.AcceptanceCriterion) []string {
+	ids := make([]string, 0, len(cs))
+	for _, c := range cs {
+		ids = append(ids, c.ID)
+	}
+	return ids
 }
 
 // dedupeJudgeCriteriaAnyUnmetWins collapses a verifier's raw per-criterion
