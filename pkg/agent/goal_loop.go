@@ -151,6 +151,15 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// renders the active goal + its ladder). This is the FR-113 "echoed in chat".
 	al.emitGoalStatusFrame(sessionID, condition, 0, maxRounds, "", "active")
 
+	// ADR-053 Phase-2 §1: capture the chat routing so a later idle-settlement
+	// unmet verdict can re-inject a steering turn via the async-notifier (the
+	// idle path has no turnResult to attach a followUp to).
+	routeAgentID := ""
+	if agentInst != nil {
+		routeAgentID = agentInst.ID
+	}
+	al.recordGoalRouting(sessionID, opts.Channel, opts.ChatID, opts.SessionKey, routeAgentID)
+
 	opts.UserMessage = condition
 	return true, false, ""
 }
@@ -330,6 +339,11 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 		pe.Release("goal") // paired with the Admit("goal") call at set time
 		al.cancelGoalVerifierIfAny(pe, sessionID)
 	}
+	// ADR-053 Phase-2 §1 (FR-114/N-12): reset the in-memory trigger surface so
+	// a later stray GOAL_STATUS: met is inert (no active goal to adjudicate
+	// against), the waiting_on_user pause clears, and the bounce streak / idle
+	// re-arm marker / routing entry all drop.
+	al.clearGoalTriggerState(sessionID)
 	al.emitGoalStatusFrame(sessionID, "", 0, 0, "", "cleared")
 	return "Goal cleared (" + note + ")."
 }
@@ -481,106 +495,85 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		return
 	}
 
-	// Phase-2 compiled criteria ladder (FR-110): judge against the compiled
-	// ladder when GoalCriteriaJSON is present, else fall back to a single prose
-	// criterion synthesized from GoalCondition (back-compat with pre-Phase-2
-	// sessions). compiledGoalCriteriaFor is the single read point (DoD-11).
-	criteria := compiledGoalCriteriaFor(meta.GoalCriteriaJSON, meta.GoalCondition, sessionID)
-	attempt := meta.GoalRoundsUsed + 1
+	// ADR-053 Phase-2 §1 (FR-101): the Judge fires ONLY on (a) an explicit
+	// completion claim ([goal:evidence] + GOAL_STATUS: met) or (b)
+	// event-driven idle settlement — NEVER after every worker turn (the
+	// superseded ADR-052 defect). This turn-stop hook implements the CLAIM
+	// path and the waiting_on_user pause; the IDLE path runs from the
+	// PlanEngine tick (goalQuietWindowSettle, driven via goalIdleExpirySweep).
+	// Parse the S6 typed marker once (parser co-located with the evidence
+	// gate in task_completion_signal.go, FR-199).
+	marker := parseGoalStatusMarker(result.finalContent)
 
-	// review r1 major M2: bound the judge call to its OWN timeout, derived
-	// from (so an already-aborted turn still cancels promptly) but never
-	// longer than goalJudgeRoundTimeout — see that var's doc comment.
-	judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
-	defer cancel()
+	// G-5 resume (US-2 AS-3): a genuine user reply (UserInitiated) to a
+	// waiting_on_user goal clears the pause and re-arms the idle timer. The
+	// user's turn itself is the new activity; it is NOT itself a claim, so
+	// fall through to the classification below rather than judging here. The
+	// goal loop's own re-injected follow-up (SenderID == goalLoopFollowUpSenderID)
+	// does NOT clear the pause — only a real user message resumes.
+	if opts.UserInitiated && al.goalIsWaitingOnUser(sessionID) {
+		al.goalSetWaitingOnUser(sessionID, false)
+		al.bumpGoalActivityOnTurn(store, sessionID)
+	}
 
-	jr := al.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
-		Scope:           task.VerdictScopeGoal,
-		AssigneeAgentID: agentInst.ID,
-		Criteria:        criteria,
-		Attempt:         attempt,
-		ClaimText:       result.finalContent,
-		// ADR-052 FR-032/FR-037: the goal's own chat session — keys the
-		// verifier registry (so /goal clear can cancel an in-flight goal
-		// verifier) and sources the transcript window the verifier is fed.
-		GoalSessionID: sessionID,
-		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the chat
-		// turn's own channel-bound workspace (opts.WorkspaceID; may
-		// legitimately be empty for an unbound chat — the Judge's turn then
-		// falls back to its own agent home, never a hard failure). See
-		// JudgeCriteriaInput.WorkspaceID.
-		WorkspaceID: opts.WorkspaceID,
-	})
-
-	if jr.Unavailable {
-		// D7: judge unavailable — attempt/round NOT consumed, no verdict
-		// recorded, idle clock untouched (the goal stays exactly as it was;
-		// the next natural turn on this session re-evaluates the same round).
-		logger.WarnCF("agent", "goal loop: judge unavailable, round not consumed",
-			map[string]any{"session_id": sessionID, "reason": jr.Reason})
+	switch {
+	case marker.Present && marker.Status == goalStatusWaitingOnUser:
+		// FR-104 / G-5: typed pause. NO verdict, NO round consumed; idle
+		// settlement SUPPRESSED while the pause holds (goalIsWaitingOnUser,
+		// checked in maybeSettleGoalIdle). Explicit Non-Behavior: only this
+		// typed marker counts — never a prose classifier.
+		al.goalSetWaitingOnUser(sessionID, true)
+		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed,
+			meta.GoalMaxRounds, "waiting on user", goalPillWaitingOnUser)
 		return
-	}
 
-	// FR-064/D7 idle-expiry (review r1): a real judge round just ran (not
-	// Unavailable) — this IS genuine activity, so bump the calendar-brake
-	// clock. Best-effort: a write failure here only delays idle-expiry,
-	// never blocks the round itself (mirrors plan_engine.go's touchActivity).
-	activityNow := time.Now().UTC().Format(time.RFC3339)
-	if perr := store.SetMeta(sessionID, session.MetaPatch{
-		GoalLastActivityAt: &activityNow,
-	}); perr != nil {
-		logger.WarnCF("agent", "goal loop: could not bump idle-expiry activity clock",
-			map[string]any{"session_id": sessionID, "error": perr.Error()})
-	}
-
-	verdict := jr.Verdict
-	al.writeGoalVerdictTranscript(store, sessionID, verdict)
-
-	if verdict.Met {
-		al.clearGoal(sessionID, store, "condition met")
+	case marker.Present && marker.Status == goalStatusMet && marker.HasEvidence:
+		// G-1: explicit completion claim WITH evidence → invoke the Judge
+		// EXACTLY once (INV-1, via the shared runGoalAdjudication body).
+		// Clear any bounce streak (the worker satisfied the evidence gate).
+		// ClaimText = the worker's whole turn output (placed LAST in the
+		// judge's input ordering per ClaimText semantics); the adjudication
+		// re-arms the idle timer via its own activity bump.
+		al.clearGoalBareClaimStreak(sessionID)
+		al.runGoalAdjudication(ctx, agentInst, opts.WorkspaceID, sessionID, store, meta,
+			result.finalContent,
+			func(steer string) {
+				// Claim-path steer re-inject: the existing turn re-inject seam
+				// (result.followUps, republished by runAgentLoop). Content
+				// deliberately does not start with "/goal"; UserInitiated is
+				// left false (Gap #8). An unmet verdict's steer re-dispatch
+				// IS new activity (G-2).
+				result.followUps = append(result.followUps, bus.InboundMessage{
+					Channel:    opts.Channel,
+					ChatID:     opts.ChatID,
+					Sender:     bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
+					Content:    steer,
+					SessionID:  sessionID,
+					SessionKey: opts.SessionKey,
+				})
+			})
 		return
-	}
 
-	maxRounds := meta.GoalMaxRounds
-	if maxRounds < 1 {
-		maxRounds = config.DefaultGoalMaxRounds
-	}
-	reasonText := goalVerdictReasonText(verdict)
-
-	if attempt >= maxRounds {
-		handover := fmt.Sprintf(
-			"Goal %q did not reach a MET verdict within %d round(s). Latest judge feedback:\n%s",
-			meta.GoalCondition, maxRounds, reasonText,
-		)
-		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, handover)
-		al.clearGoal(sessionID, store, fmt.Sprintf("round bound reached (%d/%d)", attempt, maxRounds))
+	case marker.Present && marker.Status == goalStatusMet:
+		// G-4: bare claim (GOAL_STATUS: met with NO [goal:evidence]). Bounce
+		// economics — 1st free (teaching steer), 2nd costs a round. NEVER
+		// invokes the Judge (nothing to judge). Claiming stays cheaper than
+		// idling (D8/N-13).
+		al.handleBareGoalClaim(ctx, agentInst, opts, store, sessionID, meta, result)
 		return
-	}
 
-	newRound := attempt
-	if perr := store.SetMeta(sessionID, session.MetaPatch{
-		GoalRoundsUsed:   &newRound,
-		GoalLatestReason: &reasonText,
-	}); perr != nil {
-		logger.WarnCF("agent", "goal loop: failed to persist round advance",
-			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	default:
+		// No claim marker and not waiting: an ordinary worker turn. Bump the
+		// activity clock (re-arm the idle quiet window, FR-102) and clear any
+		// already-settled marker (G-2 re-arm). Do NOT judge — the idle path
+		// adjudicates accumulated evidence after the quiet window (FR-101(b),
+		// G-3). An UNRECOGNIZED marker value also lands here: the
+		// deterministic not-a-claim-not-a-pause fallback (FR-104 AS-2 — no
+		// marker means not-waiting, and by symmetry not a claim either).
+		al.bumpGoalActivityOnTurn(store, sessionID)
+		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed,
+			meta.GoalMaxRounds, meta.GoalLatestReason, goalPillActive)
 	}
-	al.emitGoalStatusFrame(sessionID, meta.GoalCondition, newRound, maxRounds, reasonText, "round_advanced")
-
-	// Re-inject a follow-up turn carrying the judge reason as steering
-	// (turn re-inject seam: followUps re-publish, runAgentLoop). Content
-	// deliberately does not start with "/goal" — even if this message
-	// somehow reached handleCommand again, it would not parse as a command;
-	// UserInitiated is left at its zero value (false) regardless, correctly
-	// marking this a system continuation, not a fresh user command (Gap #8).
-	result.followUps = append(result.followUps, bus.InboundMessage{
-		Channel:    opts.Channel,
-		ChatID:     opts.ChatID,
-		Sender:     bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
-		Content:    goalSteeringPrompt(meta.GoalCondition, reasonText),
-		SessionID:  sessionID,
-		SessionKey: opts.SessionKey,
-	})
 }
 
 // goalVerdictReasonText builds a human-readable summary of the judge's unmet
@@ -687,6 +680,12 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 		// Admit("goal") call at set time) as part of its shared body.
 		al.clearGoal(sessionID, store, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
 	}
+
+	// ADR-053 Phase-2 §1 (FR-102/G-2/G-3): the ~60 s quiet-window idle
+	// settlement — distinct from the multi-DAY calendar brake above — fires
+	// ONE claimless adjudication per goal-id whose quiet window elapsed.
+	// Same tick driver (DoD-11: one periodic driver for all goal sweeps).
+	al.goalQuietWindowSettle(now)
 }
 
 // effectiveGoalActivity returns the best available "last real activity"
