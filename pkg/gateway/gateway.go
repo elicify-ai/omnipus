@@ -71,6 +71,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/state"
@@ -2266,11 +2267,36 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Plan tool surface wired (create_plan/execute_plan/run_task/inspect_session)")
 
+	// ADR-053 §5 boot sweep (FR-118/G-13) + intent-log (FR-148/M4): construct
+	// the durable session-lifecycle store and the write-ahead intent-log. Both
+	// are folded into the plan engine's single boot pass via the setters below
+	// (SetLifecycleStore / SetIntentLog), so Start runs the intent-log replay,
+	// plan reconciliation, and session boot sweep as one atomic boot step.
+	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
+	intentLog := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"))
+	bootSweepCfg := agentLoop.GetConfig().Planning
+
 	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
 	// convention immediately below/above for a missing task store/executor
 	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
 	if tStore != nil && tExecutor != nil {
 		planEngine := agent.NewPlanEngine(agentLoop, planStore, tStore, tExecutor)
+		// Boot-sweep + intent-log wiring (must precede Start so the first boot
+		// pass runs synchronously inside Start).
+		planEngine.SetLifecycleStore(lifecycleStore)
+		planEngine.SetIntentLog(intentLog)
+		if bsec := bootSweepCfg.EffectiveBootSweepBudgetSeconds(); bsec > 0 {
+			planEngine.SetBootSweepBudget(time.Duration(bsec) * time.Second)
+		}
+		if smb := bootSweepCfg.EffectiveSnapshotMaxBytes(); smb > 0 {
+			planEngine.SetSnapshotMaxBytes(smb)
+		}
+		// session.failed hook: best-effort recovery signal. The plan engine's
+		// own tick loop re-arms idle settlement after Start; this hook is where
+		// a future event-bus emission of session.failed would plug in.
+		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
+			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
+		})
 		// Wave 2-C2 supplies the real /goal and /loop active-loop counters via
 		// these exact call sites; until then they contribute 0 to the R5
 		// global active-loop cap (documented boot-ordering requirement on

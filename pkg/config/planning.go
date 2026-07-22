@@ -62,6 +62,36 @@ type PlanningConfig struct {
 	// exists yet (interview 2026-07-21 confirmed N=20000 globally;
 	// per-verifier override is a noted future direction only).
 	VerifierWindowTokens int `json:"verifier_window_tokens,omitempty"`
+	// BootSweepBudgetSeconds bounds the wall-clock time the ADR-053 §5 boot
+	// sweep may take to reconcile persisted non-terminal sessions to
+	// failed(interrupted) at startup (FR-118 "within N s"). Zero inherits the
+	// engine's DefaultBootSweepBudgetSeconds.
+	BootSweepBudgetSeconds int `json:"boot_sweep_budget_seconds,omitempty"`
+	// SnapshotMaxBytes caps a parked needs_input session's retained context
+	// snapshot for the isNeedsInputReconstructable predicate (R§8.6 clause 4).
+	// Zero inherits the engine's DefaultSnapshotMaxBytes.
+	SnapshotMaxBytes int `json:"snapshot_max_bytes,omitempty"`
+}
+
+// EffectiveBootSweepBudgetSeconds resolves the boot-sweep budget (FR-118):
+// this config's BootSweepBudgetSeconds when >=1, else 0 (the engine substitutes
+// its own DefaultBootSweepBudgetSeconds on a zero/<=0 return, keeping the
+// config struct free of an agent-package import).
+func (c PlanningConfig) EffectiveBootSweepBudgetSeconds() int {
+	if c.BootSweepBudgetSeconds >= 1 {
+		return c.BootSweepBudgetSeconds
+	}
+	return 0
+}
+
+// EffectiveSnapshotMaxBytes resolves the reconstructability snapshot cap
+// (R§8.6 clause 4): this config's SnapshotMaxBytes when >=1, else 0 (the
+// engine substitutes its own DefaultSnapshotMaxBytes on a zero/<=0 return).
+func (c PlanningConfig) EffectiveSnapshotMaxBytes() int64 {
+	if c.SnapshotMaxBytes >= 1 {
+		return int64(c.SnapshotMaxBytes)
+	}
+	return 0
 }
 
 // EffectiveTaskMaxAttempts resolves the attempt ceiling (FR-9): a non-nil,

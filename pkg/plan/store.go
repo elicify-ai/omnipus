@@ -260,6 +260,14 @@ type Patch struct {
 	// HandoverText sets Plan.HandoverText (Wave 2-B engine steering/handover
 	// note). See that field's doc comment on Plan.
 	HandoverText *string
+	// LastUnmetTerminalSignature sets Plan.LastUnmetTerminalSignature (ADR-053
+	// C1/FR-147 — durable F2 round-burn gate). A nil pointer leaves the field
+	// unchanged; a pointer to "" clears it (e.g. on a fresh
+	// approved->running admission).
+	LastUnmetTerminalSignature *string
+	// OwnerSessionID sets Plan.OwnerSessionID (ADR-053 m-3/FR-147 — named
+	// plan<->owner-session linkage).
+	OwnerSessionID *string
 }
 
 // Update applies patch to the plan identified by id and persists the result.
@@ -370,6 +378,12 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			return nil, verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
 		}
 		p.HandoverText = *patch.HandoverText
+	}
+	if patch.LastUnmetTerminalSignature != nil {
+		p.LastUnmetTerminalSignature = *patch.LastUnmetTerminalSignature
+	}
+	if patch.OwnerSessionID != nil {
+		p.OwnerSessionID = *patch.OwnerSessionID
 	}
 	if patch.State != nil {
 		if !IsValidState(*patch.State) {

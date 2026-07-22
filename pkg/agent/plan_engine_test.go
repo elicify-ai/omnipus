@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -147,6 +148,7 @@ type planEngineHarness struct {
 	disp  *fakePlanDispatcher
 	notif *fakePlanNotifier
 	clock *fakePlanClock
+	ls    *session.LifecycleStore
 }
 
 // newTestPlanEngine builds a PlanEngine with fakes for every collaborator, by
@@ -439,8 +441,15 @@ func TestPlanEngine_JudgeUnmet_StoresSteeringAndWakesOwnerWithoutTerminal(t *tes
 	if got.JudgeRounds != 1 {
 		t.Fatalf("judge_rounds = %d, want 1", got.JudgeRounds)
 	}
-	if got.PlanPhase != plan.PhaseDispatching {
-		t.Fatalf("plan_phase = %q, want dispatching", got.PlanPhase)
+	// ADR-053 C1/FR-147/INV-2: an UNMET verdict on an all-terminal DAG durably
+	// parks the plan at plan_phase=awaiting_owner_correction (NOT dispatching —
+	// that was the pre-C1 in-memory-only behavior). The durable phase is what
+	// the boot sweep's exemption (b) and the pill crosswalk resolve against.
+	if got.PlanPhase != plan.PhaseAwaitingOwnerCorrection {
+		t.Fatalf("plan_phase = %q, want awaiting_owner_correction (C1 durable condition)", got.PlanPhase)
+	}
+	if got.LastUnmetTerminalSignature == "" {
+		t.Fatal("last_unmet_terminal_signature must be persisted on an UNMET all-terminal verdict (C1)")
 	}
 	if got.HandoverText == "" {
 		t.Fatal("expected steering text to be persisted in HandoverText")
