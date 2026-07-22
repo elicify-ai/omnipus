@@ -22,6 +22,25 @@ var defaultPatterns = []string{
 	`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`, // Email addresses
 }
 
+// defaultPatternLabels are human-readable labels aligned 1:1 with
+// defaultPatterns (same index). They let the secrets scanner (secretscan.go)
+// report WHICH class of secret it found without ever echoing the secret value.
+// A compile-time length check lives in NewSecretScanner.
+var defaultPatternLabels = []string{
+	"OpenAI/OpenRouter API key (sk-…)",
+	"generic API key (key-…)",
+	"HTTP Bearer token",
+	"GitHub personal access token (ghp_…)",
+	"GitHub OAuth token (gho_…)",
+	"Slack bot token (xoxb-…)",
+	"Slack user token (xoxp-…)",
+	"AWS access-key ID (AKIA…)",
+	"AWS temporary access-key ID (ASIA…)",
+	"JSON Web Token (JWT)",
+	"Google OAuth access token (ya29.…)",
+	"email address",
+}
+
 const redactedValue = "[REDACTED]"
 
 // sensitiveFieldNames is the set of normalized field names whose values are always

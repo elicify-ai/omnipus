@@ -102,6 +102,56 @@ func SetRestrictAuditHook(fn func(*audit.Entry)) {
 	restrictAuditHook.Store(&fn)
 }
 
+// gitDenyAuditHook is the package-level audit emitter for git-evidence sandbox
+// denials (ADR-053 D17). Set by SetGitDenyAuditHook at gateway boot; nil until
+// then. Stored atomically so the hardened-exec vet path stays lock-free.
+var gitDenyAuditHook atomic.Pointer[func(*audit.Entry)]
+
+// SetGitDenyAuditHook installs the audit emitter for git-evidence sandbox
+// denials. Pass nil to clear (tests). Safe to call from any goroutine.
+//
+// The gateway wires this at boot to the same audit sink as SetRestrictAuditHook
+// so a blocked `git commit --amend` / `.git` tamper attempt surfaces in the
+// audit JSONL, not only in slog.
+func SetGitDenyAuditHook(fn func(*audit.Entry)) {
+	if fn == nil {
+		gitDenyAuditHook.Store(nil)
+		return
+	}
+	gitDenyAuditHook.Store(&fn)
+}
+
+// emitGitDeny records a git-evidence sandbox denial (Decision == "deny") with
+// the full explainable PolicyRule, argv, and cwd. Falls back to slog.Warn when
+// no hook is wired so the denial is never silent.
+func emitGitDeny(dec ExecDecision, argv []string, cwd string) {
+	hookPtr := gitDenyAuditHook.Load()
+	if hookPtr == nil {
+		slog.Warn("hardened_exec: git-evidence sandbox block (no audit hook wired)",
+			"policy_rule", dec.PolicyRule, "reason", dec.Reason,
+			"git_dir", dec.GitDir, "verb", dec.Verb, "cwd", cwd)
+		return
+	}
+	// argv[0] is the command; keep the full argv in details but never the env.
+	(*hookPtr)(&audit.Entry{
+		Event:      "git_evidence_sandbox_block",
+		Decision:   audit.DecisionDeny,
+		Tool:       "bash",
+		Command:    strings.Join(argv, " "),
+		PolicyRule: dec.PolicyRule,
+		Details: map[string]any{
+			"reason":  dec.Reason,
+			"git_dir": dec.GitDir,
+			"verb":    dec.Verb,
+			"cwd":     cwd,
+		},
+	})
+}
+
+// ErrGitEvidenceProtected is returned by Run when a child would tamper with a
+// protected git-evidence repository (ADR-053 D17 sandbox block).
+var ErrGitEvidenceProtected = errors.New("hardened_exec: blocked — command would modify protected git-evidence repository (.git)")
+
 // emitRestrictFailure dispatches to the registered hook, falling back to
 // slog.Error when no hook is wired. Called from Run and StartLocked when
 // restrictCurrentThreadIfNeeded returns a non-nil error so the operator
@@ -520,6 +570,20 @@ var ErrEmptyArgv = errors.New("hardened_exec: argv is empty")
 func Run(ctx context.Context, argv []string, env []string, lim Limits) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, ErrEmptyArgv
+	}
+
+	// ADR-053 D17 sandbox block (spike caveat 3): before spawning, refuse any
+	// command that would tamper with a protected git-evidence repository
+	// (work/.git). Commits into that repo happen in-process via go-git; an
+	// agent using bash to `git commit --amend` / `rm -rf .git` / `git rebase`
+	// would forge the Judge's rung-1 evidence. The guard is a no-op until a
+	// repo is registered via sandbox.ProtectRepoWorkdir, so it costs one map
+	// length check per spawn when the git layer is inactive. This runs on every
+	// platform (the authoritative layer where Landlock is unavailable or cannot
+	// express writable-parent/read-only-child — see gitguard.go).
+	if dec := DefaultGitGuard.InspectExec(argv, lim.WorkspaceDir); !dec.Allowed {
+		emitGitDeny(dec, argv, lim.WorkspaceDir)
+		return Result{}, fmt.Errorf("%w: %s", ErrGitEvidenceProtected, dec.Reason)
 	}
 
 	// Linux Landlock enforces per-OS-thread, but Go's M:N scheduler routes
