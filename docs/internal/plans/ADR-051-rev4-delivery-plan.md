@@ -29,6 +29,8 @@
 
 **Reviewer dispatch model:** the slice implementor spawns **6 parallel `general` agents in one turn**, each carrying per-reviewer-toolkit instructions (`code-reviewer`, `code-simplifier`, `comment-analyzer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`), plus 1 holistic. Total 7 parallel `general` calls per gate round. The pr-test-analyzer gets **first pass + longest context** (it sizes test-coverage gaps — the broadest job).
 
+**Holistic reviewer prompt (compensating control, F-L4-1 PARTIAL resolution):** the 7th holistic `general` is supplied with the following context in its prompt: (i) the governing ADR's Decision section, (ii) the spec's Behavioral Contract + Explicit Non-Behaviors + Integration Boundaries, (iii) the round-1 and round-2 grill findings for the ADR + spec, (iv) the slice's TDD plan rows. This converts the absent-dedicated-architect problem into a context-loaded holistic review — the agent has the architect's frame-of-reference (the ADR's decision rationale) without needing the agent type. Without these supplies, the holistic role would degrade into a generic re-pass; with them, it is a structural-and-architectural holistic.
+
 ---
 
 ## 1. Slice → FR mapping (the unit of work)
@@ -38,8 +40,8 @@ Slices are defined by FR dependency: a slice owns its primary FRs, may *touch* F
 | Slice | Primary FRs | Touched FRs | Coupled with |
 |---|---|---|---|
 | **A — Contracts foundation** | FR-031 (MediaLibraryEntry.yaml, MediaAttachmentRequest.yaml generated) | FR-001 (wire shape), FR-022 (wire shape for attachment requests) | Provides wire types to B, D, E, F, G, H |
-| **B1 — Workspace library core (storage)** | FR-001, FR-002, FR-003, FR-004, FR-006, FR-007, FR-007a | FR-005 (carve-out verification), FR-028, FR-029, FR-030 | Standalone package `pkg/media/library/`; sha256-on-read; manifest; orphan-GC refcount (separate counter from `pathStates.refCount` per spec round-2 R2-M1); cascade-delete hook into `pkg/workspace/` |
-| **B2 — Audit + namespace integration** | FR-009 (cascade-delete wire-up), FR-033 (audit event shape) | FR-008 (audit single-file-delete) | Depends on B1's manifest refcount existing; depends on `pkg/audit/` audit subsystem accepting the new event shape |
+| **B1 — Workspace library core (storage)** | FR-001, FR-002, FR-003, FR-004, FR-006, FR-007, FR-007a | FR-005 (carve-out verification), FR-028, FR-029, FR-030 | Standalone package `pkg/media/library/`; sha256-on-read; manifest; orphan-GC refcount (separate counter from `pathStates.refCount` per spec round-2 R2-M1); the cascade-delete **hook** in `pkg/workspace/` (function signature that B2 fills in) |
+| **B2 — Audit events + cascade-delete audit wire-up** | FR-008 (audit), FR-009 (cascade-delete wire-up), FR-033 (audit event shape) | depends on B1's manifest refcount API existing | **MUST be sequential after B1 (NOT parallel).** Owns: audit event shape + single-file-delete audit + cascade-delete audit + the workspace-namespace wiring of the manifest API endpoint. The hook in B1's code (in `pkg/workspace/`) calls into B2's registered audit emitter. |
 | **C — Capability catalog transport** | FR-024, FR-025, FR-026, FR-027 | FR-031 (consumed types), FR-010, FR-014, FR-015 (budget-from-catalog) | Lives in **new package `pkg/providers/capabilities/`** (NOT `pkg/providers/catalog/` — that already exists with provider metadata, not modalities). The freeze-gate artifact is committed at end of Slice C: `docs/internal/research/provider-media-format-support-2026-07.md` per FR-024. |
 | **D — Step-5 offload + sanitization** | FR-020, FR-020a, FR-021, FR-022, FR-023, FR-023a | FR-004 (text extraction in step-6 text-injection path) | Co-travels with FR-020a security fix (cannot land without sanitization); FR-023a touches the existing `loop_media.go:78-79,91,117` injection sites. STRIDE-focused reviewer pass. |
 | **E — Step-4 outcome-based retry + 2 new classifier codes** | FR-017, FR-017a, FR-018, FR-019 | FR-020 (degrades to step-5), FR-028 (resolver unchanged) | Co-travels with classifier tests; FR-018 adds `CodeToolArgs` + `CodeSchema` to `pkg/agent/translate_error.go` |
@@ -64,13 +66,16 @@ Slices are defined by FR dependency: a slice owns its primary FRs, may *touch* F
 - **Output:** 1 commit on `sendfile-fix` — `feat(adr-051-rev4): generate media library wire contracts`. Wire types now exist in `pkg/api/generated/` and `src/lib/api/generated/`.
 - **Reviewer gate (this wave only):** none — wire-gen is mechanical + verifiably correct on `make verify-contracts`.
 
-### Wave 1 — Core backend (parallel ×5 in one turn: T1=B1, T2=B2, T3=C, T4=F, T5=E)
-Dispatch five `general` subagents in parallel, each carrying its per-slice lead-role prompt:
+### Wave 1 — Core backend (Wave 1a: B1; Wave 1b: B2/C/F/E in parallel ×4)
+
+**Wave 1a** is a single-slice prerequisite: B1 produces the storage + manifest + refcount API that B2's audit + cascade-delete wiring calls into.
+
+**Wave 1b** dispatches four `general` subagents in parallel, each carrying its per-slice lead-role prompt:
 
 | Team | subagent_type | Per-slice prompt instruction | Slice | Output (stacked commit) |
 |---|---|---|---|---|
-| T1 | `general` (backend-lead) | "Implement Slice B1 — workspace library core storage under `pkg/media/library/`…" | **B1** | `feat(adr-051-rev4): workspace media library storage (manifest, sha256, GC, refcount)` |
-| T2 | `general` (backend-lead) | "Implement Slice B2 — audit events + cascade-delete wiring (FR-009, FR-033). Depends on B1's refcount API…" | **B2** | `feat(adr-051-rev4): media audit events + cascade-delete wiring` |
+| T1 (Wave 1a, alone) | `general` (backend-lead) | "Implement Slice B1 — workspace library core storage under `pkg/media/library/`. **Define** the cascade-delete hook signature in `pkg/workspace/` (the function stub B2 fills in); B2 cannot land without it. Stops after B1 commits; B2 follows sequentially." | **B1** | `feat(adr-051-rev4): workspace media library storage (manifest, sha256, GC, refcount)` |
+| T2 | `general` (backend-lead) | "Implement Slice B2 — audit events + cascade-delete wire-up (FR-009, FR-033). Requires B1's manifest refcount API and the cascade-delete hook signature to exist on `sendfile-fix` HEAD. Verify both before starting. Depends sequentially on B1." | **B2** | `feat(adr-051-rev4): media audit events + cascade-delete wiring` |
 | T3 | `general` (backend-lead) | "Implement Slice C — capability catalog transport in NEW package `pkg/providers/capabilities/` (NOT `pkg/providers/catalog/`)…" | **C** | `feat(adr-051-rev4): capability catalog transport (GitHub Release + raw fallback)` |
 | T4 | `general` (backend-lead) | "Implement Slice F — resize-to-fit + DecodeConfig guard + PNG→JPEG ladder + **DELETE D2 passthrough (FR-016)** in the same PR as FR-011/013/014/015 (same `encodeImageToDataURL` function). Co-travel enforced at the function boundary per round-1 grill M6…" | **F** | `feat(adr-051-rev4): resize-to-fit with co-traveled D2-passthrough deletion` |
 | T5 | `general` (backend-lead) | "Implement Slice E — outcome-based retry + 2 new classifier codes (`CodeToolArgs`, `CodeSchema`) + outcome-relabel…" | **E** | `feat(adr-051-rev4): outcome-based strip-retry with classifier expansion` |
@@ -101,7 +106,7 @@ Sequential after Wave 2. **2 stacked commits.**
 | T9 | `general` (qa-lead) | Wire the orchestrator `pkg/agent/media_present.go` (NEW package per ADR-051 Rev-4 Affected Components): the 7-step presentation chain composes **all** slices — call B1 for storage, C for capability, D for offload + sanitization, E for outcome retry, F for normalize+resize, FR-020a/023a sanitization, etc. Replace `resolveMediaRefs`'s inline logic with the orchestrator (FR's impose the contract). T9 owns the **rewrite** of the 16 existing `TestResolveMediaRefs_*` tests + the 4 `TestEncodeImageToDataURL_*` tests to assert the new observable contract — behavioral invariants preserved per the round-1 grill M4 fix (NO "without modification" — but no test is silently dropped; every updated test maps to the same acceptance criterion). | `feat(adr-051-rev4): orchestrator wires slices into 7-step chain` |
 | T10 | `general` (qa-lead) | Add the spec's TDD-plan named tests not yet implemented by Wave 1-2: all-formats-upload Scenario Outline (FR-001/SC-001, m1), resize ladder floor (FR-015, m2), document-class guidance noun (FR-021, m3), ref disambiguation (FR-028, m4), single-file-delete audit (FR-008/033, m5); round-2 corrections: deferred GC (R2-M1+M2 → test #42), filename sanitization in content (R2-M3 → test #43), legacy nilable resolver (R2-M4 → test #45), retry-fails-different (R2-m1 → test #44), freeze-gate artifact (R2-m2 → committed alongside), E2E env gating (R2-m3 → wired into E2E rows). | `test(adr-051-rev4): complete spec test coverage gap-fills` |
 
-**Reviewer gate:** 6-reviewer gate on the diff so far (current branch HEAD vs `ae9271d0`^). All slices merged together, full chain tested.
+**Reviewer gate:** 6-reviewer gate on the diff so far (current branch HEAD vs `ae9271d0`^). All slices merged together, full chain reviewed. **Note:** the 6-reviewer gate is a code review (correctness, security, simplicity, comment quality, test-coverage sizing, type-design quality) — it does NOT exercise behavioral correctness. Behavioral correctness is enforced by the per-SC observation log in Wave 4 (T15). The "full chain tested" phrase in this row refers to the slice-local unit tests; behavioral verification happens at acceptance (Wave 4 T14/T15).
 
 ### Wave 4 — UAT + acceptance + fix-everything
 Sequential after Wave 3.
@@ -149,6 +154,8 @@ Hard constraints (CLAUDE.md):
 ```
 
 The security-lead prompt (T7 in Wave 2) adds: `Extra focus on STRIDE: every byte that enters or leaves the step-5 path must be reviewable for Spoofing/Tampering/Repudiation/Info-Disclosure/DoS/Elevation-of-Privilege. The FR-020a + FR-023a sanitization is the load-bearing security fix — do not weaken it.`
+
+**Frontend prompt variant (N-m3 MINOR resolution):** for Slice H (SPA), the standard Go-shaped template is replaced with the frontend shape — `cd src && npm run typecheck`, `npx vitest run`, `npm run build`, plus the same contract-first rule (never hand-write wire types; use `src/lib/api/generated/`). The frontend slice is gated on these three commands returning clean, not on `go build`/`golangci-lint`. The reviewer-gate for the frontend slice uses the same 6-toolkit fan-out but the `pr-test-analyzer`'s scope is vitest coverage rather than Go coverage.
 
 The Wave 0 Slice A prompt differs slightly: "You are the GENERATOR step. Run `scripts/gen-contracts.sh`, verify with `make verify-contracts`, commit the generated files. Do NOT hand-write any of the types — the schemas are the source of truth, the generator is the only writer."
 
@@ -208,12 +215,12 @@ The following are now **decided**, not open:
 
 1. **Slice C package location**: `pkg/providers/capabilities/` (NEW) — NOT `pkg/providers/catalog/` (which already exists with provider metadata). F-L2-3 MINOR resolved.
 2. **Manifest refcount design**: SEPARATE counter from `pathStates.refCount`, distinct semantics (deferred 30d vs immediate-delete-at-zero). Spec FR-007a updated in round-2 corrections (R2-M1). F-L8-1 MINOR resolved.
-3. **Step-5 work/ size limit**: the per-file cap remains `maxUploadFileSize` (100 MB); per-workspace `work/` cap is operator-configurable (default unset). F-L8-1 MINOR resolved.
+3. **Step-5 work/ size limit**: per-file cap remains `maxUploadFileSize` (100 MB). **No separate work-dir cap in this release** — the operator's "no quota" stance (ADR §Operator decision 1) carries; the two-mechanism split (user uploads = persistent, agent-generated = ephemeral) bounds the flood vector; orphan-GC covers stale refs. F-L8-1 MINOR + N-m2 resolved by aligning with the spec/ADR rather than inventing a new cap.
 4. **Slice C freeze-gate artifact**: `docs/internal/research/provider-media-format-support-2026-07.md` is produced by Slice C and referenced in the seed commit. F-L8-1 MINOR resolved.
 5. **Slice G channel-by-channel threading verification**: T6 enumerates each of the 8 channels in the test matrix and verifies the nilable param threading per channel. F-L8-1 MINOR resolved.
-6. **Slice E classifier substrings for new codes**: `CodeToolArgs` detected by body-substring `"invalid tool arguments"`; `CodeSchema` detected by body-substring `"schema validation"`. F-L8-2 MINOR resolved.
+6. **Slice E classifier substrings for new codes**: `CodeToolArgs` detected by body-substring `"invalid tool arguments"`; `CodeSchema` detected by body-substring `"schema validation"`. **Status/class backstop:** the existing `classifyByHTTPStatus` already handles status-code-driven classification (`401`/`403`/`413` → `CodeProviderRejected`, etc.) — for any 4xx whose body phrasing doesn't match the new codes' substrings, the status-code path returns the appropriate non-media code and step-4 is suppressed regardless of phrasing. The body-substring match is a SECONDARY detector; the status-code path is the PRIMARY gate. If a new provider emits an unrecognized phrasing for a status code the existing classifier already covers (e.g. `400`), the classifier returns `CodeUnknown` (inconclusive) and step-4's outcome-based fallback fires — which is the intended outcome per FR-017. F-L8-2 MINOR resolved.
 7. **PR strategy**: stacked commits on `sendfile-fix`; ONE draft PR opened at end of Wave 4 acceptance. F-L5-3 MAJOR resolved.
-8. **Per-SC observation log format**: `## SC-NNN: <name>\n- Verification: <tool output>\n- Result: PASS/FAIL\n- Timestamp: <ts>`. F-L6-2 MINOR resolved.
+8. **Per-SC observation log format** (F-L6-2 MINOR resolution): `## SC-NNN: <name>\n- Verification: <tool output>\n- File path evidence: <path or cmd/exit>\n- Operator/agent: <who ran it>\n- Result: PASS/FAIL\n- Timestamp: <ts>`. Each observation references either a file path under `docs/internal/uat/` (commit-evidence, persona-log entries) or a recorded shell command + exit code for reproducibility.
 9. **Slice B blast-radius mitigation**: B lands as TWO stacked commits (B1-core, B2-audit+namespace). F-L2-1 MAJOR resolved.
 
 ---
