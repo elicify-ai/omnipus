@@ -53,7 +53,7 @@ func TestHandleClearSessions_NoSessions_ReturnsContractShapeNoWarnings(t *testin
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
 	status, _ := resp["status"].(string)
-	assert.Equal(t, "cleared", status, "status must match the gen.Cleared enum value")
+	assert.Equal(t, "cleared", status, "status must match the gen.ClearAllSessionsResponseStatusCleared enum value")
 
 	count, hasCount := resp["count"]
 	require.True(t, hasCount, "count key must always be present")

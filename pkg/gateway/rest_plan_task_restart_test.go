@@ -729,7 +729,7 @@ func TestTaskStop_HappyPathCancelsAndSetsReason(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &stopped))
 	assert.Equal(t, gen.TaskStatusFailed, stopped.Status)
 	require.NotNil(t, stopped.CancelReason)
-	assert.Equal(t, gen.StoppedByUser, *stopped.CancelReason)
+	assert.Equal(t, gen.TaskCancelReasonStoppedByUser, *stopped.CancelReason)
 
 	reloaded, gerr := api.taskStore.Get(taskID)
 	require.NoError(t, gerr)
