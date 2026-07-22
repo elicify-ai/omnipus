@@ -129,32 +129,31 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 		return "", fmt.Errorf("%w: agent_id=%s", ErrAgentNotWorkspaceMember, agentID)
 	}
 
-	wsDir, idErr := workspace.SafeWorkDir(home, wsID)
-	if idErr != nil {
+	// workspace.EnsureWorkDir (SafeWorkDir + MkdirAll + idempotent git-evidence
+	// auto-init, see its own doc comment) replaces the former two-step
+	// SafeWorkDir-then-MkdirAll here so the work/-dir auto-init hook actually
+	// fires on the native + external-cli dispatch path this function gates
+	// for both. Both former failure branches (invalid id / MkdirAll failure)
+	// already produced byte-identical wrapped-error text
+	// ("workspace work dir unavailable for agent_id=%s workspace_id=%s: %w"),
+	// so collapsing them to one call + one WARN loses no caller-visible
+	// distinction — no call site inspects the underlying error type (both
+	// resolveTurnWorkDirOrRefuse callers, loop.go and external_dispatch.go,
+	// treat wsErr opaquely), and %w still chains through EnsureWorkDir's own
+	// wrapping for errors.Is(err, workspace.ErrInvalidWorkspaceID) if a
+	// future caller ever needs it.
+	wsDir, dirErr := workspace.EnsureWorkDir(home, wsID)
+	if dirErr != nil {
 		logger.WarnCF(
 			"agent",
-			"turn refused: invalid workspace id resolving work dir",
-			map[string]any{"agent_id": agentID, "workspace_id": wsID, "error": idErr.Error()},
+			"turn refused: workspace work dir unavailable",
+			map[string]any{"agent_id": agentID, "workspace_id": wsID, "error": dirErr.Error()},
 		)
 		return "", fmt.Errorf(
 			"workspace work dir unavailable for agent_id=%s workspace_id=%s: %w",
 			agentID,
 			wsID,
-			idErr,
-		)
-	}
-
-	if mkErr := os.MkdirAll(wsDir, 0o700); mkErr != nil {
-		logger.WarnCF(
-			"agent",
-			"turn refused: could not create workspace work dir",
-			map[string]any{"agent_id": agentID, "workspace_id": wsID, "dir": wsDir, "error": mkErr.Error()},
-		)
-		return "", fmt.Errorf(
-			"workspace work dir unavailable for agent_id=%s workspace_id=%s: %w",
-			agentID,
-			wsID,
-			mkErr,
+			dirErr,
 		)
 	}
 

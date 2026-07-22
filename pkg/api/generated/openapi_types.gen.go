@@ -12020,6 +12020,9 @@ type TaskUpdateRequest struct {
 	// Due New deadline (RFC 3339 UTC).
 	Due *time.Time `json:"due,omitempty"`
 
+	// IsJoin ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
+	IsJoin *bool `json:"is_join,omitempty"`
+
 	// MaxAttempts New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
@@ -12040,6 +12043,9 @@ type TaskUpdateRequest struct {
 
 	// Status New task status (6-state lifecycle, ADR-051 D5).
 	Status *TaskUpdateRequestStatus `json:"status,omitempty"`
+
+	// Stream ADR-053 §Contract Surface — the parallel-group id this member belongs to.
+	Stream *string `json:"stream,omitempty"`
 
 	// Surface New UI surface ownership (Detail
 	Surface *TaskUpdateRequestSurface `json:"surface,omitempty"`
@@ -12081,6 +12087,9 @@ type TaskUpdateRequest struct {
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskUpdateRequestTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
+
+	// WriteSet ADR-053 §Contract Surface. Replacement set of concrete paths this plan member creates/edits — see `Task.write_set`. Meaningful only alongside `plan_id`; empty/absent for an exploratory member (D10) or a standalone task.
+	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
 // TaskUpdateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.

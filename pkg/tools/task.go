@@ -264,6 +264,19 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
 			},
+			"write_set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Concrete paths this plan member creates/edits (optional). Meaningful only alongside plan_id; plan-lint reads this at approve to reject overlapping parallel streams. Empty/omitted for an exploratory member whose write footprint is unknowable up front.",
+			},
+			"stream": map[string]any{
+				"type":        "string",
+				"description": "The parallel-group id this plan member belongs to (optional). Members sharing a stream run serially within it; different streams may run concurrently provided their write_sets are disjoint.",
+			},
+			"is_join": map[string]any{
+				"type":        "boolean",
+				"description": "True marks this plan member as an authored join/assemble member with its own criteria, converging one or more parallel streams into a single artifact. Defaults to false.",
+			},
 			"blocked_by": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
@@ -555,6 +568,27 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		entity.PlanID = planID
 	}
 
+	// Optional write_set/stream/is_join (ADR-053 §Contract Surface, US-11
+	// G-16): meaningful only alongside plan_id, but accepted unconditionally
+	// (ignored by plan-lint on a standalone task) — matching the wire
+	// contract's own "meaningful only when plan_id is set" convention rather
+	// than rejecting a caller who supplies them without a plan_id.
+	if rawWriteSet, ok := args["write_set"].([]any); ok {
+		writeSet := make([]string, 0, len(rawWriteSet))
+		for _, p := range rawWriteSet {
+			if s, ok := p.(string); ok && s != "" {
+				writeSet = append(writeSet, s)
+			}
+		}
+		entity.WriteSet = writeSet
+	}
+	if stream, ok := args["stream"].(string); ok {
+		entity.Stream = stream
+	}
+	if isJoin, ok := args["is_join"].(bool); ok {
+		entity.IsJoin = isJoin
+	}
+
 	if err := t.store.Create(entity); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
@@ -675,6 +709,19 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Array of task IDs this task is blocked by. Pass the full list to REPLACE the existing deps; pass [] to CLEAR; omit to leave unchanged. Each blocker must exist + be same-workspace; cycles rejected.",
+			},
+			"write_set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Replacement set of concrete paths this plan member creates/edits. Pass the full list to REPLACE; pass [] to CLEAR; omit to leave unchanged. Meaningful only alongside plan_id.",
+			},
+			"stream": map[string]any{
+				"type":        "string",
+				"description": "New parallel-group id this plan member belongs to. Pass \"\" to CLEAR; omit to leave unchanged.",
+			},
+			"is_join": map[string]any{
+				"type":        "boolean",
+				"description": "Set/clear whether this plan member is an authored join/assemble member.",
 			},
 		},
 		"required": []string{"task_id"},
@@ -844,9 +891,36 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
+	// write_set (ADR-053 §Contract Surface, US-11 G-16): three-way, mirroring
+	// blocked_by — provided-empty CLEARs the declared write-set (reverts to
+	// an exploratory member, D10), populated REPLACEs it, absent leaves it
+	// unchanged.
+	if rawWriteSet, ok := args["write_set"].([]any); ok {
+		writeSet := make([]string, 0, len(rawWriteSet))
+		for _, p := range rawWriteSet {
+			if s, ok := p.(string); ok && s != "" {
+				writeSet = append(writeSet, s)
+			}
+		}
+		patch.WriteSet = &writeSet
+		updatedFields = append(updatedFields, "write_set")
+	}
+
+	// stream (empty string CLEARs the label; absent leaves it unchanged).
+	if stream, ok := args["stream"].(string); ok {
+		patch.Stream = &stream
+		updatedFields = append(updatedFields, "stream")
+	}
+
+	// is_join (plain overwrite; absent leaves it unchanged).
+	if isJoin, ok := args["is_join"].(bool); ok {
+		patch.IsJoin = &isJoin
+		updatedFields = append(updatedFields, "is_join")
+	}
+
 	if len(updatedFields) == 0 {
 		return ErrorResult(
-			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by)",
+			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join)",
 		)
 	}
 

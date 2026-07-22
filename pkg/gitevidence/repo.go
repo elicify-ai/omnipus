@@ -15,7 +15,9 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // Repo is a hidden go-git evidence repository rooted at a workspace's
@@ -29,9 +31,10 @@ type Repo struct {
 
 	mu sync.Mutex
 
-	guard  SizeGuard
-	redact func(string) string
-	now    func() time.Time
+	guard   SizeGuard
+	redact  func(string) string
+	scanner *audit.SecretScanner
+	now     func() time.Time
 }
 
 // Dir returns the absolute path this Repo is rooted at (the workspace's
@@ -56,8 +59,30 @@ func WithSizeGuard(g SizeGuard) Option {
 // precedent. f should return its input UNCHANGED when no secret is
 // present; a nil Option (the default) disables the scan (e.g. test
 // harnesses with no registered secrets).
+//
+// Superseded by WithSecretScanner (DoD-11 — reconciled to ONE guard on
+// commit, not two): when both are supplied to the same Repo, WithSecretScanner
+// wins and this redactor is never consulted — see (*Repo).fileHasSecret. Kept
+// for callers that only have a raw config.Config.SensitiveDataReplacer() and
+// no *audit.SecretScanner instance; a caller with the fuller scanner should
+// prefer WithSecretScanner, which also catches runtime-obtained secrets via
+// pkg/audit's format-pattern layer (sk-…, ghp_…, JWTs, AWS keys, …), not just
+// the credential-store registry this callback alone can see.
 func WithRedactor(f func(string) string) Option {
 	return func(r *Repo) { r.redact = f }
+}
+
+// WithSecretScanner installs the fuller MIN-5 secret-detection engine
+// (pkg/audit.SecretScanner — credential-store registry AND format-pattern
+// layers, ADR-053 D17/MIN-5) as this Repo's ONE secret guard on commit
+// (DoD-11: reconciles the two secret-detection mechanisms this package and
+// pkg/audit each independently offer into a single call path — see
+// (*Repo).fileHasSecret). s is typically constructed once via
+// audit.NewSecretScanner(cfg.SensitiveDataReplacer(), extraPatterns) at the
+// gateway boot seam and reused across every workspace's Repo. A nil s is a
+// no-op (matches WithRedactor's nil-disables convention).
+func WithSecretScanner(s *audit.SecretScanner) Option {
+	return func(r *Repo) { r.scanner = s }
 }
 
 // WithClock overrides the commit-timestamp clock. Test-only hook; real
@@ -131,6 +156,30 @@ func Open(dir string, opts ...Option) (*Repo, error) {
 		} else {
 			logger.InfoCF("gitevidence", "auto-initialized hidden evidence repo", map[string]any{"dir": dir})
 		}
+	}
+
+	// D17 (FR-152 caveat 3): a repo produced purely via go-git is byte-for-
+	// byte indistinguishable from one built by the real `git` binary, so an
+	// agent with bash access could tamper with it directly (commit --amend,
+	// rm -rf .git, …) unless the exec-chokepoint guard is armed for this
+	// dir. Registering unconditionally here — not left to each Open caller
+	// to remember — means every path that materializes/opens a work/ dir
+	// (workspace.EnsureWorkDir today; any future direct caller, e.g. the
+	// Play engine's commit orchestration) arms the same process-wide guard
+	// (pkg/sandbox.DefaultGitGuard, already consulted by every
+	// hardened_exec.Run call) the moment Omnipus's own evidence repo is
+	// confirmed present. Deliberately only on the success path below — NOT
+	// when ErrNestedRepo bailed out above — protecting a directory whose
+	// .git belongs to the OPERATOR's own repo (MIN-6 degraded case) would
+	// wrongly block the operator's own legitimate git commands against it.
+	// Protect's only failure mode (filepath.Abs erroring) is vanishingly
+	// rare and never worth failing Open's directory-creation contract over
+	// (mirrors Open's own "the git layer degrades, the caller's directory
+	// creation is unaffected" contract) — logged at WARN, not returned.
+	if protectErr := sandbox.ProtectRepoWorkdir(dir); protectErr != nil {
+		logger.WarnCF("gitevidence", "could not arm the exec-block guard for this evidence repo", map[string]any{
+			"dir": dir, "error": protectErr.Error(),
+		})
 	}
 
 	r := &Repo{

@@ -644,6 +644,9 @@ type TaskUpdateRequest = Partial<{
   clear_due: boolean;
   tags: Array<string>;
   plan_id: string;
+  write_set: Array<string>;
+  stream: string;
+  is_join: boolean;
   criteria: Array<AcceptanceCriterion>;
   max_attempts: number | null;
   surface: "user" | "heartbeat";
@@ -2684,6 +2687,9 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     clear_due: z.boolean(),
     tags: z.array(z.string().max(64)).max(16),
     plan_id: z.string(),
+    write_set: z.array(z.string()),
+    stream: z.string(),
+    is_join: z.boolean(),
     criteria: z.array(AcceptanceCriterion),
     max_attempts: z.number().int().gte(1).nullable(),
     surface: z.enum(["user", "heartbeat"]),

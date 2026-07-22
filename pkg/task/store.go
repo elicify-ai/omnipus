@@ -550,6 +550,20 @@ type Patch struct {
 	PlanID       *string
 	Tags         *[]string
 	Criteria     *[]AcceptanceCriterion
+	// WriteSet, Stream, and IsJoin are the ADR-053 plan-member fields
+	// (§Contract Surface — "write_sets + rationale on create_plan", US-11
+	// G-16). Meaningful only when the task has a non-empty PlanID; plan-lint
+	// (pkg/plan) reads them at approve time to reject overlapping parallel
+	// streams and join-less convergence points. A nil pointer leaves the
+	// field unchanged; *WriteSet pointing at an empty/nil slice CLEARS the
+	// declared write-set (an exploratory member, D10); *Stream pointing at
+	// "" CLEARS the stream label; IsJoin is a plain overwrite (mirrors the
+	// AttemptCount/Surface bool/int single-pointer convention above — unlike
+	// Trigger/MaxAttempts there is no meaningful "unset vs explicit false"
+	// distinction for IsJoin worth a double pointer).
+	WriteSet *[]string
+	Stream   *string
+	IsJoin   *bool
 	// MaxAttempts is a double pointer (mirrors Trigger): outer nil = unchanged,
 	// *outer nil = clear the override (inherit the global PlanningConfig
 	// default), *outer non-nil = set to that value.
@@ -855,6 +869,20 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		if len(t.Criteria) == 0 {
 			t.Criteria = nil
 		}
+	}
+	if patch.WriteSet != nil {
+		newWriteSet := *patch.WriteSet
+		if len(newWriteSet) == 0 {
+			t.WriteSet = nil
+		} else {
+			t.WriteSet = newWriteSet
+		}
+	}
+	if patch.Stream != nil {
+		t.Stream = *patch.Stream
+	}
+	if patch.IsJoin != nil {
+		t.IsJoin = *patch.IsJoin
 	}
 	if patch.MaxAttempts != nil {
 		newMax := *patch.MaxAttempts

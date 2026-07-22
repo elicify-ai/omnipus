@@ -43,7 +43,7 @@ import (
 // Constructor errors are logged at Warn level and the corresponding tool is
 // skipped. The caller must not treat a shorter-than-expected slice as fatal.
 func GeneralBuiltinMetadata() []Tool {
-	out := make([]Tool, 0, 38)
+	out := make([]Tool, 0, 39)
 
 	// --- bash (CategoryShell, ScopeCore) — ADR-036 merge of
 	// exec/workspace_shell/workspace_shell_bg into one universally-registered
@@ -96,6 +96,14 @@ func GeneralBuiltinMetadata() []Tool {
 	// --- delegate tool (CategoryDelegation) — ADR-036 merge of the former
 	// spawn / run_subagent / check_spawn_status trio into one tool. ---
 	out = append(out, NewDelegateTool("", 0, 0))
+
+	// --- message_parent tool (CategoryDelegation) — ADR-053 §5.1: the
+	// child-side tool a delegated session uses to push a typed message into
+	// its parent's durable inbox. Metadata-only instance (nil inbox/lifecycle
+	// stores; never Execute()d here) so the central registry and the
+	// Constraint #6 tool-policy-coverage universe (buildKnownBuiltinToolNames)
+	// see it, mirroring delegate's registration exactly. ---
+	out = append(out, NewMessageParentTool(nil, nil))
 
 	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))

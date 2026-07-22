@@ -177,10 +177,10 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 			}
 			return nil, fmt.Errorf("gitevidence: read write-set file %s: %w", f.relPath, readErr)
 		}
-		if r.redact != nil && r.redact(string(data)) != string(data) {
+		if tainted, detail := r.fileHasSecret(f.relPath, data); tainted {
 			result.ExcludedForSecret = append(result.ExcludedForSecret, f.relPath)
 			logger.WarnCF("gitevidence", "excluding write-set path from boundary commit: sensitive value detected", map[string]any{
-				"dir": r.dir, "boundary": string(boundary), "path": f.relPath,
+				"dir": r.dir, "boundary": string(boundary), "path": f.relPath, "detail": detail,
 			})
 			continue
 		}
@@ -220,6 +220,34 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 	}
 	result.Hash = hash.String()
 	return result, nil
+}
+
+// fileHasSecret is the ONE MIN-5 secret-detection call path a boundary
+// commit consults (DoD-11 — reconciling WithSecretScanner and WithRedactor
+// into a single guard, not two independent checks that could disagree or
+// double-scan). WithSecretScanner (pkg/audit.SecretScanner — credential-
+// registry AND format-pattern layers) is preferred and supersedes
+// WithRedactor when both are configured on the same Repo: only one of the
+// two branches below ever runs for a given file, never both. detail is a
+// human-readable, non-secret-leaking label suitable for logging (the
+// SecretScanner branch reuses SecretFinding.Detail; the legacy redactor
+// branch has no equivalent label to offer, since it only ever reported
+// "changed or not").
+func (r *Repo) fileHasSecret(relPath string, data []byte) (tainted bool, detail string) {
+	if r.scanner != nil {
+		findings := r.scanner.ScanBytes(relPath, data)
+		if len(findings) == 0 {
+			return false, ""
+		}
+		return true, findings[0].Detail
+	}
+	if r.redact != nil {
+		s := string(data)
+		if r.redact(s) != s {
+			return true, "registered credential"
+		}
+	}
+	return false, ""
 }
 
 func formatCommitMessage(b Boundary, m CommitMeta) string {

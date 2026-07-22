@@ -177,6 +177,19 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
 			},
+			"write_set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Concrete paths this plan member creates/edits (optional). Meaningful only alongside plan_id.",
+			},
+			"stream": map[string]any{
+				"type":        "string",
+				"description": "The parallel-group id this plan member belongs to (optional).",
+			},
+			"is_join": map[string]any{
+				"type":        "boolean",
+				"description": "True marks this plan member as an authored join/assemble member. Defaults to false.",
+			},
 			"blocked_by": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
@@ -340,6 +353,24 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		tk.PlanID = v
 	}
 
+	// Optional write_set/stream/is_join (ADR-053 §Contract Surface, US-11
+	// G-16) — parity with the plain create_task tool.
+	if rawWriteSet, ok := args["write_set"].([]any); ok {
+		writeSet := make([]string, 0, len(rawWriteSet))
+		for _, p := range rawWriteSet {
+			if s, ok := p.(string); ok && s != "" {
+				writeSet = append(writeSet, s)
+			}
+		}
+		tk.WriteSet = writeSet
+	}
+	if v, ok := args["stream"].(string); ok {
+		tk.Stream = v
+	}
+	if v, ok := args["is_join"].(bool); ok {
+		tk.IsJoin = v
+	}
+
 	if rawDeps, ok := args["blocked_by"].([]any); ok && len(rawDeps) > 0 {
 		deps := make([]string, 0, len(rawDeps))
 		for _, d := range rawDeps {
@@ -414,6 +445,19 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "Task IDs this task is blocked by (replaces existing list)",
+			},
+			"write_set": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Replacement set of concrete paths this plan member creates/edits (replaces existing list; pass [] to clear)",
+			},
+			"stream": map[string]any{
+				"type":        "string",
+				"description": "New parallel-group id this plan member belongs to (pass \"\" to clear)",
+			},
+			"is_join": map[string]any{
+				"type":        "boolean",
+				"description": "Set/clear whether this plan member is an authored join/assemble member",
 			},
 		},
 		"required": []string{"id"},
@@ -550,6 +594,27 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 		patch.BlockedBy = &deps
 		updated = append(updated, "blocked_by")
+	}
+
+	// write_set/stream/is_join (ADR-053 §Contract Surface, US-11 G-16) —
+	// parity with the plain update_task tool.
+	if rawWriteSet, ok := args["write_set"].([]any); ok {
+		writeSet := make([]string, 0, len(rawWriteSet))
+		for _, p := range rawWriteSet {
+			if s, ok := p.(string); ok && s != "" {
+				writeSet = append(writeSet, s)
+			}
+		}
+		patch.WriteSet = &writeSet
+		updated = append(updated, "write_set")
+	}
+	if v, ok := args["stream"].(string); ok {
+		patch.Stream = &v
+		updated = append(updated, "stream")
+	}
+	if v, ok := args["is_join"].(bool); ok {
+		patch.IsJoin = &v
+		updated = append(updated, "is_join")
 	}
 
 	// Apply the field patch via the store (DAG validation + atomic write).
