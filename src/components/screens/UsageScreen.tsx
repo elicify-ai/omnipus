@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
+import { TokenBudgetSection } from '@/components/screens/TokenBudgetSection'
 
 export { formatTokens }
 
@@ -376,6 +377,12 @@ export function UsageScreen() {
             ))}
           </div>
         </div>
+
+        {/* ADR-053 D12 / FE-6 — app-level OVERALL token budget. Rendered
+            independently of the stats loading/empty states so the unbounded
+            advisory (R§8.3a) is persistent. The section owns its own
+            loading/error affordances. */}
+        <TokenBudgetSection />
 
         {/* Loading state */}
         {isLoading && <UsageSkeleton />}

@@ -165,6 +165,8 @@ import {
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
+  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
+  TokenBudgetStatus as TokenBudgetStatusSchema,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
   MailboxListResponse as MailboxListResponseSchema,
@@ -361,6 +363,8 @@ import type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
+  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
+  TokenBudgetStatus,
   // Unified task types (Sprint 2) — imported once here (Task was already imported above):
   TaskCreateRequest,
   TaskUpdateRequest,
@@ -528,6 +532,8 @@ export type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
+  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
+  TokenBudgetStatus,
   // Unified task types (Sprint 2) — Task already exported above, add new ones:
   TaskCreateRequest,
   TaskUpdateRequest,
@@ -3712,5 +3718,36 @@ export function updateMemorySettings(body: MemorySettings): Promise<MemorySettin
     '/settings/memory',
     { method: 'PUT', body: JSON.stringify(body) },
     MemorySettingsSchema as ZodType<MemorySettings>,
+  )
+}
+
+// ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget for the Usage
+// screen. ONE shared pool across all workloads (owner/member/verifier/Judge);
+// no per-plan cap, no money/USD cap, no IsPrivilegedAgent exemption (D12).
+// GET returns the live spend accounting (TokenBudgetStatus). PUT persists the
+// operator-set ceiling; the ceiling is restart-gated (R§8.3e — a live ceiling
+// change would straddle two budgets, the N-15 hazard; the live lever for
+// runaway spend is the existing Stop/cancel cascade, NOT a live token cut).
+// The PUT body is the single operator-set field (`budget`; 0 = unbounded
+// sentinel, R§8.3a) — no hand-written request wire type; the response is
+// zod-validated against the landed TokenBudgetStatus schema (contract-first #8).
+// See contracts/components/schemas/TokenBudgetStatus.yaml.
+export const tokenBudgetQueryKeys = {
+  status: ['token-budget', 'status'] as const,
+}
+
+export function fetchTokenBudgetStatus(): Promise<TokenBudgetStatus> {
+  return request<TokenBudgetStatus>(
+    '/settings/token-budget',
+    undefined,
+    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
+  )
+}
+
+export function updateTokenBudget(budget: number): Promise<TokenBudgetStatus> {
+  return request<TokenBudgetStatus>(
+    '/settings/token-budget',
+    { method: 'PUT', body: JSON.stringify({ budget }) },
+    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
   )
 }
