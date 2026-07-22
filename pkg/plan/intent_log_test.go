@@ -196,3 +196,80 @@ func TestIntentLog_SelfContainedRecord(t *testing.T) {
 		t.Errorf("patch not preserved: %+v", got[0].Patch)
 	}
 }
+
+// TestIntentLog_CommitCorrection_FullFourStep verifies the CommitCorrection
+// wrapper sequences AppendIntent → MarkCommitted → Apply → MarkDone and the
+// intent ends up status=done with a non-zero DoneAt (FR-148/INV-6).
+func TestIntentLog_CommitCorrection_FullFourStep(t *testing.T) {
+	il := newTestIntentLog(t)
+	rec := IntentRecord{
+		IntentID: "i-cc", PlanID: "p-cc",
+		Members:  []task.Task{{ID: "m-cc", Title: "member", WorkspaceID: "ws", PlanID: "p-cc"}},
+		Revision: RevisionEntry{RevisionID: "r-cc", PlanID: "p-cc", Verb: RevisionAppend, Generation: 0},
+	}
+	var applied bool
+	err := il.CommitCorrection(rec, func(r IntentRecord) error {
+		applied = true
+		if len(r.Members) != 1 || r.Members[0].ID != "m-cc" {
+			t.Errorf("apply received wrong members: %+v", r.Members)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CommitCorrection: %v", err)
+	}
+	if !applied {
+		t.Error("apply function was not called")
+	}
+	got, _ := il.List("p-cc")
+	if len(got) != 1 || got[0].Status != IntentDone {
+		t.Errorf("after CommitCorrection: %+v, want status=done", got)
+	}
+	if got[0].DoneAt.IsZero() {
+		t.Error("DoneAt not set after CommitCorrection")
+	}
+}
+
+// TestIntentLog_CommitCorrection_NilApply verifies CommitCorrection with a
+// nil apply function (supersede with no new members — commit-only intent).
+func TestIntentLog_CommitCorrection_NilApply(t *testing.T) {
+	il := newTestIntentLog(t)
+	rec := IntentRecord{
+		IntentID: "i-na", PlanID: "p-na",
+		Revision: RevisionEntry{RevisionID: "r-na", PlanID: "p-na", Verb: RevisionSupersede, SupersededMemberID: "old-1"},
+	}
+	err := il.CommitCorrection(rec, nil)
+	if err != nil {
+		t.Fatalf("CommitCorrection with nil apply: %v", err)
+	}
+	got, _ := il.List("p-na")
+	if got[0].Status != IntentDone {
+		t.Errorf("status = %s, want done", got[0].Status)
+	}
+}
+
+// TestIntentLog_CommitCorrection_ApplyErrorKeepsCommitted verifies that if
+// apply fails AFTER MarkCommitted, the intent stays committed (not done) —
+// boot replay will complete it. The error is returned to the caller.
+func TestIntentLog_CommitCorrection_ApplyErrorKeepsCommitted(t *testing.T) {
+	il := newTestIntentLog(t)
+	rec := IntentRecord{
+		IntentID: "i-ae", PlanID: "p-ae",
+		Revision: RevisionEntry{RevisionID: "r-ae", PlanID: "p-ae", Verb: RevisionAppend},
+	}
+	applyErr := errors.New("simulated apply failure")
+	err := il.CommitCorrection(rec, func(r IntentRecord) error {
+		return applyErr
+	})
+	if !errors.Is(err, applyErr) {
+		t.Errorf("expected apply error, got %v", err)
+	}
+	// The intent must be committed (not done) — boot will replay-forward.
+	got, _ := il.List("p-ae")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(got))
+	}
+	if got[0].Status != IntentCommitted {
+		t.Errorf("status = %s, want committed (apply failed after commit; boot will replay)", got[0].Status)
+	}
+}
