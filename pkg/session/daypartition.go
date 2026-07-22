@@ -124,6 +124,26 @@ type SessionMeta struct {
 	// calendar brake, never via a fabricated verdict or a clock that never
 	// expires.
 	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
+	// GoalCriteriaJSON is the ADR-053 Phase-2 compiled criteria ladder
+	// (FR-110/FR-113): the engine-invoked SMART compiler's output — a JSON-encoded
+	// []task.AcceptanceCriterion (the S1 unified goal/criteria record, reusing the
+	// SAME AcceptanceCriterion type tasks/plans use, DoD-11 — never a second
+	// criteria type). Empty when no goal is active OR when a legacy pre-Phase-2
+	// goal carries only GoalCondition (checkGoalLoopAfterTurn falls back to a
+	// single prose criterion from GoalCondition in that case, preserving
+	// back-compat). Cleared together with GoalCondition on /goal clear (FR-114).
+	// Immutable once the user confirms the echo (D9); a re-statement AMENDS by
+	// minting a fresh JSON via a diffed, confirmed amendment (N-6).
+	GoalCriteriaJSON string `json:"goal_criteria,omitempty"`
+	// GoalPendingJSON holds a PROPOSED-but-unconfirmed CompiledGoal JSON during
+	// a re-statement amendment flow (N-6/D11: a `/goal <new intent>` issued while
+	// a goal is ALREADY active is diffed as an amendment and confirmed via
+	// `/goal confirm`, never silently recompiled). While pending, the ACTIVE
+	// goal's Condition + GoalCriteriaJSON are untouched; on confirm the pending
+	// goal mints a new generation (GoalCondition + GoalCriteriaJSON take the
+	// proposed values, GoalPendingJSON clears). Ephemeral-ish: cleared on
+	// /goal clear and on a fresh `/goal <intent>` that supersedes it.
+	GoalPendingJSON string `json:"goal_pending,omitempty"`
 
 	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
 	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)

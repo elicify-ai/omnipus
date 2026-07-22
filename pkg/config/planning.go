@@ -71,6 +71,17 @@ type PlanningConfig struct {
 	// snapshot for the isNeedsInputReconstructable predicate (R§8.6 clause 4).
 	// Zero inherits the engine's DefaultSnapshotMaxBytes.
 	SnapshotMaxBytes int `json:"snapshot_max_bytes,omitempty"`
+	// TokenBudget is the ADR-053 Phase-2 / D12 (R§8.3) app-level OVERALL token
+	// budget: the ONE shared pool debited by ALL workloads (owner/member/
+	// verifier/Judge) from provider-reported usage, deliberately NOT honoring
+	// IsPrivilegedAgent (FR-171/FR-172). Sentinel 0 = unbounded (FR-175); an
+	// unset budget runs unbounded with a persistent Usage-screen advisory. The
+	// ceiling is restart-gated (FR-177 — a live change would straddle two
+	// budgets, the N-15 hazard); the live lever for runaway spend is the
+	// existing Stop/cancel cascade, NOT a live token cut. This field supersedes
+	// NFR-1's "no token/money fields" for THIS one overall budget (D12 converts
+	// SEC-26's USD cap → tokens because cost isn't reliably measurable).
+	TokenBudget int64 `json:"token_budget,omitempty"`
 }
 
 // EffectiveBootSweepBudgetSeconds resolves the boot-sweep budget (FR-118):
@@ -158,6 +169,21 @@ func (c PlanningConfig) EffectiveLoopMaxRuns() int {
 		return c.LoopMaxRuns
 	}
 	return DefaultLoopMaxRuns
+}
+
+// EffectiveTokenBudget resolves the app-level OVERALL token budget ceiling
+// (D12/R§8.3/FR-175): returns the configured TokenBudget verbatim, since 0 IS
+// the unbounded sentinel (not a "fall back to a default" case). A negative
+// value is clamped to 0 (unbounded) defensively. The ceiling is restart-gated
+// (FR-177): the caller reads this ONCE at boot to construct the TokenBudget
+// pool; later config changes do NOT live-reload the ceiling (a live change
+// would straddle two budgets). The live lever for runaway spend is the existing
+// Stop/cancel cascade, not a live token cut.
+func (c PlanningConfig) EffectiveTokenBudget() int64 {
+	if c.TokenBudget < 0 {
+		return 0
+	}
+	return c.TokenBudget
 }
 
 // EffectiveVerifierWindowTokens resolves the verifier transcript-window

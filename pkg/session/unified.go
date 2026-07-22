@@ -90,6 +90,13 @@ type MetaPatch struct {
 	GoalLatestReason   *string
 	GoalStartedAt      *string
 	GoalLastActivityAt *string
+	// GoalCriteriaJSON is the ADR-053 Phase-2 compiled criteria ladder
+	// (FR-110/FR-113). Pass an empty string to CLEAR it (paired with clearing
+	// GoalCondition on /goal clear, FR-114).
+	GoalCriteriaJSON *string
+	// GoalPendingJSON is the proposed CompiledGoal during a re-statement
+	// amendment (N-6/D11). Pass an empty string to CLEAR it (on confirm/clear).
+	GoalPendingJSON *string
 
 	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
 	// callers that want to CLEAR a loop must pass an empty-string LoopMode
@@ -644,6 +651,12 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.GoalLastActivityAt != nil {
 		meta.GoalLastActivityAt = *patch.GoalLastActivityAt
+	}
+	if patch.GoalCriteriaJSON != nil {
+		meta.GoalCriteriaJSON = *patch.GoalCriteriaJSON
+	}
+	if patch.GoalPendingJSON != nil {
+		meta.GoalPendingJSON = *patch.GoalPendingJSON
 	}
 	if patch.LoopMode != nil {
 		meta.LoopMode = *patch.LoopMode
