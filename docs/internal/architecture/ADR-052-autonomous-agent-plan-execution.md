@@ -5,6 +5,7 @@
 - **Deciders:** Operator (Daniel Piatkowski); Albert (architecture)
 - **Evidence level (highest used):** 1 (user-input, operator-locked) + codebase `[FACT]` grounding
 - **Supersedes (in part):** the human-approval gate introduced by [ADR-049](ADR-049-planning-goals-system-agents.md) / Planning & Goals epic (PR #526, release/v0.1.1). ADR-049's engine, System-Agents, and guardrails stand; the Judge System Agent and its evidence-ladder stand too as a concept, but its execution mechanism is re-architected (real agent, own verifier session, replacing the old direct `Provider.Chat` shortcut — §6); only the *human-only kickoff* is replaced.
+- **Superseded in part (2026-07-22):** by [ADR-053](ADR-053-unified-goal-plan-subagent.md) (unified goal/plan/subagent system) — the chat-goal **after-every-turn adjudication** is replaced by **claim-or-idle** triggering (an explicit `[goal:evidence]` / `GOAL_STATUS: met` claim, or event-driven idle settlement; a `GOAL_STATUS: waiting_on_user` turn pauses with no verdict and no round). ADR-052's autonomous plan+execute tool surface, the verifier-as-real-agent-in-its-own-session architecture, the PUT-lockdown, the Stop fan-out, and the restart/continuation model all stand. See ADR-053 §5.2.
 - **Ratification note:** the direction was interview-locked with the operator over an extended design conversation. This ADR records and grounds the decision; it does not re-litigate it.
 
 ---
