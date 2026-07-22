@@ -101,3 +101,35 @@ func TestCanonicalizePath_RelativePath(t *testing.T) {
 	_ = abs
 	_ = dir
 }
+
+// TestPathIsUnder_TrailingSeparators pins pathIsUnder's robustness to trailing
+// separators on EITHER argument (correctness m4). All current callers
+// filepath.Clean their inputs so this is latent, but a future caller that
+// forgets must not trip the equality check (child == parent failed when parent
+// carried a trailing slash in the original impl).
+func TestPathIsUnder_TrailingSeparators(t *testing.T) {
+	sep := string(filepath.Separator)
+	cases := []struct {
+		name   string
+		child  string
+		parent string
+		want   bool
+	}{
+		{"equal no trailing", "/foo/bar", "/foo/bar", true},
+		{"parent trailing slash", "/foo/bar", "/foo/bar" + sep, true},
+		{"child trailing slash", "/foo/bar" + sep, "/foo/bar", true},
+		{"both trailing slash", "/foo/bar" + sep, "/foo/bar" + sep, true},
+		{"strictly under", "/foo/bar/baz", "/foo/bar", true},
+		{"strictly under parent trailing", "/foo/bar/baz", "/foo/bar" + sep, true},
+		{"sibling not under", "/foo/baz", "/foo/bar", false},
+		{"prefix-segment not under", "/foobar", "/foo", false},
+		{"root parent", "/anything", sep, true},
+		{"empty equal", "", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pathIsUnder(c.child, c.parent)
+			assert.Equal(t, c.want, got, "pathIsUnder(%q,%q)", c.child, c.parent)
+		})
+	}
+}

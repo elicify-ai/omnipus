@@ -85,6 +85,44 @@ func TestGitSandbox_BlocksMutatingGitVerbs(t *testing.T) {
 	}
 }
 
+// TestGitSandbox_GlobalShortCConfig pins inspectGitArgs' handling of git's -c
+// config-override flag in ALL three syntactic forms git(1) accepts, so the verb
+// is correctly identified (and the deny on `commit --amend` fires) regardless
+// of form. The glued short form "-c<name>=<value>" (one token, no space) was
+// previously dropped into the unknown-option skip branch — functionally safe
+// only by accident; this test pins the explicit parse (correctness m1).
+func TestGitSandbox_GlobalShortCConfig(t *testing.T) {
+	g, work := newProtectedWork(t)
+	// Mutating verb must be DENIED in every -c form: the parser must consume
+	// the config token and still land on `commit` as the verb.
+	for _, argv := range [][]string{
+		{"git", "-c", "user.email=foo@bar", "commit", "--amend"},                  // spaced (two-token)
+		{"git", "-c=user.email=foo@bar", "commit", "--amend"},                     // -c=<name>=<value>
+		{"git", "-cuser.email=foo@bar", "commit", "--amend"},                      // -c<name>=<value> (glued short form)
+		{"git", "-cuser.email=foo@bar", "-c", "user.name=x", "commit", "--amend"}, // mixed repeats
+	} {
+		d := g.InspectExec(argv, work)
+		if d.Allowed {
+			t.Errorf("argv %v: want DENIED (verb must be parsed as commit), got allowed", argv)
+			continue
+		}
+		if d.PolicyRule == "" {
+			t.Errorf("argv %v: deny must carry PolicyRule (SEC-17)", argv)
+		}
+	}
+	// Read verb must still be ALLOWED via the glued short form — proves the
+	// verb is positively identified (not "no verb found → unconditional allow").
+	for _, argv := range [][]string{
+		{"git", "-cuser.email=foo@bar", "log"},
+		{"git", "-c=user.email=foo@bar", "show"},
+	} {
+		d := g.InspectExec(argv, work)
+		if !d.Allowed {
+			t.Errorf("argv %v: want allowed (read verb), got denied (%s)", argv, d.PolicyRule)
+		}
+	}
+}
+
 func TestGitSandbox_BlocksAmendExplanation(t *testing.T) {
 	g, work := newProtectedWork(t)
 	d := g.InspectExec([]string{"git", "commit", "--amend"}, work)

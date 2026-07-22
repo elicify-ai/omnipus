@@ -6325,8 +6325,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// Filesystem re-rooting: every agent that belongs to a Workspace's CoreTeam
 	// — native (Main/Subagent) or subagent_3p (external-CLI), no exceptions by
 	// kind — works in that Workspace's dedicated project-work subdirectory
-	// (workspaces/<id>/work/, workspace.SafeWorkDir) instead of its private
-	// per-agent one. Unconditional (no feature flag) and PRIMARILY driven by
+	// (workspaces/<id>/work/, materialized via workspace.EnsureWorkDir — the
+	// sanctioned SafeWorkDir+MkdirAll+git-evidence replacement) instead of its
+	// private per-agent one. Unconditional (no feature flag) and PRIMARILY driven by
 	// AGENT IDENTITY (workspace.FindForAgent's CoreTeam-membership lookup),
 	// NOT by ts.opts.WorkspaceID above: those are genuinely different signals
 	// that can diverge in both directions — a CoreTeam member responding via

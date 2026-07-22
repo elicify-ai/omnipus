@@ -77,10 +77,11 @@ type CommitResult struct {
 // checkout cannot corrupt the index mid-stage.
 //
 // A write-set path whose content matches the registered sensitive-value
-// scan (WithRedactor) is excluded from the commit and reported in
-// ExcludedForSecret — this package never stages a matching path, so a
-// secret written and then deleted within the SAME boundary window never
-// reaches history at all. See the package doc's caveat 3 for what is (and
+// scan — WithSecretScanner (the preferred/superseding engine, DoD-11) or
+// the older WithRedactor callback — is excluded from the commit and
+// reported in ExcludedForSecret — this package never stages a matching
+// path, so a secret written and then deleted within the SAME boundary
+// window never reaches history at all. See the package doc's caveat 3 for what is (and
 // is not) covered once a secret HAS already reached a prior commit: this
 // package does not rewrite history; the documented remediation is
 // operational (rotate the credential; the evidence repo has no
