@@ -40,10 +40,14 @@ jobs:
           go-version-file: go.mod
 
       # cft-bundle.sh needs md5sum/sha256sum (coreutils) + jq; macOS ships
-      # curl/base64/od/shasum, GH images have zip/unzip.
+      # curl/base64/od/shasum, GH images have zip/unzip. coreutils' GNU tools
+      # live under .../gnubin (not on PATH); require() probes --version which
+      # BSD's `od`/`base64` don't accept. Prepend gnubin so GNU `od` resolves.
       - name: Install cft-bundle deps
         shell: bash
-        run: brew install -q coreutils jq 2>/dev/null || true
+        run: |
+          brew install -q coreutils jq 2>/dev/null || true
+          echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
 
       - uses: actions/setup-node@v6
         with: { node-version: "24" }
@@ -155,6 +159,9 @@ jobs:
         run: |
           npm ci && npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa
           go build -tags goolm,stdjson -o omnipus ./cmd/omnipus/
+          # Prepend coreutils gnubin so cft-bundle.sh's GNU-coreutils-style
+          # require() / od / sha256sum resolve on the macOS runner.
+          export PATH="/opt/homebrew/opt/coreutils/libexec/gnubin:$PATH"
           bash scripts/cft-bundle.sh arm64 darwin || true
           OMNIPUS_HOME="$(mktemp -d)"
           export OMNIPUS_HOME
