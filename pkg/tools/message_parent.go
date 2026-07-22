@@ -43,6 +43,10 @@ type MessageParentLifecycleStore interface {
 	Load(sessionID string) (*session.LifecycleRecord, error)
 	Persist(rec *session.LifecycleRecord) error
 	Lock(sessionID string) *sync.Mutex
+	// Mutate is the atomic read-modify-write primitive (Correctness-MAJOR-3).
+	// parkNeedsInput routes through it so the park transition holds the
+	// per-session striped lock across the whole tail→decide→write RMW.
+	Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error
 }
 
 // MessageParentWakeEvent carries the fields needed to compose a bounded
@@ -76,11 +80,18 @@ type MessageParentWaker interface {
 type ContentEgressFilter func(text string) string
 
 // messageParentWakeableKinds is the closed set of kinds that attempt a
-// bounded typed wake after a successful Append (mirrors
-// async_notifier.go's own wakeableSessionMessageKinds allow-list — kept as
-// a local copy so this package does not need to import pkg/agent to read
-// it, and so a caller wiring a DIFFERENT MessageParentWaker still gets the
-// same kind-gating at the call site).
+// bounded typed wake after a successful Append.
+//
+// Comments-MAJOR-2: this set is INTENTIONALLY A SUBSET of
+// async_notifier.go's wakeableSessionMessageKinds, NOT a mirror of it. The
+// notifier's set is {question, blocker, error, handback}; this list omits
+// `error` because message_parent deliberately does not EMIT kind=error
+// (error is an engine/parent-only SessionMessage kind — see this file's
+// package doc comment — so a child can never append one and thus can never
+// wake on it). The two were never equal; the prior comment's "mirrors"
+// claim was false. Kept as a local copy so this package does not need to
+// import pkg/agent, and so a caller wiring a DIFFERENT MessageParentWaker
+// still gets the same kind-gating at the call site.
 var messageParentWakeableKinds = map[string]bool{ //nolint:gochecknoglobals
 	"blocker":  true,
 	"question": true,
@@ -142,6 +153,21 @@ func (t *MessageParentTool) filterText(s string) string {
 		return s
 	}
 	return t.egress(s)
+}
+
+// filterStringSlice applies f to each element of in, returning a new slice.
+// Used for path-like fields (artifact.paths, handback.artifacts) so the
+// content-egress policy covers them too (Security-MINOR-1) — a child must
+// not be able to exfiltrate via a filename carrying a secret.
+func filterStringSlice(f func(string) string, in []string) []string {
+	if f == nil || len(in) == 0 {
+		return in
+	}
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = f(s)
+	}
+	return out
 }
 
 func (t *MessageParentTool) Name() string { return "message_parent" }
@@ -380,7 +406,11 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			v.ResultSoFar = &filtered
 		}
 		if cr, ok := stringArg(args, "commit_ref"); ok {
-			v.CommitRef = &cr
+			// Security-MINOR-1: commit_ref is a path-like field a child
+			// could exfiltrate through (a filename carrying a secret).
+			// Route it through the same content-egress filter as free text.
+			filtered := t.filterText(cr)
+			v.CommitRef = &filtered
 		}
 		if err := sm.FromSessionMessageCheckpoint(v); err != nil {
 			return ErrorResult(fmt.Sprintf("message_parent: encode checkpoint: %v", err))
@@ -402,7 +432,10 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			Depth:           1,
 			UntrustedOrigin: true,
 			SenderIdentity:  rec.AgentID,
-			Paths:           paths,
+			// Security-MINOR-1: paths are path-like fields a child could
+			// exfiltrate through (a filename carrying a secret). Route each
+			// through the same content-egress filter as free text.
+			Paths: filterStringSlice(t.filterText, paths),
 		}
 		if note, ok := stringArg(args, "note"); ok {
 			filtered := t.filterText(note)
@@ -516,8 +549,11 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			SenderIdentity:  rec.AgentID,
 			Mode:            generated.SessionMessageHandbackMode(mode),
 			ResultSoFar:     t.filterText(resultSoFar),
-			Artifacts:       artifacts,
-			OpenQuestions:   filteredOQ,
+			// Security-MINOR-1: artifacts are path-like fields a child could
+			// exfiltrate through (a filename carrying a secret). Route each
+			// through the same content-egress filter as free text.
+			Artifacts:     filterStringSlice(t.filterText, artifacts),
+			OpenQuestions: filteredOQ,
 		}
 		if v.Artifacts == nil {
 			v.Artifacts = []string{}
@@ -543,7 +579,7 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 	}
 
 	if waitParks {
-		if perr := t.parkNeedsInput(childSessionID, rec, correlationID, now); perr != nil {
+		if perr := t.parkNeedsInput(childSessionID, correlationID, now); perr != nil {
 			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v", perr)).WithError(perr)
 		}
 	}
@@ -575,23 +611,35 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 }
 
 // parkNeedsInput transitions the calling child's own durable record to
-// needs_input (INV-4/G-6). NOTE ON LOCKING: session.LifecycleStore.Persist
-// is individually self-locking (takes the per-session striped mutex
-// internally for its own duration); this function deliberately does NOT
-// wrap the call in an additional outer Lock() — sync.Mutex is not
-// reentrant, and doing so would self-deadlock. rec was already loaded by
-// the caller (Execute), so there is no Load+Persist race window here at
-// all — only the single Persist call below needs atomicity, and it already
-// has it internally.
-func (t *MessageParentTool) parkNeedsInput(childSessionID string, rec *session.LifecycleRecord, correlationID string, now time.Time) error {
-	parked := *rec
-	parked.State = session.LifecycleNeedsInput
-	parked.NeedsInput = &session.NeedsInput{
-		CorrelationID:   correlationID,
-		Reconstructable: true, // park-time hint only (m5); boot-sweep re-derives authoritatively
-		TTLDeadline:     now.Add(t.needsInputTTL),
-	}
-	return t.lifecycle.Persist(&parked)
+// needs_input (INV-4/G-6).
+//
+// NOTE ON LOCKING (Comments-MAJOR-1 — the prior comment here was false): a
+// naked Persist over the `rec` Execute loaded earlier (at line ~304) is NOT
+// atomic — there IS a Load+Persist race window, because the unlocked work
+// between Execute's Load and this Persist (encoding the message, the inbox
+// Append, the wake) can be raced by a concurrent transition on the SAME
+// session_id (e.g. a parent cancel landing between the Load and the park),
+// and `rec` would be stale by the time it is copied here. This now routes
+// the whole transition through session.LifecycleStore.Mutate — the atomic
+// RMW primitive that holds the per-session striped lock across tail→decide→
+// write (Correctness-MAJOR-3). Mutate RE-LOADS the current tail under the
+// lock, so the park always lands against the live record, not the stale
+// snapshot Execute captured. Callers MUST NOT already hold Lock(sessionID)
+// (sync.Mutex is not reentrant — Mutate takes it once internally). The
+// honesty template is delegate.go transitionLifecycle's doc comment.
+func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID string, now time.Time) error {
+	return t.lifecycle.Mutate(childSessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil {
+			return session.ErrLifecycleNotFound
+		}
+		cur.State = session.LifecycleNeedsInput
+		cur.NeedsInput = &session.NeedsInput{
+			CorrelationID:   correlationID,
+			Reconstructable: true, // park-time hint only (m5); boot-sweep re-derives authoritatively
+			TTLDeadline:     now.Add(t.needsInputTTL),
+		}
+		return nil
+	})
 }
 
 // summarizeForWake renders a short, human-readable summary of sm for the

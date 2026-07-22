@@ -365,15 +365,34 @@ func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {
 // record of this generation (or set to now for a new generation);
 // rec.UpdatedAt is always stamped to now.
 //
-// Callers performing a read-then-decide-then-write sequence should hold
-// Lock(rec.SessionID) across the whole sequence; Persist itself only holds
-// the lock for the duration of its own read-tail + append.
+// Callers performing a read-then-decide-then-write sequence MUST use Mutate
+// (the atomic RMW primitive) rather than a manual Load+Persist pair — a
+// naked Load+Persist races a concurrent transition on the same session_id
+// (Correctness-MAJOR-3 / S4 INV-3: cancel-vs-complete). Persist is the right
+// primitive only for a fire-and-forget append where the caller already knows
+// the full next record (e.g. the initial `queued` seed at run time, or
+// spawnCorrectiveFollowUp's new-generation mint).
 func (s *LifecycleStore) Persist(rec *LifecycleRecord) error {
 	if rec == nil {
 		return fmt.Errorf("session: lifecycle: nil record")
 	}
 	if err := validateLifecycleSessionID(rec.SessionID); err != nil {
 		return err
+	}
+	mu := s.Lock(rec.SessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	return s.persistLocked(rec)
+}
+
+// persistLocked validates rec and appends it as the new current state. It is
+// the shared write half of Persist (which takes the lock) and Mutate (which
+// holds the lock across its whole tail→fn→write RMW). The caller MUST hold
+// Lock(rec.SessionID); persistLocked does not take the lock itself (taking
+// it again would self-deadlock — sync.Mutex is not reentrant).
+func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
+	if rec == nil {
+		return fmt.Errorf("session: lifecycle: nil record")
 	}
 	if !IsValidLifecycleState(rec.State) {
 		return fmt.Errorf("session: lifecycle: invalid state %q", rec.State)
@@ -387,16 +406,22 @@ func (s *LifecycleStore) Persist(rec *LifecycleRecord) error {
 	if rec.State == LifecycleFailed && strings.TrimSpace(rec.FailedReason) == "" {
 		return fmt.Errorf("session: lifecycle: state failed requires failed_reason")
 	}
-	if rec.OwnerScopeKind != "" && !IsValidOwnerScopeKind(rec.OwnerScopeKind) {
+	// OwnerScopeKind is a REQUIRED discriminator (m5/Comments-MINOR-3): every
+	// record must declare parent_session/plan/human so ownership resolution
+	// (verifyCallerOwnsSession, ownerKeyFor) never silently falls through on
+	// an unset value. Strict like State (empty is not one of the three valid
+	// kinds). Safe to require because every creation path sets it
+	// (delegate.go run mints OwnerScopeHuman/OwnerScopeParentSession), and
+	// transitions copy it forward from the loaded tail.
+	if rec.OwnerScopeKind == "" {
+		return fmt.Errorf("session: lifecycle: owner_scope_kind is required")
+	}
+	if !IsValidOwnerScopeKind(rec.OwnerScopeKind) {
 		return fmt.Errorf("session: lifecycle: invalid owner_scope_kind %q", rec.OwnerScopeKind)
 	}
 	if rec.LaunchProfile != "" && !IsValidLaunchProfile(rec.LaunchProfile) {
 		return fmt.Errorf("session: lifecycle: invalid launch_profile %q", rec.LaunchProfile)
 	}
-
-	mu := s.Lock(rec.SessionID)
-	mu.Lock()
-	defer mu.Unlock()
 
 	prev, err := s.tail(rec.SessionID)
 	if err != nil {
@@ -428,6 +453,59 @@ func (s *LifecycleStore) Persist(rec *LifecycleRecord) error {
 	rec.UpdatedAt = now
 
 	return fileutil.AppendJSONL(s.path(rec.SessionID), rec)
+}
+
+// Mutate is the atomic read-modify-write primitive for one session's
+// lifecycle record (Correctness-MAJOR-3 / S4 INV-3): it holds the per-session
+// striped lock across tail→fn→persist, so two concurrent transitions on the
+// SAME session_id serialize and the immutable-terminal guard resolves the
+// loser (the cancel-vs-complete race — previously a naked Load+Persist left
+// the loser either overwriting the winner or being rejected by the guard
+// non-atomically).
+//
+// fn receives a pointer to a COPY of the CURRENT tail record (or nil when no
+// record exists for sessionID yet) which fn may mutate in place; whatever fn
+// leaves there is what Mutate persists (after the same validation and
+// immutable-terminal guard Persist applies). If fn returns a non-nil error,
+// Mutate aborts the write (nothing is persisted) and returns that error. If
+// fn sets the record pointer to nil, Mutate writes nothing and returns nil
+// (a "no transition needed" signal).
+//
+// The immutable-terminal invariant (L-3) is enforced inside this primitive:
+// if fn mutates a terminal tail's OWN generation, persistLocked rejects with
+// ErrLifecycleTerminalImmutable and Mutate returns that error — exactly the
+// outcome the concurrent loser of a cancel/complete race must see.
+//
+// Callers MUST NOT already hold Lock(sessionID): sync.Mutex is not
+// reentrant, and Mutate takes the lock ONCE internally (this is why Mutate
+// does not delegate to the public Load/Persist, which each take the lock
+// themselves — calling them under a held lock self-deadlocks). Callers that
+// need an atomic RMW over a lifecycle record should ALWAYS use Mutate rather
+// than a manual Load+Persist pair.
+func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) error) error {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return err
+	}
+	mu := s.Lock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	cur, err := s.tail(sessionID)
+	if err != nil {
+		return err
+	}
+	var next *LifecycleRecord
+	if cur != nil {
+		c := *cur // copy so fn mutates the copy, not the tail record
+		next = &c
+	}
+	if err := fn(next); err != nil {
+		return err
+	}
+	if next == nil {
+		return nil
+	}
+	return s.persistLocked(next)
 }
 
 // LifecycleFilter narrows the result of List. All fields are optional

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -289,4 +290,100 @@ func TestMessageParentTool_WakeFailureDoesNotFailToolCall(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected the tool call to succeed even when WakeParent fails, got error: %s", result.ForLLM)
 	}
+}
+
+// TestMessageParentTool_EgressFilter_AppliedToPathFields proves Security-MINOR-1:
+// the content-egress filter is applied to path-like fields (artifact.paths,
+// handback.artifacts, checkpoint.commit_ref) too — a child must not be able to
+// exfiltrate via a filename carrying a secret.
+func TestMessageParentTool_EgressFilter_AppliedToPathFields(t *testing.T) {
+	tool, _, inbox, _ := newMessageParentTestSetup(t)
+	tool.SetContentEgressFilter(func(s string) string {
+		return strings.ReplaceAll(s, "sk-secret-999", "[REDACTED]")
+	})
+	ctx := withChildContext("child-1")
+
+	t.Run("artifact_paths", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{
+			"kind": "artifact", "paths": []any{"out/sk-secret-999-file.txt", "clean.txt"},
+		})
+		if result.IsError {
+			t.Fatalf("artifact failed: %s", result.ForLLM)
+		}
+		msgs, _, _, err := inbox.Drain("parent-1", "child-1", "", 10)
+		if err != nil || len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d (err=%v)", len(msgs), err)
+		}
+		a, err := msgs[0].AsSessionMessageArtifact()
+		if err != nil {
+			t.Fatalf("AsSessionMessageArtifact: %v", err)
+		}
+		for _, p := range a.Paths {
+			if strings.Contains(p, "sk-secret-999") {
+				t.Errorf("artifact path leaked the secret: %q", p)
+			}
+		}
+	})
+
+	// Each sub-test discriminates its message by `kind`, so leftover
+	// messages from a prior sub-test do not interfere.
+
+	t.Run("handback_artifacts", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{
+			"kind": "handback", "mode": "final", "result_so_far": "done",
+			"artifacts": []any{"build/sk-secret-999.bin"},
+		})
+		if result.IsError {
+			t.Fatalf("handback failed: %s", result.ForLLM)
+		}
+		msgs, _, _, err := inbox.Drain("parent-1", "child-1", "", 10)
+		if err != nil {
+			t.Fatalf("Drain: %v", err)
+		}
+		var hb *generated.SessionMessageHandback
+		for _, m := range msgs {
+			if k, _ := m.Discriminator(); k == "handback" {
+				if v, err := m.AsSessionMessageHandback(); err == nil {
+					hb = &v
+					break
+				}
+			}
+		}
+		if hb == nil {
+			t.Fatal("expected a handback message in the inbox")
+		}
+		for _, p := range hb.Artifacts {
+			if strings.Contains(p, "sk-secret-999") {
+				t.Errorf("handback artifact path leaked the secret: %q", p)
+			}
+		}
+	})
+
+	t.Run("checkpoint_commit_ref", func(t *testing.T) {
+		result := tool.Execute(ctx, map[string]any{
+			"kind": "checkpoint", "summary": "halfway", "commit_ref": "refs/sk-secret-999-head",
+		})
+		if result.IsError {
+			t.Fatalf("checkpoint failed: %s", result.ForLLM)
+		}
+		msgs, _, _, err := inbox.Drain("parent-1", "child-1", "", 10)
+		if err != nil {
+			t.Fatalf("Drain: %v", err)
+		}
+		var cp *generated.SessionMessageCheckpoint
+		for _, m := range msgs {
+			if k, _ := m.Discriminator(); k == "checkpoint" {
+				if v, err := m.AsSessionMessageCheckpoint(); err == nil {
+					cp = &v
+					break
+				}
+			}
+		}
+		if cp == nil {
+			t.Fatal("expected a checkpoint message in the inbox")
+		}
+		if cp.CommitRef != nil && strings.Contains(*cp.CommitRef, "sk-secret-999") {
+			t.Errorf("checkpoint commit_ref leaked the secret: %q", *cp.CommitRef)
+		}
+	})
 }

@@ -868,40 +868,44 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, snap)
 }
 
-// transitionLifecycle is a small helper that reads the current record for
-// sessionID (when a lifecycle store is configured) and persists it with the
-// given terminal/non-terminal state + optional failedReason, preserving
-// every other field. Errors are logged, not propagated — a durable-record
-// write failure must never fail (or mask the outcome of) the underlying
-// delegation itself.
-// NOTE ON LOCKING: MessageParentLifecycleStore.Load/Persist are EACH
-// individually self-locking (session.LifecycleStore.Load/Persist take the
-// per-session striped mutex internally for their own duration — see that
-// type's doc). This function deliberately does NOT wrap the Load+Persist
-// pair in an additional outer Lock() call: sync.Mutex is not reentrant, and
-// Lock()+Load() on the SAME session_id would self-deadlock (Load's own
-// internal lock call blocks forever waiting for the lock this function is
-// already holding). The narrow race this leaves (a concurrent write to the
-// same session_id landing between this function's Load and Persist) is
-// benign for every caller today — see this function's call sites for why.
+// transitionLifecycle is a small helper that atomically transitions
+// sessionID's durable record to the given terminal/non-terminal state +
+// optional failedReason, preserving every other field. Errors are logged,
+// not propagated — a durable-record write failure must never fail (or mask
+// the outcome of) the underlying delegation itself.
+//
+// NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this routes the
+// whole transition through session.LifecycleStore.Mutate — the atomic RMW
+// primitive that holds the per-session striped lock across tail→fn→write.
+// The prior Load+Persist pair was a non-atomic RMW: two concurrent
+// transitions on the same session_id (the cancel-vs-complete race, S4 INV-3)
+// raced — the loser either overwrote the winner's terminal record or was
+// rejected by the immutable-terminal guard non-atomically. Under Mutate the
+// two serialize: the first writer lands its terminal state, the second sees
+// that terminal tail under the lock and persistLocked rejects its same-
+// generation write with ErrLifecycleTerminalImmutable (logged here, harmless
+// — the record is already terminally correct). Callers MUST NOT already
+// hold Lock(sessionID): sync.Mutex is not reentrant, and Mutate takes the
+// lock ONCE internally (which is why this helper does not call the public
+// Load/Persist under a manual Lock — that would self-deadlock). The sibling
+// comment in message_parent.go parkNeedsInput mirrors this one.
 func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
-
-	rec, err := t.lifecycle.Load(sessionID)
+	err := t.lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		rec.State = state
+		rec.FailedReason = failedReason
+		if state != session.LifecycleNeedsInput {
+			rec.NeedsInput = nil
+		}
+		return nil
+	})
 	if err != nil {
-		slog.Warn("delegate: transitionLifecycle: load failed", "session_id", sessionID, "error", err)
-		return
-	}
-	next := *rec
-	next.State = state
-	next.FailedReason = failedReason
-	if state != session.LifecycleNeedsInput {
-		next.NeedsInput = nil
-	}
-	if err := t.lifecycle.Persist(&next); err != nil {
-		slog.Warn("delegate: transitionLifecycle: persist failed", "session_id", sessionID, "state", state, "error", err)
+		slog.Warn("delegate: transitionLifecycle: atomic transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
 }
 
@@ -1564,12 +1568,25 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	if ownerKey == "" {
 		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
 	}
-	if t.lifecycle != nil {
-		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil {
-			if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
-				return ErrorResult(fmt.Sprintf("delegate: inbox: %v", verr))
-			}
-		}
+	// FAIL-CLOSED (Security-MAJOR-1): caller-ownership verification is
+	// MANDATORY — a Load error (not-found, corrupt tail, I/O) MUST NOT let
+	// the inbox read fall through against whatever session_id the caller
+	// named (a cross-tenant read gated on an induced read error — peek/inbox
+	// would leak the victim's lifecycle state + persisted messages).
+	// Previously the ownership check only ran when Load SUCCEEDED, so any
+	// Load error skipped it and the inbox was drained regardless. Now deny
+	// when the lifecycle store is unconfigured OR when Load errors, mirroring
+	// executeCancel/executeSteer/executeRespond/executeFollowUp's posture
+	// (the rest of ADR-053's fail-closed contract — see delegate.go:1808).
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", lerr))
+	}
+	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", verr))
 	}
 
 	sinceCursor, _ := args["since_cursor"].(string)
@@ -1677,11 +1694,13 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 		return ErrorResult(err.Error())
 	}
 
-	// NOTE ON LOCKING: see transitionLifecycle's doc comment — Load/Persist
-	// are each individually self-locking; do NOT wrap them in an additional
-	// outer Lock() (self-deadlock, sync.Mutex is not reentrant). The narrow
-	// concurrent-respond race this leaves is documented at this function's
-	// call site.
+	// rec is loaded UNLOCKED here only for the fast-path pre-checks
+	// (ownership, needs_input/correlation match, authority via inbox Drain).
+	// The actual state transition is atomic — see the Mutate call below,
+	// which re-verifies state + correlation UNDER the per-session striped
+	// lock (Correctness-MAJOR-3) so a concurrent respond/cancel cannot
+	// double-apply. Do NOT wrap this Load in a manual Lock(); the transition
+	// uses Mutate, which takes the lock once internally.
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", lerr))
@@ -1757,16 +1776,49 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 		))
 	}
 
-	next := *rec
-	next.State = session.LifecycleRunning
-	next.NeedsInput = nil
-	if perr := t.lifecycle.Persist(&next); perr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", perr)).WithError(perr)
+	// Atomically transition the parked session out of needs_input via Mutate
+	// (Correctness-MAJOR-3): re-verify state + correlation UNDER the lock so a
+	// concurrent respond/cancel that already moved this session is rejected
+	// rather than double-applied.
+	//
+	// Correctness-MAJOR-2 (3P respond state): a 3P respond spawns a NEW
+	// corrective session (spawnCorrectiveFollowUp) and never warm-resumes the
+	// original. Flipping the ORIGINAL to `running` would leave a record with
+	// no live runtime turn, which status would falsely report as `running`
+	// and the Phase-2 boot sweep would re-classify `failed(interrupted)`,
+	// corrupting the terminal record. Instead the original is marked terminal
+	// `cancelled` — recording via FailedReason that it was superseded by the
+	// corrective re-dispatch. (FailedReason is the record's free-text "why
+	// this ended" field; using it for a cancelled-via-supersession is more
+	// informative than leaving the cancellation unexplained, and adding a
+	// dedicated `superseded` state would be a wire-type change outside this
+	// wave's scope.) The native path keeps the original `running` transition.
+	nextState := session.LifecycleRunning
+	var failedReason string
+	if rec.Is3P {
+		nextState = session.LifecycleCancelled
+		failedReason = "superseded by corrective re-dispatch (3P respond)"
+	}
+	if err := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil {
+			return session.ErrLifecycleNotFound
+		}
+		if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil || cur.NeedsInput.CorrelationID != correlationID {
+			return fmt.Errorf("session %s is not parked on correlation_id %q", sessionID, correlationID)
+		}
+		cur.State = nextState
+		cur.NeedsInput = nil
+		cur.FailedReason = failedReason
+		return nil
+	}); err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", err)).WithError(err)
 	}
 
 	if rec.Is3P {
 		// D5: 3P respond spawns a NEW corrective session — never an
-		// in-place warm resume (external CLIs have no such primitive).
+		// in-place warm resume (external CLIs have no such primitive). The
+		// original was marked terminal `cancelled` (superseded) above; the
+		// NEW session (minted in spawnCorrectiveFollowUp) carries the turn.
 		return t.spawnCorrectiveFollowUp(ctx, sessionID, rec,
 			fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text), nil)
 	}
@@ -1837,10 +1889,13 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 	}
 
-	// FR-... cancel = soft cooperative stop + a hard RequestCancel backstop
+	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
 	// after the grace window, mirroring InterruptSession/InterruptSessionHard's
 	// existing two-phase escalation (steering.go). The backstop only fires
 	// if the session has NOT already reached a terminal state within grace.
+	// (Comments-MINOR-3: the prior `// FR-...` prefix was a placeholder —
+	// cancel is not a numbered FR; see ADR-053 R§Cancel/restart for the
+	// two-phase prose this implements.)
 	if t.cancelHard != nil {
 		grace := t.cancelGrace
 		go func() {
@@ -1953,15 +2008,23 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
 	}
 
-	state := "unknown"
-	if t.lifecycle != nil {
-		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil {
-			if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
-				return ErrorResult(fmt.Sprintf("delegate: peek: %v", verr))
-			}
-			state = string(rec.State)
-		}
+	// FAIL-CLOSED (Security-MAJOR-1): caller-ownership verification is
+	// MANDATORY — same posture as executeInbox above. The prior `if lerr == nil`
+	// pattern skipped ownership verification on ANY Load error, so peek
+	// leaked the victim's lifecycle state (info disclosure) whenever Load
+	// errored. Now deny when the lifecycle store is unconfigured OR when Load
+	// errors OR when ownership mismatches.
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
 	}
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: peek: %v", lerr))
+	}
+	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: peek: %v", verr))
+	}
+	state := string(rec.State)
 
 	snap, perr := t.inbox.Peek(ownerKey, sessionID)
 	if perr != nil {

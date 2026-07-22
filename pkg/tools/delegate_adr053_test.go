@@ -741,3 +741,149 @@ func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
 		t.Fatalf("respond on a present, unacked self_ok question should succeed, got: %s", result.ForLLM)
 	}
 }
+
+// TestDelegateTool_Respond_3P_OriginalNotLeftRunning proves Correctness-MAJOR-2:
+// for a 3P child, respond spawns a NEW corrective session (spawnCorrective-
+// FollowUp) and must NOT flip the ORIGINAL record to `running` (which would
+// leave a live-turn-less record the Phase-2 boot sweep re-classifies
+// failed(interrupted), corrupting the terminal record). The original is
+// instead marked terminal `cancelled` (superseded by corrective re-dispatch).
+func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-3p-resp", State: session.LifecycleNeedsInput,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker-3p", LaunchProfile: session.LaunchProfileSpecialist,
+		Is3P:       true,
+		NeedsInput: &session.NeedsInput{CorrelationID: "corr-3p", TTLDeadline: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-3p-resp", "q-3p", "corr-3p",
+		generated.SelfOk)); err != nil {
+		t.Fatalf("seed question failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-3p-resp", "correlation_id": "corr-3p", "text": "go",
+	})
+	if result.IsError {
+		t.Fatalf("3P respond failed: %s", result.ForLLM)
+	}
+
+	// The ORIGINAL session must NOT be at running. It must be terminal
+	// `cancelled` (superseded) — never a live-turn-less running record.
+	orig, err := lc.Load("child-3p-resp")
+	if err != nil {
+		t.Fatalf("Load original: %v", err)
+	}
+	if orig.State == session.LifecycleRunning {
+		t.Fatalf("ORIGINAL 3P session left at running with no live turn — Phase-2 boot sweep would " +
+			"re-classify it failed(interrupted), corrupting the terminal record (Correctness-MAJOR-2)")
+	}
+	if orig.State != session.LifecycleCancelled {
+		t.Errorf("original state = %q, want %q (superseded by corrective re-dispatch)", orig.State, session.LifecycleCancelled)
+	}
+	if !orig.Terminal() {
+		t.Errorf("original state %q is not terminal — it must be terminal so it is never re-classified", orig.State)
+	}
+	if orig.FailedReason == "" {
+		t.Error("expected a non-empty FailedReason recording the supersession")
+	}
+
+	// A NEW corrective session must exist, linked back via ResumedFrom, on a
+	// DIFFERENT session_id (3P cold respawn, D5).
+	all, err := lc.List(session.LifecycleFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var successor *session.LifecycleRecord
+	for i := range all {
+		if all[i].ResumedFrom == "child-3p-resp" && all[i].SessionID != "child-3p-resp" {
+			successor = &all[i]
+			break
+		}
+	}
+	if successor == nil {
+		t.Fatal("expected a NEW corrective session (ResumedFrom=child-3p-resp, different id) to be spawned")
+	}
+}
+
+// TestDelegateTool_Inbox_DeniedOnLifecycleLoadError proves Security-MAJOR-1:
+// executeInbox MUST be denied (not drained) when the lifecycle Load errors —
+// the caller-ownership check can no longer be skipped by an induced read error
+// (cross-tenant inbox leak). Previously `if lerr == nil { verify }` skipped
+// verification on ANY Load error and drained regardless.
+func TestDelegateTool_Inbox_DeniedOnLifecycleLoadError(t *testing.T) {
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-inbox-corrupt", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	// Seed a real message in the inbox that the fail-open bug WOULD have leaked.
+	if _, err := inbox.Append("parent-1", progressMsgForDelegateTest(t, "child-inbox-corrupt", "leak-1")); err != nil {
+		t.Fatalf("seed inbox: %v", err)
+	}
+	// Corrupt the lifecycle tail so Load errors.
+	if err := os.WriteFile(filepath.Join(lc.Dir(), "child-inbox-corrupt.jsonl"), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{"action": "inbox", "session_id": "child-inbox-corrupt"})
+	if !result.IsError {
+		t.Fatal("expected inbox to be DENIED on a lifecycle Load error, got success (fail-open regression)")
+	}
+}
+
+// TestDelegateTool_Inbox_DeniedWhenLifecycleUnconfigured proves the
+// Security-MAJOR-1 fail-closed posture: no lifecycle store → no ownership
+// verification → inbox denied (never leaks messages without verifying the
+// caller owns the session).
+func TestDelegateTool_Inbox_DeniedWhenLifecycleUnconfigured(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
+	// inbox configured but NO lifecycle store — the prior code treated
+	// lifecycle as optional enrichment and drained anyway.
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	tool.SetMessageInbox(inbox)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	result := tool.Execute(ctx, map[string]any{"action": "inbox", "session_id": "any"})
+	if !result.IsError {
+		t.Fatal("expected inbox DENIED when no lifecycle store configured, got success (fail-open)")
+	}
+}
+
+// TestDelegateTool_Peek_DeniedOnLifecycleLoadError proves Security-MAJOR-1 for
+// executePeek: a Load error MUST deny peek (the prior `if lerr == nil` pattern
+// leaked the victim's lifecycle state + persisted messages on any read error).
+func TestDelegateTool_Peek_DeniedOnLifecycleLoadError(t *testing.T) {
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-peek-corrupt", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	if _, err := inbox.Append("parent-1", progressMsgForDelegateTest(t, "child-peek-corrupt", "peek-leak")); err != nil {
+		t.Fatalf("seed inbox: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lc.Dir(), "child-peek-corrupt.jsonl"), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{"action": "peek", "session_id": "child-peek-corrupt"})
+	if !result.IsError {
+		t.Fatal("expected peek DENIED on a lifecycle Load error, got success (fail-open regression)")
+	}
+	if strings.Contains(result.ForLLM, "peek-leak") {
+		t.Errorf("peek leaked inbox content despite the Load error: %s", result.ForLLM)
+	}
+}
