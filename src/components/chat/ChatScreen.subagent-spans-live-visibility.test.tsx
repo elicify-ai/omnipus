@@ -118,6 +118,21 @@ function Providers({ children }: { children: React.ReactNode }) {
   const queryClientRef = React.useRef<QueryClient | null>(null)
   if (!queryClientRef.current) {
     queryClientRef.current = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    // Prime the ['agents'] cache synchronously (same list the mocked
+    // fetchAgents above resolves to) so the very first render already has
+    // resolveSpanAgentType's data available. Without this, the W3 agentType
+    // assertions below race the real fetchAgents() promise's microtask against
+    // React Testing Library's single `act(async () => render(...))` flush and
+    // can observe the pre-resolution empty agents list (data-agent-type="").
+    // Mirrors the sibling ChatScreen.subagent-spans-historical-agenttype-
+    // wiring.test.tsx Providers (commit 9bf5dee2), which fixed the identical
+    // race on the historical path. Keep this list in sync with the
+    // fetchAgents mock above.
+    queryClientRef.current.setQueryData(['agents'], [
+      { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
+      { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#4488ff', icon: 'compass' },
+      { id: 'codex-1', name: 'Codex Runner', type: 'subagent_3p', locked: false, status: 'active', color: '#ff8800', icon: 'terminal-window' },
+    ])
   }
   const runtime = useOmnipusRuntime()
   return (
