@@ -87,8 +87,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// registered but omitted from the seed + catalog, so it was denied-by-default
 	// (fail-closed) on every install — taking general from 31 to 32.
 	// ADR-052 added create_plan/execute_plan/run_task/inspect_session, taking
-	// the total from 78 to 82.
-	const wantToolCount = 82
+	// the total from 78 to 82. ADR-053 added message_parent (the child→parent
+	// messaging tool, seeded allow everywhere delegate is), taking it to 83.
+	const wantToolCount = 83
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
 		t.Errorf(
 			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",
