@@ -355,7 +355,10 @@ func TestGoalLoop_MetVerdict_ClearsGoalAndWritesVerdict(t *testing.T) {
 
 	judgeInst.Provider = metJudgeProvider("tests pass")
 
-	result := &turnResult{finalContent: "Tests are passing now."}
+	// ADR-053 Phase-2 (FR-101/G-1): the Judge fires ONLY on an explicit
+	// completion claim ([goal:evidence] + GOAL_STATUS: met) — a bare turn
+	// with no marker must NOT adjudicate. This turn ends in a real claim.
+	result := &turnResult{finalContent: "[goal:evidence] all tests green\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
 	after, err := store.GetMeta(sid)
@@ -409,7 +412,10 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 
 	judgeInst.Provider = unmetJudgeProvider("3 tests still failing")
 
-	result := &turnResult{finalContent: "I tried but some tests still fail."}
+	// ADR-053 Phase-2 (FR-101/G-1): the Judge fires ONLY on an explicit
+	// completion claim. This turn ends in a real claim ([goal:evidence] +
+	// GOAL_STATUS: met); the judge returns unmet → one round consumed + steer.
+	result := &turnResult{finalContent: "[goal:evidence] ran suite, 3 still red\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
 	after, err := store.GetMeta(sid)
@@ -530,7 +536,12 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1",
 		SenderID: goalLoopFollowUpSenderID,
 	}
-	result := &turnResult{finalContent: "continuing to work on it"}
+	// ADR-053 Phase-2 (FR-101): the round advances on a CLAIM, not on a bare
+	// turn. The re-injected follow-up passes the origin gate (SenderID ==
+	// goalLoopFollowUpSenderID, UserInitiated=false) and a claim carried by it
+	// still adjudicates + advances — proving the system continuation is not
+	// gated out (only non-user-origin gating, not a claim-blocking gate).
+	result := &turnResult{finalContent: "[goal:evidence] tried again\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, followUpOpts, result)
 
 	after, err := store.GetMeta(sid)
@@ -557,7 +568,9 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
 	judgeInst.Provider = unmetJudgeProvider("still unmet")
 
-	r1 := &turnResult{finalContent: "attempt 1"}
+	// ADR-053 Phase-2 (FR-101): each round advances on a CLAIM, not a bare
+	// turn. Round 1 = a claim the judge finds unmet.
+	r1 := &turnResult{finalContent: "[goal:evidence] attempt 1\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r1)
 	after1, err := store.GetMeta(sid)
 	if err != nil {
@@ -570,7 +583,7 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 		t.Fatalf("round 1: expected a follow-up round, got %d", len(r1.followUps))
 	}
 
-	r2 := &turnResult{finalContent: "attempt 2"}
+	r2 := &turnResult{finalContent: "[goal:evidence] attempt 2\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r2)
 	after2, err := store.GetMeta(sid)
 	if err != nil {

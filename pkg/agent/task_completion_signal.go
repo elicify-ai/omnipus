@@ -503,3 +503,160 @@ func checkEvidenceMarkerGate(output string) evidenceGateVerdict {
 	// evidence, so the claim is bare.
 	return evidenceGateVerdict{Applicable: true, Honored: false, SteeringText: evidenceGateSteeringText}
 }
+
+// --- ADR-053 Phase-2 S6 family: GOAL_STATUS typed marker (FR-101/FR-104) ---
+//
+// This EXTENDS the SAME ADR-043 marker family (TASK_STATUS / TASK_SUMMARY /
+// [goal:evidence]) with a fourth co-located member — `GOAL_STATUS: <value>` —
+// rather than inventing a second completion-signal protocol (FR-199: the
+// GOAL_STATUS parser + its teaching fragment MUST live in THIS file, the S6
+// family owner; DoD-11 anti-drift). ADR-053 §1 replaces ADR-052's
+// after-every-turn adjudication with claim-or-idle triggering, and the typed
+// GOAL_STATUS marker is the ONLY mechanism that satisfies it:
+//
+//   - `GOAL_STATUS: met`            — an explicit completion CLAIM. The goal
+//     loop honors it ONLY when a genuine `[goal:evidence] <text>` line
+//     immediately precedes it (the SAME evidence-gate primitive above,
+//     re-used verbatim). A bare `met` (no evidence line) is the bounce case
+//     (G-4: 1st free steer, 2nd consumes a round).
+//   - `GOAL_STATUS: waiting_on_user`— a typed PAUSE. FR-104 / Explicit
+//     Non-Behavior: the system MUST NOT infer waiting-on-user from free text
+//     (a prose classifier); ONLY this typed marker counts. A turn ending in it
+//     produces NO verdict and consumes NO round, and idle settlement is
+//     suppressed while the pause holds.
+//
+// parseGoalStatusMarker re-locates the marker line via the SAME shared,
+// already-hardened primitives (computeFencedLines, isExcludedMarkerLine) so it
+// can never disagree with the rest of the family about fencing/exclusion. It
+// deliberately does NOT mutate or reuse parseTaskCompletionSignal's return
+// value — GOAL_STATUS is its own marker, evaluated independently.
+
+// goalStatusLabel is the ADR-053 S6 typed-status marker token.
+const goalStatusLabel = "GOAL_STATUS"
+
+// goalStatusMet / goalStatusWaitingOnUser are the two typed GOAL_STATUS values
+// (lower-cased canonical form; the regex matches case-insensitively and
+// normalizes to these).
+const (
+	goalStatusMet           = "met"
+	goalStatusWaitingOnUser = "waiting_on_user"
+)
+
+// goalStatusLineRe matches a `GOAL_STATUS: <value>` line, tolerant of the same
+// markdown-emphasis wrapping the rest of the family tolerates (bold/italic/
+// code-span around the label). The captured group is the trailing value text,
+// which the caller trims and lower-cases before comparing to the canonical
+// constants. An unrecognized value is still "Present" (the marker fired) but
+// resolves to an empty Status — the goal loop treats an unknown value the same
+// as no marker at all (fail to the deterministic "not a claim, not a pause"
+// path) rather than guessing intent.
+var goalStatusLineRe = regexp.MustCompile(
+	"(?i)^[*`_\\s]*GOAL_STATUS[*`_\\s]*:?[*`_\\s]*(.*)$",
+)
+
+// goalStatusMarker is the result of parseGoalStatusMarker.
+type goalStatusMarker struct {
+	// Present is true when output contains at least one valid (non-fenced,
+	// non-excluded) GOAL_STATUS line — the marker fired at all. False means
+	// no marker: the deterministic fallback (not a claim, not a pause).
+	Present bool
+	// Status is the canonical typed value (goalStatusMet or
+	// goalStatusWaitingOnUser) of the LAST valid marker line. Empty when
+	// Present is true but the value was unrecognized, OR when Present is
+	// false. Callers key only on the canonical constants.
+	Status string
+	// HasEvidence is meaningful only when Status == goalStatusMet: true when a
+	// genuine (non-fenced, non-excluded), non-empty [goal:evidence] line
+	// immediately precedes the marker (the SAME nearest-non-blank-line-above
+	// rule checkEvidenceMarkerGate applies). A bare `met` claim
+	// (HasEvidence == false) is the G-4 bounce case.
+	HasEvidence bool
+	// EvidenceText is the trailing text of the [goal:evidence] line when
+	// HasEvidence is true (the worker's own one-line statement of what was
+	// verified), else empty.
+	EvidenceText string
+}
+
+// goalStatusBareClaimSteer is the G-4 teaching fragment: the FIRST bare
+// `GOAL_STATUS: met` (no [goal:evidence]) is bounced before the Judge with
+// this steer, free of round cost. Co-located with the parser (FR-199).
+const goalStatusBareClaimSteer = "completion claim bounced: a \"" + goalStatusLabel +
+	": met\" marker was found WITHOUT a \"" + goalEvidenceLabel + " <what you verified>\" line " +
+	"immediately before it. Verify your work, put \"" + goalEvidenceLabel +
+	" <what you verified>\" immediately before the completion marker, then restate \"" +
+	goalStatusLabel + ": met\". (A repeat bare claim costs a round.)"
+
+// parseGoalStatusMarker scans output for the LAST valid (non-fenced,
+// non-excluded) GOAL_STATUS marker line — the same "last occurrence wins" rule
+// the rest of the family applies — and reports its typed value plus whether a
+// genuine [goal:evidence] line immediately precedes it (ADR-053 FR-101/FR-104).
+//
+// Returns Present=false when output contains no valid GOAL_STATUS line at all
+// (the deterministic not-a-claim-not-a-pause fallback, FR-104 AS-2). An
+// unrecognized value yields Present=true with Status="" — callers treat that
+// identically to no marker (no claim, no pause), never as a guess.
+func parseGoalStatusMarker(output string) goalStatusMarker {
+	if strings.TrimSpace(output) == "" {
+		return goalStatusMarker{}
+	}
+	lines := strings.Split(output, "\n")
+	fenced := computeFencedLines(lines)
+
+	statusIdx := -1
+	for i, line := range lines {
+		if fenced[i] {
+			continue
+		}
+		trimmedR := strings.TrimRight(line, "\r")
+		if isExcludedMarkerLine(trimmedR) {
+			continue
+		}
+		if goalStatusLineRe.MatchString(trimmedR) {
+			statusIdx = i // last non-fenced, non-excluded match wins
+		}
+	}
+	if statusIdx == -1 {
+		return goalStatusMarker{}
+	}
+	m := goalStatusLineRe.FindStringSubmatch(strings.TrimRight(lines[statusIdx], "\r"))
+	rawVal := strings.TrimSpace(m[1])
+	canonical := ""
+	switch strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rawVal), "."))) {
+	case goalStatusMet:
+		canonical = goalStatusMet
+	case goalStatusWaitingOnUser:
+		canonical = goalStatusWaitingOnUser
+	}
+	if canonical == "" {
+		// Marker fired but the value is unrecognized — do not guess.
+		return goalStatusMarker{Present: true}
+	}
+
+	out := goalStatusMarker{Present: true, Status: canonical}
+	if canonical != goalStatusMet {
+		return out // evidence only meaningful for a `met` claim
+	}
+	// Reuse checkEvidenceMarkerGate's exact "nearest non-blank line above"
+	// contract so the goal loop and the family never disagree on what counts
+	// as evidence. A fenced/excluded candidate, an empty evidence line, or no
+	// line at all above the marker all leave HasEvidence=false (bare claim).
+	for j := statusIdx - 1; j >= 0; j-- {
+		trimmedR := strings.TrimRight(lines[j], "\r")
+		if strings.TrimSpace(trimmedR) == "" {
+			continue // blank lines tolerated between evidence and marker
+		}
+		if fenced[j] || isExcludedMarkerLine(trimmedR) {
+			return out // bare
+		}
+		em := goalEvidenceLineRe.FindStringSubmatch(trimmedR)
+		if em == nil {
+			return out // nearest non-blank line is not an evidence line → bare
+		}
+		if txt := strings.TrimSpace(em[1]); txt != "" {
+			out.HasEvidence = true
+			out.EvidenceText = txt
+		}
+		return out
+	}
+	return out // marker is the first line → bare
+}
