@@ -1,0 +1,32 @@
+type: object
+title: DelegateSteerAction
+description: >
+  `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection
+  at the child's next tool boundary (skip-remaining-batch semantics
+  identical to chat steering). Rate-capped 6/min, 16 KiB body.
+required:
+  - action
+  - session_id
+  - text
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - steer
+    example: "steer"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session to steer.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 16384
+    description: Steering instruction.
+    example: "Skip the xlsx shard for now, prioritize the CSV export."
+  correlation_id:
+    type: string
+    description: Optional — set when this steer accompanies a specific open question/blocker.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"

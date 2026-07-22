@@ -264,17 +264,21 @@ type ErrorFrame struct {
 	Type      string  `json:"type"`
 }
 
-// GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+// GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
 type GoalStatusFrame struct {
-	ActiveLoops  int    `json:"active_loops"`
-	Cap          int    `json:"cap"`
-	Condition    string `json:"condition"`
-	LatestReason string `json:"latest_reason"`
-	MaxRounds    int    `json:"max_rounds"`
-	Round        int    `json:"round"`
-	SessionId    string `json:"session_id"`
-	State        string `json:"state"`
-	Type         string `json:"type"`
+	ActiveLoops int    `json:"active_loops"`
+	Cap         int    `json:"cap"`
+	Condition   string `json:"condition"`
+	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
+	GoalId       *string `json:"goal_id,omitempty"`
+	LatestReason string  `json:"latest_reason"`
+	MaxRounds    int     `json:"max_rounds"`
+	// Adjudications consumed so far (ADR-053 R§8.9 — one round = one adjudication, claim-triggered OR idle-settled).
+	Round     int    `json:"round"`
+	SessionId string `json:"session_id"`
+	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (8 states, superseding the original 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
+	State string `json:"state"`
+	Type  string `json:"type"`
 }
 
 // JudgeVerdictFrame — Server → client. Live push of a judge adjudication (ADR-049 D2/D4/NFR-5) — the WS carrier of a judge verdict. The other carrier is the persisted session-transcript entry (Message.type=judge_verdict / Message.verdict, contract C12); both carry the same shape so they cannot silently disagree.
@@ -488,6 +492,21 @@ type SubagentEndFrame struct {
 	Type         string  `json:"type"`
 }
 
+// SubagentMessageFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat, UI-facing PROJECTION of the underlying SessionMessage riding between subagent_start/subagent_end — see components/schemas/SubagentMessageFrame.yaml for the full shape- decision rationale (why this is not a full embedded SessionMessage oneOf). Canonical copy — keep in sync by hand.
+type SubagentMessageFrame struct {
+	CorrelationId   *string `json:"correlation_id,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	Kind            string  `json:"kind"`
+	MessageId       string  `json:"message_id"`
+	Pct             *int    `json:"pct,omitempty"`
+	SenderIdentity  string  `json:"sender_identity"`
+	SessionId       string  `json:"session_id"`
+	SpanId          string  `json:"span_id"`
+	Text            *string `json:"text,omitempty"`
+	Type            string  `json:"type"`
+	UntrustedOrigin bool    `json:"untrusted_origin"`
+}
+
 // SubagentStartFrame — Server → client subagent span opened (FR-H-004).
 type SubagentStartFrame struct {
 	AgentId      *string `json:"agent_id,omitempty"`
@@ -496,6 +515,19 @@ type SubagentStartFrame struct {
 	SpanId       string  `json:"span_id"`
 	TaskLabel    string  `json:"task_label"`
 	Type         string  `json:"type"`
+}
+
+// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
+type SubagentStateFrame struct {
+	CreatedAt       string `json:"created_at"`
+	SessionId       string `json:"session_id"`
+	SpanId          string `json:"span_id"`
+	State           string `json:"state"`
+	SteeringReceipt struct {
+		AppliedAt     string `json:"applied_at"`
+		CorrelationId string `json:"correlation_id"`
+	} `json:"steering_receipt,omitempty"`
+	Type string `json:"type"`
 }
 
 // SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009).

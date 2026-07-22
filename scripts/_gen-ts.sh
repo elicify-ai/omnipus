@@ -128,7 +128,10 @@ for name in $STRICT_SCHEMAS; do
   fi
 done
 
-# ── Discriminated-union fix-up (AgentCreateRequest oneOf, 2026-07-03).
+# ── Discriminated-union fix-up (AgentCreateRequest oneOf, 2026-07-03;
+# extended 2026-07-22 for the ADR-053 SessionMessage / DelegateActionRequest
+# / MessageParentRequest inline oneOf+discriminator unions — same ADR-034
+# pattern, same fix-up need).
 # The template pins every schema to its emitted TS type via
 # `export const Name: z.ZodType<Name> = …`. That annotation ERASES the
 # ZodObject-ness that z.discriminatedUnion() requires of its option schemas,
@@ -136,7 +139,7 @@ done
 # options collapse its inference). Rewrite the union and its option schemas
 # to the `satisfies` form — the identical compile-time drift pin against the
 # emitted TS type, without widening the declared type.
-UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest"}
+UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest SessionMessageProgress SessionMessageCheckpoint SessionMessageArtifact SessionMessageBlocker SessionMessageQuestion SessionMessageDecisionRequest SessionMessageError SessionMessageHandback SessionMessageRevisionEntry SessionMessageGoalStatus SessionMessageSteer SessionMessageRespond SessionMessage DelegateRunAction DelegateStatusAction DelegateInboxAction DelegateInboxAckAction DelegateSteerAction DelegateRespondAction DelegateCancelAction DelegateFollowUpAction DelegatePeekAction DelegateActionRequest MessageParentProgress MessageParentCheckpoint MessageParentArtifact MessageParentBlocker MessageParentQuestion MessageParentHandback MessageParentRequest"}
 node - "$STRICT_RAW" $UNION_SATISFIES_SCHEMAS <<'NODE_SCRIPT'
 const fs = require("fs");
 const [path, ...names] = process.argv.slice(2);

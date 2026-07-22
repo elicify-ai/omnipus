@@ -1,0 +1,96 @@
+type: object
+title: SessionMessageDecisionRequest
+description: >
+  SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053
+  §Contract Surface, R§8.2). Child -> parent. Like `question` but
+  enumerates discrete `options[]`; the answering `respond.text` names the
+  chosen option. Same untrusted-authority handling as `question` (M3).
+  Envelope fields are duplicated inline (ADR-034 precedent, see
+  SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+  - options
+  - correlation_id
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WM"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - decision_request
+    example: "decision_request"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    example: true
+  text:
+    type: string
+    maxLength: 32768
+    description: Untrusted decision prompt.
+    example: "Which lint profile should the plan-lint gate use?"
+  options:
+    type: array
+    minItems: 2
+    items:
+      type: string
+    description: >
+      The enumerated choices. The answering `respond.text` names the
+      chosen option verbatim.
+    example:
+      - "strict"
+      - "soft"
+  correlation_id:
+    type: string
+    minLength: 1
+    description: Routes the eventual `respond` back to this decision request.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WN"
+  authority:
+    type: string
+    enum:
+      - self_ok
+      - owner_required
+    description: >
+      Child-authored authority tag, untrusted (M3) — see
+      SessionMessageQuestion.authority for the identical fail-closed
+      derivation rule.
+    example: "owner_required"

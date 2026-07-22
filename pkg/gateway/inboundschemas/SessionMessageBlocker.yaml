@@ -1,0 +1,81 @@
+type: object
+title: SessionMessageBlocker
+description: >
+  SessionMessage `oneOf` variant, `kind: blocker` (ADR-053 §Contract
+  Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034
+  precedent, see SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+  - severity
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WH"
+  session_id:
+    type: string
+    minLength: 1
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - child_to_parent
+    example: "child_to_parent"
+  kind:
+    type: string
+    enum:
+      - blocker
+    example: "blocker"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "ray"
+  untrusted_origin:
+    type: boolean
+    example: true
+  text:
+    type: string
+    maxLength: 32768
+    description: Untrusted description of what is blocking progress.
+    example: "The sandbox denied `go test` — awaiting policy review."
+  severity:
+    type: string
+    enum:
+      - low
+      - medium
+      - high
+    description: Blocker severity, used to prioritize the parent's response.
+    example: "medium"
+  correlation_id:
+    type: string
+    description: >
+      Optional. A blocker counts toward the per-child unacked ceiling
+      (D15) like a question; a `correlation_id` lets a subsequent
+      `inbox_ack`/`respond` reference it precisely.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WJ"

@@ -1,0 +1,30 @@
+type: object
+title: DelegateInboxAckAction
+description: >
+  `delegate` tool call, `action: inbox_ack` (ADR-053 §5.1). Explicit ack;
+  the runtime dedupes by `message_id` before surfacing and persists acked
+  messages in the audit log.
+required:
+  - action
+  - session_id
+  - message_ids
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - inbox_ack
+    example: "inbox_ack"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session whose inbox entries are being acked.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  message_ids:
+    type: array
+    minItems: 1
+    items:
+      type: string
+    description: The `message_id`s to ack.
+    example:
+      - "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"

@@ -772,13 +772,13 @@ func (e ChannelIdentityKind) Valid() bool {
 
 // Defines values for ClearAllSessionsResponseStatus.
 const (
-	Cleared ClearAllSessionsResponseStatus = "cleared"
+	ClearAllSessionsResponseStatusCleared ClearAllSessionsResponseStatus = "cleared"
 )
 
 // Valid indicates whether the value is a known member of the ClearAllSessionsResponseStatus enum.
 func (e ClearAllSessionsResponseStatus) Valid() bool {
 	switch e {
-	case Cleared:
+	case ClearAllSessionsResponseStatusCleared:
 		return true
 	default:
 		return false
@@ -878,6 +878,342 @@ func (e CliValidateResponseReason) Valid() bool {
 	case CliValidateResponseReasonUnauthenticated:
 		return true
 	case CliValidateResponseReasonUnknownCli:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateCancelActionAction.
+const (
+	DelegateCancelActionActionCancel DelegateCancelActionAction = "cancel"
+)
+
+// Valid indicates whether the value is a known member of the DelegateCancelActionAction enum.
+func (e DelegateCancelActionAction) Valid() bool {
+	switch e {
+	case DelegateCancelActionActionCancel:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateFollowUpActionAction.
+const (
+	FollowUp DelegateFollowUpActionAction = "follow_up"
+)
+
+// Valid indicates whether the value is a known member of the DelegateFollowUpActionAction enum.
+func (e DelegateFollowUpActionAction) Valid() bool {
+	switch e {
+	case FollowUp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateInboxAckActionAction.
+const (
+	InboxAck DelegateInboxAckActionAction = "inbox_ack"
+)
+
+// Valid indicates whether the value is a known member of the DelegateInboxAckActionAction enum.
+func (e DelegateInboxAckActionAction) Valid() bool {
+	switch e {
+	case InboxAck:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateInboxActionAction.
+const (
+	DelegateInboxActionActionInbox DelegateInboxActionAction = "inbox"
+)
+
+// Valid indicates whether the value is a known member of the DelegateInboxActionAction enum.
+func (e DelegateInboxActionAction) Valid() bool {
+	switch e {
+	case DelegateInboxActionActionInbox:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegatePeekActionAction.
+const (
+	Peek DelegatePeekActionAction = "peek"
+)
+
+// Valid indicates whether the value is a known member of the DelegatePeekActionAction enum.
+func (e DelegatePeekActionAction) Valid() bool {
+	switch e {
+	case Peek:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegatePeekResponseState.
+const (
+	DelegatePeekResponseStateCancelled  DelegatePeekResponseState = "cancelled"
+	DelegatePeekResponseStateCompleted  DelegatePeekResponseState = "completed"
+	DelegatePeekResponseStateFailed     DelegatePeekResponseState = "failed"
+	DelegatePeekResponseStateNeedsInput DelegatePeekResponseState = "needs_input"
+	DelegatePeekResponseStatePaused     DelegatePeekResponseState = "paused"
+	DelegatePeekResponseStateQueued     DelegatePeekResponseState = "queued"
+	DelegatePeekResponseStateRunning    DelegatePeekResponseState = "running"
+	DelegatePeekResponseStateTimedOut   DelegatePeekResponseState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the DelegatePeekResponseState enum.
+func (e DelegatePeekResponseState) Valid() bool {
+	switch e {
+	case DelegatePeekResponseStateCancelled:
+		return true
+	case DelegatePeekResponseStateCompleted:
+		return true
+	case DelegatePeekResponseStateFailed:
+		return true
+	case DelegatePeekResponseStateNeedsInput:
+		return true
+	case DelegatePeekResponseStatePaused:
+		return true
+	case DelegatePeekResponseStateQueued:
+		return true
+	case DelegatePeekResponseStateRunning:
+		return true
+	case DelegatePeekResponseStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRespondActionAction.
+const (
+	DelegateRespondActionActionRespond DelegateRespondActionAction = "respond"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRespondActionAction enum.
+func (e DelegateRespondActionAction) Valid() bool {
+	switch e {
+	case DelegateRespondActionActionRespond:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRespondResponseCorrectiveSessionState.
+const (
+	DelegateRespondResponseCorrectiveSessionStateCancelled  DelegateRespondResponseCorrectiveSessionState = "cancelled"
+	DelegateRespondResponseCorrectiveSessionStateCompleted  DelegateRespondResponseCorrectiveSessionState = "completed"
+	DelegateRespondResponseCorrectiveSessionStateFailed     DelegateRespondResponseCorrectiveSessionState = "failed"
+	DelegateRespondResponseCorrectiveSessionStateNeedsInput DelegateRespondResponseCorrectiveSessionState = "needs_input"
+	DelegateRespondResponseCorrectiveSessionStatePaused     DelegateRespondResponseCorrectiveSessionState = "paused"
+	DelegateRespondResponseCorrectiveSessionStateQueued     DelegateRespondResponseCorrectiveSessionState = "queued"
+	DelegateRespondResponseCorrectiveSessionStateRunning    DelegateRespondResponseCorrectiveSessionState = "running"
+	DelegateRespondResponseCorrectiveSessionStateTimedOut   DelegateRespondResponseCorrectiveSessionState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRespondResponseCorrectiveSessionState enum.
+func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
+	switch e {
+	case DelegateRespondResponseCorrectiveSessionStateCancelled:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStateCompleted:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStateFailed:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStateNeedsInput:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStatePaused:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStateQueued:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStateRunning:
+		return true
+	case DelegateRespondResponseCorrectiveSessionStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionAction.
+const (
+	Run DelegateRunActionAction = "run"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionAction enum.
+func (e DelegateRunActionAction) Valid() bool {
+	switch e {
+	case Run:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionLaunchProfile.
+const (
+	DelegateRunActionLaunchProfileSpecialist DelegateRunActionLaunchProfile = "specialist"
+	DelegateRunActionLaunchProfileUtility    DelegateRunActionLaunchProfile = "utility"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionLaunchProfile enum.
+func (e DelegateRunActionLaunchProfile) Valid() bool {
+	switch e {
+	case DelegateRunActionLaunchProfileSpecialist:
+		return true
+	case DelegateRunActionLaunchProfileUtility:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateSessionResponseState.
+const (
+	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
+	DelegateSessionResponseStateCompleted  DelegateSessionResponseState = "completed"
+	DelegateSessionResponseStateFailed     DelegateSessionResponseState = "failed"
+	DelegateSessionResponseStateNeedsInput DelegateSessionResponseState = "needs_input"
+	DelegateSessionResponseStatePaused     DelegateSessionResponseState = "paused"
+	DelegateSessionResponseStateQueued     DelegateSessionResponseState = "queued"
+	DelegateSessionResponseStateRunning    DelegateSessionResponseState = "running"
+	DelegateSessionResponseStateTimedOut   DelegateSessionResponseState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the DelegateSessionResponseState enum.
+func (e DelegateSessionResponseState) Valid() bool {
+	switch e {
+	case DelegateSessionResponseStateCancelled:
+		return true
+	case DelegateSessionResponseStateCompleted:
+		return true
+	case DelegateSessionResponseStateFailed:
+		return true
+	case DelegateSessionResponseStateNeedsInput:
+		return true
+	case DelegateSessionResponseStatePaused:
+		return true
+	case DelegateSessionResponseStateQueued:
+		return true
+	case DelegateSessionResponseStateRunning:
+		return true
+	case DelegateSessionResponseStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusActionAction.
+const (
+	Status DelegateStatusActionAction = "status"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusActionAction enum.
+func (e DelegateStatusActionAction) Valid() bool {
+	switch e {
+	case Status:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionLaunchProfile.
+const (
+	DelegateStatusResponseSessionLaunchProfileSpecialist DelegateStatusResponseSessionLaunchProfile = "specialist"
+	DelegateStatusResponseSessionLaunchProfileUtility    DelegateStatusResponseSessionLaunchProfile = "utility"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionLaunchProfile enum.
+func (e DelegateStatusResponseSessionLaunchProfile) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionLaunchProfileSpecialist:
+		return true
+	case DelegateStatusResponseSessionLaunchProfileUtility:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionOwnerScopeKind.
+const (
+	DelegateStatusResponseSessionOwnerScopeKindHuman         DelegateStatusResponseSessionOwnerScopeKind = "human"
+	DelegateStatusResponseSessionOwnerScopeKindParentSession DelegateStatusResponseSessionOwnerScopeKind = "parent_session"
+	DelegateStatusResponseSessionOwnerScopeKindPlan          DelegateStatusResponseSessionOwnerScopeKind = "plan"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionOwnerScopeKind enum.
+func (e DelegateStatusResponseSessionOwnerScopeKind) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionOwnerScopeKindHuman:
+		return true
+	case DelegateStatusResponseSessionOwnerScopeKindParentSession:
+		return true
+	case DelegateStatusResponseSessionOwnerScopeKindPlan:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionState.
+const (
+	DelegateStatusResponseSessionStateCancelled  DelegateStatusResponseSessionState = "cancelled"
+	DelegateStatusResponseSessionStateCompleted  DelegateStatusResponseSessionState = "completed"
+	DelegateStatusResponseSessionStateFailed     DelegateStatusResponseSessionState = "failed"
+	DelegateStatusResponseSessionStateNeedsInput DelegateStatusResponseSessionState = "needs_input"
+	DelegateStatusResponseSessionStatePaused     DelegateStatusResponseSessionState = "paused"
+	DelegateStatusResponseSessionStateQueued     DelegateStatusResponseSessionState = "queued"
+	DelegateStatusResponseSessionStateRunning    DelegateStatusResponseSessionState = "running"
+	DelegateStatusResponseSessionStateTimedOut   DelegateStatusResponseSessionState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionState enum.
+func (e DelegateStatusResponseSessionState) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionStateCancelled:
+		return true
+	case DelegateStatusResponseSessionStateCompleted:
+		return true
+	case DelegateStatusResponseSessionStateFailed:
+		return true
+	case DelegateStatusResponseSessionStateNeedsInput:
+		return true
+	case DelegateStatusResponseSessionStatePaused:
+		return true
+	case DelegateStatusResponseSessionStateQueued:
+		return true
+	case DelegateStatusResponseSessionStateRunning:
+		return true
+	case DelegateStatusResponseSessionStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateSteerActionAction.
+const (
+	DelegateSteerActionActionSteer DelegateSteerActionAction = "steer"
+)
+
+// Valid indicates whether the value is a known member of the DelegateSteerActionAction enum.
+func (e DelegateSteerActionAction) Valid() bool {
+	switch e {
+	case DelegateSteerActionActionSteer:
 		return true
 	default:
 		return false
@@ -1052,6 +1388,150 @@ func (e GlobalToolPoliciesPolicies) Valid() bool {
 	case GlobalToolPoliciesPoliciesAsk:
 		return true
 	case GlobalToolPoliciesPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalBindingKind.
+const (
+	GoalBindingKindPlan    GoalBindingKind = "plan"
+	GoalBindingKindSession GoalBindingKind = "session"
+	GoalBindingKindTask    GoalBindingKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the GoalBindingKind enum.
+func (e GoalBindingKind) Valid() bool {
+	switch e {
+	case GoalBindingKindPlan:
+		return true
+	case GoalBindingKindSession:
+		return true
+	case GoalBindingKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalCriteriaAuthorKind.
+const (
+	GoalCriteriaAuthorKindAgent GoalCriteriaAuthorKind = "agent"
+	GoalCriteriaAuthorKindUser  GoalCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the GoalCriteriaAuthorKind enum.
+func (e GoalCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case GoalCriteriaAuthorKindAgent:
+		return true
+	case GoalCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalCriteriaBehaviorScope.
+const (
+	GoalCriteriaBehaviorScopeAttempt     GoalCriteriaBehaviorScope = "attempt"
+	GoalCriteriaBehaviorScopeTaskSession GoalCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the GoalCriteriaBehaviorScope enum.
+func (e GoalCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case GoalCriteriaBehaviorScopeAttempt:
+		return true
+	case GoalCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalCriteriaKind.
+const (
+	GoalCriteriaKindBehavior GoalCriteriaKind = "behavior"
+	GoalCriteriaKindCheck    GoalCriteriaKind = "check"
+	GoalCriteriaKindProse    GoalCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the GoalCriteriaKind enum.
+func (e GoalCriteriaKind) Valid() bool {
+	switch e {
+	case GoalCriteriaKindBehavior:
+		return true
+	case GoalCriteriaKindCheck:
+		return true
+	case GoalCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalCriteriaStatus.
+const (
+	GoalCriteriaStatusMet     GoalCriteriaStatus = "met"
+	GoalCriteriaStatusPending GoalCriteriaStatus = "pending"
+	GoalCriteriaStatusUnmet   GoalCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the GoalCriteriaStatus enum.
+func (e GoalCriteriaStatus) Valid() bool {
+	switch e {
+	case GoalCriteriaStatusMet:
+		return true
+	case GoalCriteriaStatusPending:
+		return true
+	case GoalCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSource.
+const (
+	ChatCompiled GoalSource = "chat_compiled"
+	PlanDod      GoalSource = "plan_dod"
+	TaskExplicit GoalSource = "task_explicit"
+)
+
+// Valid indicates whether the value is a known member of the GoalSource enum.
+func (e GoalSource) Valid() bool {
+	switch e {
+	case ChatCompiled:
+		return true
+	case PlanDod:
+		return true
+	case TaskExplicit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalState.
+const (
+	GoalStateActive  GoalState = "active"
+	GoalStateCleared GoalState = "cleared"
+	GoalStateDone    GoalState = "done"
+	GoalStateFailed  GoalState = "failed"
+)
+
+// Valid indicates whether the value is a known member of the GoalState enum.
+func (e GoalState) Valid() bool {
+	switch e {
+	case GoalStateActive:
+		return true
+	case GoalStateCleared:
+		return true
+	case GoalStateDone:
+		return true
+	case GoalStateFailed:
 		return true
 	default:
 		return false
@@ -1361,6 +1841,153 @@ func (e MessageVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for MessageParentArtifactKind.
+const (
+	MessageParentArtifactKindArtifact MessageParentArtifactKind = "artifact"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentArtifactKind enum.
+func (e MessageParentArtifactKind) Valid() bool {
+	switch e {
+	case MessageParentArtifactKindArtifact:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentBlockerKind.
+const (
+	MessageParentBlockerKindBlocker MessageParentBlockerKind = "blocker"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentBlockerKind enum.
+func (e MessageParentBlockerKind) Valid() bool {
+	switch e {
+	case MessageParentBlockerKindBlocker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentBlockerSeverity.
+const (
+	MessageParentBlockerSeverityHigh   MessageParentBlockerSeverity = "high"
+	MessageParentBlockerSeverityLow    MessageParentBlockerSeverity = "low"
+	MessageParentBlockerSeverityMedium MessageParentBlockerSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentBlockerSeverity enum.
+func (e MessageParentBlockerSeverity) Valid() bool {
+	switch e {
+	case MessageParentBlockerSeverityHigh:
+		return true
+	case MessageParentBlockerSeverityLow:
+		return true
+	case MessageParentBlockerSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentCheckpointKind.
+const (
+	MessageParentCheckpointKindCheckpoint MessageParentCheckpointKind = "checkpoint"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentCheckpointKind enum.
+func (e MessageParentCheckpointKind) Valid() bool {
+	switch e {
+	case MessageParentCheckpointKindCheckpoint:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentHandbackKind.
+const (
+	MessageParentHandbackKindHandback MessageParentHandbackKind = "handback"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentHandbackKind enum.
+func (e MessageParentHandbackKind) Valid() bool {
+	switch e {
+	case MessageParentHandbackKindHandback:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentHandbackMode.
+const (
+	MessageParentHandbackModeFinal MessageParentHandbackMode = "final"
+	MessageParentHandbackModePause MessageParentHandbackMode = "pause"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentHandbackMode enum.
+func (e MessageParentHandbackMode) Valid() bool {
+	switch e {
+	case MessageParentHandbackModeFinal:
+		return true
+	case MessageParentHandbackModePause:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentProgressKind.
+const (
+	MessageParentProgressKindProgress MessageParentProgressKind = "progress"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentProgressKind enum.
+func (e MessageParentProgressKind) Valid() bool {
+	switch e {
+	case MessageParentProgressKindProgress:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentQuestionAuthority.
+const (
+	MessageParentQuestionAuthorityOwnerRequired MessageParentQuestionAuthority = "owner_required"
+	MessageParentQuestionAuthoritySelfOk        MessageParentQuestionAuthority = "self_ok"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentQuestionAuthority enum.
+func (e MessageParentQuestionAuthority) Valid() bool {
+	switch e {
+	case MessageParentQuestionAuthorityOwnerRequired:
+		return true
+	case MessageParentQuestionAuthoritySelfOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParentQuestionKind.
+const (
+	MessageParentQuestionKindQuestion MessageParentQuestionKind = "question"
+)
+
+// Valid indicates whether the value is a known member of the MessageParentQuestionKind enum.
+func (e MessageParentQuestionKind) Valid() bool {
+	switch e {
+	case MessageParentQuestionKindQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NotificationSeverity.
 const (
 	NotificationSeverityError   NotificationSeverity = "error"
@@ -1540,6 +2167,7 @@ func (e PlanDodStatus) Valid() bool {
 
 // Defines values for PlanFailedReason.
 const (
+	PlanFailedReasonBudgetExhausted      PlanFailedReason = "budget_exhausted"
 	PlanFailedReasonIdleExpired          PlanFailedReason = "idle_expired"
 	PlanFailedReasonJudgeRoundsExhausted PlanFailedReason = "judge_rounds_exhausted"
 	PlanFailedReasonStoppedByUser        PlanFailedReason = "stopped_by_user"
@@ -1548,6 +2176,8 @@ const (
 // Valid indicates whether the value is a known member of the PlanFailedReason enum.
 func (e PlanFailedReason) Valid() bool {
 	switch e {
+	case PlanFailedReasonBudgetExhausted:
+		return true
 	case PlanFailedReasonIdleExpired:
 		return true
 	case PlanFailedReasonJudgeRoundsExhausted:
@@ -1561,15 +2191,18 @@ func (e PlanFailedReason) Valid() bool {
 
 // Defines values for PlanPlanPhase.
 const (
-	PlanPlanPhaseDispatching  PlanPlanPhase = "dispatching"
-	PlanPlanPhaseIdle         PlanPlanPhase = "idle"
-	PlanPlanPhaseJudging      PlanPlanPhase = "judging"
-	PlanPlanPhaseSynthesizing PlanPlanPhase = "synthesizing"
+	PlanPlanPhaseAwaitingOwnerCorrection PlanPlanPhase = "awaiting_owner_correction"
+	PlanPlanPhaseDispatching             PlanPlanPhase = "dispatching"
+	PlanPlanPhaseIdle                    PlanPlanPhase = "idle"
+	PlanPlanPhaseJudging                 PlanPlanPhase = "judging"
+	PlanPlanPhaseSynthesizing            PlanPlanPhase = "synthesizing"
 )
 
 // Valid indicates whether the value is a known member of the PlanPlanPhase enum.
 func (e PlanPlanPhase) Valid() bool {
 	switch e {
+	case PlanPlanPhaseAwaitingOwnerCorrection:
+		return true
 	case PlanPlanPhaseDispatching:
 		return true
 	case PlanPlanPhaseIdle:
@@ -1768,6 +2401,7 @@ func (e PlanListResponsePlansDodStatus) Valid() bool {
 
 // Defines values for PlanListResponsePlansFailedReason.
 const (
+	PlanListResponsePlansFailedReasonBudgetExhausted      PlanListResponsePlansFailedReason = "budget_exhausted"
 	PlanListResponsePlansFailedReasonIdleExpired          PlanListResponsePlansFailedReason = "idle_expired"
 	PlanListResponsePlansFailedReasonJudgeRoundsExhausted PlanListResponsePlansFailedReason = "judge_rounds_exhausted"
 	PlanListResponsePlansFailedReasonStoppedByUser        PlanListResponsePlansFailedReason = "stopped_by_user"
@@ -1776,6 +2410,8 @@ const (
 // Valid indicates whether the value is a known member of the PlanListResponsePlansFailedReason enum.
 func (e PlanListResponsePlansFailedReason) Valid() bool {
 	switch e {
+	case PlanListResponsePlansFailedReasonBudgetExhausted:
+		return true
 	case PlanListResponsePlansFailedReasonIdleExpired:
 		return true
 	case PlanListResponsePlansFailedReasonJudgeRoundsExhausted:
@@ -1789,15 +2425,18 @@ func (e PlanListResponsePlansFailedReason) Valid() bool {
 
 // Defines values for PlanListResponsePlansPlanPhase.
 const (
-	PlanListResponsePlansPlanPhaseDispatching  PlanListResponsePlansPlanPhase = "dispatching"
-	PlanListResponsePlansPlanPhaseIdle         PlanListResponsePlansPlanPhase = "idle"
-	PlanListResponsePlansPlanPhaseJudging      PlanListResponsePlansPlanPhase = "judging"
-	PlanListResponsePlansPlanPhaseSynthesizing PlanListResponsePlansPlanPhase = "synthesizing"
+	PlanListResponsePlansPlanPhaseAwaitingOwnerCorrection PlanListResponsePlansPlanPhase = "awaiting_owner_correction"
+	PlanListResponsePlansPlanPhaseDispatching             PlanListResponsePlansPlanPhase = "dispatching"
+	PlanListResponsePlansPlanPhaseIdle                    PlanListResponsePlansPlanPhase = "idle"
+	PlanListResponsePlansPlanPhaseJudging                 PlanListResponsePlansPlanPhase = "judging"
+	PlanListResponsePlansPlanPhaseSynthesizing            PlanListResponsePlansPlanPhase = "synthesizing"
 )
 
 // Valid indicates whether the value is a known member of the PlanListResponsePlansPlanPhase enum.
 func (e PlanListResponsePlansPlanPhase) Valid() bool {
 	switch e {
+	case PlanListResponsePlansPlanPhaseAwaitingOwnerCorrection:
+		return true
 	case PlanListResponsePlansPlanPhaseDispatching:
 		return true
 	case PlanListResponsePlansPlanPhaseIdle:
@@ -1832,6 +2471,162 @@ func (e PlanListResponsePlansState) Valid() bool {
 	case PlanListResponsePlansStateFailed:
 		return true
 	case PlanListResponsePlansStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanDodAuthorKind.
+const (
+	PlanRestartResponsePlanDodAuthorKindAgent PlanRestartResponsePlanDodAuthorKind = "agent"
+	PlanRestartResponsePlanDodAuthorKindUser  PlanRestartResponsePlanDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanDodAuthorKind enum.
+func (e PlanRestartResponsePlanDodAuthorKind) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanDodAuthorKindAgent:
+		return true
+	case PlanRestartResponsePlanDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanDodBehaviorScope.
+const (
+	PlanRestartResponsePlanDodBehaviorScopeAttempt     PlanRestartResponsePlanDodBehaviorScope = "attempt"
+	PlanRestartResponsePlanDodBehaviorScopeTaskSession PlanRestartResponsePlanDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanDodBehaviorScope enum.
+func (e PlanRestartResponsePlanDodBehaviorScope) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanDodBehaviorScopeAttempt:
+		return true
+	case PlanRestartResponsePlanDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanDodKind.
+const (
+	PlanRestartResponsePlanDodKindBehavior PlanRestartResponsePlanDodKind = "behavior"
+	PlanRestartResponsePlanDodKindCheck    PlanRestartResponsePlanDodKind = "check"
+	PlanRestartResponsePlanDodKindProse    PlanRestartResponsePlanDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanDodKind enum.
+func (e PlanRestartResponsePlanDodKind) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanDodKindBehavior:
+		return true
+	case PlanRestartResponsePlanDodKindCheck:
+		return true
+	case PlanRestartResponsePlanDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanDodStatus.
+const (
+	PlanRestartResponsePlanDodStatusMet     PlanRestartResponsePlanDodStatus = "met"
+	PlanRestartResponsePlanDodStatusPending PlanRestartResponsePlanDodStatus = "pending"
+	PlanRestartResponsePlanDodStatusUnmet   PlanRestartResponsePlanDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanDodStatus enum.
+func (e PlanRestartResponsePlanDodStatus) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanDodStatusMet:
+		return true
+	case PlanRestartResponsePlanDodStatusPending:
+		return true
+	case PlanRestartResponsePlanDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanFailedReason.
+const (
+	PlanRestartResponsePlanFailedReasonBudgetExhausted      PlanRestartResponsePlanFailedReason = "budget_exhausted"
+	PlanRestartResponsePlanFailedReasonIdleExpired          PlanRestartResponsePlanFailedReason = "idle_expired"
+	PlanRestartResponsePlanFailedReasonJudgeRoundsExhausted PlanRestartResponsePlanFailedReason = "judge_rounds_exhausted"
+	PlanRestartResponsePlanFailedReasonStoppedByUser        PlanRestartResponsePlanFailedReason = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanFailedReason enum.
+func (e PlanRestartResponsePlanFailedReason) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanFailedReasonBudgetExhausted:
+		return true
+	case PlanRestartResponsePlanFailedReasonIdleExpired:
+		return true
+	case PlanRestartResponsePlanFailedReasonJudgeRoundsExhausted:
+		return true
+	case PlanRestartResponsePlanFailedReasonStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanPlanPhase.
+const (
+	AwaitingOwnerCorrection PlanRestartResponsePlanPlanPhase = "awaiting_owner_correction"
+	Dispatching             PlanRestartResponsePlanPlanPhase = "dispatching"
+	Idle                    PlanRestartResponsePlanPlanPhase = "idle"
+	Judging                 PlanRestartResponsePlanPlanPhase = "judging"
+	Synthesizing            PlanRestartResponsePlanPlanPhase = "synthesizing"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanPlanPhase enum.
+func (e PlanRestartResponsePlanPlanPhase) Valid() bool {
+	switch e {
+	case AwaitingOwnerCorrection:
+		return true
+	case Dispatching:
+		return true
+	case Idle:
+		return true
+	case Judging:
+		return true
+	case Synthesizing:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanState.
+const (
+	PlanRestartResponsePlanStateApproved PlanRestartResponsePlanState = "approved"
+	PlanRestartResponsePlanStateDone     PlanRestartResponsePlanState = "done"
+	PlanRestartResponsePlanStateDraft    PlanRestartResponsePlanState = "draft"
+	PlanRestartResponsePlanStateFailed   PlanRestartResponsePlanState = "failed"
+	PlanRestartResponsePlanStateRunning  PlanRestartResponsePlanState = "running"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanState enum.
+func (e PlanRestartResponsePlanState) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanStateApproved:
+		return true
+	case PlanRestartResponsePlanStateDone:
+		return true
+	case PlanRestartResponsePlanStateDraft:
+		return true
+	case PlanRestartResponsePlanStateFailed:
+		return true
+	case PlanRestartResponsePlanStateRunning:
 		return true
 	default:
 		return false
@@ -2200,19 +2995,19 @@ func (e PromptGuardUpdateRequestLevel) Valid() bool {
 
 // Defines values for PromptGuardUpdateResponseAppliedLevel.
 const (
-	High   PromptGuardUpdateResponseAppliedLevel = "high"
-	Low    PromptGuardUpdateResponseAppliedLevel = "low"
-	Medium PromptGuardUpdateResponseAppliedLevel = "medium"
+	PromptGuardUpdateResponseAppliedLevelHigh   PromptGuardUpdateResponseAppliedLevel = "high"
+	PromptGuardUpdateResponseAppliedLevelLow    PromptGuardUpdateResponseAppliedLevel = "low"
+	PromptGuardUpdateResponseAppliedLevelMedium PromptGuardUpdateResponseAppliedLevel = "medium"
 )
 
 // Valid indicates whether the value is a known member of the PromptGuardUpdateResponseAppliedLevel enum.
 func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 	switch e {
-	case High:
+	case PromptGuardUpdateResponseAppliedLevelHigh:
 		return true
-	case Low:
+	case PromptGuardUpdateResponseAppliedLevelLow:
 		return true
-	case Medium:
+	case PromptGuardUpdateResponseAppliedLevelMedium:
 		return true
 	default:
 		return false
@@ -2318,6 +3113,27 @@ func (e ProviderCatalogEntryWire) Valid() bool {
 	case Anthropic:
 		return true
 	case OpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RevisionEntryVerb.
+const (
+	RevisionEntryVerbAppend        RevisionEntryVerb = "append"
+	RevisionEntryVerbSupersede     RevisionEntryVerb = "supersede"
+	RevisionEntryVerbTargetedRetry RevisionEntryVerb = "targeted_retry"
+)
+
+// Valid indicates whether the value is a known member of the RevisionEntryVerb enum.
+func (e RevisionEntryVerb) Valid() bool {
+	switch e {
+	case RevisionEntryVerbAppend:
+		return true
+	case RevisionEntryVerbSupersede:
+		return true
+	case RevisionEntryVerbTargetedRetry:
 		return true
 	default:
 		return false
@@ -2951,6 +3767,555 @@ func (e SessionDetailSessionType) Valid() bool {
 	}
 }
 
+// Defines values for SessionLifecycleRecordLaunchProfile.
+const (
+	Specialist SessionLifecycleRecordLaunchProfile = "specialist"
+	Utility    SessionLifecycleRecordLaunchProfile = "utility"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordLaunchProfile enum.
+func (e SessionLifecycleRecordLaunchProfile) Valid() bool {
+	switch e {
+	case Specialist:
+		return true
+	case Utility:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionLifecycleRecordOwnerScopeKind.
+const (
+	SessionLifecycleRecordOwnerScopeKindHuman         SessionLifecycleRecordOwnerScopeKind = "human"
+	SessionLifecycleRecordOwnerScopeKindParentSession SessionLifecycleRecordOwnerScopeKind = "parent_session"
+	SessionLifecycleRecordOwnerScopeKindPlan          SessionLifecycleRecordOwnerScopeKind = "plan"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordOwnerScopeKind enum.
+func (e SessionLifecycleRecordOwnerScopeKind) Valid() bool {
+	switch e {
+	case SessionLifecycleRecordOwnerScopeKindHuman:
+		return true
+	case SessionLifecycleRecordOwnerScopeKindParentSession:
+		return true
+	case SessionLifecycleRecordOwnerScopeKindPlan:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionLifecycleRecordState.
+const (
+	SessionLifecycleRecordStateCancelled  SessionLifecycleRecordState = "cancelled"
+	SessionLifecycleRecordStateCompleted  SessionLifecycleRecordState = "completed"
+	SessionLifecycleRecordStateFailed     SessionLifecycleRecordState = "failed"
+	SessionLifecycleRecordStateNeedsInput SessionLifecycleRecordState = "needs_input"
+	SessionLifecycleRecordStatePaused     SessionLifecycleRecordState = "paused"
+	SessionLifecycleRecordStateQueued     SessionLifecycleRecordState = "queued"
+	SessionLifecycleRecordStateRunning    SessionLifecycleRecordState = "running"
+	SessionLifecycleRecordStateTimedOut   SessionLifecycleRecordState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordState enum.
+func (e SessionLifecycleRecordState) Valid() bool {
+	switch e {
+	case SessionLifecycleRecordStateCancelled:
+		return true
+	case SessionLifecycleRecordStateCompleted:
+		return true
+	case SessionLifecycleRecordStateFailed:
+		return true
+	case SessionLifecycleRecordStateNeedsInput:
+		return true
+	case SessionLifecycleRecordStatePaused:
+		return true
+	case SessionLifecycleRecordStateQueued:
+		return true
+	case SessionLifecycleRecordStateRunning:
+		return true
+	case SessionLifecycleRecordStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageArtifactDirection.
+const (
+	SessionMessageArtifactDirectionChildToParent SessionMessageArtifactDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageArtifactDirection enum.
+func (e SessionMessageArtifactDirection) Valid() bool {
+	switch e {
+	case SessionMessageArtifactDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageArtifactKind.
+const (
+	SessionMessageArtifactKindArtifact SessionMessageArtifactKind = "artifact"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageArtifactKind enum.
+func (e SessionMessageArtifactKind) Valid() bool {
+	switch e {
+	case SessionMessageArtifactKindArtifact:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageBlockerDirection.
+const (
+	SessionMessageBlockerDirectionChildToParent SessionMessageBlockerDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageBlockerDirection enum.
+func (e SessionMessageBlockerDirection) Valid() bool {
+	switch e {
+	case SessionMessageBlockerDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageBlockerKind.
+const (
+	SessionMessageBlockerKindBlocker SessionMessageBlockerKind = "blocker"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageBlockerKind enum.
+func (e SessionMessageBlockerKind) Valid() bool {
+	switch e {
+	case SessionMessageBlockerKindBlocker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageBlockerSeverity.
+const (
+	High   SessionMessageBlockerSeverity = "high"
+	Low    SessionMessageBlockerSeverity = "low"
+	Medium SessionMessageBlockerSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageBlockerSeverity enum.
+func (e SessionMessageBlockerSeverity) Valid() bool {
+	switch e {
+	case High:
+		return true
+	case Low:
+		return true
+	case Medium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageCheckpointDirection.
+const (
+	SessionMessageCheckpointDirectionChildToParent SessionMessageCheckpointDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageCheckpointDirection enum.
+func (e SessionMessageCheckpointDirection) Valid() bool {
+	switch e {
+	case SessionMessageCheckpointDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageCheckpointKind.
+const (
+	SessionMessageCheckpointKindCheckpoint SessionMessageCheckpointKind = "checkpoint"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageCheckpointKind enum.
+func (e SessionMessageCheckpointKind) Valid() bool {
+	switch e {
+	case SessionMessageCheckpointKindCheckpoint:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageDecisionRequestAuthority.
+const (
+	SessionMessageDecisionRequestAuthorityOwnerRequired SessionMessageDecisionRequestAuthority = "owner_required"
+	SessionMessageDecisionRequestAuthoritySelfOk        SessionMessageDecisionRequestAuthority = "self_ok"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestAuthority enum.
+func (e SessionMessageDecisionRequestAuthority) Valid() bool {
+	switch e {
+	case SessionMessageDecisionRequestAuthorityOwnerRequired:
+		return true
+	case SessionMessageDecisionRequestAuthoritySelfOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageDecisionRequestDirection.
+const (
+	SessionMessageDecisionRequestDirectionChildToParent SessionMessageDecisionRequestDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestDirection enum.
+func (e SessionMessageDecisionRequestDirection) Valid() bool {
+	switch e {
+	case SessionMessageDecisionRequestDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageDecisionRequestKind.
+const (
+	DecisionRequest SessionMessageDecisionRequestKind = "decision_request"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestKind enum.
+func (e SessionMessageDecisionRequestKind) Valid() bool {
+	switch e {
+	case DecisionRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageErrorDirection.
+const (
+	SessionMessageErrorDirectionChildToParent SessionMessageErrorDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageErrorDirection enum.
+func (e SessionMessageErrorDirection) Valid() bool {
+	switch e {
+	case SessionMessageErrorDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageErrorKind.
+const (
+	SessionMessageErrorKindError SessionMessageErrorKind = "error"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageErrorKind enum.
+func (e SessionMessageErrorKind) Valid() bool {
+	switch e {
+	case SessionMessageErrorKindError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageGoalStatusCondition.
+const (
+	SessionMessageGoalStatusConditionMet           SessionMessageGoalStatusCondition = "met"
+	SessionMessageGoalStatusConditionWaitingOnUser SessionMessageGoalStatusCondition = "waiting_on_user"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageGoalStatusCondition enum.
+func (e SessionMessageGoalStatusCondition) Valid() bool {
+	switch e {
+	case SessionMessageGoalStatusConditionMet:
+		return true
+	case SessionMessageGoalStatusConditionWaitingOnUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageGoalStatusDirection.
+const (
+	SessionToUi SessionMessageGoalStatusDirection = "session_to_ui"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageGoalStatusDirection enum.
+func (e SessionMessageGoalStatusDirection) Valid() bool {
+	switch e {
+	case SessionToUi:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageGoalStatusKind.
+const (
+	GoalStatus SessionMessageGoalStatusKind = "goal_status"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageGoalStatusKind enum.
+func (e SessionMessageGoalStatusKind) Valid() bool {
+	switch e {
+	case GoalStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageHandbackDirection.
+const (
+	SessionMessageHandbackDirectionChildToParent SessionMessageHandbackDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageHandbackDirection enum.
+func (e SessionMessageHandbackDirection) Valid() bool {
+	switch e {
+	case SessionMessageHandbackDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageHandbackKind.
+const (
+	SessionMessageHandbackKindHandback SessionMessageHandbackKind = "handback"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageHandbackKind enum.
+func (e SessionMessageHandbackKind) Valid() bool {
+	switch e {
+	case SessionMessageHandbackKindHandback:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageHandbackMode.
+const (
+	SessionMessageHandbackModeFinal SessionMessageHandbackMode = "final"
+	SessionMessageHandbackModePause SessionMessageHandbackMode = "pause"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageHandbackMode enum.
+func (e SessionMessageHandbackMode) Valid() bool {
+	switch e {
+	case SessionMessageHandbackModeFinal:
+		return true
+	case SessionMessageHandbackModePause:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageProgressDirection.
+const (
+	SessionMessageProgressDirectionChildToParent SessionMessageProgressDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageProgressDirection enum.
+func (e SessionMessageProgressDirection) Valid() bool {
+	switch e {
+	case SessionMessageProgressDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageProgressKind.
+const (
+	SessionMessageProgressKindProgress SessionMessageProgressKind = "progress"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageProgressKind enum.
+func (e SessionMessageProgressKind) Valid() bool {
+	switch e {
+	case SessionMessageProgressKindProgress:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageQuestionAuthority.
+const (
+	OwnerRequired SessionMessageQuestionAuthority = "owner_required"
+	SelfOk        SessionMessageQuestionAuthority = "self_ok"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageQuestionAuthority enum.
+func (e SessionMessageQuestionAuthority) Valid() bool {
+	switch e {
+	case OwnerRequired:
+		return true
+	case SelfOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageQuestionDirection.
+const (
+	SessionMessageQuestionDirectionChildToParent SessionMessageQuestionDirection = "child_to_parent"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageQuestionDirection enum.
+func (e SessionMessageQuestionDirection) Valid() bool {
+	switch e {
+	case SessionMessageQuestionDirectionChildToParent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageQuestionKind.
+const (
+	SessionMessageQuestionKindQuestion SessionMessageQuestionKind = "question"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageQuestionKind enum.
+func (e SessionMessageQuestionKind) Valid() bool {
+	switch e {
+	case SessionMessageQuestionKindQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageRespondDirection.
+const (
+	SessionMessageRespondDirectionParentToChild SessionMessageRespondDirection = "parent_to_child"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageRespondDirection enum.
+func (e SessionMessageRespondDirection) Valid() bool {
+	switch e {
+	case SessionMessageRespondDirectionParentToChild:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageRespondKind.
+const (
+	SessionMessageRespondKindRespond SessionMessageRespondKind = "respond"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageRespondKind enum.
+func (e SessionMessageRespondKind) Valid() bool {
+	switch e {
+	case SessionMessageRespondKindRespond:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageRevisionEntryDirection.
+const (
+	Engine SessionMessageRevisionEntryDirection = "engine"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageRevisionEntryDirection enum.
+func (e SessionMessageRevisionEntryDirection) Valid() bool {
+	switch e {
+	case Engine:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageRevisionEntryKind.
+const (
+	SessionMessageRevisionEntryKindRevisionEntry SessionMessageRevisionEntryKind = "revision_entry"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageRevisionEntryKind enum.
+func (e SessionMessageRevisionEntryKind) Valid() bool {
+	switch e {
+	case SessionMessageRevisionEntryKindRevisionEntry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageRevisionEntryRevisionVerb.
+const (
+	SessionMessageRevisionEntryRevisionVerbAppend        SessionMessageRevisionEntryRevisionVerb = "append"
+	SessionMessageRevisionEntryRevisionVerbSupersede     SessionMessageRevisionEntryRevisionVerb = "supersede"
+	SessionMessageRevisionEntryRevisionVerbTargetedRetry SessionMessageRevisionEntryRevisionVerb = "targeted_retry"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageRevisionEntryRevisionVerb enum.
+func (e SessionMessageRevisionEntryRevisionVerb) Valid() bool {
+	switch e {
+	case SessionMessageRevisionEntryRevisionVerbAppend:
+		return true
+	case SessionMessageRevisionEntryRevisionVerbSupersede:
+		return true
+	case SessionMessageRevisionEntryRevisionVerbTargetedRetry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageSteerDirection.
+const (
+	SessionMessageSteerDirectionParentToChild SessionMessageSteerDirection = "parent_to_child"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageSteerDirection enum.
+func (e SessionMessageSteerDirection) Valid() bool {
+	switch e {
+	case SessionMessageSteerDirectionParentToChild:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionMessageSteerKind.
+const (
+	SessionMessageSteerKindSteer SessionMessageSteerKind = "steer"
+)
+
+// Valid indicates whether the value is a known member of the SessionMessageSteerKind enum.
+func (e SessionMessageSteerKind) Valid() bool {
+	switch e {
+	case SessionMessageSteerKindSteer:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionScopeRequestDmScope.
 const (
 	SessionScopeRequestDmScopeMain                  SessionScopeRequestDmScope = "main"
@@ -3142,13 +4507,13 @@ func (e TaskAction) Valid() bool {
 
 // Defines values for TaskCancelReason.
 const (
-	StoppedByUser TaskCancelReason = "stopped_by_user"
+	TaskCancelReasonStoppedByUser TaskCancelReason = "stopped_by_user"
 )
 
 // Valid indicates whether the value is a known member of the TaskCancelReason enum.
 func (e TaskCancelReason) Valid() bool {
 	switch e {
-	case StoppedByUser:
+	case TaskCancelReasonStoppedByUser:
 		return true
 	default:
 		return false
@@ -3802,19 +5167,19 @@ func (e ToolCallStatus) Valid() bool {
 
 // Defines values for ToolPolicy.
 const (
-	Allow ToolPolicy = "allow"
-	Ask   ToolPolicy = "ask"
-	Deny  ToolPolicy = "deny"
+	ToolPolicyAllow ToolPolicy = "allow"
+	ToolPolicyAsk   ToolPolicy = "ask"
+	ToolPolicyDeny  ToolPolicy = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolPolicy enum.
 func (e ToolPolicy) Valid() bool {
 	switch e {
-	case Allow:
+	case ToolPolicyAllow:
 		return true
-	case Ask:
+	case ToolPolicyAsk:
 		return true
-	case Deny:
+	case ToolPolicyDeny:
 		return true
 	default:
 		return false
@@ -4066,28 +5431,28 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	Blocked    ListTasksParamsStatus = "blocked"
-	Done       ListTasksParamsStatus = "done"
-	Failed     ListTasksParamsStatus = "failed"
-	InProgress ListTasksParamsStatus = "in_progress"
-	Inbox      ListTasksParamsStatus = "inbox"
-	Next       ListTasksParamsStatus = "next"
+	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
+	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
+	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
+	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
+	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case Blocked:
+	case ListTasksParamsStatusBlocked:
 		return true
-	case Done:
+	case ListTasksParamsStatusDone:
 		return true
-	case Failed:
+	case ListTasksParamsStatusFailed:
 		return true
-	case InProgress:
+	case ListTasksParamsStatusInProgress:
 		return true
-	case Inbox:
+	case ListTasksParamsStatusInbox:
 		return true
-	case Next:
+	case ListTasksParamsStatusNext:
 		return true
 	default:
 		return false
@@ -4096,16 +5461,16 @@ func (e ListTasksParamsStatus) Valid() bool {
 
 // Defines values for ListTasksParamsSurface.
 const (
-	ListTasksParamsSurfaceHeartbeat ListTasksParamsSurface = "heartbeat"
-	ListTasksParamsSurfaceUser      ListTasksParamsSurface = "user"
+	Heartbeat ListTasksParamsSurface = "heartbeat"
+	User      ListTasksParamsSurface = "user"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsSurface enum.
 func (e ListTasksParamsSurface) Valid() bool {
 	switch e {
-	case ListTasksParamsSurfaceHeartbeat:
+	case Heartbeat:
 		return true
-	case ListTasksParamsSurfaceUser:
+	case User:
 		return true
 	default:
 		return false
@@ -5641,6 +7006,349 @@ type CriterionVerdict struct {
 	Reason string `json:"reason"`
 }
 
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone.
+type DelegateActionRequest struct {
+	union json.RawMessage
+}
+
+// DelegateCancelAction `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+type DelegateCancelAction struct {
+	Action DelegateCancelActionAction `json:"action"`
+
+	// Hard False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
+	Hard *bool `json:"hard,omitempty"`
+
+	// SessionId The child session to cancel.
+	SessionId string `json:"session_id"`
+}
+
+// DelegateCancelActionAction defines model for DelegateCancelAction.Action.
+type DelegateCancelActionAction string
+
+// DelegateFollowUpAction `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
+type DelegateFollowUpAction struct {
+	Action DelegateFollowUpActionAction `json:"action"`
+
+	// SessionId The (terminal) child session to follow up on.
+	SessionId string `json:"session_id"`
+
+	// Task Optional additional instructions for the resumed/new session.
+	Task *string `json:"task,omitempty"`
+}
+
+// DelegateFollowUpActionAction defines model for DelegateFollowUpAction.Action.
+type DelegateFollowUpActionAction string
+
+// DelegateInboxAckAction `delegate` tool call, `action: inbox_ack` (ADR-053 §5.1). Explicit ack; the runtime dedupes by `message_id` before surfacing and persists acked messages in the audit log.
+type DelegateInboxAckAction struct {
+	Action DelegateInboxAckActionAction `json:"action"`
+
+	// MessageIds The `message_id`s to ack.
+	MessageIds []string `json:"message_ids"`
+
+	// SessionId The child session whose inbox entries are being acked.
+	SessionId string `json:"session_id"`
+}
+
+// DelegateInboxAckActionAction defines model for DelegateInboxAckAction.Action.
+type DelegateInboxAckActionAction string
+
+// DelegateInboxAction `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+type DelegateInboxAction struct {
+	Action DelegateInboxActionAction `json:"action"`
+
+	// Max Maximum messages to return (inbox unacked ceiling is 200/session).
+	Max *int `json:"max,omitempty"`
+
+	// SessionId The child session whose inbox to drain.
+	SessionId string `json:"session_id"`
+
+	// SinceCursor Opaque cursor — return only messages after this point (since-cursor replay).
+	SinceCursor *string `json:"since_cursor,omitempty"`
+}
+
+// DelegateInboxActionAction defines model for DelegateInboxAction.Action.
+type DelegateInboxActionAction string
+
+// DelegateInboxResponse Response to `delegate` `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox. `messages` reuses the SAME `SessionMessage` discriminated union used everywhere else a SessionMessage crosses a boundary (DoD-11 — never a second, narrower message shape here).
+type DelegateInboxResponse struct {
+	// HasMore True when more undelivered messages remain beyond this page.
+	HasMore bool `json:"has_more"`
+
+	// Messages Messages after since_cursor, oldest first, capped at the request's max.
+	Messages []SessionMessage `json:"messages"`
+
+	// NextCursor Opaque cursor to pass as since_cursor on the next drain.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// DelegatePeekAction `delegate` tool call, `action: peek` (ADR-053 §5.1). AGENT-callable, read-only Agent-View parity read WITHOUT attach — inspects the child's latest checkpoint/progress without steering, without consuming the child's unacked ceiling, and without enqueuing anything on the child's steering queue (m8). Distinct from the human-facing FE-5 `ActivityPanel -> Agent-View` render surface, which is a separate UI concept, not this tool action.
+type DelegatePeekAction struct {
+	Action DelegatePeekActionAction `json:"action"`
+
+	// SessionId The child session to peek at.
+	SessionId string `json:"session_id"`
+}
+
+// DelegatePeekActionAction defines model for DelegatePeekAction.Action.
+type DelegatePeekActionAction string
+
+// DelegatePeekResponse Response to `delegate` `action: peek` (ADR-053 §5.1). Read-only Agent-View parity snapshot — does not ack, steer, or consume the child's unacked ceiling (m8).
+type DelegatePeekResponse struct {
+	// LatestCheckpointSummary The most recent checkpoint summary, if any.
+	LatestCheckpointSummary *string `json:"latest_checkpoint_summary,omitempty"`
+
+	// LatestProgressPct The most recent progress percentage estimate, if any.
+	LatestProgressPct *int `json:"latest_progress_pct,omitempty"`
+
+	// LatestProgressText The most recent progress narration text, if any.
+	LatestProgressText *string                   `json:"latest_progress_text,omitempty"`
+	SessionId          string                    `json:"session_id"`
+	State              DelegatePeekResponseState `json:"state"`
+}
+
+// DelegatePeekResponseState defines model for DelegatePeekResponse.State.
+type DelegatePeekResponseState string
+
+// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+type DelegateRespondAction struct {
+	Action DelegateRespondActionAction `json:"action"`
+
+	// CorrelationId The `correlation_id` of the question/decision_request being answered.
+	CorrelationId string `json:"correlation_id"`
+
+	// SessionId The child session being answered.
+	SessionId string `json:"session_id"`
+
+	// Text The answer. For a `decision_request`, names the chosen option verbatim.
+	Text string `json:"text"`
+}
+
+// DelegateRespondActionAction defines model for DelegateRespondAction.Action.
+type DelegateRespondActionAction string
+
+// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+type DelegateRespondResponse struct {
+	// Acknowledged True when the response was accepted and routed by `correlation_id`.
+	Acknowledged bool `json:"acknowledged"`
+
+	// CorrectiveSession Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+	CorrectiveSession *struct {
+		// Generation The generation this response corresponds to.
+		Generation int `json:"generation"`
+
+		// Is3p True when this session dispatches via an external CLI runner.
+		Is3p bool `json:"is_3p"`
+
+		// ResumedFrom The prior session id this generation resumed from, when applicable.
+		ResumedFrom *string `json:"resumed_from,omitempty"`
+
+		// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+		SessionId string `json:"session_id"`
+
+		// State The newly-spawned/resumed session's initial lifecycle state.
+		State DelegateRespondResponseCorrectiveSessionState `json:"state"`
+	} `json:"corrective_session,omitempty"`
+}
+
+// DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
+type DelegateRespondResponseCorrectiveSessionState string
+
+// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/ `steering` combinations are rejected at the handler (not schema- expressible beyond the enum itself) — see `launch_profile`'s description for the two published legal profiles.
+type DelegateRunAction struct {
+	Action DelegateRunActionAction `json:"action"`
+
+	// AllowBlockingQuestion Explicit opt-in (only meaningful with `wait: true`) permitting a bounded human-routed wait on a child `question` instead of the default rejection (P2M-14/MIN-3).
+	AllowBlockingQuestion *bool `json:"allow_blocking_question,omitempty"`
+
+	// Critical Continue running after the parent finishes gracefully.
+	Critical *bool `json:"critical,omitempty"`
+
+	// Label Human-readable label for the spawned span (subagent_start.task_label).
+	Label *string `json:"label,omitempty"`
+
+	// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
+	LaunchProfile DelegateRunActionLaunchProfile `json:"launch_profile"`
+
+	// Snapshot The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated.
+	Snapshot *struct {
+		// Notes Optional parent-authored notes, counted against `snapshot_max_bytes`.
+		Notes *string `json:"notes,omitempty"`
+
+		// References Parent-named artifact path/ref strings (not contents) visible to the child.
+		References *[]string `json:"references,omitempty"`
+	} `json:"snapshot,omitempty"`
+
+	// TargetAgentId The agent to delegate to. Its own soul/tools/model/policy apply (ADR-032).
+	TargetAgentId string `json:"target_agent_id"`
+
+	// Task The task prompt handed to the child as its first user message.
+	Task string `json:"task"`
+
+	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// Wait True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
+	Wait *bool `json:"wait,omitempty"`
+}
+
+// DelegateRunActionAction defines model for DelegateRunAction.Action.
+type DelegateRunActionAction string
+
+// DelegateRunActionLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
+type DelegateRunActionLaunchProfile string
+
+// DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+type DelegateSessionResponse struct {
+	// Generation The generation this response corresponds to.
+	Generation int `json:"generation"`
+
+	// Is3p True when this session dispatches via an external CLI runner.
+	Is3p bool `json:"is_3p"`
+
+	// ResumedFrom The prior session id this generation resumed from, when applicable.
+	ResumedFrom *string `json:"resumed_from,omitempty"`
+
+	// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+	SessionId string `json:"session_id"`
+
+	// State The newly-spawned/resumed session's initial lifecycle state.
+	State DelegateSessionResponseState `json:"state"`
+}
+
+// DelegateSessionResponseState The newly-spawned/resumed session's initial lifecycle state.
+type DelegateSessionResponseState string
+
+// DelegateStatusAction `delegate` tool call, `action: status` (ADR-053 §5.1). Event-driven V-1 payload assembled from checkpoints + messages — no longer a poll-scrape of the child transcript.
+type DelegateStatusAction struct {
+	Action DelegateStatusActionAction `json:"action"`
+
+	// SessionId The child session to query.
+	SessionId string `json:"session_id"`
+
+	// TaskId DEPRECATED compat alias for `session_id` (pre-ADR-053 callers). When both are present, `session_id` wins.
+	TaskId *string `json:"task_id,omitempty"`
+}
+
+// DelegateStatusActionAction defines model for DelegateStatusAction.Action.
+type DelegateStatusActionAction string
+
+// DelegateStatusResponse Response to `delegate` `action: status` (ADR-053 §5.1) — the event-driven V-1 payload assembled from checkpoints + messages (no transcript poll-scrape). Wraps the durable `SessionLifecycleRecord` rather than re-declaring its fields (DoD-11).
+type DelegateStatusResponse struct {
+	// LastCheckpoint The most recent checkpoint, if any (absent when none — no schema `nullable: true`; see `SessionLifecycleRecord.needs_input` for why an optional nested object stays plain-optional in this contract set).
+	LastCheckpoint *struct {
+		CommitRef   *string    `json:"commit_ref,omitempty"`
+		CreatedAt   *time.Time `json:"created_at,omitempty"`
+		ResultSoFar *string    `json:"result_so_far,omitempty"`
+		Summary     *string    `json:"summary,omitempty"`
+	} `json:"last_checkpoint,omitempty"`
+
+	// LastProgress The most recent progress narration, if any (absent when none).
+	LastProgress *struct {
+		CreatedAt *time.Time `json:"created_at,omitempty"`
+		Pct       *int       `json:"pct,omitempty"`
+		Text      *string    `json:"text,omitempty"`
+	} `json:"last_progress,omitempty"`
+
+	// Session The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+	Session struct {
+		// AgentId The agent running this session.
+		AgentId string `json:"agent_id"`
+
+		// CreatedAt RFC3339 timestamp this session record was created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed 3-value enum, so this field is left open rather than guessing at a complete set (flagged for review).
+		FailedReason *string `json:"failed_reason,omitempty"`
+
+		// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+		Generation int `json:"generation"`
+
+		// GoalRef The goal-id this session is servicing, when it is goal-bearing.
+		GoalRef *string `json:"goal_ref,omitempty"`
+
+		// Is3p True when this session dispatches via an external CLI runner (subagent_3p: claude-code/codex/opencode) rather than natively. 3P sessions never advertise `question`/`needs_input`/warm-resume (D5).
+		Is3p bool `json:"is_3p"`
+
+		// LastCheckpointRef The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
+		LastCheckpointRef *string `json:"last_checkpoint_ref,omitempty"`
+
+		// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
+		LaunchProfile DelegateStatusResponseSessionLaunchProfile `json:"launch_profile"`
+
+		// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
+		NeedsInput *struct {
+			// CorrelationId The open question/decision_request this session is parked on.
+			CorrelationId string `json:"correlation_id"`
+
+			// Reconstructable Park-time hint (m5) — NOT authoritative. See description above.
+			Reconstructable bool `json:"reconstructable"`
+
+			// TtlDeadline When this park auto-`handback(pause)`s if unanswered (default 24h, INV-5).
+			TtlDeadline time.Time `json:"ttl_deadline"`
+		} `json:"needs_input,omitempty"`
+
+		// OwnerScopeId The `parent_session_id` or `plan_id` this session's ownership resolves to, per `owner_scope_kind`. Absent/empty when `owner_scope_kind == human`.
+		OwnerScopeId *string `json:"owner_scope_id,omitempty"`
+
+		// OwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
+		OwnerScopeKind DelegateStatusResponseSessionOwnerScopeKind `json:"owner_scope_kind"`
+
+		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+		OwnsPlanId *string `json:"owns_plan_id,omitempty"`
+
+		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+		ResumedFrom *string `json:"resumed_from,omitempty"`
+
+		// SessionId Unique durable session identifier.
+		SessionId string `json:"session_id"`
+
+		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+		State DelegateStatusResponseSessionState `json:"state"`
+
+		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+		Terminal *bool `json:"terminal,omitempty"`
+
+		// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
+		UndeliveredMessageIds []string `json:"undelivered_message_ids"`
+
+		// UpdatedAt RFC3339 timestamp of the last state transition or persist.
+		UpdatedAt time.Time `json:"updated_at"`
+
+		// WorkspaceId Workspace this session belongs to.
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"session"`
+
+	// UnackedCount Open question+blocker count against this child's per-child ceiling (D15, max 20).
+	UnackedCount int `json:"unacked_count"`
+}
+
+// DelegateStatusResponseSessionLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
+type DelegateStatusResponseSessionLaunchProfile string
+
+// DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
+type DelegateStatusResponseSessionOwnerScopeKind string
+
+// DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+type DelegateStatusResponseSessionState string
+
+// DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
+type DelegateSteerAction struct {
+	Action DelegateSteerActionAction `json:"action"`
+
+	// CorrelationId Optional — set when this steer accompanies a specific open question/blocker.
+	CorrelationId *string `json:"correlation_id,omitempty"`
+
+	// SessionId The child session to steer.
+	SessionId string `json:"session_id"`
+
+	// Text Steering instruction.
+	Text string `json:"text"`
+}
+
+// DelegateSteerActionAction defines model for DelegateSteerAction.Action.
+type DelegateSteerActionAction string
+
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
 type DevicePaired struct {
 	// DeviceId Unique device identifier.
@@ -6051,6 +7759,111 @@ type GlobalToolPolicies struct {
 
 // GlobalToolPoliciesPolicies defines model for GlobalToolPolicies.Policies.
 type GlobalToolPoliciesPolicies string
+
+// Goal The unified goal / criteria record (ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal`, a standalone Task's criteria, and a Plan's DoD are all judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit`/`plan_dod` (explicit at task/plan creation).
+type Goal struct {
+	// AttemptsMax Attempt ceiling before the goal loop wakes the owner (3 native / 6 default per session_messaging config, restart-gated).
+	AttemptsMax int `json:"attempts_max"`
+
+	// BindingId The session/task/plan id this goal is bound to, per `binding_kind`.
+	BindingId string `json:"binding_id"`
+
+	// BindingKind SHAPE DECISION (flagged for review): the spec describes `binding` as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of untagged strings has no discriminator, so it is split into this enum tag plus `binding_id` below — mirrors the same pattern used for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
+	BindingKind GoalBindingKind `json:"binding_kind"`
+
+	// CreatedAt RFC3339 timestamp this goal was set/created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Criteria REUSED unchanged (S1) — `kind: check` is the machine-checkable ladder rung ("machine" = `check`), `behavior` the deterministic tool-call-log rung, `prose` the subjective Judge rung.
+	Criteria []struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind GoalCriteriaAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *GoalCriteriaBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+		Kind GoalCriteriaKind `json:"kind"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status GoalCriteriaStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"criteria"`
+
+	// Definition The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit`/`plan_dod` sources, which have no separate compile step.
+	Definition *string `json:"definition,omitempty"`
+
+	// GoalId Unique goal identifier.
+	GoalId string `json:"goal_id"`
+
+	// JudgeRoundsMax Adjudication-round ceiling (R§8.9 — one round = one adjudication, claim-triggered or idle-settled).
+	JudgeRoundsMax int `json:"judge_rounds_max"`
+
+	// Prompt The raw user intent this goal was set/compiled from.
+	Prompt string `json:"prompt"`
+
+	// Round Adjudications consumed so far (R§8.9). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved.
+	Round *int `json:"round,omitempty"`
+
+	// Source How this goal's criteria were authored.
+	Source GoalSource `json:"source"`
+
+	// State SHAPE DECISION (flagged for review): the spec lists a bare `state` field with no enumerated values. This 4-value set is the persisted GOAL record's OWN lifecycle (active while iterating; done on a met verdict; failed on rounds/attempts/budget exhaustion; cleared via `/goal clear`) — deliberately narrower than and distinct from the 8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which derives its richer display states from this state PLUS the session's own lifecycle PLUS ephemeral engine-phase signals. Do not conflate the two.
+	State GoalState `json:"state"`
+}
+
+// GoalBindingKind SHAPE DECISION (flagged for review): the spec describes `binding` as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of untagged strings has no discriminator, so it is split into this enum tag plus `binding_id` below — mirrors the same pattern used for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
+type GoalBindingKind string
+
+// GoalCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type GoalCriteriaAuthorKind string
+
+// GoalCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type GoalCriteriaBehaviorScope string
+
+// GoalCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type GoalCriteriaKind string
+
+// GoalCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type GoalCriteriaStatus string
+
+// GoalSource How this goal's criteria were authored.
+type GoalSource string
+
+// GoalState SHAPE DECISION (flagged for review): the spec lists a bare `state` field with no enumerated values. This 4-value set is the persisted GOAL record's OWN lifecycle (active while iterating; done on a met verdict; failed on rounds/attempts/budget exhaustion; cleared via `/goal clear`) — deliberately narrower than and distinct from the 8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which derives its richer display states from this state PLUS the session's own lifecycle PLUS ephemeral engine-phase signals. Do not conflate the two.
+type GoalState string
 
 // GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
 type GodModeStatus struct {
@@ -6647,6 +8460,149 @@ type MessageType string
 // MessageVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type MessageVerdictScope string
 
+// MessageParentArtifact `message_parent` child tool call, `kind: artifact` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
+type MessageParentArtifact struct {
+	Kind MessageParentArtifactKind `json:"kind"`
+
+	// MessageId Optional child-supplied dedupe key.
+	MessageId *string `json:"message_id,omitempty"`
+
+	// Note Untrusted free-text note about the artifact.
+	Note *string `json:"note,omitempty"`
+
+	// Paths Paths to output files / artifact references produced by the child.
+	Paths []string `json:"paths"`
+}
+
+// MessageParentArtifactKind defines model for MessageParentArtifact.Kind.
+type MessageParentArtifactKind string
+
+// MessageParentBlocker `message_parent` child tool call, `kind: blocker` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker).
+type MessageParentBlocker struct {
+	Kind MessageParentBlockerKind `json:"kind"`
+
+	// MessageId Optional child-supplied dedupe key.
+	MessageId *string `json:"message_id,omitempty"`
+
+	// Severity Blocker severity, used to prioritize the parent's response.
+	Severity MessageParentBlockerSeverity `json:"severity"`
+
+	// Text Untrusted description of what is blocking progress.
+	Text string `json:"text"`
+}
+
+// MessageParentBlockerKind defines model for MessageParentBlocker.Kind.
+type MessageParentBlockerKind string
+
+// MessageParentBlockerSeverity Blocker severity, used to prioritize the parent's response.
+type MessageParentBlockerSeverity string
+
+// MessageParentCheckpoint `message_parent` child tool call, `kind: checkpoint` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
+type MessageParentCheckpoint struct {
+	// CommitRef The go-git boundary commit hash this checkpoint corresponds to, if any.
+	CommitRef *string                     `json:"commit_ref,omitempty"`
+	Kind      MessageParentCheckpointKind `json:"kind"`
+
+	// MessageId Optional child-supplied dedupe key.
+	MessageId *string `json:"message_id,omitempty"`
+
+	// ResultSoFar Accumulated result text at this checkpoint, if any.
+	ResultSoFar *string `json:"result_so_far,omitempty"`
+
+	// Summary 1-3 sentence checkpoint summary.
+	Summary string `json:"summary"`
+}
+
+// MessageParentCheckpointKind defines model for MessageParentCheckpoint.Kind.
+type MessageParentCheckpointKind string
+
+// MessageParentHandback `message_parent` child tool call, `kind: handback` (ADR-053 §5.1). The terminal or pause-boundary call; feeds the rung-0 evidence gate. Payload-only — see `MessageParentProgress` for the request/record split rationale.
+type MessageParentHandback struct {
+	// Artifacts Paths to output files / artifact references. May be omitted (treated as empty).
+	Artifacts *[]string                 `json:"artifacts,omitempty"`
+	Kind      MessageParentHandbackKind `json:"kind"`
+
+	// MessageId Optional child-supplied dedupe key.
+	MessageId *string `json:"message_id,omitempty"`
+
+	// Mode `final` — terminal handback. `pause` — cooperative pause; the session may warm-resume via `delegate.follow_up`.
+	Mode MessageParentHandbackMode `json:"mode"`
+
+	// OpenQuestions Untrusted, unresolved questions outstanding at handback time. May be omitted.
+	OpenQuestions *[]string `json:"open_questions,omitempty"`
+
+	// ResultSoFar Accumulated result text at handback time. May be empty on an early pause.
+	ResultSoFar string `json:"result_so_far"`
+}
+
+// MessageParentHandbackKind defines model for MessageParentHandback.Kind.
+type MessageParentHandbackKind string
+
+// MessageParentHandbackMode `final` — terminal handback. `pause` — cooperative pause; the session may warm-resume via `delegate.follow_up`.
+type MessageParentHandbackMode string
+
+// MessageParentProgress `message_parent` child tool call, `kind: progress` (ADR-053 §5.1). The first-class child-side tool a delegated child uses to push a typed message into its parent's inbox. Payload-only (no envelope fields) — the runtime assigns `message_id` (unless the child supplies one for its own dedupe purposes), `session_id`, `parent_session_id`, `sender_identity`, `created_at`, and `untrusted_origin` from the execution context; the corresponding `SessionMessageProgress` is the full envelope+payload record this call produces once received (see that file — the two are deliberately separate schemas for the two pipeline stages, mirroring the existing `ToolApprovalActionRequest`/`ToolApprovalRequiredFrame` precedent).
+type MessageParentProgress struct {
+	Kind MessageParentProgressKind `json:"kind"`
+
+	// MessageId Optional child-supplied dedupe key. Server-generated when absent.
+	MessageId *string `json:"message_id,omitempty"`
+
+	// Pct Optional completion percentage estimate.
+	Pct *int `json:"pct,omitempty"`
+
+	// Text Untrusted narration text (child send body cap 32 KiB).
+	Text string `json:"text"`
+}
+
+// MessageParentProgressKind defines model for MessageParentProgress.Kind.
+type MessageParentProgressKind string
+
+// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+type MessageParentQuestion struct {
+	// Authority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
+	Authority *MessageParentQuestionAuthority `json:"authority,omitempty"`
+
+	// CorrelationId Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
+	CorrelationId *string                   `json:"correlation_id,omitempty"`
+	Kind          MessageParentQuestionKind `json:"kind"`
+
+	// MessageId Optional child-supplied dedupe key.
+	MessageId *string `json:"message_id,omitempty"`
+
+	// Text Untrusted question text.
+	Text string `json:"text"`
+
+	// Wait True parks the calling child in `needs_input` awaiting a `respond`.
+	Wait bool `json:"wait"`
+}
+
+// MessageParentQuestionAuthority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
+type MessageParentQuestionAuthority string
+
+// MessageParentQuestionKind defines model for MessageParentQuestion.Kind.
+type MessageParentQuestionKind string
+
+// MessageParentRequest The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal).
+type MessageParentRequest struct {
+	union json.RawMessage
+}
+
+// MessageParentResponse Response to the child's `message_parent` tool call (ADR-053 §5.1). A never-silent-drop back-pressure contract — a rejection (per-child ceiling exceeded, content-egress policy block, etc.) is surfaced here as `accepted: false` + `error`, never a silent drop (no-silent-drop invariant).
+type MessageParentResponse struct {
+	// Accepted True when the message was enqueued into the parent's inbox. False on back-pressure (e.g. the per-child unacked ceiling, D15) or a content-egress policy block (N-10) — `error` explains why.
+	Accepted bool `json:"accepted"`
+
+	// CorrelationId Echoes/assigns the `correlation_id` for a `question` call, so the child can track its own open questions.
+	CorrelationId *string `json:"correlation_id,omitempty"`
+
+	// Error Human-readable rejection reason. Present only when `accepted == false` (e.g. "await answers — per-child unacked ceiling reached").
+	Error *string `json:"error,omitempty"`
+
+	// MessageId The (possibly server-generated) `message_id` assigned to this message.
+	MessageId *string `json:"message_id,omitempty"`
+}
+
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
 	// CacheRead Cache-read tokens (served from KV cache) for this model. A SUBSET of total, not additive to it.
@@ -6916,7 +8872,7 @@ type Plan struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
 	FailedReason *PlanFailedReason `json:"failed_reason,omitempty"`
 
 	// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -6931,20 +8887,29 @@ type Plan struct {
 	// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
+	// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+	LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
 	// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 	Owner *string `json:"owner,omitempty"`
 
 	// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
 	OwnerAgentId string `json:"owner_agent_id"`
 
+	// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+	OwnerSessionId *string `json:"owner_session_id,omitempty"`
+
 	// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
 	PausedReason *string `json:"paused_reason,omitempty"`
 
-	// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+	// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
 	PlanPhase *PlanPlanPhase `json:"plan_phase,omitempty"`
 
 	// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
 	Progress *float32 `json:"progress,omitempty"`
+
+	// Rationale ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
+	Rationale *string `json:"rationale,omitempty"`
 
 	// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
 	StartedAt *time.Time `json:"started_at,omitempty"`
@@ -6974,10 +8939,10 @@ type PlanDodKind string
 // PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanDodStatus string
 
-// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
 type PlanFailedReason string
 
-// PlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+// PlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
 type PlanPlanPhase string
 
 // PlanState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
@@ -7065,6 +9030,9 @@ type PlanCreateRequest struct {
 
 	// OwnerAgentId Agent responsible for this plan.
 	OwnerAgentId string `json:"owner_agent_id"`
+
+	// Rationale ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
+	Rationale *string `json:"rationale,omitempty"`
 
 	// Title Plan title.
 	Title string `json:"title"`
@@ -7164,7 +9132,7 @@ type PlanListResponse struct {
 			Text string `json:"text"`
 		} `json:"dod,omitempty"`
 
-		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
 		FailedReason *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 
 		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -7179,20 +9147,29 @@ type PlanListResponse struct {
 		// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
 		LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
+		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 		Owner *string `json:"owner,omitempty"`
 
 		// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
 		OwnerAgentId string `json:"owner_agent_id"`
 
+		// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+		OwnerSessionId *string `json:"owner_session_id,omitempty"`
+
 		// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
 		PausedReason *string `json:"paused_reason,omitempty"`
 
-		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
 		PlanPhase *PlanListResponsePlansPlanPhase `json:"plan_phase,omitempty"`
 
 		// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
 		Progress *float32 `json:"progress,omitempty"`
+
+		// Rationale ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
+		Rationale *string `json:"rationale,omitempty"`
 
 		// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
 		StartedAt *time.Time `json:"started_at,omitempty"`
@@ -7226,14 +9203,181 @@ type PlanListResponsePlansDodKind string
 // PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanListResponsePlansDodStatus string
 
-// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so the three don't collapse to one generic "Failed" badge.
+// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
 type PlanListResponsePlansFailedReason string
 
-// PlanListResponsePlansPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`).
+// PlanListResponsePlansPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
 type PlanListResponsePlansPlanPhase string
 
 // PlanListResponsePlansState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
 type PlanListResponsePlansState string
+
+// PlanRestartResponse ADR-053 §Contract Surface — "Cancel / restart". The Play route mints a new owner-session generation via `resumed_from` (cancelled -> approved edge) rather than mutating the terminal owner session in place; done members are preserved, failed/cancelled members resume from the last git boundary commit (no-commit -> fresh attempt, D13), and JudgeRounds reset to 0.
+// NOT YET WIRED (flagged for review, Phase-0 scope): this schema is authored and added to `components.schemas` for codegen per the 5-step process, but the EXISTING `POST /plans/{id}/restart` path's 200 response is left unchanged (`$ref: '#/components/schemas/Plan'`) in this contracts-only pass — that endpoint already ships and is consumed by live Go/TS code (ADR-052 FR-026); swapping its response shape is Phase-1/2 consuming-code work, not Phase-0 contract authoring. Phase 1 wires this schema onto that path (or a `generation`-aware successor) alongside the owner-loop implementation.
+type PlanRestartResponse struct {
+	// Generation The new owner-session generation this Play minted.
+	Generation int `json:"generation"`
+
+	// NewSessionId The plan-owner session id for the newly-minted generation (may equal the prior owner session's id if the owner session itself warm-resumes; a new id when a fresh owner session was spawned).
+	NewSessionId string `json:"new_session_id"`
+
+	// Plan A first-class Plan entity (ADR-049 D1/FR-1) that groups an executable task DAG under a goal, Definition of Done, owner agent, and state machine. Tasks join a plan via `Task.plan_id` (same-workspace FK, validated); membership and `progress` are computed read-time by scanning member tasks — never stored on the Plan record (mirrors the removed Milestone's `computeMilestoneCounts`). Persisted at `~/.omnipus/plans/<id>.json` (`pkg/plan`, atomic write + per-plan striped lock). Replaces Milestones (see the Milestone removal diffs) as the container for grouped, judged, goal-driven work.
+	// Returned by GET /workspaces/{id}/plans, POST /workspaces/{id}/plans, GET /plans/{id}, PUT /plans/{id}, POST /plans/{id}/approve, and POST /plans/{id}/stop (Wave 2-C1 — the deferred REST paths from Constraint #8's contract-surface table).
+	Plan struct {
+		// ActiveLoop True while this plan counts toward the global active-loop cap — iff `state == running` (Round-1 Grill Reconciliation R5).
+		ActiveLoop *bool `json:"active_loop,omitempty"`
+
+		// ApprovedAt RFC 3339 timestamp when the plan transitioned `draft -> approved`. Absent until then.
+		ApprovedAt *time.Time `json:"approved_at,omitempty"`
+
+		// Bounds Per-plan overrides of the global `PlanningConfig` bounds (FR-9). Absent fields inherit the global default.
+		Bounds *struct {
+			// IdleExpiryDays Override of the global idle-expiry calendar brake (global default 7 days).
+			IdleExpiryDays *int `json:"idle_expiry_days,omitempty"`
+
+			// PlanJudgeMaxRounds Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
+			PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+		} `json:"bounds,omitempty"`
+
+		// CompletedAt RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
+		CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+		// CreatedAt RFC 3339 UTC timestamp when the plan was created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// CreatedBy Username (or agent ID) that created the plan. Set server-side at creation; read-only.
+		CreatedBy *string `json:"created_by,omitempty"`
+
+		// Description Optional free-form description.
+		Description *string `json:"description,omitempty"`
+
+		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+		Dod *[]struct {
+			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+			Author struct {
+				// Id Agent ID or username of the author.
+				Id string `json:"id"`
+
+				// Kind Whether this criterion was authored by an agent or a human user.
+				Kind PlanRestartResponsePlanDodAuthorKind `json:"kind"`
+			} `json:"author"`
+
+			// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+			Behavior *struct {
+				// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+				MaxCount *int `json:"max_count,omitempty"`
+
+				// MinCount Minimum number of successful calls of `tool` required within `scope`.
+				MinCount *int `json:"min_count,omitempty"`
+
+				// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+				Scope *PlanRestartResponsePlanDodBehaviorScope `json:"scope,omitempty"`
+
+				// Tool Name of the tool whose successful-call count is checked.
+				Tool string `json:"tool"`
+			} `json:"behavior,omitempty"`
+
+			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+			Check *struct {
+				// Command Shell command run through the assignee's `bash` tool.
+				Command string `json:"command"`
+
+				// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+				ExpectedExitCode int `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+
+			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+			Id *string `json:"id,omitempty"`
+
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+			Kind PlanRestartResponsePlanDodKind `json:"kind"`
+
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+			Status PlanRestartResponsePlanDodStatus `json:"status"`
+
+			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+			Text string `json:"text"`
+		} `json:"dod,omitempty"`
+
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+		FailedReason *PlanRestartResponsePlanFailedReason `json:"failed_reason,omitempty"`
+
+		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+		Goal *string `json:"goal,omitempty"`
+
+		// Id Unique plan identifier (ULID).
+		Id string `json:"id"`
+
+		// JudgeRounds Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable boot-reconciled counter).
+		JudgeRounds *int `json:"judge_rounds,omitempty"`
+
+		// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
+		LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+
+		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
+		Owner *string `json:"owner,omitempty"`
+
+		// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
+		OwnerAgentId string `json:"owner_agent_id"`
+
+		// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+		OwnerSessionId *string `json:"owner_session_id,omitempty"`
+
+		// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
+		PausedReason *string `json:"paused_reason,omitempty"`
+
+		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
+		PlanPhase *PlanRestartResponsePlanPlanPhase `json:"plan_phase,omitempty"`
+
+		// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
+		Progress *float32 `json:"progress,omitempty"`
+
+		// Rationale ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
+		Rationale *string `json:"rationale,omitempty"`
+
+		// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
+		StartedAt *time.Time `json:"started_at,omitempty"`
+
+		// State Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+		State PlanRestartResponsePlanState `json:"state"`
+
+		// Title Human-readable plan title.
+		Title string `json:"title"`
+
+		// UpdatedAt RFC 3339 UTC timestamp of the last update.
+		UpdatedAt time.Time `json:"updated_at"`
+
+		// WorkspaceId Workspace this plan belongs to. Required-scoped — a plan may only reference same-workspace tasks (validated FK on `Task.plan_id`).
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"plan"`
+
+	// ResumedFrom The prior owner-session id this generation resumed from. Null only if this is somehow generation 0 (should not occur for a restart — present for schema symmetry with `SessionLifecycleRecord.resumed_from`).
+	ResumedFrom *string `json:"resumed_from,omitempty"`
+}
+
+// PlanRestartResponsePlanDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type PlanRestartResponsePlanDodAuthorKind string
+
+// PlanRestartResponsePlanDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type PlanRestartResponsePlanDodBehaviorScope string
+
+// PlanRestartResponsePlanDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type PlanRestartResponsePlanDodKind string
+
+// PlanRestartResponsePlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type PlanRestartResponsePlanDodStatus string
+
+// PlanRestartResponsePlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+type PlanRestartResponsePlanFailedReason string
+
+// PlanRestartResponsePlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only.
+type PlanRestartResponsePlanPlanPhase string
+
+// PlanRestartResponsePlanState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
+type PlanRestartResponsePlanState string
 
 // PlanUpdateRequest Request body for PUT /plans/{id} (ADR-049 D1). All fields are optional; only provided fields are updated. `state` drives the canonical 5-value plan state machine (draft/approved/running/done/failed) — illegal transitions are rejected 400 (`ErrIllegalPlanTransition`); approving with no `dod` and no member-task criteria is rejected per the tiered DoD rule (ADR D5, Round-1 Grill Reconciliation R1).
 type PlanUpdateRequest struct {
@@ -7649,6 +9793,48 @@ type RetentionUpdateResponse struct {
 	// SessionDays Number of days to retain session logs. 0 = system default (90 days).
 	SessionDays int `json:"session_days"`
 }
+
+// RevisionEntry A single owner-loop plan correction record (ADR-053 §Contract Surface — "Revision entry"). Committed transactionally with the tail members + edges it introduces via the write-ahead intent-log (INV-6/N-8) — the intent record, the tail members, their edges, and the plan-record patch land all-or-nothing. This is the single canonical shape for a revision record; `SessionMessageRevisionEntry` (the SessionMessage transport variant, `kind: revision_entry`) nests this same schema under a `revision` key rather than duplicating its fields — see that file's description for why the two `generation` concepts cannot be flattened into one object.
+type RevisionEntry struct {
+	// CreatedAt RFC3339 timestamp this revision was recorded.
+	CreatedAt time.Time `json:"created_at"`
+
+	// FalsifiedAssumption The owner's stated reason the prior plan state was wrong — the assumption the correction falsifies.
+	FalsifiedAssumption string `json:"falsified_assumption"`
+
+	// Generation The plan's generation this revision was recorded against.
+	Generation int `json:"generation"`
+
+	// PlanId The plan this revision corrects.
+	PlanId string `json:"plan_id"`
+
+	// Reason Human-readable rationale for this correction.
+	Reason string `json:"reason"`
+
+	// RetriedMemberId Present iff `verb == targeted_retry` — the frozen-transient member being retried.
+	RetriedMemberId *string `json:"retried_member_id,omitempty"`
+
+	// RevisionId Unique identifier for this revision entry.
+	RevisionId string `json:"revision_id"`
+
+	// SupersededMemberId Present iff `verb == supersede` — the `done` member being superseded.
+	SupersededMemberId *string `json:"superseded_member_id,omitempty"`
+
+	// TailAdds Member IDs + their dependency edges this revision adds to the DAG. May be empty for a pure `supersede`/`targeted_retry` that adds no new tail.
+	TailAdds []struct {
+		// BlockedBy Dependency edges for the new tail member (DAG ordering only).
+		BlockedBy *[]string `json:"blocked_by,omitempty"`
+
+		// MemberId ID of the new tail member task this revision adds.
+		MemberId string `json:"member_id"`
+	} `json:"tail_adds"`
+
+	// Verb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+	Verb RevisionEntryVerb `json:"verb"`
+}
+
+// RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+type RevisionEntryVerb string
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
 type RotateTokenResponse struct {
@@ -8540,6 +10726,508 @@ type SessionDetailSessionStatus string
 // SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
 type SessionDetailSessionType string
 
+// SessionLifecycleRecord The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+type SessionLifecycleRecord struct {
+	// AgentId The agent running this session.
+	AgentId string `json:"agent_id"`
+
+	// CreatedAt RFC3339 timestamp this session record was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed 3-value enum, so this field is left open rather than guessing at a complete set (flagged for review).
+	FailedReason *string `json:"failed_reason,omitempty"`
+
+	// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+	Generation int `json:"generation"`
+
+	// GoalRef The goal-id this session is servicing, when it is goal-bearing.
+	GoalRef *string `json:"goal_ref,omitempty"`
+
+	// Is3p True when this session dispatches via an external CLI runner (subagent_3p: claude-code/codex/opencode) rather than natively. 3P sessions never advertise `question`/`needs_input`/warm-resume (D5).
+	Is3p bool `json:"is_3p"`
+
+	// LastCheckpointRef The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
+	LastCheckpointRef *string `json:"last_checkpoint_ref,omitempty"`
+
+	// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
+	LaunchProfile SessionLifecycleRecordLaunchProfile `json:"launch_profile"`
+
+	// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
+	NeedsInput *struct {
+		// CorrelationId The open question/decision_request this session is parked on.
+		CorrelationId string `json:"correlation_id"`
+
+		// Reconstructable Park-time hint (m5) — NOT authoritative. See description above.
+		Reconstructable bool `json:"reconstructable"`
+
+		// TtlDeadline When this park auto-`handback(pause)`s if unanswered (default 24h, INV-5).
+		TtlDeadline time.Time `json:"ttl_deadline"`
+	} `json:"needs_input,omitempty"`
+
+	// OwnerScopeId The `parent_session_id` or `plan_id` this session's ownership resolves to, per `owner_scope_kind`. Absent/empty when `owner_scope_kind == human`.
+	OwnerScopeId *string `json:"owner_scope_id,omitempty"`
+
+	// OwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
+	OwnerScopeKind SessionLifecycleRecordOwnerScopeKind `json:"owner_scope_kind"`
+
+	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+	OwnsPlanId *string `json:"owns_plan_id,omitempty"`
+
+	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+	ResumedFrom *string `json:"resumed_from,omitempty"`
+
+	// SessionId Unique durable session identifier.
+	SessionId string `json:"session_id"`
+
+	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+	State SessionLifecycleRecordState `json:"state"`
+
+	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+	Terminal *bool `json:"terminal,omitempty"`
+
+	// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
+	UndeliveredMessageIds []string `json:"undelivered_message_ids"`
+
+	// UpdatedAt RFC3339 timestamp of the last state transition or persist.
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Workspace this session belongs to.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// SessionLifecycleRecordLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
+type SessionLifecycleRecordLaunchProfile string
+
+// SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
+type SessionLifecycleRecordOwnerScopeKind string
+
+// SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+type SessionLifecycleRecordState string
+
+// SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
+type SessionMessage struct {
+	union json.RawMessage
+}
+
+// SessionMessageArtifact SessionMessage `oneOf` variant, `kind: artifact` (ADR-053 §Contract Surface). Child -> parent. References output files the child produced. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageArtifact struct {
+	CreatedAt  time.Time                       `json:"created_at"`
+	Depth      int                             `json:"depth"`
+	Direction  SessionMessageArtifactDirection `json:"direction"`
+	Generation *int                            `json:"generation,omitempty"`
+	Kind       SessionMessageArtifactKind      `json:"kind"`
+	MessageId  string                          `json:"message_id"`
+
+	// Note Untrusted free-text note about the artifact.
+	Note            *string `json:"note,omitempty"`
+	ParentSessionId *string `json:"parent_session_id,omitempty"`
+
+	// Paths Paths to output files / artifact references produced by the child.
+	Paths           []string `json:"paths"`
+	SenderIdentity  string   `json:"sender_identity"`
+	SessionId       string   `json:"session_id"`
+	UntrustedOrigin bool     `json:"untrusted_origin"`
+}
+
+// SessionMessageArtifactDirection defines model for SessionMessageArtifact.Direction.
+type SessionMessageArtifactDirection string
+
+// SessionMessageArtifactKind defines model for SessionMessageArtifact.Kind.
+type SessionMessageArtifactKind string
+
+// SessionMessageBlocker SessionMessage `oneOf` variant, `kind: blocker` (ADR-053 §Contract Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageBlocker struct {
+	// CorrelationId Optional. A blocker counts toward the per-child unacked ceiling (D15) like a question; a `correlation_id` lets a subsequent `inbox_ack`/`respond` reference it precisely.
+	CorrelationId   *string                        `json:"correlation_id,omitempty"`
+	CreatedAt       time.Time                      `json:"created_at"`
+	Depth           int                            `json:"depth"`
+	Direction       SessionMessageBlockerDirection `json:"direction"`
+	Generation      *int                           `json:"generation,omitempty"`
+	Kind            SessionMessageBlockerKind      `json:"kind"`
+	MessageId       string                         `json:"message_id"`
+	ParentSessionId *string                        `json:"parent_session_id,omitempty"`
+	SenderIdentity  string                         `json:"sender_identity"`
+	SessionId       string                         `json:"session_id"`
+
+	// Severity Blocker severity, used to prioritize the parent's response.
+	Severity SessionMessageBlockerSeverity `json:"severity"`
+
+	// Text Untrusted description of what is blocking progress.
+	Text            string `json:"text"`
+	UntrustedOrigin bool   `json:"untrusted_origin"`
+}
+
+// SessionMessageBlockerDirection defines model for SessionMessageBlocker.Direction.
+type SessionMessageBlockerDirection string
+
+// SessionMessageBlockerKind defines model for SessionMessageBlocker.Kind.
+type SessionMessageBlockerKind string
+
+// SessionMessageBlockerSeverity Blocker severity, used to prioritize the parent's response.
+type SessionMessageBlockerSeverity string
+
+// SessionMessageCheckpoint SessionMessage `oneOf` variant, `kind: checkpoint` (ADR-053 §Contract Surface). Child -> parent. The durable checkpoint that powers Play-from- commit (D13) and the boot-sweep recover-to-checkpoint (§5). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageCheckpoint struct {
+	// CommitRef The go-git boundary commit hash this checkpoint corresponds to (rung-1 evidence, R§8.4). Absent when the runtime degraded below the worktree/clone isolation rungs (no boundary commit taken).
+	CommitRef       *string                           `json:"commit_ref,omitempty"`
+	CreatedAt       time.Time                         `json:"created_at"`
+	Depth           int                               `json:"depth"`
+	Direction       SessionMessageCheckpointDirection `json:"direction"`
+	Generation      *int                              `json:"generation,omitempty"`
+	Kind            SessionMessageCheckpointKind      `json:"kind"`
+	MessageId       string                            `json:"message_id"`
+	ParentSessionId *string                           `json:"parent_session_id,omitempty"`
+
+	// ResultSoFar Accumulated result text at this checkpoint, if any.
+	ResultSoFar    *string `json:"result_so_far,omitempty"`
+	SenderIdentity string  `json:"sender_identity"`
+	SessionId      string  `json:"session_id"`
+
+	// Summary 1-3 sentence checkpoint summary.
+	Summary         string `json:"summary"`
+	UntrustedOrigin bool   `json:"untrusted_origin"`
+}
+
+// SessionMessageCheckpointDirection defines model for SessionMessageCheckpoint.Direction.
+type SessionMessageCheckpointDirection string
+
+// SessionMessageCheckpointKind defines model for SessionMessageCheckpoint.Kind.
+type SessionMessageCheckpointKind string
+
+// SessionMessageDecisionRequest SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageDecisionRequest struct {
+	// Authority Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
+	Authority *SessionMessageDecisionRequestAuthority `json:"authority,omitempty"`
+
+	// CorrelationId Routes the eventual `respond` back to this decision request.
+	CorrelationId string                                 `json:"correlation_id"`
+	CreatedAt     time.Time                              `json:"created_at"`
+	Depth         int                                    `json:"depth"`
+	Direction     SessionMessageDecisionRequestDirection `json:"direction"`
+	Generation    *int                                   `json:"generation,omitempty"`
+	Kind          SessionMessageDecisionRequestKind      `json:"kind"`
+	MessageId     string                                 `json:"message_id"`
+
+	// Options The enumerated choices. The answering `respond.text` names the chosen option verbatim.
+	Options         []string `json:"options"`
+	ParentSessionId *string  `json:"parent_session_id,omitempty"`
+	SenderIdentity  string   `json:"sender_identity"`
+	SessionId       string   `json:"session_id"`
+
+	// Text Untrusted decision prompt.
+	Text            string `json:"text"`
+	UntrustedOrigin bool   `json:"untrusted_origin"`
+}
+
+// SessionMessageDecisionRequestAuthority Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
+type SessionMessageDecisionRequestAuthority string
+
+// SessionMessageDecisionRequestDirection defines model for SessionMessageDecisionRequest.Direction.
+type SessionMessageDecisionRequestDirection string
+
+// SessionMessageDecisionRequestKind defines model for SessionMessageDecisionRequest.Kind.
+type SessionMessageDecisionRequestKind string
+
+// SessionMessageError SessionMessage `oneOf` variant, `kind: error` (ADR-053 §Contract Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageError struct {
+	CreatedAt time.Time                    `json:"created_at"`
+	Depth     int                          `json:"depth"`
+	Direction SessionMessageErrorDirection `json:"direction"`
+
+	// Fatal True when the child cannot continue (the session will terminate); false for a recoverable error the child is still working past.
+	Fatal           bool                    `json:"fatal"`
+	Generation      *int                    `json:"generation,omitempty"`
+	Kind            SessionMessageErrorKind `json:"kind"`
+	MessageId       string                  `json:"message_id"`
+	ParentSessionId *string                 `json:"parent_session_id,omitempty"`
+	SenderIdentity  string                  `json:"sender_identity"`
+	SessionId       string                  `json:"session_id"`
+
+	// Text Untrusted error description.
+	Text            string `json:"text"`
+	UntrustedOrigin bool   `json:"untrusted_origin"`
+}
+
+// SessionMessageErrorDirection defines model for SessionMessageError.Direction.
+type SessionMessageErrorDirection string
+
+// SessionMessageErrorKind defines model for SessionMessageError.Kind.
+type SessionMessageErrorKind string
+
+// SessionMessageGoalStatus SessionMessage `oneOf` variant, `kind: goal_status` (ADR-053 §Contract Surface). Direction `session_to_ui`. This is the typed, engine-internal propagation of the parsed `GOAL_STATUS:` marker (US-2) — DISTINCT from the existing `GoalStatusFrame` WS frame (`contracts/asyncapi.yaml`), which carries the 8-state DISPLAY pill (queued/active/waiting_on_user/ judge_unavailable/re-planning/judging/done/failed, R§8.10) plus round/max_rounds/cap accounting. `SessionMessageGoalStatus.condition` is the raw two-value marker outcome (`met`/`waiting_on_user`) the claim-or- idle trigger consumes to decide whether to adjudicate or pause — it feeds the pill, it is not the pill itself. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageGoalStatus struct {
+	// Condition The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+	Condition  SessionMessageGoalStatusCondition `json:"condition"`
+	CreatedAt  time.Time                         `json:"created_at"`
+	Depth      int                               `json:"depth"`
+	Direction  SessionMessageGoalStatusDirection `json:"direction"`
+	Generation *int                              `json:"generation,omitempty"`
+
+	// GoalId The goal this condition applies to (R§8.11 — a session may carry multiple independent goals, each keyed by goal-id).
+	GoalId          string                       `json:"goal_id"`
+	Kind            SessionMessageGoalStatusKind `json:"kind"`
+	MessageId       string                       `json:"message_id"`
+	ParentSessionId *string                      `json:"parent_session_id,omitempty"`
+	SenderIdentity  string                       `json:"sender_identity"`
+	SessionId       string                       `json:"session_id"`
+	UntrustedOrigin bool                         `json:"untrusted_origin"`
+}
+
+// SessionMessageGoalStatusCondition The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+type SessionMessageGoalStatusCondition string
+
+// SessionMessageGoalStatusDirection defines model for SessionMessageGoalStatus.Direction.
+type SessionMessageGoalStatusDirection string
+
+// SessionMessageGoalStatusKind defines model for SessionMessageGoalStatus.Kind.
+type SessionMessageGoalStatusKind string
+
+// SessionMessageHandback SessionMessage `oneOf` variant, `kind: handback` (ADR-053 §Contract Surface). Child -> parent. The terminal or pause-boundary message; feeds the rung-0 evidence gate. `mode: final` is a completed/terminal session; `mode: pause` is the auto-handback the engine fires on a `needs_input` TTL expiry (G-6, INV-5) or a cooperative cancel-soft. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageHandback struct {
+	// Artifacts Paths to output files / artifact references. May be empty.
+	Artifacts  []string                        `json:"artifacts"`
+	CreatedAt  time.Time                       `json:"created_at"`
+	Depth      int                             `json:"depth"`
+	Direction  SessionMessageHandbackDirection `json:"direction"`
+	Generation *int                            `json:"generation,omitempty"`
+	Kind       SessionMessageHandbackKind      `json:"kind"`
+	MessageId  string                          `json:"message_id"`
+
+	// Mode `final` — terminal handback, no further work expected from this generation. `pause` — cooperative pause (TTL auto-handback or cancel-soft grace); the session may warm-resume via `follow_up`.
+	Mode SessionMessageHandbackMode `json:"mode"`
+
+	// OpenQuestions Untrusted, unresolved questions the child had outstanding at handback time. May be empty (a clean final handback).
+	OpenQuestions   []string `json:"open_questions"`
+	ParentSessionId *string  `json:"parent_session_id,omitempty"`
+
+	// ResultSoFar Accumulated result text at handback time. May be empty on an early pause.
+	ResultSoFar     string `json:"result_so_far"`
+	SenderIdentity  string `json:"sender_identity"`
+	SessionId       string `json:"session_id"`
+	UntrustedOrigin bool   `json:"untrusted_origin"`
+}
+
+// SessionMessageHandbackDirection defines model for SessionMessageHandback.Direction.
+type SessionMessageHandbackDirection string
+
+// SessionMessageHandbackKind defines model for SessionMessageHandback.Kind.
+type SessionMessageHandbackKind string
+
+// SessionMessageHandbackMode `final` — terminal handback, no further work expected from this generation. `pause` — cooperative pause (TTL auto-handback or cancel-soft grace); the session may warm-resume via `follow_up`.
+type SessionMessageHandbackMode string
+
+// SessionMessageProgress SessionMessage `oneOf` variant, `kind: progress` (ADR-053 §Contract Surface — SessionMessage). Child -> parent. A lightweight in-flight narration line; never a claim, never a checkpoint. Envelope fields are duplicated inline on every variant (ADR-034 precedent — oapi-codegen inlines `oneOf` members that are direct component refs into named `As*`/`From*` accessors; a shared base composed via `allOf` across files does not receive the same treatment, so each variant is flat, matching `AgentCreateRequestMain`/`AgentCreateRequestSubagent`).
+type SessionMessageProgress struct {
+	// CreatedAt RFC3339 timestamp this message was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/subturn.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+	Depth int `json:"depth"`
+
+	// Direction M8 — the unused `human` value is dropped. `progress` is always child -> parent.
+	Direction SessionMessageProgressDirection `json:"direction"`
+
+	// Generation Session generation this message was emitted under (resumed_from lineage) — a message from a stale generation is inert.
+	Generation *int `json:"generation,omitempty"`
+
+	// Kind Discriminator for the SessionMessage `oneOf`.
+	Kind SessionMessageProgressKind `json:"kind"`
+
+	// MessageId Dedupe key. At-least-once delivery over the existing `pkg/bus`; the runtime dedupes repeated deliveries of the same `message_id`.
+	MessageId string `json:"message_id"`
+
+	// ParentSessionId The parent session this child reports to. Null for a top-level session.
+	ParentSessionId *string `json:"parent_session_id,omitempty"`
+
+	// Pct Optional completion percentage estimate.
+	Pct *int `json:"pct,omitempty"`
+
+	// SenderIdentity Agent ID (or "human") that authored this message.
+	SenderIdentity string `json:"sender_identity"`
+
+	// SessionId The durable session this message belongs to (SessionLifecycleRecord.session_id).
+	SessionId string `json:"session_id"`
+
+	// Text Untrusted narration text. Capped at the 32 KiB child-send body cap (session_messaging.child_send_body).
+	Text string `json:"text"`
+
+	// UntrustedOrigin True when this message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12) — plain text or sanctioned markdown only, no raw HTML, non-clickable links.
+	UntrustedOrigin bool `json:"untrusted_origin"`
+}
+
+// SessionMessageProgressDirection M8 — the unused `human` value is dropped. `progress` is always child -> parent.
+type SessionMessageProgressDirection string
+
+// SessionMessageProgressKind Discriminator for the SessionMessage `oneOf`.
+type SessionMessageProgressKind string
+
+// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageQuestion struct {
+	// Authority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
+	Authority *SessionMessageQuestionAuthority `json:"authority,omitempty"`
+
+	// CorrelationId Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
+	CorrelationId   string                          `json:"correlation_id"`
+	CreatedAt       time.Time                       `json:"created_at"`
+	Depth           int                             `json:"depth"`
+	Direction       SessionMessageQuestionDirection `json:"direction"`
+	Generation      *int                            `json:"generation,omitempty"`
+	Kind            SessionMessageQuestionKind      `json:"kind"`
+	MessageId       string                          `json:"message_id"`
+	ParentSessionId *string                         `json:"parent_session_id,omitempty"`
+	SenderIdentity  string                          `json:"sender_identity"`
+	SessionId       string                          `json:"session_id"`
+
+	// Text Untrusted question text.
+	Text            string `json:"text"`
+	UntrustedOrigin bool   `json:"untrusted_origin"`
+
+	// Wait True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
+	Wait bool `json:"wait"`
+}
+
+// SessionMessageQuestionAuthority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
+type SessionMessageQuestionAuthority string
+
+// SessionMessageQuestionDirection defines model for SessionMessageQuestion.Direction.
+type SessionMessageQuestionDirection string
+
+// SessionMessageQuestionKind defines model for SessionMessageQuestion.Kind.
+type SessionMessageQuestionKind string
+
+// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageRespond struct {
+	// CorrelationId The `correlation_id` of the `question`/`decision_request` being answered.
+	CorrelationId string                         `json:"correlation_id"`
+	CreatedAt     time.Time                      `json:"created_at"`
+	Depth         int                            `json:"depth"`
+	Direction     SessionMessageRespondDirection `json:"direction"`
+	Generation    *int                           `json:"generation,omitempty"`
+	Kind          SessionMessageRespondKind      `json:"kind"`
+	MessageId     string                         `json:"message_id"`
+
+	// ParentSessionId The parent session issuing the response.
+	ParentSessionId *string `json:"parent_session_id,omitempty"`
+	SenderIdentity  string  `json:"sender_identity"`
+
+	// SessionId The CHILD session being answered.
+	SessionId string `json:"session_id"`
+
+	// Text The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+	Text string `json:"text"`
+
+	// UntrustedOrigin False — parent-authored, trusted content.
+	UntrustedOrigin bool `json:"untrusted_origin"`
+}
+
+// SessionMessageRespondDirection defines model for SessionMessageRespond.Direction.
+type SessionMessageRespondDirection string
+
+// SessionMessageRespondKind defines model for SessionMessageRespond.Kind.
+type SessionMessageRespondKind string
+
+// SessionMessageRevisionEntry SessionMessage `oneOf` variant, `kind: revision_entry` (ADR-053 §Contract Surface). Direction `engine` (M8 — engine/owner-emitted control kinds use `engine`, not `child_to_parent`/`parent_to_child`).
+// SHAPE DECISION (flagged for review): every other SessionMessage variant flattens its payload fields directly onto the envelope (matching the `AgentCreateRequestMain`/`Subagent` precedent). This variant instead nests the full `RevisionEntry` record under a `revision` key. Reason: the envelope's own `generation` field (SessionMessage lineage — which session generation emitted this message) and RevisionEntry's own `generation` field (which PLAN generation this correction was recorded against) are two different counters that the design's field table lists under the identical name `generation` for this row. Flattening them would either collide (two properties named `generation` is not representable in JSON Schema) or silently conflate two distinct concepts. Nesting resolves the collision and keeps `RevisionEntry` the single canonical schema for a revision record wherever it appears (SessionMessage transport now; any future direct persistence read later) — consistent with DoD-11 anti-drift.
+type SessionMessageRevisionEntry struct {
+	CreatedAt time.Time                            `json:"created_at"`
+	Depth     int                                  `json:"depth"`
+	Direction SessionMessageRevisionEntryDirection `json:"direction"`
+
+	// Generation SessionMessage lineage generation (the owner SESSION's generation — NOT the plan's generation; see `revision.generation` for that).
+	Generation      *int                            `json:"generation,omitempty"`
+	Kind            SessionMessageRevisionEntryKind `json:"kind"`
+	MessageId       string                          `json:"message_id"`
+	ParentSessionId *string                         `json:"parent_session_id,omitempty"`
+
+	// Revision A single owner-loop plan correction record (ADR-053 §Contract Surface — "Revision entry"). Committed transactionally with the tail members + edges it introduces via the write-ahead intent-log (INV-6/N-8) — the intent record, the tail members, their edges, and the plan-record patch land all-or-nothing. This is the single canonical shape for a revision record; `SessionMessageRevisionEntry` (the SessionMessage transport variant, `kind: revision_entry`) nests this same schema under a `revision` key rather than duplicating its fields — see that file's description for why the two `generation` concepts cannot be flattened into one object.
+	Revision struct {
+		// CreatedAt RFC3339 timestamp this revision was recorded.
+		CreatedAt time.Time `json:"created_at"`
+
+		// FalsifiedAssumption The owner's stated reason the prior plan state was wrong — the assumption the correction falsifies.
+		FalsifiedAssumption string `json:"falsified_assumption"`
+
+		// Generation The plan's generation this revision was recorded against.
+		Generation int `json:"generation"`
+
+		// PlanId The plan this revision corrects.
+		PlanId string `json:"plan_id"`
+
+		// Reason Human-readable rationale for this correction.
+		Reason string `json:"reason"`
+
+		// RetriedMemberId Present iff `verb == targeted_retry` — the frozen-transient member being retried.
+		RetriedMemberId *string `json:"retried_member_id,omitempty"`
+
+		// RevisionId Unique identifier for this revision entry.
+		RevisionId string `json:"revision_id"`
+
+		// SupersededMemberId Present iff `verb == supersede` — the `done` member being superseded.
+		SupersededMemberId *string `json:"superseded_member_id,omitempty"`
+
+		// TailAdds Member IDs + their dependency edges this revision adds to the DAG. May be empty for a pure `supersede`/`targeted_retry` that adds no new tail.
+		TailAdds []struct {
+			// BlockedBy Dependency edges for the new tail member (DAG ordering only).
+			BlockedBy *[]string `json:"blocked_by,omitempty"`
+
+			// MemberId ID of the new tail member task this revision adds.
+			MemberId string `json:"member_id"`
+		} `json:"tail_adds"`
+
+		// Verb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+		Verb SessionMessageRevisionEntryRevisionVerb `json:"verb"`
+	} `json:"revision"`
+
+	// SenderIdentity Owner agent ID that authored this correction.
+	SenderIdentity string `json:"sender_identity"`
+
+	// SessionId The plan-owner session this revision was recorded under.
+	SessionId string `json:"session_id"`
+
+	// UntrustedOrigin False for an owner-authored revision entry (trusted, not child free-text) — included for envelope uniformity.
+	UntrustedOrigin bool `json:"untrusted_origin"`
+}
+
+// SessionMessageRevisionEntryDirection defines model for SessionMessageRevisionEntry.Direction.
+type SessionMessageRevisionEntryDirection string
+
+// SessionMessageRevisionEntryKind defines model for SessionMessageRevisionEntry.Kind.
+type SessionMessageRevisionEntryKind string
+
+// SessionMessageRevisionEntryRevisionVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+type SessionMessageRevisionEntryRevisionVerb string
+
+// SessionMessageSteer SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+type SessionMessageSteer struct {
+	// CorrelationId Optional — set when this steer is issued alongside/answering a specific open question or blocker.
+	CorrelationId *string                      `json:"correlation_id,omitempty"`
+	CreatedAt     time.Time                    `json:"created_at"`
+	Depth         int                          `json:"depth"`
+	Direction     SessionMessageSteerDirection `json:"direction"`
+	Generation    *int                         `json:"generation,omitempty"`
+	Kind          SessionMessageSteerKind      `json:"kind"`
+	MessageId     string                       `json:"message_id"`
+
+	// ParentSessionId The parent session issuing the steer.
+	ParentSessionId *string `json:"parent_session_id,omitempty"`
+	SenderIdentity  string  `json:"sender_identity"`
+
+	// SessionId The CHILD session being steered.
+	SessionId string `json:"session_id"`
+
+	// Text Steering instruction injected at the child's next tool boundary.
+	Text string `json:"text"`
+
+	// UntrustedOrigin False — parent-authored, trusted content.
+	UntrustedOrigin bool `json:"untrusted_origin"`
+}
+
+// SessionMessageSteerDirection defines model for SessionMessageSteer.Direction.
+type SessionMessageSteerDirection string
+
+// SessionMessageSteerKind defines model for SessionMessageSteer.Kind.
+type SessionMessageSteerKind string
+
 // SessionRenameRequest Body for PUT /sessions/{id}. Renames a session.
 type SessionRenameRequest struct {
 	// Title New title for the session.
@@ -8891,6 +11579,12 @@ type Task struct {
 	// Id Unique task identifier (UUID).
 	Id string `json:"id"`
 
+	// IsJoin ADR-053 §Contract Surface — true marks this plan member as an authored join/assemble member with its own criteria, converging one or more parallel `stream`s into a single artifact (g5 shard+assemble topology). Plan-lint rejects a convergence point with no authored join member (join-less plan, US-11 AS-2). Absent/false is the common case (not a join member) — deliberately no schema `default:` alongside this optional field (see the `priority`/`surface` convention note in this file's `required` comment: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as NON-optional in the plain TS type regardless of the `required` list, which would make `is_join` falsely mandatory on every existing `Task` literal across the SPA test suite).
+	IsJoin *bool `json:"is_join,omitempty"`
+
+	// JudgeRounds ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
+	JudgeRounds *int `json:"judge_rounds,omitempty"`
+
 	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
@@ -8939,6 +11633,9 @@ type Task struct {
 	// Status Current lifecycle state (ADR-051 D5, 6-state). `inbox` captured/untriaged · `next` triaged & ready (also the landing state for a task remapped from the removed `planning` status) · `in_progress` worked by a human OR agent (decoupled from /start) · `blocked` auto side-state for an unmet dependency (set automatically; clears to `next` when all `blocked_by` deps reach `done`) · `done` · `failed`. Everything lands in `inbox` by default; nothing auto-lands in `next`.
 	Status TaskStatus `json:"status"`
 
+	// Stream ADR-053 §Contract Surface — the parallel-group id this plan member belongs to (US-11/g4). Members sharing a `stream` run serially within it; different streams may run concurrently provided their `write_set`s are disjoint (plan-lint invariant). Absent for a member not part of a parallel decomposition.
+	Stream *string `json:"stream,omitempty"`
+
 	// Surface Which UI surface owns this task (Detail #5). `user` (default) → shows on all four general views (Board/List/Graph/Calendar). A non-`user` surface (first: `heartbeat`) → hidden from ALL general views and rendered only by its owning feature's dedicated UI (heartbeat → the agent profile). A reusable pattern: future system-ish features set their own surface, get the task+trigger engine for free, and never clutter the board/calendar.
 	Surface *TaskSurface `json:"surface,omitempty"`
 
@@ -8985,6 +11682,9 @@ type Task struct {
 
 	// WorkspaceId Workspace this task belongs to. Required-scoped — every task lives in a workspace; reads and writes are workspace-scoped.
 	WorkspaceId string `json:"workspace_id"`
+
+	// WriteSet ADR-053 §Contract Surface — "write_sets + rationale on create_plan" (US-11/G-16). Concrete paths this plan MEMBER task creates/edits. Plan-lint reads this at approve to reject overlapping parallel `stream`s and join-less convergence points. Empty for an exploratory member whose write footprint is unknowable up front — it runs in its own isolated checkout at the highest available isolation rung (worktree -> go-git clone -> subdir, FR-154) rather than declaring a write-set (D10). Meaningful only when `plan_id` is set; ignored on a standalone task.
+	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
 // TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
@@ -9100,6 +11800,9 @@ type TaskCreateRequest struct {
 	// Due Optional deadline (RFC 3339 UTC).
 	Due *time.Time `json:"due,omitempty"`
 
+	// IsJoin ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
+	IsJoin *bool `json:"is_join,omitempty"`
+
 	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
@@ -9120,6 +11823,9 @@ type TaskCreateRequest struct {
 
 	// SourceChatId Originating chat/conversation ID for a delegated task (Detail
 	SourceChatId *string `json:"source_chat_id,omitempty"`
+
+	// Stream ADR-053 §Contract Surface — the parallel-group id this member belongs to.
+	Stream *string `json:"stream,omitempty"`
 
 	// Surface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
 	Surface *TaskCreateRequestSurface `json:"surface,omitempty"`
@@ -9164,6 +11870,9 @@ type TaskCreateRequest struct {
 
 	// WorkspaceId Workspace this task belongs to. Required — every task is workspace-scoped.
 	WorkspaceId string `json:"workspace_id"`
+
+	// WriteSet ADR-053 §Contract Surface. Concrete paths this plan member creates/ edits — see `Task.write_set`. Meaningful only alongside `plan_id`; empty/absent for an exploratory member (D10) or a standalone task.
+	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
 // TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
@@ -9422,6 +12131,39 @@ type Todo struct {
 
 // TodoStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TodoStatus string
+
+// TokenBudgetStatus App-level OVERALL token budget status for the Usage screen (ADR-053 §Contract Surface, D12/R§8.3, FE-6). ONE shared pool across the whole install — no per-plan budgets, no money caps, no `IsPrivilegedAgent` exemption (D12 deliberately removes the core-agent exemption). Debited by owner + member + verifier + Judge turns from provider-reported usage via a single atomic `debitTokenBudget(n)` critical section (INV-8).
+type TokenBudgetStatus struct {
+	// Advisory Present (non-empty) only when `budget == 0` — the persistent "unbounded — set a budget" Usage-screen advisory (R§8.3a). Also used for the one-time token≠dollar-cap warning surfaced when an operator first sets a budget (R§8.3b).
+	Advisory *string `json:"advisory,omitempty"`
+
+	// Budget The operator-set overall token budget. `0` is the unbounded sentinel (R§8.3a — default on a fresh install) — the Usage screen shows `advisory` persistently while this is 0.
+	Budget int `json:"budget"`
+
+	// ByScope Per-scope spend accounting (owner/member/verifier/Judge turns each debit the SAME shared pool — this breakdown is display-only, not a separate budget per scope).
+	ByScope struct {
+		// Judge Tokens consumed by the Judge's own adjudication calls.
+		Judge int `json:"judge"`
+
+		// Member Tokens consumed by plan-member / delegated-child turns.
+		Member int `json:"member"`
+
+		// Owner Tokens consumed by plan-owner / goal-owner turns.
+		Owner int `json:"owner"`
+
+		// Verifier Tokens consumed by verifier/Judge-adjacent worker turns.
+		Verifier int `json:"verifier"`
+	} `json:"by_scope"`
+
+	// Consumed Total tokens debited so far this budget period, reconciled from the persisted counter at boot. May overshoot `budget` by up to the sum of in-flight turn costs at the moment of exhaustion (INV-8 — post-turn provider-reported debit, graceful wind-down, never a mid-tool hard cut).
+	Consumed int `json:"consumed"`
+
+	// Exhausted True once the pool has crossed zero. Every running scope brakes to `failed(budget_exhausted)` at its next turn/adjudication boundary (INV-8) — never mid-tool.
+	Exhausted bool `json:"exhausted"`
+
+	// Remaining `budget - consumed`, floored at 0. Meaningless (ignore) when `budget == 0` (unbounded).
+	Remaining int `json:"remaining"`
+}
 
 // TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. subagent_3p (external CLI workers) are excluded — they run on a separate engine and their tokens are not tracked.
 type TokenUsageSummary struct {
@@ -11041,6 +13783,903 @@ func (t AgentCreateRequest) MarshalJSON() ([]byte, error) {
 }
 
 func (t *AgentCreateRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsDelegateRunAction returns the union data inside the DelegateActionRequest as a DelegateRunAction
+func (t DelegateActionRequest) AsDelegateRunAction() (DelegateRunAction, error) {
+	var body DelegateRunAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateRunAction overwrites any union data inside the DelegateActionRequest as the provided DelegateRunAction
+func (t *DelegateActionRequest) FromDelegateRunAction(v DelegateRunAction) error {
+	v.Action = "run"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateRunAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateRunAction
+func (t *DelegateActionRequest) MergeDelegateRunAction(v DelegateRunAction) error {
+	v.Action = "run"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateStatusAction returns the union data inside the DelegateActionRequest as a DelegateStatusAction
+func (t DelegateActionRequest) AsDelegateStatusAction() (DelegateStatusAction, error) {
+	var body DelegateStatusAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateStatusAction overwrites any union data inside the DelegateActionRequest as the provided DelegateStatusAction
+func (t *DelegateActionRequest) FromDelegateStatusAction(v DelegateStatusAction) error {
+	v.Action = "status"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateStatusAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateStatusAction
+func (t *DelegateActionRequest) MergeDelegateStatusAction(v DelegateStatusAction) error {
+	v.Action = "status"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateInboxAction returns the union data inside the DelegateActionRequest as a DelegateInboxAction
+func (t DelegateActionRequest) AsDelegateInboxAction() (DelegateInboxAction, error) {
+	var body DelegateInboxAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateInboxAction overwrites any union data inside the DelegateActionRequest as the provided DelegateInboxAction
+func (t *DelegateActionRequest) FromDelegateInboxAction(v DelegateInboxAction) error {
+	v.Action = "inbox"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateInboxAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateInboxAction
+func (t *DelegateActionRequest) MergeDelegateInboxAction(v DelegateInboxAction) error {
+	v.Action = "inbox"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateInboxAckAction returns the union data inside the DelegateActionRequest as a DelegateInboxAckAction
+func (t DelegateActionRequest) AsDelegateInboxAckAction() (DelegateInboxAckAction, error) {
+	var body DelegateInboxAckAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateInboxAckAction overwrites any union data inside the DelegateActionRequest as the provided DelegateInboxAckAction
+func (t *DelegateActionRequest) FromDelegateInboxAckAction(v DelegateInboxAckAction) error {
+	v.Action = "inbox_ack"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateInboxAckAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateInboxAckAction
+func (t *DelegateActionRequest) MergeDelegateInboxAckAction(v DelegateInboxAckAction) error {
+	v.Action = "inbox_ack"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateSteerAction returns the union data inside the DelegateActionRequest as a DelegateSteerAction
+func (t DelegateActionRequest) AsDelegateSteerAction() (DelegateSteerAction, error) {
+	var body DelegateSteerAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateSteerAction overwrites any union data inside the DelegateActionRequest as the provided DelegateSteerAction
+func (t *DelegateActionRequest) FromDelegateSteerAction(v DelegateSteerAction) error {
+	v.Action = "steer"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateSteerAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateSteerAction
+func (t *DelegateActionRequest) MergeDelegateSteerAction(v DelegateSteerAction) error {
+	v.Action = "steer"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateRespondAction returns the union data inside the DelegateActionRequest as a DelegateRespondAction
+func (t DelegateActionRequest) AsDelegateRespondAction() (DelegateRespondAction, error) {
+	var body DelegateRespondAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateRespondAction overwrites any union data inside the DelegateActionRequest as the provided DelegateRespondAction
+func (t *DelegateActionRequest) FromDelegateRespondAction(v DelegateRespondAction) error {
+	v.Action = "respond"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateRespondAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateRespondAction
+func (t *DelegateActionRequest) MergeDelegateRespondAction(v DelegateRespondAction) error {
+	v.Action = "respond"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateCancelAction returns the union data inside the DelegateActionRequest as a DelegateCancelAction
+func (t DelegateActionRequest) AsDelegateCancelAction() (DelegateCancelAction, error) {
+	var body DelegateCancelAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateCancelAction overwrites any union data inside the DelegateActionRequest as the provided DelegateCancelAction
+func (t *DelegateActionRequest) FromDelegateCancelAction(v DelegateCancelAction) error {
+	v.Action = "cancel"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateCancelAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateCancelAction
+func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction) error {
+	v.Action = "cancel"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateFollowUpAction returns the union data inside the DelegateActionRequest as a DelegateFollowUpAction
+func (t DelegateActionRequest) AsDelegateFollowUpAction() (DelegateFollowUpAction, error) {
+	var body DelegateFollowUpAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateFollowUpAction overwrites any union data inside the DelegateActionRequest as the provided DelegateFollowUpAction
+func (t *DelegateActionRequest) FromDelegateFollowUpAction(v DelegateFollowUpAction) error {
+	v.Action = "follow_up"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateFollowUpAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateFollowUpAction
+func (t *DelegateActionRequest) MergeDelegateFollowUpAction(v DelegateFollowUpAction) error {
+	v.Action = "follow_up"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegatePeekAction returns the union data inside the DelegateActionRequest as a DelegatePeekAction
+func (t DelegateActionRequest) AsDelegatePeekAction() (DelegatePeekAction, error) {
+	var body DelegatePeekAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegatePeekAction overwrites any union data inside the DelegateActionRequest as the provided DelegatePeekAction
+func (t *DelegateActionRequest) FromDelegatePeekAction(v DelegatePeekAction) error {
+	v.Action = "peek"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegatePeekAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegatePeekAction
+func (t *DelegateActionRequest) MergeDelegatePeekAction(v DelegatePeekAction) error {
+	v.Action = "peek"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t DelegateActionRequest) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"action"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t DelegateActionRequest) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "cancel":
+		return t.AsDelegateCancelAction()
+	case "follow_up":
+		return t.AsDelegateFollowUpAction()
+	case "inbox":
+		return t.AsDelegateInboxAction()
+	case "inbox_ack":
+		return t.AsDelegateInboxAckAction()
+	case "peek":
+		return t.AsDelegatePeekAction()
+	case "respond":
+		return t.AsDelegateRespondAction()
+	case "run":
+		return t.AsDelegateRunAction()
+	case "status":
+		return t.AsDelegateStatusAction()
+	case "steer":
+		return t.AsDelegateSteerAction()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t DelegateActionRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *DelegateActionRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsMessageParentProgress returns the union data inside the MessageParentRequest as a MessageParentProgress
+func (t MessageParentRequest) AsMessageParentProgress() (MessageParentProgress, error) {
+	var body MessageParentProgress
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessageParentProgress overwrites any union data inside the MessageParentRequest as the provided MessageParentProgress
+func (t *MessageParentRequest) FromMessageParentProgress(v MessageParentProgress) error {
+	v.Kind = "progress"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessageParentProgress performs a merge with any union data inside the MessageParentRequest, using the provided MessageParentProgress
+func (t *MessageParentRequest) MergeMessageParentProgress(v MessageParentProgress) error {
+	v.Kind = "progress"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMessageParentCheckpoint returns the union data inside the MessageParentRequest as a MessageParentCheckpoint
+func (t MessageParentRequest) AsMessageParentCheckpoint() (MessageParentCheckpoint, error) {
+	var body MessageParentCheckpoint
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessageParentCheckpoint overwrites any union data inside the MessageParentRequest as the provided MessageParentCheckpoint
+func (t *MessageParentRequest) FromMessageParentCheckpoint(v MessageParentCheckpoint) error {
+	v.Kind = "checkpoint"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessageParentCheckpoint performs a merge with any union data inside the MessageParentRequest, using the provided MessageParentCheckpoint
+func (t *MessageParentRequest) MergeMessageParentCheckpoint(v MessageParentCheckpoint) error {
+	v.Kind = "checkpoint"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMessageParentArtifact returns the union data inside the MessageParentRequest as a MessageParentArtifact
+func (t MessageParentRequest) AsMessageParentArtifact() (MessageParentArtifact, error) {
+	var body MessageParentArtifact
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessageParentArtifact overwrites any union data inside the MessageParentRequest as the provided MessageParentArtifact
+func (t *MessageParentRequest) FromMessageParentArtifact(v MessageParentArtifact) error {
+	v.Kind = "artifact"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessageParentArtifact performs a merge with any union data inside the MessageParentRequest, using the provided MessageParentArtifact
+func (t *MessageParentRequest) MergeMessageParentArtifact(v MessageParentArtifact) error {
+	v.Kind = "artifact"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMessageParentBlocker returns the union data inside the MessageParentRequest as a MessageParentBlocker
+func (t MessageParentRequest) AsMessageParentBlocker() (MessageParentBlocker, error) {
+	var body MessageParentBlocker
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessageParentBlocker overwrites any union data inside the MessageParentRequest as the provided MessageParentBlocker
+func (t *MessageParentRequest) FromMessageParentBlocker(v MessageParentBlocker) error {
+	v.Kind = "blocker"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessageParentBlocker performs a merge with any union data inside the MessageParentRequest, using the provided MessageParentBlocker
+func (t *MessageParentRequest) MergeMessageParentBlocker(v MessageParentBlocker) error {
+	v.Kind = "blocker"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMessageParentQuestion returns the union data inside the MessageParentRequest as a MessageParentQuestion
+func (t MessageParentRequest) AsMessageParentQuestion() (MessageParentQuestion, error) {
+	var body MessageParentQuestion
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessageParentQuestion overwrites any union data inside the MessageParentRequest as the provided MessageParentQuestion
+func (t *MessageParentRequest) FromMessageParentQuestion(v MessageParentQuestion) error {
+	v.Kind = "question"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessageParentQuestion performs a merge with any union data inside the MessageParentRequest, using the provided MessageParentQuestion
+func (t *MessageParentRequest) MergeMessageParentQuestion(v MessageParentQuestion) error {
+	v.Kind = "question"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMessageParentHandback returns the union data inside the MessageParentRequest as a MessageParentHandback
+func (t MessageParentRequest) AsMessageParentHandback() (MessageParentHandback, error) {
+	var body MessageParentHandback
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMessageParentHandback overwrites any union data inside the MessageParentRequest as the provided MessageParentHandback
+func (t *MessageParentRequest) FromMessageParentHandback(v MessageParentHandback) error {
+	v.Kind = "handback"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMessageParentHandback performs a merge with any union data inside the MessageParentRequest, using the provided MessageParentHandback
+func (t *MessageParentRequest) MergeMessageParentHandback(v MessageParentHandback) error {
+	v.Kind = "handback"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t MessageParentRequest) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"kind"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t MessageParentRequest) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "artifact":
+		return t.AsMessageParentArtifact()
+	case "blocker":
+		return t.AsMessageParentBlocker()
+	case "checkpoint":
+		return t.AsMessageParentCheckpoint()
+	case "handback":
+		return t.AsMessageParentHandback()
+	case "progress":
+		return t.AsMessageParentProgress()
+	case "question":
+		return t.AsMessageParentQuestion()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t MessageParentRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *MessageParentRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsSessionMessageProgress returns the union data inside the SessionMessage as a SessionMessageProgress
+func (t SessionMessage) AsSessionMessageProgress() (SessionMessageProgress, error) {
+	var body SessionMessageProgress
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageProgress overwrites any union data inside the SessionMessage as the provided SessionMessageProgress
+func (t *SessionMessage) FromSessionMessageProgress(v SessionMessageProgress) error {
+	v.Kind = "progress"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageProgress performs a merge with any union data inside the SessionMessage, using the provided SessionMessageProgress
+func (t *SessionMessage) MergeSessionMessageProgress(v SessionMessageProgress) error {
+	v.Kind = "progress"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageCheckpoint returns the union data inside the SessionMessage as a SessionMessageCheckpoint
+func (t SessionMessage) AsSessionMessageCheckpoint() (SessionMessageCheckpoint, error) {
+	var body SessionMessageCheckpoint
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageCheckpoint overwrites any union data inside the SessionMessage as the provided SessionMessageCheckpoint
+func (t *SessionMessage) FromSessionMessageCheckpoint(v SessionMessageCheckpoint) error {
+	v.Kind = "checkpoint"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageCheckpoint performs a merge with any union data inside the SessionMessage, using the provided SessionMessageCheckpoint
+func (t *SessionMessage) MergeSessionMessageCheckpoint(v SessionMessageCheckpoint) error {
+	v.Kind = "checkpoint"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageArtifact returns the union data inside the SessionMessage as a SessionMessageArtifact
+func (t SessionMessage) AsSessionMessageArtifact() (SessionMessageArtifact, error) {
+	var body SessionMessageArtifact
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageArtifact overwrites any union data inside the SessionMessage as the provided SessionMessageArtifact
+func (t *SessionMessage) FromSessionMessageArtifact(v SessionMessageArtifact) error {
+	v.Kind = "artifact"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageArtifact performs a merge with any union data inside the SessionMessage, using the provided SessionMessageArtifact
+func (t *SessionMessage) MergeSessionMessageArtifact(v SessionMessageArtifact) error {
+	v.Kind = "artifact"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageBlocker returns the union data inside the SessionMessage as a SessionMessageBlocker
+func (t SessionMessage) AsSessionMessageBlocker() (SessionMessageBlocker, error) {
+	var body SessionMessageBlocker
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageBlocker overwrites any union data inside the SessionMessage as the provided SessionMessageBlocker
+func (t *SessionMessage) FromSessionMessageBlocker(v SessionMessageBlocker) error {
+	v.Kind = "blocker"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageBlocker performs a merge with any union data inside the SessionMessage, using the provided SessionMessageBlocker
+func (t *SessionMessage) MergeSessionMessageBlocker(v SessionMessageBlocker) error {
+	v.Kind = "blocker"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageQuestion returns the union data inside the SessionMessage as a SessionMessageQuestion
+func (t SessionMessage) AsSessionMessageQuestion() (SessionMessageQuestion, error) {
+	var body SessionMessageQuestion
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageQuestion overwrites any union data inside the SessionMessage as the provided SessionMessageQuestion
+func (t *SessionMessage) FromSessionMessageQuestion(v SessionMessageQuestion) error {
+	v.Kind = "question"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageQuestion performs a merge with any union data inside the SessionMessage, using the provided SessionMessageQuestion
+func (t *SessionMessage) MergeSessionMessageQuestion(v SessionMessageQuestion) error {
+	v.Kind = "question"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageDecisionRequest returns the union data inside the SessionMessage as a SessionMessageDecisionRequest
+func (t SessionMessage) AsSessionMessageDecisionRequest() (SessionMessageDecisionRequest, error) {
+	var body SessionMessageDecisionRequest
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageDecisionRequest overwrites any union data inside the SessionMessage as the provided SessionMessageDecisionRequest
+func (t *SessionMessage) FromSessionMessageDecisionRequest(v SessionMessageDecisionRequest) error {
+	v.Kind = "decision_request"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageDecisionRequest performs a merge with any union data inside the SessionMessage, using the provided SessionMessageDecisionRequest
+func (t *SessionMessage) MergeSessionMessageDecisionRequest(v SessionMessageDecisionRequest) error {
+	v.Kind = "decision_request"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageError returns the union data inside the SessionMessage as a SessionMessageError
+func (t SessionMessage) AsSessionMessageError() (SessionMessageError, error) {
+	var body SessionMessageError
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageError overwrites any union data inside the SessionMessage as the provided SessionMessageError
+func (t *SessionMessage) FromSessionMessageError(v SessionMessageError) error {
+	v.Kind = "error"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageError performs a merge with any union data inside the SessionMessage, using the provided SessionMessageError
+func (t *SessionMessage) MergeSessionMessageError(v SessionMessageError) error {
+	v.Kind = "error"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageHandback returns the union data inside the SessionMessage as a SessionMessageHandback
+func (t SessionMessage) AsSessionMessageHandback() (SessionMessageHandback, error) {
+	var body SessionMessageHandback
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageHandback overwrites any union data inside the SessionMessage as the provided SessionMessageHandback
+func (t *SessionMessage) FromSessionMessageHandback(v SessionMessageHandback) error {
+	v.Kind = "handback"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageHandback performs a merge with any union data inside the SessionMessage, using the provided SessionMessageHandback
+func (t *SessionMessage) MergeSessionMessageHandback(v SessionMessageHandback) error {
+	v.Kind = "handback"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageRevisionEntry returns the union data inside the SessionMessage as a SessionMessageRevisionEntry
+func (t SessionMessage) AsSessionMessageRevisionEntry() (SessionMessageRevisionEntry, error) {
+	var body SessionMessageRevisionEntry
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageRevisionEntry overwrites any union data inside the SessionMessage as the provided SessionMessageRevisionEntry
+func (t *SessionMessage) FromSessionMessageRevisionEntry(v SessionMessageRevisionEntry) error {
+	v.Kind = "revision_entry"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageRevisionEntry performs a merge with any union data inside the SessionMessage, using the provided SessionMessageRevisionEntry
+func (t *SessionMessage) MergeSessionMessageRevisionEntry(v SessionMessageRevisionEntry) error {
+	v.Kind = "revision_entry"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageGoalStatus returns the union data inside the SessionMessage as a SessionMessageGoalStatus
+func (t SessionMessage) AsSessionMessageGoalStatus() (SessionMessageGoalStatus, error) {
+	var body SessionMessageGoalStatus
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageGoalStatus overwrites any union data inside the SessionMessage as the provided SessionMessageGoalStatus
+func (t *SessionMessage) FromSessionMessageGoalStatus(v SessionMessageGoalStatus) error {
+	v.Kind = "goal_status"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageGoalStatus performs a merge with any union data inside the SessionMessage, using the provided SessionMessageGoalStatus
+func (t *SessionMessage) MergeSessionMessageGoalStatus(v SessionMessageGoalStatus) error {
+	v.Kind = "goal_status"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageSteer returns the union data inside the SessionMessage as a SessionMessageSteer
+func (t SessionMessage) AsSessionMessageSteer() (SessionMessageSteer, error) {
+	var body SessionMessageSteer
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageSteer overwrites any union data inside the SessionMessage as the provided SessionMessageSteer
+func (t *SessionMessage) FromSessionMessageSteer(v SessionMessageSteer) error {
+	v.Kind = "steer"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageSteer performs a merge with any union data inside the SessionMessage, using the provided SessionMessageSteer
+func (t *SessionMessage) MergeSessionMessageSteer(v SessionMessageSteer) error {
+	v.Kind = "steer"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSessionMessageRespond returns the union data inside the SessionMessage as a SessionMessageRespond
+func (t SessionMessage) AsSessionMessageRespond() (SessionMessageRespond, error) {
+	var body SessionMessageRespond
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSessionMessageRespond overwrites any union data inside the SessionMessage as the provided SessionMessageRespond
+func (t *SessionMessage) FromSessionMessageRespond(v SessionMessageRespond) error {
+	v.Kind = "respond"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSessionMessageRespond performs a merge with any union data inside the SessionMessage, using the provided SessionMessageRespond
+func (t *SessionMessage) MergeSessionMessageRespond(v SessionMessageRespond) error {
+	v.Kind = "respond"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SessionMessage) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"kind"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t SessionMessage) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "artifact":
+		return t.AsSessionMessageArtifact()
+	case "blocker":
+		return t.AsSessionMessageBlocker()
+	case "checkpoint":
+		return t.AsSessionMessageCheckpoint()
+	case "decision_request":
+		return t.AsSessionMessageDecisionRequest()
+	case "error":
+		return t.AsSessionMessageError()
+	case "goal_status":
+		return t.AsSessionMessageGoalStatus()
+	case "handback":
+		return t.AsSessionMessageHandback()
+	case "progress":
+		return t.AsSessionMessageProgress()
+	case "question":
+		return t.AsSessionMessageQuestion()
+	case "respond":
+		return t.AsSessionMessageRespond()
+	case "revision_entry":
+		return t.AsSessionMessageRevisionEntry()
+	case "steer":
+		return t.AsSessionMessageSteer()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t SessionMessage) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SessionMessage) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

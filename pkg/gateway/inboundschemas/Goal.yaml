@@ -1,0 +1,123 @@
+type: object
+title: Goal
+description: >
+  The unified goal / criteria record (ADR-053 §Contract Surface, S1 — "one
+  criteria model, two authors"). A chat `/goal`, a standalone Task's
+  criteria, and a Plan's DoD are all judged against the SAME
+  `AcceptanceCriterion` model (REUSED, never duplicated — a second goal
+  store is a DoD-11 blocking finding). Authored two ways: `chat_compiled`
+  (agent-compiled from user intent via the SMART goal compiler, US-3) or
+  `task_explicit`/`plan_dod` (explicit at task/plan creation).
+required:
+  - goal_id
+  - binding_kind
+  - binding_id
+  - source
+  - prompt
+  - criteria
+  - attempts_max
+  - judge_rounds_max
+  - round
+  - state
+  - created_at
+additionalProperties: false
+properties:
+  goal_id:
+    type: string
+    minLength: 1
+    description: Unique goal identifier.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
+  binding_kind:
+    type: string
+    enum:
+      - session
+      - task
+      - plan
+    description: >
+      SHAPE DECISION (flagged for review): the spec describes `binding`
+      as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of
+      untagged strings has no discriminator, so it is split into this
+      enum tag plus `binding_id` below — mirrors the same pattern used
+      for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
+    example: "session"
+  binding_id:
+    type: string
+    minLength: 1
+    description: The session/task/plan id this goal is bound to, per `binding_kind`.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  source:
+    type: string
+    enum:
+      - chat_compiled
+      - task_explicit
+      - plan_dod
+    description: How this goal's criteria were authored.
+    example: "chat_compiled"
+  prompt:
+    type: string
+    minLength: 1
+    maxLength: 4000
+    description: The raw user intent this goal was set/compiled from.
+    example: "make the tests pass and the linter clean"
+  definition:
+    type: string
+    maxLength: 4000
+    description: >
+      The compiled SMART restatement of `prompt` (US-3 echo-confirm) —
+      distinct from the raw prompt. Absent for `task_explicit`/`plan_dod`
+      sources, which have no separate compile step.
+    example: "All pkg/plan tests pass and golangci-lint reports zero issues."
+  criteria:
+    type: array
+    items:
+      $ref: './AcceptanceCriterion.yaml'
+    description: >
+      REUSED unchanged (S1) — `kind: check` is the machine-checkable
+      ladder rung ("machine" = `check`), `behavior` the deterministic
+      tool-call-log rung, `prose` the subjective Judge rung.
+  attempts_max:
+    type: integer
+    minimum: 1
+    description: >
+      Attempt ceiling before the goal loop wakes the owner (3 native / 6
+      default per session_messaging config, restart-gated).
+    example: 3
+  judge_rounds_max:
+    type: integer
+    minimum: 1
+    description: >
+      Adjudication-round ceiling (R§8.9 — one round = one adjudication,
+      claim-triggered or idle-settled).
+    example: 20
+  round:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Adjudications consumed so far (R§8.9). The stored integer is
+      preserved unchanged across the upgrade from the legacy "one turn +
+      judge" round definition — only the increment site moved.
+    example: 0
+  state:
+    type: string
+    enum:
+      - active
+      - done
+      - failed
+      - cleared
+    description: >
+      SHAPE DECISION (flagged for review): the spec lists a bare `state`
+      field with no enumerated values. This 4-value set is the persisted
+      GOAL record's OWN lifecycle (active while iterating; done on a met
+      verdict; failed on rounds/attempts/budget exhaustion; cleared via
+      `/goal clear`) — deliberately narrower than and distinct from the
+      8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which
+      derives its richer display states from this state PLUS the
+      session's own lifecycle PLUS ephemeral engine-phase signals. Do not
+      conflate the two.
+    example: "active"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp this goal was set/created.
+    example: "2026-07-22T10:00:00Z"

@@ -1,0 +1,29 @@
+type: object
+title: DelegateCancelAction
+description: >
+  `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false`
+  (default) is the SOFT cooperative stop — a tool-boundary checkpoint
+  flush inside `session_messaging.cancel_grace`. `hard: true` is the
+  backstop `RequestCancel` fired after grace elapses (or immediately, at
+  the parent's discretion).
+required:
+  - action
+  - session_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - cancel
+    example: "cancel"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session to cancel.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  hard:
+    type: boolean
+    description: >
+      False (default) — cooperative soft cancel with grace. True —
+      immediate hard cancel, bypassing the grace window.
+    example: false

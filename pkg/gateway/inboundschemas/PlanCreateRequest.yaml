@@ -49,6 +49,19 @@ properties:
       one criterion before approval (strict tier, ADR D5); human/UI creation
       may leave this empty (soft tier — the plan judge then evaluates
       against `title` + `goal`).
+  rationale:
+    type: string
+    maxLength: 4000
+    description: >
+      ADR-053 §Contract Surface — persisted planning rationale (the "why"
+      behind the plan's decomposition, e.g. the write-set/stream split
+      chosen and the join points authored). Plan-lint and the owner-loop
+      correction flow read this alongside `write_set`/`stream`/`is_join`
+      on member tasks. Optional — absent for simple plans with no
+      parallel-stream reasoning to record.
+    example: >
+      Split into two lint-disjoint worktree streams (schema + client) that
+      converge at a single merge member, per the shard+assemble topology.
   bounds:
     type: object
     additionalProperties: false

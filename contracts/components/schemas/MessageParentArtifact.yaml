@@ -1,0 +1,33 @@
+type: object
+title: MessageParentArtifact
+description: >
+  `message_parent` child tool call, `kind: artifact` (ADR-053 §5.1).
+  Payload-only — see `MessageParentProgress` for the request/record split
+  rationale.
+required:
+  - kind
+  - paths
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - artifact
+    example: "artifact"
+  message_id:
+    type: string
+    description: Optional child-supplied dedupe key.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WG"
+  paths:
+    type: array
+    minItems: 1
+    items:
+      type: string
+    description: Paths to output files / artifact references produced by the child.
+    example:
+      - "work/report.pdf"
+  note:
+    type: string
+    maxLength: 4096
+    description: Untrusted free-text note about the artifact.
+    example: "Draft v1 — pending review."

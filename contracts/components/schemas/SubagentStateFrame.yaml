@@ -1,0 +1,69 @@
+type: object
+title: SubagentStateFrame
+description: >
+  Server -> client (ADR-053 §Contract Surface — "Mid-span subagent
+  frames"). A mid-span live lifecycle ping riding between the existing
+  `subagent_start`/`subagent_end` brackets — a flat projection of the
+  child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for
+  the same flat-projection-over-full-record shape decision and its
+  rationale) plus an optional steering-receipt acknowledgement.
+required:
+  - type
+  - session_id
+  - span_id
+  - state
+  - created_at
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - subagent_state
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which the parent's span is running.
+  span_id:
+    type: string
+    minLength: 1
+    description: Matches the `span_id` from the bracketing `subagent_start` frame.
+  state:
+    type: string
+    enum:
+      - queued
+      - running
+      - needs_input
+      - paused
+      - completed
+      - failed
+      - cancelled
+      - timed_out
+    description: The child's current durable lifecycle state (SessionLifecycleRecord.state).
+    example: "running"
+  steering_receipt:
+    type: object
+    nullable: true
+    required:
+      - correlation_id
+      - applied_at
+    additionalProperties: false
+    description: >
+      Present when this state ping is reporting that a prior
+      `steer`/`respond` was applied at the child's next tool boundary
+      (INV-3).
+    properties:
+      correlation_id:
+        type: string
+        description: >
+          The `correlation_id` of the applied steer/respond, when one was
+          supplied; otherwise a server-assigned reference.
+        example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+      applied_at:
+        type: string
+        format: date-time
+        example: "2026-07-22T10:00:30Z"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp this state ping was emitted.
+    example: "2026-07-22T10:00:00Z"

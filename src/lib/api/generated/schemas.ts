@@ -436,6 +436,10 @@ type Task = {
   workspace_id: string;
   tags?: Array<string> | undefined;
   plan_id?: string | undefined;
+  write_set?: Array<string> | undefined;
+  stream?: string | undefined;
+  is_join?: boolean | undefined;
+  judge_rounds?: number | undefined;
   criteria?: Array<AcceptanceCriterion> | undefined;
   attempt_count?: number | undefined;
   max_attempts?: (number | null) | undefined;
@@ -616,6 +620,9 @@ type TaskCreateRequest = {
   workspace_id: string;
   tags?: Array<string> | undefined;
   plan_id?: string | undefined;
+  write_set?: Array<string> | undefined;
+  stream?: string | undefined;
+  is_join?: boolean | undefined;
   criteria?: Array<AcceptanceCriterion> | undefined;
   max_attempts?: (number | null) | undefined;
   due?: string | undefined;
@@ -831,13 +838,27 @@ type Plan = {
   description?: string | undefined;
   state: "draft" | "approved" | "running" | "done" | "failed";
   plan_phase?:
-    | ("dispatching" | "judging" | "synthesizing" | "idle")
+    | (
+        | "dispatching"
+        | "judging"
+        | "synthesizing"
+        | "idle"
+        | "awaiting_owner_correction"
+      )
     | undefined;
+  last_unmet_terminal_signature?: string | undefined;
+  owner_session_id?: string | undefined;
   failed_reason?:
-    | ("judge_rounds_exhausted" | "stopped_by_user" | "idle_expired")
+    | (
+        | "judge_rounds_exhausted"
+        | "stopped_by_user"
+        | "idle_expired"
+        | "budget_exhausted"
+      )
     | undefined;
   owner_agent_id: string;
   dod?: Array<AcceptanceCriterion> | undefined;
+  rationale?: string | undefined;
   bounds?:
     | Partial<{
         plan_judge_max_rounds: number;
@@ -864,6 +885,7 @@ type PlanCreateRequest = {
   description?: string | undefined;
   owner_agent_id: string;
   dod?: Array<AcceptanceCriterion> | undefined;
+  rationale?: string | undefined;
   bounds?:
     | Partial<{
         plan_judge_max_rounds: number;
@@ -906,6 +928,424 @@ type TokenUsageSummary = {
   by_model?: {} | undefined;
   partial?: boolean | undefined;
   partial_error_count?: number | undefined;
+};
+type SessionMessage =
+  | SessionMessageProgress
+  | SessionMessageCheckpoint
+  | SessionMessageArtifact
+  | SessionMessageBlocker
+  | SessionMessageQuestion
+  | SessionMessageDecisionRequest
+  | SessionMessageError
+  | SessionMessageHandback
+  | SessionMessageRevisionEntry
+  | SessionMessageGoalStatus
+  | SessionMessageSteer
+  | SessionMessageRespond;
+type SessionMessageProgress = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "progress";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  pct?: number | undefined;
+};
+type SessionMessageCheckpoint = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "checkpoint";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  summary: string;
+  result_so_far?: string | undefined;
+  commit_ref?: string | undefined;
+};
+type SessionMessageArtifact = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "artifact";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  paths: Array<string>;
+  note?: string | undefined;
+};
+type SessionMessageBlocker = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "blocker";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  severity: "low" | "medium" | "high";
+  correlation_id?: string | undefined;
+};
+type SessionMessageQuestion = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "question";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  wait: boolean;
+  correlation_id: string;
+  authority?: ("self_ok" | "owner_required") | undefined;
+};
+type SessionMessageDecisionRequest = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "decision_request";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  options: Array<string>;
+  correlation_id: string;
+  authority?: ("self_ok" | "owner_required") | undefined;
+};
+type SessionMessageError = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "error";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  fatal: boolean;
+};
+type SessionMessageHandback = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "child_to_parent";
+  kind: "handback";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  result_so_far: string;
+  artifacts: Array<string>;
+  open_questions: Array<string>;
+  mode: "final" | "pause";
+};
+type SessionMessageRevisionEntry = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "engine";
+  kind: "revision_entry";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  revision: RevisionEntry;
+};
+type RevisionEntry = {
+  revision_id: string;
+  plan_id: string;
+  generation: number;
+  verb: "append" | "supersede" | "targeted_retry";
+  falsified_assumption: string;
+  tail_adds: Array<{
+    member_id: string;
+    blocked_by?: Array<string> | undefined;
+  }>;
+  superseded_member_id?: string | undefined;
+  retried_member_id?: string | undefined;
+  reason: string;
+  created_at: string;
+};
+type SessionMessageGoalStatus = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "session_to_ui";
+  kind: "goal_status";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  condition: "met" | "waiting_on_user";
+  goal_id: string;
+};
+type SessionMessageSteer = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "parent_to_child";
+  kind: "steer";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  correlation_id?: string | undefined;
+};
+type SessionMessageRespond = {
+  message_id: string;
+  session_id: string;
+  parent_session_id?: (string | null) | undefined;
+  generation?: number | undefined;
+  direction: "parent_to_child";
+  kind: "respond";
+  depth: number;
+  created_at: string;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  text: string;
+  correlation_id: string;
+};
+type Goal = {
+  goal_id: string;
+  binding_kind: "session" | "task" | "plan";
+  binding_id: string;
+  source: "chat_compiled" | "task_explicit" | "plan_dod";
+  prompt: string;
+  definition?: string | undefined;
+  criteria: Array<AcceptanceCriterion>;
+  attempts_max: number;
+  judge_rounds_max: number;
+  round: number;
+  state: "active" | "done" | "failed" | "cleared";
+  created_at: string;
+};
+type PlanRestartResponse = {
+  plan: Plan;
+  new_session_id: string;
+  generation: number;
+  resumed_from?: (string | null) | undefined;
+};
+type DelegateActionRequest =
+  | DelegateRunAction
+  | DelegateStatusAction
+  | DelegateInboxAction
+  | DelegateInboxAckAction
+  | DelegateSteerAction
+  | DelegateRespondAction
+  | DelegateCancelAction
+  | DelegateFollowUpAction
+  | DelegatePeekAction;
+type DelegateRunAction = {
+  action: "run";
+  target_agent_id: string;
+  task: string;
+  label?: string | undefined;
+  launch_profile: "utility" | "specialist";
+  wait?: boolean | undefined;
+  allow_blocking_question?: boolean | undefined;
+  critical?: boolean | undefined;
+  timeout_seconds?: number | undefined;
+  snapshot?:
+    | Partial<{
+        references: Array<string>;
+        notes: string;
+      }>
+    | undefined;
+};
+type DelegateStatusAction = {
+  action: "status";
+  session_id: string;
+  task_id?: string | undefined;
+};
+type DelegateInboxAction = {
+  action: "inbox";
+  session_id: string;
+  since_cursor?: string | undefined;
+  max?: number | undefined;
+};
+type DelegateInboxAckAction = {
+  action: "inbox_ack";
+  session_id: string;
+  message_ids: Array<string>;
+};
+type DelegateSteerAction = {
+  action: "steer";
+  session_id: string;
+  text: string;
+  correlation_id?: string | undefined;
+};
+type DelegateRespondAction = {
+  action: "respond";
+  session_id: string;
+  text: string;
+  correlation_id: string;
+};
+type DelegateCancelAction = {
+  action: "cancel";
+  session_id: string;
+  hard?: boolean | undefined;
+};
+type DelegateFollowUpAction = {
+  action: "follow_up";
+  session_id: string;
+  task?: string | undefined;
+};
+type DelegatePeekAction = {
+  action: "peek";
+  session_id: string;
+};
+type DelegateStatusResponse = {
+  session: SessionLifecycleRecord;
+  last_checkpoint?:
+    | Partial<{
+        summary: string;
+        result_so_far: string;
+        commit_ref: string;
+        created_at: string;
+      }>
+    | undefined;
+  last_progress?:
+    | Partial<{
+        text: string;
+        pct: number;
+        created_at: string;
+      }>
+    | undefined;
+  unacked_count: number;
+};
+type SessionLifecycleRecord = {
+  session_id: string;
+  generation: number;
+  resumed_from?: (string | null) | undefined;
+  state:
+    | "queued"
+    | "running"
+    | "needs_input"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out";
+  terminal: boolean;
+  owner_scope_kind: "parent_session" | "plan" | "human";
+  owner_scope_id?: string | undefined;
+  owns_plan_id?: string | undefined;
+  goal_ref?: string | undefined;
+  workspace_id: string;
+  agent_id: string;
+  is_3p: boolean;
+  launch_profile: "utility" | "specialist";
+  last_checkpoint_ref?: string | undefined;
+  undelivered_message_ids: Array<string>;
+  needs_input?:
+    | {
+        correlation_id: string;
+        ttl_deadline: string;
+        reconstructable: boolean;
+      }
+    | undefined;
+  failed_reason?: string | undefined;
+  created_at: string;
+  updated_at: string;
+};
+type DelegateInboxResponse = {
+  messages: Array<SessionMessage>;
+  has_more: boolean;
+  next_cursor?: string | undefined;
+};
+type DelegateRespondResponse = {
+  acknowledged: boolean;
+  corrective_session?: DelegateSessionResponse | undefined;
+};
+type DelegateSessionResponse = {
+  session_id: string;
+  generation: number;
+  resumed_from?: (string | null) | undefined;
+  is_3p: boolean;
+  state:
+    | "queued"
+    | "running"
+    | "needs_input"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out";
+};
+type MessageParentRequest =
+  | MessageParentProgress
+  | MessageParentCheckpoint
+  | MessageParentArtifact
+  | MessageParentBlocker
+  | MessageParentQuestion
+  | MessageParentHandback;
+type MessageParentProgress = {
+  kind: "progress";
+  message_id?: string | undefined;
+  text: string;
+  pct?: number | undefined;
+};
+type MessageParentCheckpoint = {
+  kind: "checkpoint";
+  message_id?: string | undefined;
+  summary: string;
+  result_so_far?: string | undefined;
+  commit_ref?: string | undefined;
+};
+type MessageParentArtifact = {
+  kind: "artifact";
+  message_id?: string | undefined;
+  paths: Array<string>;
+  note?: string | undefined;
+};
+type MessageParentBlocker = {
+  kind: "blocker";
+  message_id?: string | undefined;
+  text: string;
+  severity: "low" | "medium" | "high";
+};
+type MessageParentQuestion = {
+  kind: "question";
+  message_id?: string | undefined;
+  text: string;
+  wait: boolean;
+  authority?: ("self_ok" | "owner_required") | undefined;
+  correlation_id?: string | undefined;
+};
+type MessageParentHandback = {
+  kind: "handback";
+  message_id?: string | undefined;
+  result_so_far: string;
+  artifacts?: Array<string> | undefined;
+  open_questions?: Array<string> | undefined;
+  mode: "final" | "pause";
 };
 
 export const LoginRequest = z.object({
@@ -2159,6 +2599,10 @@ export const Task: z.ZodType<Task> = z
     workspace_id: z.string(),
     tags: z.array(z.string().max(64)).max(16).optional(),
     plan_id: z.string().optional(),
+    write_set: z.array(z.string()).optional(),
+    stream: z.string().optional(),
+    is_join: z.boolean().optional(),
+    judge_rounds: z.number().int().gte(0).optional(),
     criteria: z.array(AcceptanceCriterion).optional(),
     attempt_count: z.number().int().gte(0).optional(),
     max_attempts: z.number().int().gte(1).nullish(),
@@ -2208,6 +2652,9 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   workspace_id: z.string(),
   tags: z.array(z.string().max(64)).max(16).optional(),
   plan_id: z.string().optional(),
+  write_set: z.array(z.string()).optional(),
+  stream: z.string().optional(),
+  is_join: z.boolean().optional(),
   criteria: z.array(AcceptanceCriterion).optional(),
   max_attempts: z.number().int().gte(1).nullish(),
   due: z.string().datetime({ offset: true }).optional(),
@@ -2496,14 +2943,28 @@ export const Plan: z.ZodType<Plan> = z.object({
   description: z.string().max(2000).optional(),
   state: z.enum(["draft", "approved", "running", "done", "failed"]),
   plan_phase: z
-    .enum(["dispatching", "judging", "synthesizing", "idle"])
+    .enum([
+      "dispatching",
+      "judging",
+      "synthesizing",
+      "idle",
+      "awaiting_owner_correction",
+    ])
     .optional()
     .default("idle"),
+  last_unmet_terminal_signature: z.string().optional(),
+  owner_session_id: z.string().optional(),
   failed_reason: z
-    .enum(["judge_rounds_exhausted", "stopped_by_user", "idle_expired"])
+    .enum([
+      "judge_rounds_exhausted",
+      "stopped_by_user",
+      "idle_expired",
+      "budget_exhausted",
+    ])
     .optional(),
   owner_agent_id: z.string(),
   dod: z.array(AcceptanceCriterion).optional(),
+  rationale: z.string().max(4000).optional(),
   bounds: z
     .object({
       plan_judge_max_rounds: z.number().int().gte(1),
@@ -2535,6 +2996,7 @@ export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
   description: z.string().max(2000).optional(),
   owner_agent_id: z.string().min(1),
   dod: z.array(AcceptanceCriterion).optional(),
+  rationale: z.string().max(4000).optional(),
   bounds: z
     .object({
       plan_judge_max_rounds: z.number().int().gte(1),
@@ -2684,6 +3146,502 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
 export const RetentionUpdateRequest = z
   .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
   .partial();
+export const SessionMessageProgress =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("progress"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    pct: z.number().int().gte(0).lte(100).optional(),
+  }) satisfies z.ZodType<SessionMessageProgress>;
+export const SessionMessageCheckpoint =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("checkpoint"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    summary: z.string().min(1).max(500),
+    result_so_far: z.string().max(32768).optional(),
+    commit_ref: z.string().optional(),
+  }) satisfies z.ZodType<SessionMessageCheckpoint>;
+export const SessionMessageArtifact =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("artifact"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    paths: z.array(z.string()).min(1),
+    note: z.string().max(4096).optional(),
+  }) satisfies z.ZodType<SessionMessageArtifact>;
+export const SessionMessageBlocker = z.object(
+  {
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("blocker"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    severity: z.enum(["low", "medium", "high"]),
+    correlation_id: z.string().optional(),
+  }
+) satisfies z.ZodType<SessionMessageBlocker>;
+export const SessionMessageQuestion =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("question"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    wait: z.boolean(),
+    correlation_id: z.string().min(1),
+    authority: z.enum(["self_ok", "owner_required"]).optional(),
+  }) satisfies z.ZodType<SessionMessageQuestion>;
+export const SessionMessageDecisionRequest =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("decision_request"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(32768),
+    options: z.array(z.string()).min(2),
+    correlation_id: z.string().min(1),
+    authority: z.enum(["self_ok", "owner_required"]).optional(),
+  }) satisfies z.ZodType<SessionMessageDecisionRequest>;
+export const SessionMessageError = z.object({
+  message_id: z.string().min(1),
+  session_id: z.string().min(1),
+  parent_session_id: z.string().nullish(),
+  generation: z.number().int().gte(0).optional(),
+  direction: z.literal("child_to_parent"),
+  kind: z.literal("error"),
+  depth: z.number().int().gte(0).lte(5),
+  created_at: z.string().datetime({ offset: true }),
+  sender_identity: z.string().min(1),
+  untrusted_origin: z.boolean(),
+  text: z.string().max(32768),
+  fatal: z.boolean(),
+}) satisfies z.ZodType<SessionMessageError>;
+export const SessionMessageHandback =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("child_to_parent"),
+    kind: z.literal("handback"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    result_so_far: z.string().max(50000),
+    artifacts: z.array(z.string()),
+    open_questions: z.array(z.string()),
+    mode: z.enum(["final", "pause"]),
+  }) satisfies z.ZodType<SessionMessageHandback>;
+export const RevisionEntry: z.ZodType<RevisionEntry> = z.object({
+  revision_id: z.string().min(1),
+  plan_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  verb: z.enum(["append", "supersede", "targeted_retry"]),
+  falsified_assumption: z.string().min(1).max(2000),
+  tail_adds: z.array(
+    z.object({
+      member_id: z.string().min(1),
+      blocked_by: z.array(z.string()).optional(),
+    })
+  ),
+  superseded_member_id: z.string().optional(),
+  retried_member_id: z.string().optional(),
+  reason: z.string().min(1).max(2000),
+  created_at: z.string().datetime({ offset: true }),
+});
+export const SessionMessageRevisionEntry =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("engine"),
+    kind: z.literal("revision_entry"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    revision: RevisionEntry,
+  }) satisfies z.ZodType<SessionMessageRevisionEntry>;
+export const SessionMessageGoalStatus =
+  z.object({
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("session_to_ui"),
+    kind: z.literal("goal_status"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    condition: z.enum(["met", "waiting_on_user"]),
+    goal_id: z.string().min(1),
+  }) satisfies z.ZodType<SessionMessageGoalStatus>;
+export const SessionMessageSteer = z.object({
+  message_id: z.string().min(1),
+  session_id: z.string().min(1),
+  parent_session_id: z.string().nullish(),
+  generation: z.number().int().gte(0).optional(),
+  direction: z.literal("parent_to_child"),
+  kind: z.literal("steer"),
+  depth: z.number().int().gte(0).lte(5),
+  created_at: z.string().datetime({ offset: true }),
+  sender_identity: z.string().min(1),
+  untrusted_origin: z.boolean(),
+  text: z.string().max(16384),
+  correlation_id: z.string().optional(),
+}) satisfies z.ZodType<SessionMessageSteer>;
+export const SessionMessageRespond = z.object(
+  {
+    message_id: z.string().min(1),
+    session_id: z.string().min(1),
+    parent_session_id: z.string().nullish(),
+    generation: z.number().int().gte(0).optional(),
+    direction: z.literal("parent_to_child"),
+    kind: z.literal("respond"),
+    depth: z.number().int().gte(0).lte(5),
+    created_at: z.string().datetime({ offset: true }),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    text: z.string().max(16384),
+    correlation_id: z.string().min(1),
+  }
+) satisfies z.ZodType<SessionMessageRespond>;
+export const SessionMessage = z.discriminatedUnion(
+  "kind",
+  [
+    SessionMessageProgress,
+    SessionMessageCheckpoint,
+    SessionMessageArtifact,
+    SessionMessageBlocker,
+    SessionMessageQuestion,
+    SessionMessageDecisionRequest,
+    SessionMessageError,
+    SessionMessageHandback,
+    SessionMessageRevisionEntry,
+    SessionMessageGoalStatus,
+    SessionMessageSteer,
+    SessionMessageRespond,
+  ]
+) satisfies z.ZodType<SessionMessage>;
+export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
+  z.object({
+    session_id: z.string().min(1),
+    generation: z.number().int().gte(0),
+    resumed_from: z.string().nullish(),
+    state: z.enum([
+      "queued",
+      "running",
+      "needs_input",
+      "paused",
+      "completed",
+      "failed",
+      "cancelled",
+      "timed_out",
+    ]),
+    terminal: z.boolean(),
+    owner_scope_kind: z.enum(["parent_session", "plan", "human"]),
+    owner_scope_id: z.string().optional(),
+    owns_plan_id: z.string().optional(),
+    goal_ref: z.string().optional(),
+    workspace_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    is_3p: z.boolean(),
+    launch_profile: z.enum(["utility", "specialist"]),
+    last_checkpoint_ref: z.string().optional(),
+    undelivered_message_ids: z.array(z.string()),
+    needs_input: z
+      .object({
+        correlation_id: z.string().min(1),
+        ttl_deadline: z.string().datetime({ offset: true }),
+        reconstructable: z.boolean(),
+      })
+      .optional(),
+    failed_reason: z.string().optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+  });
+export const Goal: z.ZodType<Goal> = z.object({
+  goal_id: z.string().min(1),
+  binding_kind: z.enum(["session", "task", "plan"]),
+  binding_id: z.string().min(1),
+  source: z.enum(["chat_compiled", "task_explicit", "plan_dod"]),
+  prompt: z.string().min(1).max(4000),
+  definition: z.string().max(4000).optional(),
+  criteria: z.array(AcceptanceCriterion),
+  attempts_max: z.number().int().gte(1),
+  judge_rounds_max: z.number().int().gte(1),
+  round: z.number().int().gte(0),
+  state: z.enum(["active", "done", "failed", "cleared"]),
+  created_at: z.string().datetime({ offset: true }),
+});
+export const TokenBudgetStatus = z.object({
+  budget: z.number().int().gte(0),
+  consumed: z.number().int().gte(0),
+  remaining: z.number().int(),
+  exhausted: z.boolean(),
+  advisory: z.string().optional(),
+  by_scope: z.object({
+    owner: z.number().int().gte(0),
+    member: z.number().int().gte(0),
+    verifier: z.number().int().gte(0),
+    judge: z.number().int().gte(0),
+  }),
+});
+export const PlanRestartResponse: z.ZodType<PlanRestartResponse> = z.object({
+  plan: Plan,
+  new_session_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  resumed_from: z.string().nullish(),
+});
+export const DelegateRunAction = z.object({
+  action: z.literal("run"),
+  target_agent_id: z.string().min(1),
+  task: z.string().min(1).max(10000),
+  label: z.string().max(100).optional(),
+  launch_profile: z.enum(["utility", "specialist"]),
+  wait: z.boolean().optional(),
+  allow_blocking_question: z.boolean().optional(),
+  critical: z.boolean().optional(),
+  timeout_seconds: z.number().int().gte(0).optional(),
+  snapshot: z
+    .object({ references: z.array(z.string()), notes: z.string().max(8192) })
+    .partial()
+    .optional(),
+}) satisfies z.ZodType<DelegateRunAction>;
+export const DelegateStatusAction = z.object({
+  action: z.literal("status"),
+  session_id: z.string().min(1),
+  task_id: z.string().optional(),
+}) satisfies z.ZodType<DelegateStatusAction>;
+export const DelegateInboxAction = z.object({
+  action: z.literal("inbox"),
+  session_id: z.string().min(1),
+  since_cursor: z.string().optional(),
+  max: z.number().int().gte(1).lte(200).optional(),
+}) satisfies z.ZodType<DelegateInboxAction>;
+export const DelegateInboxAckAction =
+  z.object({
+    action: z.literal("inbox_ack"),
+    session_id: z.string().min(1),
+    message_ids: z.array(z.string()).min(1),
+  }) satisfies z.ZodType<DelegateInboxAckAction>;
+export const DelegateSteerAction = z.object({
+  action: z.literal("steer"),
+  session_id: z.string().min(1),
+  text: z.string().min(1).max(16384),
+  correlation_id: z.string().optional(),
+}) satisfies z.ZodType<DelegateSteerAction>;
+export const DelegateRespondAction = z.object(
+  {
+    action: z.literal("respond"),
+    session_id: z.string().min(1),
+    text: z.string().min(1).max(16384),
+    correlation_id: z.string().min(1),
+  }
+) satisfies z.ZodType<DelegateRespondAction>;
+export const DelegateCancelAction = z.object({
+  action: z.literal("cancel"),
+  session_id: z.string().min(1),
+  hard: z.boolean().optional(),
+}) satisfies z.ZodType<DelegateCancelAction>;
+export const DelegateFollowUpAction =
+  z.object({
+    action: z.literal("follow_up"),
+    session_id: z.string().min(1),
+    task: z.string().max(10000).optional(),
+  }) satisfies z.ZodType<DelegateFollowUpAction>;
+export const DelegatePeekAction = z.object({
+  action: z.literal("peek"),
+  session_id: z.string().min(1),
+}) satisfies z.ZodType<DelegatePeekAction>;
+export const DelegateActionRequest =
+  z.discriminatedUnion("action", [
+    DelegateRunAction,
+    DelegateStatusAction,
+    DelegateInboxAction,
+    DelegateInboxAckAction,
+    DelegateSteerAction,
+    DelegateRespondAction,
+    DelegateCancelAction,
+    DelegateFollowUpAction,
+    DelegatePeekAction,
+  ]) satisfies z.ZodType<DelegateActionRequest>;
+export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
+  z.object({
+    session_id: z.string().min(1),
+    generation: z.number().int().gte(0),
+    resumed_from: z.string().nullish(),
+    is_3p: z.boolean(),
+    state: z.enum([
+      "queued",
+      "running",
+      "needs_input",
+      "paused",
+      "completed",
+      "failed",
+      "cancelled",
+      "timed_out",
+    ]),
+  });
+export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
+  z.object({
+    session: SessionLifecycleRecord,
+    last_checkpoint: z
+      .object({
+        summary: z.string(),
+        result_so_far: z.string(),
+        commit_ref: z.string(),
+        created_at: z.string().datetime({ offset: true }),
+      })
+      .partial()
+      .optional(),
+    last_progress: z
+      .object({
+        text: z.string(),
+        pct: z.number().int().gte(0).lte(100),
+        created_at: z.string().datetime({ offset: true }),
+      })
+      .partial()
+      .optional(),
+    unacked_count: z.number().int().gte(0),
+  });
+export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
+  {
+    messages: z.array(SessionMessage),
+    has_more: z.boolean(),
+    next_cursor: z.string().optional(),
+  }
+);
+export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
+  z.object({
+    acknowledged: z.boolean(),
+    corrective_session: DelegateSessionResponse.optional(),
+  });
+export const DelegatePeekResponse = z.object({
+  session_id: z.string().min(1),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "paused",
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+  ]),
+  latest_checkpoint_summary: z.string().optional(),
+  latest_progress_text: z.string().optional(),
+  latest_progress_pct: z.number().int().gte(0).lte(100).optional(),
+});
+export const MessageParentProgress = z.object(
+  {
+    kind: z.literal("progress"),
+    message_id: z.string().optional(),
+    text: z.string().min(1).max(32768),
+    pct: z.number().int().gte(0).lte(100).optional(),
+  }
+) satisfies z.ZodType<MessageParentProgress>;
+export const MessageParentCheckpoint =
+  z.object({
+    kind: z.literal("checkpoint"),
+    message_id: z.string().optional(),
+    summary: z.string().min(1).max(500),
+    result_so_far: z.string().max(32768).optional(),
+    commit_ref: z.string().optional(),
+  }) satisfies z.ZodType<MessageParentCheckpoint>;
+export const MessageParentArtifact = z.object(
+  {
+    kind: z.literal("artifact"),
+    message_id: z.string().optional(),
+    paths: z.array(z.string()).min(1),
+    note: z.string().max(4096).optional(),
+  }
+) satisfies z.ZodType<MessageParentArtifact>;
+export const MessageParentBlocker = z.object({
+  kind: z.literal("blocker"),
+  message_id: z.string().optional(),
+  text: z.string().min(1).max(32768),
+  severity: z.enum(["low", "medium", "high"]),
+}) satisfies z.ZodType<MessageParentBlocker>;
+export const MessageParentQuestion = z.object(
+  {
+    kind: z.literal("question"),
+    message_id: z.string().optional(),
+    text: z.string().min(1).max(32768),
+    wait: z.boolean(),
+    authority: z.enum(["self_ok", "owner_required"]).optional(),
+    correlation_id: z.string().optional(),
+  }
+) satisfies z.ZodType<MessageParentQuestion>;
+export const MessageParentHandback = z.object(
+  {
+    kind: z.literal("handback"),
+    message_id: z.string().optional(),
+    result_so_far: z.string().max(50000),
+    artifacts: z.array(z.string()).optional(),
+    open_questions: z.array(z.string()).optional(),
+    mode: z.enum(["final", "pause"]),
+  }
+) satisfies z.ZodType<MessageParentHandback>;
+export const MessageParentRequest =
+  z.discriminatedUnion("kind", [
+    MessageParentProgress,
+    MessageParentCheckpoint,
+    MessageParentArtifact,
+    MessageParentBlocker,
+    MessageParentQuestion,
+    MessageParentHandback,
+  ]) satisfies z.ZodType<MessageParentRequest>;
+export const MessageParentResponse = z.object({
+  accepted: z.boolean(),
+  message_id: z.string().optional(),
+  correlation_id: z.string().optional(),
+  error: z.string().optional(),
+});
 
 const endpoints = makeApi([
   {
@@ -7780,6 +8738,38 @@ export const SubagentEndFrame = z
   })
   .strict();
 
+export const SubagentMessageFrame = z
+  .object({
+    type: z.literal("subagent_message"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    message_id: z.string().min(1),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    text: z.string().optional(),
+    pct: z.number().int().min(0).max(100).optional(),
+    correlation_id: z.string().optional(),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    created_at: z.string(),
+  })
+  .strict();
+
+export const SubagentStateFrame = z
+  .object({
+    type: z.literal("subagent_state"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
+    steering_receipt: z
+    .object({
+      correlation_id: z.string(),
+      applied_at: z.string(),
+    })
+    .strict().optional(),
+    created_at: z.string(),
+  })
+  .strict();
+
 export const TaskStatusChangedFrame = z
   .object({
     type: z.literal("task_status_changed"),
@@ -8145,13 +9135,14 @@ export const GoalStatusFrame = z
   .object({
     type: z.literal("goal_status"),
     session_id: z.string().min(1),
+    goal_id: z.string().min(1).optional(),
     condition: z.string(),
     round: z.number().int().min(0),
     max_rounds: z.number().int().min(1),
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["active", "paused_judge_unavailable", "brake_fired", "cleared"]),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed"]),
   })
   .strict();
 
@@ -8218,6 +9209,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolCallResultFrame,
   SubagentStartFrame,
   SubagentEndFrame,
+  SubagentMessageFrame,
+  SubagentStateFrame,
   TaskStatusChangedFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,

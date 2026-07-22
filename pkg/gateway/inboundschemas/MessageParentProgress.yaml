@@ -1,0 +1,41 @@
+type: object
+title: MessageParentProgress
+description: >
+  `message_parent` child tool call, `kind: progress` (ADR-053 §5.1). The
+  first-class child-side tool a delegated child uses to push a typed
+  message into its parent's inbox. Payload-only (no envelope fields) —
+  the runtime assigns `message_id` (unless the child supplies one for its
+  own dedupe purposes), `session_id`, `parent_session_id`,
+  `sender_identity`, `created_at`, and `untrusted_origin` from the
+  execution context; the corresponding `SessionMessageProgress` is the
+  full envelope+payload record this call produces once received (see
+  that file — the two are deliberately separate schemas for the two
+  pipeline stages, mirroring the existing
+  `ToolApprovalActionRequest`/`ToolApprovalRequiredFrame` precedent).
+required:
+  - kind
+  - text
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - progress
+    example: "progress"
+  message_id:
+    type: string
+    description: >
+      Optional child-supplied dedupe key. Server-generated when absent.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 32768
+    description: Untrusted narration text (child send body cap 32 KiB).
+    example: "Scanning pkg/plan for the write-set boundary..."
+  pct:
+    type: integer
+    minimum: 0
+    maximum: 100
+    description: Optional completion percentage estimate.
+    example: 40

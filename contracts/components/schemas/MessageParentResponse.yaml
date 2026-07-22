@@ -1,0 +1,35 @@
+type: object
+title: MessageParentResponse
+description: >
+  Response to the child's `message_parent` tool call (ADR-053 §5.1). A
+  never-silent-drop back-pressure contract — a rejection (per-child
+  ceiling exceeded, content-egress policy block, etc.) is surfaced here
+  as `accepted: false` + `error`, never a silent drop (no-silent-drop
+  invariant).
+required:
+  - accepted
+additionalProperties: false
+properties:
+  accepted:
+    type: boolean
+    description: >
+      True when the message was enqueued into the parent's inbox. False
+      on back-pressure (e.g. the per-child unacked ceiling, D15) or a
+      content-egress policy block (N-10) — `error` explains why.
+    example: true
+  message_id:
+    type: string
+    description: The (possibly server-generated) `message_id` assigned to this message.
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+  correlation_id:
+    type: string
+    description: >
+      Echoes/assigns the `correlation_id` for a `question` call, so the
+      child can track its own open questions.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+  error:
+    type: string
+    description: >
+      Human-readable rejection reason. Present only when `accepted ==
+      false` (e.g. "await answers — per-child unacked ceiling reached").
+    example: "await answers — per-child unacked ceiling reached"

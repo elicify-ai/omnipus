@@ -1,0 +1,25 @@
+type: object
+title: DelegatePeekAction
+description: >
+  `delegate` tool call, `action: peek` (ADR-053 §5.1). AGENT-callable,
+  read-only Agent-View parity read WITHOUT attach — inspects the child's
+  latest checkpoint/progress without steering, without consuming the
+  child's unacked ceiling, and without enqueuing anything on the child's
+  steering queue (m8). Distinct from the human-facing FE-5
+  `ActivityPanel -> Agent-View` render surface, which is a separate UI
+  concept, not this tool action.
+required:
+  - action
+  - session_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - peek
+    example: "peek"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session to peek at.
+    example: "550e8400-e29b-41d4-a716-446655440000"

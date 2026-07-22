@@ -201,6 +201,38 @@ export const SubagentEndFrame = z
   })
   .strict();
 
+export const SubagentMessageFrame = z
+  .object({
+    type: z.literal("subagent_message"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    message_id: z.string().min(1),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    text: z.string().optional(),
+    pct: z.number().int().min(0).max(100).optional(),
+    correlation_id: z.string().optional(),
+    sender_identity: z.string().min(1),
+    untrusted_origin: z.boolean(),
+    created_at: z.string(),
+  })
+  .strict();
+
+export const SubagentStateFrame = z
+  .object({
+    type: z.literal("subagent_state"),
+    session_id: z.string().min(1),
+    span_id: z.string().min(1),
+    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
+    steering_receipt: z
+    .object({
+      correlation_id: z.string(),
+      applied_at: z.string(),
+    })
+    .strict().optional(),
+    created_at: z.string(),
+  })
+  .strict();
+
 export const TaskStatusChangedFrame = z
   .object({
     type: z.literal("task_status_changed"),
@@ -566,13 +598,14 @@ export const GoalStatusFrame = z
   .object({
     type: z.literal("goal_status"),
     session_id: z.string().min(1),
+    goal_id: z.string().min(1).optional(),
     condition: z.string(),
     round: z.number().int().min(0),
     max_rounds: z.number().int().min(1),
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["active", "paused_judge_unavailable", "brake_fired", "cleared"]),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed"]),
   })
   .strict();
 
@@ -639,6 +672,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolCallResultFrame,
   SubagentStartFrame,
   SubagentEndFrame,
+  SubagentMessageFrame,
+  SubagentStateFrame,
   TaskStatusChangedFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,

@@ -1,0 +1,90 @@
+type: object
+title: TokenBudgetStatus
+description: >
+  App-level OVERALL token budget status for the Usage screen (ADR-053
+  §Contract Surface, D12/R§8.3, FE-6). ONE shared pool across the whole
+  install — no per-plan budgets, no money caps, no `IsPrivilegedAgent`
+  exemption (D12 deliberately removes the core-agent exemption). Debited
+  by owner + member + verifier + Judge turns from provider-reported
+  usage via a single atomic `debitTokenBudget(n)` critical section
+  (INV-8).
+required:
+  - budget
+  - consumed
+  - remaining
+  - exhausted
+  - by_scope
+additionalProperties: false
+properties:
+  budget:
+    type: integer
+    minimum: 0
+    description: >
+      The operator-set overall token budget. `0` is the unbounded
+      sentinel (R§8.3a — default on a fresh install) — the Usage screen
+      shows `advisory` persistently while this is 0.
+    example: 5000000
+  consumed:
+    type: integer
+    minimum: 0
+    description: >
+      Total tokens debited so far this budget period, reconciled from the
+      persisted counter at boot. May overshoot `budget` by up to the sum
+      of in-flight turn costs at the moment of exhaustion (INV-8 —
+      post-turn provider-reported debit, graceful wind-down, never a
+      mid-tool hard cut).
+    example: 1250000
+  remaining:
+    type: integer
+    description: >
+      `budget - consumed`, floored at 0. Meaningless (ignore) when
+      `budget == 0` (unbounded).
+    example: 3750000
+  exhausted:
+    type: boolean
+    description: >
+      True once the pool has crossed zero. Every running scope brakes to
+      `failed(budget_exhausted)` at its next turn/adjudication boundary
+      (INV-8) — never mid-tool.
+    example: false
+  advisory:
+    type: string
+    description: >
+      Present (non-empty) only when `budget == 0` — the persistent
+      "unbounded — set a budget" Usage-screen advisory (R§8.3a). Also
+      used for the one-time token≠dollar-cap warning surfaced when an
+      operator first sets a budget (R§8.3b).
+    example: "unbounded — set a budget"
+  by_scope:
+    type: object
+    required:
+      - owner
+      - member
+      - verifier
+      - judge
+    additionalProperties: false
+    description: >
+      Per-scope spend accounting (owner/member/verifier/Judge turns each
+      debit the SAME shared pool — this breakdown is display-only, not a
+      separate budget per scope).
+    properties:
+      owner:
+        type: integer
+        minimum: 0
+        description: Tokens consumed by plan-owner / goal-owner turns.
+        example: 200000
+      member:
+        type: integer
+        minimum: 0
+        description: Tokens consumed by plan-member / delegated-child turns.
+        example: 900000
+      verifier:
+        type: integer
+        minimum: 0
+        description: Tokens consumed by verifier/Judge-adjacent worker turns.
+        example: 100000
+      judge:
+        type: integer
+        minimum: 0
+        description: Tokens consumed by the Judge's own adjudication calls.
+        example: 50000

@@ -1,0 +1,78 @@
+type: object
+title: SessionMessageSteer
+description: >
+  SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract
+  Surface). Parent -> child. Mid-run injection applied at the child's next
+  tool boundary (skip-remaining-batch semantics identical to chat
+  steering, INV-3) — never mid-tool, never interleaved with an in-flight
+  verdict write. Rate-capped 6/min, 16 KiB body (session_messaging.
+  steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034
+  precedent, see SessionMessageProgress for the rationale).
+required:
+  - message_id
+  - session_id
+  - direction
+  - kind
+  - depth
+  - created_at
+  - sender_identity
+  - untrusted_origin
+  - text
+additionalProperties: false
+properties:
+  message_id:
+    type: string
+    minLength: 1
+    example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WV"
+  session_id:
+    type: string
+    minLength: 1
+    description: The CHILD session being steered.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  parent_session_id:
+    type: string
+    nullable: true
+    description: The parent session issuing the steer.
+    example: "660e8400-e29b-41d4-a716-446655440000"
+  generation:
+    type: integer
+    minimum: 0
+    example: 0
+  direction:
+    type: string
+    enum:
+      - parent_to_child
+    example: "parent_to_child"
+  kind:
+    type: string
+    enum:
+      - steer
+    example: "steer"
+  depth:
+    type: integer
+    minimum: 0
+    maximum: 5
+    example: 0
+  created_at:
+    type: string
+    format: date-time
+    example: "2026-07-22T10:00:00Z"
+  sender_identity:
+    type: string
+    minLength: 1
+    example: "jim"
+  untrusted_origin:
+    type: boolean
+    description: False — parent-authored, trusted content.
+    example: false
+  text:
+    type: string
+    maxLength: 16384
+    description: Steering instruction injected at the child's next tool boundary.
+    example: "Skip the xlsx shard for now, prioritize the CSV export."
+  correlation_id:
+    type: string
+    description: >
+      Optional — set when this steer is issued alongside/answering a
+      specific open question or blocker.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
