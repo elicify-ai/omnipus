@@ -513,13 +513,23 @@ func checkBrowserPackageChrome() []warning {
 				),
 			})
 		} else if len(missing) > 0 {
-			warnings = append(warnings, warning{
-				code: "WARN-BROWSER-005",
-				message: fmt.Sprintf(
-					"bundled chrome is missing required macOS libraries: %s. System libraries (/usr/lib, /System/Library) ship with macOS — a missing system dylib indicates macOS needs reinstallation. Bundled frameworks ship in the .app's Frameworks directory — a missing @rpath framework indicates the omnipus package is corrupt; reinstall it to recover the integrity-verified payload. The in-process Mach-O check is the primary defense (ADR-052 SEC-ADR052-008).",
-					strings.Join(missing, ", "),
-				),
-			})
+			// The synthetic "not-a-macho-binary" entry means the parser
+			// ran but the file isn't a Mach-O (e.g. a shell script the
+			// operator staged for testing, or a corrupt binary). That's a
+			// binary-format error, not a missing-lib error — surfacing it
+			// under WARN-BROWSER-005 ("missing required macOS libraries")
+			// would mislead the operator into installing host libs that
+			// don't exist. Skip the warning for this single-entry case;
+			// the structural-error branch above handles true parse errors.
+			if !(len(missing) == 1 && missing[0] == notAMachOBinary) {
+				warnings = append(warnings, warning{
+					code: "WARN-BROWSER-005",
+					message: fmt.Sprintf(
+						"bundled chrome is missing required macOS libraries: %s. System libraries (/usr/lib, /System/Library) ship with macOS — a missing system dylib indicates macOS needs reinstallation. Bundled frameworks ship in the .app's Frameworks directory — a missing @rpath framework indicates the omnipus package is corrupt; reinstall it to recover the integrity-verified payload. The in-process Mach-O check is the primary defense (ADR-052 SEC-ADR052-008).",
+						strings.Join(missing, ", "),
+					),
+				})
+			}
 		}
 	}
 

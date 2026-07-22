@@ -46,6 +46,37 @@ var darwinSearchPaths = []string{
 	"/Library/Frameworks",
 }
 
+// darwinSystemDylibPrefixes are the basename prefixes of dylibs that are
+// part of the macOS operating system (libsystem, core frameworks, runtime
+// libraries). These are ALWAYS present on a functioning macOS — the
+// doctor's job is to catch missing APP/USER-bundled dylibs, not
+// OS-provided ones. On minimal CI macOS images some of these don't
+// exist at their canonical paths as real files (they're dyld-synthetic),
+// so we allowlist by basename prefix.
+var darwinSystemDylibPrefixes = []string{
+	"libSystem",
+	"libsystem_",
+	"libdyld",
+	"libobjc",
+	"libcorecrypto",
+	"libcompiler_rt",
+	"libc++",
+	"libc++abi",
+}
+
+// isSystemDylib reports whether the named dylib is part of the macOS OS
+// (libsystem family + core runtimes) and therefore always present on a
+// functioning host.
+func isSystemDylib(name string) bool {
+	base := filepath.Base(name)
+	for _, p := range darwinSystemDylibPrefixes {
+		if strings.HasPrefix(base, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // missingChromeLibsMachO walks binPath's Mach-O LC_LOAD_DYLIB entries and
 // returns the name of every dependency that is NOT present on the host.
 // An empty/nil result means every dependency resolved. A non-Mach-O file
@@ -105,6 +136,15 @@ func dylibResolves(name string) bool {
 	if strings.HasPrefix(name, "@rpath/") ||
 		strings.HasPrefix(name, "@executable_path/") ||
 		strings.HasPrefix(name, "@loader_path/") {
+		return true
+	}
+
+	// System dylibs (libsystem + core runtimes) are always present on a
+	// functioning macOS regardless of whether the canonical path resolves
+	// as a real file on disk (on minimal CI macOS images some are
+	// dyld-synthetic). The doctor's job is to catch MISSING APP/USER
+	// dylibs, not OS-provided ones.
+	if isSystemDylib(name) {
 		return true
 	}
 
