@@ -1,0 +1,515 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+// ADR-053 §Contract Surface (S2) — the durable 8-state session-lifecycle
+// record. This is the single source of truth for "is anything still
+// working?" for a goal-bearing or delegated session — distinct from
+// SessionStatus (daypartition.go — active/archived/interrupted, chat-
+// transcript metadata) and from plan.State (the 5-state plan lifecycle).
+// Do not conflate any of the three.
+//
+// Persistence model: one JSONL file per durable session_id
+// (<dir>/<session_id>.jsonl), append-only. Every state transition — plus a
+// generation bump on follow_up/Play — appends a full-snapshot line; the
+// CURRENT record is always the last valid line in the file. This gives the
+// audit trail "for free" (every prior state is still on disk, immutable),
+// is crash-safe (a torn last write leaves the prior line intact and
+// readable), and mirrors the per-entity-file convention pkg/task and
+// pkg/plan use, adapted to JSONL per the ADR §Contract Surface wording
+// ("Persisted per-entity JSONL (like tasks/pins), 64-shard mutex pool").
+//
+// The immutable-terminal invariant (L-3/MAJ-1/N-7) is enforced at Persist:
+// once the tail record for a session_id is terminal, a further Persist call
+// naming the SAME generation is rejected — only a strictly-incrementing
+// Generation (minted by a follow_up/Play, ADR-053 D-the-generation-mint) may
+// be appended after a terminal tail.
+package session
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+)
+
+// ErrLifecycleNotFound is returned when a durable session_id has no
+// persisted lifecycle record.
+var ErrLifecycleNotFound = errors.New("session: lifecycle record not found")
+
+// ErrLifecycleTerminalImmutable is returned when a caller attempts to
+// Persist a mutation onto a terminal record's own generation (L-3/MAJ-1/N-7
+// — a terminal record is never mutated in place; a follow_up/Play must mint
+// a new generation instead).
+var ErrLifecycleTerminalImmutable = errors.New("session: lifecycle: terminal record is immutable")
+
+// LifecycleState is the durable 8-state session lifecycle (ADR-053 S2 / the
+// S4 interlock state machine's authority).
+type LifecycleState string
+
+// The eight canonical lifecycle states. These are the ONLY valid values.
+const (
+	LifecycleQueued     LifecycleState = "queued"
+	LifecycleRunning    LifecycleState = "running"
+	LifecycleNeedsInput LifecycleState = "needs_input"
+	// LifecyclePaused covers BOTH cooperative cancel-soft grace AND a
+	// plan-owner session idling while its plan is durably
+	// plan_phase=awaiting_owner_correction (that condition itself lives on
+	// the Plan record — pkg/plan — not as a 9th state here; see
+	// R§8.10's lifecycle-to-pill crosswalk). This package does not persist
+	// or interpret plan_phase; a caller layering the plan-owner semantics on
+	// top (Phase 2 / another wave) reads OwnsPlanID to resolve that link.
+	LifecyclePaused    LifecycleState = "paused"
+	LifecycleCompleted LifecycleState = "completed"
+	LifecycleFailed    LifecycleState = "failed"
+	LifecycleCancelled LifecycleState = "cancelled"
+	LifecycleTimedOut  LifecycleState = "timed_out"
+)
+
+// validLifecycleStates is the set of allowed LifecycleState values.
+var validLifecycleStates = map[LifecycleState]bool{ //nolint:gochecknoglobals
+	LifecycleQueued:     true,
+	LifecycleRunning:    true,
+	LifecycleNeedsInput: true,
+	LifecyclePaused:     true,
+	LifecycleCompleted:  true,
+	LifecycleFailed:     true,
+	LifecycleCancelled:  true,
+	LifecycleTimedOut:   true,
+}
+
+// IsValidLifecycleState reports whether s is one of the eight canonical
+// lifecycle states.
+func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[s] }
+
+// terminalLifecycleStates is the set of states after which a record is
+// frozen (immutable-terminal invariant, L-3).
+var terminalLifecycleStates = map[LifecycleState]bool{ //nolint:gochecknoglobals
+	LifecycleCompleted: true,
+	LifecycleFailed:    true,
+	LifecycleCancelled: true,
+	LifecycleTimedOut:  true,
+}
+
+// IsTerminalLifecycleState reports whether s is one of the four terminal
+// states (completed/failed/cancelled/timed_out).
+func IsTerminalLifecycleState(s LifecycleState) bool { return terminalLifecycleStates[s] }
+
+// LaunchProfile is the delegate launch profile (ADR-053 §Contract Surface —
+// Delegate action set). utility = visibility=outcome, steering=none,
+// child_messaging=progress_only (fire-and-collect, maps today's one-shot
+// spawn). specialist = visibility=checkpoints, steering=parent_and_human,
+// child_messaging=full (a 3P child on this profile still degrades to
+// fire-and-collect, D5).
+type LaunchProfile string
+
+const (
+	LaunchProfileUtility    LaunchProfile = "utility"
+	LaunchProfileSpecialist LaunchProfile = "specialist"
+)
+
+// IsValidLaunchProfile reports whether p is one of the two published launch
+// profiles.
+func IsValidLaunchProfile(p LaunchProfile) bool {
+	return p == LaunchProfileUtility || p == LaunchProfileSpecialist
+}
+
+// OwnerScopeKind discriminates LifecycleRecord.OwnerScopeID's meaning (N-9 —
+// a bare oneOf of untagged strings has no discriminator, so this mirrors the
+// generated SessionLifecycleRecordOwnerScopeKind split).
+type OwnerScopeKind string
+
+const (
+	// OwnerScopeParentSession — OwnerScopeID names the parent session_id.
+	OwnerScopeParentSession OwnerScopeKind = "parent_session_id"
+	// OwnerScopePlan — OwnerScopeID names the owning plan_id.
+	OwnerScopePlan OwnerScopeKind = "plan_id"
+	// OwnerScopeHuman — no single owning id; a top-level chat-goal session
+	// owned by the human/chat-principal. OwnerScopeID is empty.
+	OwnerScopeHuman OwnerScopeKind = "human"
+)
+
+// IsValidOwnerScopeKind reports whether k is one of the three owner-scope
+// discriminators.
+func IsValidOwnerScopeKind(k OwnerScopeKind) bool {
+	switch k {
+	case OwnerScopeParentSession, OwnerScopePlan, OwnerScopeHuman:
+		return true
+	default:
+		return false
+	}
+}
+
+// NeedsInput is present iff LifecycleRecord.State == LifecycleNeedsInput.
+// Reconstructable is a PARK-TIME HINT ONLY (m5) — the authoritative
+// determination for warm-resume eligibility at boot is
+// isNeedsInputReconstructable (a Phase-2/boot-sweep concern, R§8.6), never
+// this stored value.
+type NeedsInput struct {
+	CorrelationID   string    `json:"correlation_id"`
+	Reconstructable bool      `json:"reconstructable"`
+	TTLDeadline     time.Time `json:"ttl_deadline"`
+}
+
+// Expired reports whether now is at or past n's TTL deadline (INV-5 bounded
+// park — G-6). A zero TTLDeadline is treated as not-yet-expired (never
+// silently expire an unset deadline).
+func (n *NeedsInput) Expired(now time.Time) bool {
+	if n == nil || n.TTLDeadline.IsZero() {
+		return false
+	}
+	return !now.Before(n.TTLDeadline)
+}
+
+// LifecycleRecord is the durable, per-generation session-lifecycle record
+// (ADR-053 §Contract Surface — SessionLifecycleRecord). Field shapes mirror
+// the generated pkg/api/generated.SessionLifecycleRecord one-for-one so a
+// caller mapping this disk record onto the wire type (delegate.status,
+// DoD-11) never has to reconcile diverging field names.
+//
+// not-wire-format: internal disk record; a caller (pkg/tools/delegate.go)
+// maps it onto generated.SessionLifecycleRecord at the tool-result boundary.
+type LifecycleRecord struct {
+	SessionID   string         `json:"session_id"`
+	Generation  int            `json:"generation"`
+	ResumedFrom string         `json:"resumed_from,omitempty"`
+	State       LifecycleState `json:"state"`
+
+	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
+	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
+	// OwnsPlanID is set when THIS session is a plan's OWNER session — the
+	// reciprocal of plan.Plan.OwnerSessionID (m-3/FR-147, a pkg/plan field
+	// this wave does not add — see the final report's flagged pkg/plan
+	// seam). Lets a boot sweep (another wave) exempt a paused owner session
+	// whose OwnerScopeKind==human but which is legitimately idle awaiting a
+	// correction on the named plan.
+	OwnsPlanID string `json:"owns_plan_id,omitempty"`
+
+	GoalRef       string        `json:"goal_ref,omitempty"`
+	WorkspaceID   string        `json:"workspace_id"`
+	AgentID       string        `json:"agent_id"`
+	Is3P          bool          `json:"is_3p"`
+	LaunchProfile LaunchProfile `json:"launch_profile"`
+
+	// ParentDurableKey is the durable chat/plan id (D16) this session's
+	// PARENT inbox is keyed to — ALWAYS populated at spawn time with the
+	// parent's own live transcript/chat session id, regardless of
+	// OwnerScopeKind (unlike OwnerScopeID, which per the wire contract is
+	// empty when OwnerScopeKind==human — see that field's own doc comment).
+	// A durable inbox routing key must always resolve to something
+	// addressable even for a human-owned top-level parent, which is exactly
+	// the case OwnerScopeID cannot serve. Not part of the generated wire
+	// shape.
+	ParentDurableKey string `json:"parent_durable_key,omitempty"`
+
+	// OriginChannel/OriginChatID are the channel + chat_id the delegating
+	// `delegate.run` call originated FROM (the PARENT's own live
+	// conversation — mirrors pkg/tools/delegate.go's pre-existing
+	// DelegateTaskState.OriginChannel/OriginChatID fields, captured the same
+	// way via ToolChannel(ctx)/ToolChatID(ctx) at spawn time). Not part of
+	// the generated wire shape (this record is not-wire-format) — carried
+	// here so a child's own message_parent call can resolve "which live
+	// conversation does a bounded typed wake (ADR-053 S3) need to land in"
+	// without a separate lookup. Empty when the parent had no
+	// channel/chatID context at spawn time (e.g. a programmatic call).
+	OriginChannel string `json:"origin_channel,omitempty"`
+	OriginChatID  string `json:"origin_chat_id,omitempty"`
+
+	LastCheckpointRef     string   `json:"last_checkpoint_ref,omitempty"`
+	UndeliveredMessageIDs []string `json:"undelivered_message_ids,omitempty"`
+
+	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
+
+	// FailedReason is set only when State==LifecycleFailed. Left open
+	// (not a closed enum) per the generated type's own field doc — e.g.
+	// "interrupted", "budget_exhausted", "judge_rounds_exhausted".
+	FailedReason string `json:"failed_reason,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Terminal reports whether r's State is one of the four terminal states.
+func (r *LifecycleRecord) Terminal() bool {
+	if r == nil {
+		return false
+	}
+	return IsTerminalLifecycleState(r.State)
+}
+
+// validateLifecycleSessionID rejects IDs containing path separators, "..", or null
+// bytes (mirrors pkg/task/store.go's validateID exactly).
+func validateLifecycleSessionID(id string) error {
+	if id == "" {
+		return fmt.Errorf("session_id must not be empty")
+	}
+	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") || strings.ContainsRune(id, 0) {
+		return fmt.Errorf("invalid session_id %q", id)
+	}
+	return nil
+}
+
+// LifecycleStore manages the durable, per-entity JSONL session-lifecycle
+// records under a single directory. All read-modify-write paths are
+// serialized by the store's own 64-shard striped lock keyed by session_id,
+// plus an advisory flock on the file itself (fileutil.AppendJSONL's
+// O_APPEND semantics).
+type LifecycleStore struct {
+	dir  string
+	lock *lifecycleStripedLock
+}
+
+// NewLifecycleStore creates a LifecycleStore rooted at dir. By convention
+// dir is "<OMNIPUS_HOME>/session_lifecycle" — the caller wiring this store
+// into the gateway/agent-loop boot sequence (outside this wave's write-set)
+// should use that path so every consumer of the durable record agrees on
+// its location.
+func NewLifecycleStore(dir string) *LifecycleStore {
+	return &LifecycleStore{dir: dir, lock: &lifecycleStripedLock{}}
+}
+
+// Dir returns the store's root directory.
+func (s *LifecycleStore) Dir() string { return s.dir }
+
+func (s *LifecycleStore) path(sessionID string) string {
+	return filepath.Join(s.dir, sessionID+".jsonl")
+}
+
+// Lock returns the per-session striped mutex for sessionID. Callers
+// performing a manual read-modify-write (read tail, decide next state,
+// Persist) MUST hold this for the whole RMW to avoid two writers racing a
+// transition (e.g. two concurrent `respond`s against the same needs_input
+// session).
+func (s *LifecycleStore) Lock(sessionID string) *sync.Mutex {
+	return s.lock.Get(sessionID)
+}
+
+// tail reads every line of sessionID's JSONL file and returns the last
+// successfully-parsed record (the current state). Returns nil, nil when the
+// file does not exist (no record yet — a fresh session_id). A malformed
+// trailing line (a torn write from a crash mid-append) is skipped with a
+// fall-back to the last GOOD line rather than failing the read outright —
+// crash-safety mirrors fileutil.WriteFileAtomic's own "never worse than the
+// last durable write" guarantee.
+func (s *LifecycleStore) tail(sessionID string) (*LifecycleRecord, error) {
+	f, err := os.Open(s.path(sessionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
+	}
+	defer f.Close()
+
+	var last *LifecycleRecord
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var rec LifecycleRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			// Skip a torn/corrupt line; keep the last good record. This is
+			// deliberately non-fatal — see the doc comment above.
+			continue
+		}
+		r := rec
+		last = &r
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
+	}
+	return last, nil
+}
+
+// Load returns the current (tail) LifecycleRecord for sessionID.
+// Returns ErrNotFound when no record exists yet.
+func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	mu := s.Lock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	rec, err := s.tail(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, ErrLifecycleNotFound
+	}
+	return rec, nil
+}
+
+// Persist appends rec as the new current state for rec.SessionID, enforcing
+// the immutable-terminal invariant (L-3): if the existing tail record is
+// terminal AND rec.Generation == tail.Generation, the write is rejected —
+// only a strictly-greater Generation (a follow_up/Play mint) may be
+// appended after a terminal tail. rec.CreatedAt is preserved from the first
+// record of this generation (or set to now for a new generation);
+// rec.UpdatedAt is always stamped to now.
+//
+// Callers performing a read-then-decide-then-write sequence should hold
+// Lock(rec.SessionID) across the whole sequence; Persist itself only holds
+// the lock for the duration of its own read-tail + append.
+func (s *LifecycleStore) Persist(rec *LifecycleRecord) error {
+	if rec == nil {
+		return fmt.Errorf("session: lifecycle: nil record")
+	}
+	if err := validateLifecycleSessionID(rec.SessionID); err != nil {
+		return err
+	}
+	if !IsValidLifecycleState(rec.State) {
+		return fmt.Errorf("session: lifecycle: invalid state %q", rec.State)
+	}
+	if rec.State == LifecycleNeedsInput && rec.NeedsInput == nil {
+		return fmt.Errorf("session: lifecycle: state needs_input requires NeedsInput to be set")
+	}
+	if rec.State != LifecycleNeedsInput {
+		rec.NeedsInput = nil
+	}
+	if rec.State == LifecycleFailed && strings.TrimSpace(rec.FailedReason) == "" {
+		return fmt.Errorf("session: lifecycle: state failed requires failed_reason")
+	}
+	if rec.OwnerScopeKind != "" && !IsValidOwnerScopeKind(rec.OwnerScopeKind) {
+		return fmt.Errorf("session: lifecycle: invalid owner_scope_kind %q", rec.OwnerScopeKind)
+	}
+	if rec.LaunchProfile != "" && !IsValidLaunchProfile(rec.LaunchProfile) {
+		return fmt.Errorf("session: lifecycle: invalid launch_profile %q", rec.LaunchProfile)
+	}
+
+	mu := s.Lock(rec.SessionID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	prev, err := s.tail(rec.SessionID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	switch {
+	case prev == nil:
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = now
+		}
+	case prev.Terminal() && rec.Generation == prev.Generation:
+		return fmt.Errorf(
+			"%w: session %q generation %d is terminal (%s); a follow_up/Play must mint generation %d via resumed_from",
+			ErrLifecycleTerminalImmutable, rec.SessionID, prev.Generation, prev.State, prev.Generation+1,
+		)
+	case rec.Generation == prev.Generation:
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = prev.CreatedAt
+		}
+	default:
+		// A genuine new generation (follow_up/Play). CreatedAt starts fresh
+		// for this generation unless the caller already set one.
+		if rec.CreatedAt.IsZero() {
+			rec.CreatedAt = now
+		}
+	}
+	rec.UpdatedAt = now
+
+	return fileutil.AppendJSONL(s.path(rec.SessionID), rec)
+}
+
+// LifecycleFilter narrows the result of List. All fields are optional
+// (zero value = skip that filter).
+type LifecycleFilter struct {
+	WorkspaceID string
+	AgentID     string
+	// States, when non-empty, restricts results to records whose State is
+	// in this set.
+	States map[LifecycleState]bool
+	// NonTerminalOnly, when true, is shorthand for "State is not one of the
+	// four terminal states" — the boot sweep's primary query (another
+	// wave), exposed here since it is the store's natural output shape.
+	NonTerminalOnly bool
+}
+
+func (f LifecycleFilter) matches(r *LifecycleRecord) bool {
+	if f.WorkspaceID != "" && r.WorkspaceID != f.WorkspaceID {
+		return false
+	}
+	if f.AgentID != "" && r.AgentID != f.AgentID {
+		return false
+	}
+	if len(f.States) > 0 && !f.States[r.State] {
+		return false
+	}
+	if f.NonTerminalOnly && r.Terminal() {
+		return false
+	}
+	return true
+}
+
+// scanSessionIDs lists every session_id with a persisted record (one .jsonl
+// file per id) under the store's directory.
+func (s *LifecycleStore) scanSessionIDs() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("session: lifecycle: read dir: %w", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		ids = append(ids, strings.TrimSuffix(name, ".jsonl"))
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// List returns the current (tail) record for every persisted session_id
+// matching filter. This is the primitive a boot sweep (another wave) uses
+// to enumerate every non-terminal session with no live runtime turn
+// (FR-118) — pass LifecycleFilter{NonTerminalOnly: true}.
+func (s *LifecycleStore) List(filter LifecycleFilter) ([]LifecycleRecord, error) {
+	ids, err := s.scanSessionIDs()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LifecycleRecord, 0, len(ids))
+	for _, id := range ids {
+		rec, err := s.Load(id)
+		if err != nil {
+			if err == ErrLifecycleNotFound {
+				continue
+			}
+			return nil, err
+		}
+		if filter.matches(rec) {
+			out = append(out, *rec)
+		}
+	}
+	return out, nil
+}
+
+// Exists reports whether a lifecycle record file exists for sessionID.
+func (s *LifecycleStore) Exists(sessionID string) bool {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return false
+	}
+	_, err := os.Stat(s.path(sessionID))
+	return err == nil
+}

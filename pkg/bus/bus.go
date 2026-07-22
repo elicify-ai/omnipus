@@ -36,6 +36,10 @@ type MessageBus struct {
 	inbound       chan InboundMessage
 	outbound      chan OutboundMessage
 	outboundMedia chan OutboundMediaMessage
+	// sessionMessages carries the ADR-053 S3 typed SessionMessage transport
+	// (session_message.go) — a fourth in-process channel on this SAME bus
+	// struct, not a second bus (DoD-11).
+	sessionMessages chan SessionMessageEvent
 
 	closeOnce      sync.Once
 	done           chan struct{}
@@ -47,10 +51,11 @@ type MessageBus struct {
 
 func NewMessageBus() *MessageBus {
 	return &MessageBus{
-		inbound:       make(chan InboundMessage, defaultBusBufferSize),
-		outbound:      make(chan OutboundMessage, defaultBusBufferSize),
-		outboundMedia: make(chan OutboundMediaMessage, defaultBusBufferSize),
-		done:          make(chan struct{}),
+		inbound:         make(chan InboundMessage, defaultBusBufferSize),
+		outbound:        make(chan OutboundMessage, defaultBusBufferSize),
+		outboundMedia:   make(chan OutboundMediaMessage, defaultBusBufferSize),
+		sessionMessages: make(chan SessionMessageEvent, sessionMessageBufferSize),
+		done:            make(chan struct{}),
 	}
 }
 
@@ -159,6 +164,7 @@ func (mb *MessageBus) Close() {
 		close(mb.inbound)
 		close(mb.outbound)
 		close(mb.outboundMedia)
+		close(mb.sessionMessages)
 
 		// clean up any remaining messages in channels
 		drained := 0
@@ -169,6 +175,9 @@ func (mb *MessageBus) Close() {
 			drained++
 		}
 		for range mb.outboundMedia {
+			drained++
+		}
+		for range mb.sessionMessages {
 			drained++
 		}
 

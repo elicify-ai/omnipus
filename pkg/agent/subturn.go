@@ -217,7 +217,127 @@ type SubTurnConfig struct {
 	// getSubTurnConfig's own (shared-function) resolution.
 	ResolvedMaxDepth *int
 
+	// DelegateSessionID, when non-empty, is the ADR-053 durable session_id
+	// (S2) the caller (pkg/tools/delegate.go's executeRun) already minted
+	// and persisted a `queued` LifecycleRecord under BEFORE calling this
+	// spawner — spawnSubTurn reuses it verbatim as childID/sessionKey (see
+	// the childID assignment) rather than generating a fresh counter-based
+	// one, so a caller-issued session_id is always the child's real
+	// steering-queue scope. Empty means "let spawnSubTurn generate one" —
+	// the pre-ADR-053 default for any caller that does not set this.
+	DelegateSessionID string
+
+	// ContextSnapshot carries the DISCRETIONARY portion of the ADR-053 D1
+	// curated context snapshot (R§8.5) — parent-named artifact references
+	// (not contents) plus optional parent-authored notes. Deny-by-default:
+	// nothing beyond this + the MANDATORY core (SystemPrompt/task prompt +
+	// ActualSystemPrompt/target identity, both already carried by this
+	// struct's existing fields — assembled server-side via execSource per
+	// ADR-032, never from the parent's own transcript/credentials/sibling
+	// context) reaches the child. nil/zero-value means "no discretionary
+	// snapshot" (an empty, valid snapshot). Validate with
+	// ValidateContextSnapshot BEFORE spawning — spawnSubTurn does not
+	// itself enforce the cap; the caller (pkg/tools/delegate.go's
+	// executeRun) MUST call ValidateContextSnapshot and reject the
+	// `delegate.run` call on error rather than let an over-cap snapshot
+	// through.
+	ContextSnapshot *ContextSnapshot
+
 	// Can be extended with temperature, topP, etc.
+}
+
+// ContextSnapshot is the DISCRETIONARY portion of the ADR-053 D1 curated
+// context snapshot (R§8.5) a parent may attach to a `delegate.run` call.
+// The MANDATORY core (task prompt + compiled criteria + engine-injected
+// target identity) is assembled server-side and is EXEMPT from
+// snapshot_max_bytes (m4) — it is never represented by this type, which
+// covers ONLY the parent-named references + optional notes.
+type ContextSnapshot struct {
+	// References are parent-named artifact path/ref strings (NOT contents)
+	// visible to the child. Never the parent's own transcript, credentials,
+	// or sibling context (D1 deny-by-default).
+	References []string
+	// Notes are optional parent-authored free text, counted against
+	// snapshotMaxBytes alongside References.
+	Notes string
+}
+
+// ADR-053 §Contract Surface / R§8.5 defaults for the curated context
+// snapshot's discretionary-portion caps. Overridable via
+// SubTurnConfig.SnapshotMaxBytes/SnapshotMaxRefs-style config plumbing in a
+// later wave (config is outside this wave's write-set) — ValidateContextSnapshot
+// accepts explicit overrides so a caller with real config values never has
+// to touch these constants.
+const (
+	defaultSnapshotMaxBytes = 8 * 1024 // 8 KiB, per ADR §Contract Surface
+	defaultSnapshotMaxRefs  = 50
+)
+
+// ErrSnapshotOverCap is returned by ValidateContextSnapshot when the
+// DISCRETIONARY portion (references + notes) exceeds its byte or count cap.
+// The MANDATORY core (task prompt + criteria + identity) is NEVER subject
+// to this check (m4) — only what this function is handed.
+var ErrSnapshotOverCap = errors.New("agent: curated context snapshot exceeds the discretionary cap")
+
+// ValidateContextSnapshot enforces R§8.5's deny-by-default, hard-capped
+// curated context snapshot on the DISCRETIONARY portion only
+// (snap.References + snap.Notes). maxBytes/maxRefs <= 0 fall back to the
+// ADR §Contract Surface defaults (8 KiB / 50 refs). A nil snap is always
+// valid (no discretionary content — an empty snapshot never trips the
+// cap). Returns a wrapped ErrSnapshotOverCap naming exactly which cap was
+// exceeded so the caller can render a "narrow the snapshot" tool error
+// (never silently truncate, per R§8.5/FR-124).
+func ValidateContextSnapshot(snap *ContextSnapshot, maxBytes, maxRefs int) error {
+	if snap == nil {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = defaultSnapshotMaxBytes
+	}
+	if maxRefs <= 0 {
+		maxRefs = defaultSnapshotMaxRefs
+	}
+	if len(snap.References) > maxRefs {
+		return fmt.Errorf("%w: %d references exceeds snapshot_max_refs (%d) — narrow the snapshot",
+			ErrSnapshotOverCap, len(snap.References), maxRefs)
+	}
+	total := len(snap.Notes)
+	for _, ref := range snap.References {
+		total += len(ref)
+	}
+	if total > maxBytes {
+		return fmt.Errorf("%w: %d bytes exceeds snapshot_max_bytes (%d) — narrow the snapshot",
+			ErrSnapshotOverCap, total, maxBytes)
+	}
+	return nil
+}
+
+// renderContextSnapshot renders the DISCRETIONARY portion of a curated
+// context snapshot as plain text woven into the child's task prompt. Empty
+// for a nil snapshot or a snapshot with no references/notes — the common
+// case, so a call with no snapshot produces byte-for-byte the same task
+// text as before this field existed.
+func renderContextSnapshot(snap *ContextSnapshot) string {
+	if snap == nil || (len(snap.References) == 0 && strings.TrimSpace(snap.Notes) == "") {
+		return ""
+	}
+	var b strings.Builder
+	if len(snap.References) > 0 {
+		b.WriteString("References:\n")
+		for _, ref := range snap.References {
+			b.WriteString("- ")
+			b.WriteString(ref)
+			b.WriteString("\n")
+		}
+	}
+	if strings.TrimSpace(snap.Notes) != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("Notes: ")
+		b.WriteString(snap.Notes)
+	}
+	return b.String()
 }
 
 // ====================== Context Keys ======================
@@ -359,6 +479,13 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TaskLabel:          cfg.TaskLabel,
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
+		DelegateSessionID:  cfg.DelegateSessionID,
+	}
+	if cfg.ContextSnapshot != nil {
+		agentCfg.ContextSnapshot = &ContextSnapshot{
+			References: cfg.ContextSnapshot.References,
+			Notes:      cfg.ContextSnapshot.Notes,
+		}
 	}
 
 	return spawnSubTurn(ctx, s.al, parentTS, agentCfg)
@@ -454,6 +581,22 @@ func spawnSubTurn(
 		return nil, ErrInvalidSubTurnConfig
 	}
 
+	// 2b. ADR-053 D1/R§8.5: weave the curated context snapshot's
+	// DISCRETIONARY portion (parent-named references + notes — already
+	// cap-validated by the caller via ValidateContextSnapshot, e.g.
+	// pkg/tools/delegate.go's executeRun) into the SAME task text every
+	// dispatch kind reads (cfg.SystemPrompt becomes the child's first user
+	// message on the native path and composeDelegateInput's task text on
+	// the external-cli path below) — one composition point covers BOTH,
+	// so a snapshot reaches the child regardless of native/3P dispatch.
+	// The MANDATORY core (task prompt + criteria + target identity) is
+	// untouched by this — it is already cfg.SystemPrompt/ActualSystemPrompt
+	// themselves, assembled by the caller, never subject to the
+	// snapshot_max_bytes cap (m4).
+	if snapshotText := renderContextSnapshot(cfg.ContextSnapshot); snapshotText != "" {
+		cfg.SystemPrompt = cfg.SystemPrompt + "\n\n---\nContext (parent-provided, read-only references):\n" + snapshotText
+	}
+
 	// 3. Determine timeout for child SubTurn
 	timeout := cfg.Timeout
 	if timeout <= 0 {
@@ -473,7 +616,19 @@ func spawnSubTurn(
 	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	childID := al.generateSubTurnID()
+	// ADR-053 S2/D1: when the caller (pkg/tools/delegate.go's executeRun)
+	// already minted a durable session_id BEFORE dispatch (so it could
+	// persist the initial `queued` LifecycleRecord and hand the id back to
+	// the caller synchronously), reuse that EXACT value as childID rather
+	// than generating a fresh counter-based one. childID becomes
+	// childTS.sessionKey below, which is also the steering-queue scope key
+	// (steering.go) — this alignment is what lets delegate.go's steer/
+	// respond/cancel/peek actions address a child purely by the durable
+	// session_id it returned from `run`, with no separate id-mapping table.
+	childID := cfg.DelegateSessionID
+	if childID == "" {
+		childID = al.generateSubTurnID()
+	}
 
 	// FR-H-003: Extract the parent spawn tool call's ID from context. This was injected
 	// by loop.go via withSpawnToolCallID before calling ExecuteWithContext on the spawn tool.
@@ -873,6 +1028,12 @@ func spawnSubTurn(
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
+	// ADR-053 S2/D1: expose the child's own durable session_id (== childID
+	// above) to its OWN tool calls (message_parent.go reads this via
+	// tools.ToolDelegateSessionID) — distinct from the shared transcript
+	// session id (tools.ToolTranscriptSessionID), which this context also
+	// carries via runTurn below for backward compat.
+	childCtx = tools.WithDelegateSessionID(childCtx, childID)
 
 	childTS.ctx = childCtx
 
