@@ -84,7 +84,8 @@ func TestWirePlanTools_ExecutePlanFailsClosedBeforeSetPlanStore(t *testing.T) {
 
 	createResult := agentInst.Tools.Execute(context.Background(), "create_plan", map[string]any{
 		"title": "x", "owner_agent_id": "planner-agent",
-		"dod": []any{map[string]any{"kind": "prose", "text": "done"}},
+		"dod":       []any{map[string]any{"kind": "prose", "text": "done"}},
+		"rationale": "test rationale",
 	})
 	if createResult == nil || !createResult.IsError {
 		t.Fatalf("create_plan before SetPlanStore must fail closed, got %+v", createResult)
@@ -114,6 +115,7 @@ func TestWirePlanTools_SetPlanStoreWiresRealStoreForRegisteredAgent(t *testing.T
 		"title": "Ship the thing", "owner_agent_id": "planner-agent",
 		"workspace": testHarnessWorkspaceMembershipID,
 		"dod":       []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
+		"rationale": "ship the thing end to end",
 	})
 	if result == nil || result.IsError {
 		t.Fatalf("create_plan after SetPlanStore must succeed against the real store, got %+v", result)
@@ -217,6 +219,7 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 		"owner_agent_id": "planner-agent",
 		"workspace":      testHarnessWorkspaceMembershipID,
 		"dod":            []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
+		"rationale":      "ship the thing end to end",
 	})
 	if createResult == nil || createResult.IsError {
 		t.Fatalf("create_plan failed: %+v", createResult)
@@ -297,6 +300,7 @@ func TestPlanExecuteWired_RejectsMemberWithNoAcceptanceCriteria(t *testing.T) {
 		"owner_agent_id": "planner-agent",
 		"workspace":      testHarnessWorkspaceMembershipID,
 		"dod":            []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
+		"rationale":      "ship the thing end to end",
 	})
 	if createResult == nil || createResult.IsError {
 		t.Fatalf("create_plan failed: %+v", createResult)
