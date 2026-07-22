@@ -97,6 +97,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
     <div className="flex flex-col items-end" data-testid="goal-pill-wrapper">
       <button
         type="button"
+        tabIndex={0}
         data-testid={config.testId}
         data-goal-id={goalId}
         onClick={() => setExpanded((v) => !v)}
