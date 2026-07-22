@@ -317,3 +317,38 @@ func TestExtract_NonExistentFile(t *testing.T) {
 		t.Fatal("expected non-empty reason")
 	}
 }
+
+func TestExtract_SVG(t *testing.T) {
+	// ADR-051 RD1 extension (Option B): SVG is XML text — extraction must
+	// return the markup so a model can reason about the image from its
+	// source when no raster path is available.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "circle.svg")
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="blue"/></svg>`
+	if err := os.WriteFile(path, []byte(svg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text, ok, reason := Extract(path, "image/svg+xml", "circle.svg")
+	if !ok {
+		t.Fatalf("expected ok=true for SVG, reason=%q", reason)
+	}
+	if !strings.Contains(text, `<circle cx="50"`) {
+		t.Fatalf("expected SVG markup in text, got %q", text)
+	}
+}
+
+func TestExtract_SVGByExtensionOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "icon.svg")
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>`
+	if err := os.WriteFile(path, []byte(svg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	text, ok, reason := Extract(path, "", "icon.svg")
+	if !ok {
+		t.Fatalf("expected ok=true for .svg extension, reason=%q", reason)
+	}
+	if !strings.Contains(text, "<rect") {
+		t.Fatalf("expected SVG markup in text, got %q", text)
+	}
+}

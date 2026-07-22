@@ -498,3 +498,67 @@ func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
 	assert.Equal(t, TurnEndStatusError, turnEndPayload.Status,
 		"turn must end as error for a non-image LLM failure")
 }
+
+// TestResolveMediaRefs_SVG_RasterizedToPNG verifies Option A of the ADR-051
+// RD1 extension: a valid SVG attachment is rasterized to a canonical PNG
+// data URL and lands in the Media array — the provider receives an image it
+// can actually see instead of an image/svg+xml block it would reject.
+func TestResolveMediaRefs_SVG_RasterizedToPNG(t *testing.T) {
+	store := media.NewFileMediaStore()
+
+	tmpFile := filepath.Join(t.TempDir(), "circle.svg")
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="blue"/></svg>`
+	require.NoError(t, os.WriteFile(tmpFile, []byte(svg), 0o600))
+
+	ref, err := store.Store(tmpFile, media.MediaMeta{
+		Filename:    "circle.svg",
+		ContentType: "image/svg+xml",
+	}, "test-scope")
+	require.NoError(t, err)
+
+	messages := []providers.Message{
+		{Role: "user", Content: "what shape is this", Media: []string{ref}},
+	}
+
+	result := resolveMediaRefs(messages, store, 10*1024*1024, "")
+
+	require.Len(t, result, 1)
+	require.Len(t, result[0].Media, 1, "rasterized SVG must appear in Media")
+	assert.True(t, strings.HasPrefix(result[0].Media[0], "data:image/png;base64,"),
+		"SVG must be rasterized to PNG, got prefix of %q", result[0].Media[0][:48])
+	assert.NotContains(t, result[0].Content, "[attachment unavailable:")
+}
+
+// TestResolveMediaRefs_SVGRasterizeFails_TextInjection verifies Option B of
+// the ADR-051 RD1 extension: when rasterization fails, the SVG markup is
+// injected into Content as text — any model (including text-only ones) can
+// reason about the image from its code. The attachment is never dropped
+// silently and never produces the generic "unavailable" marker.
+func TestResolveMediaRefs_SVGRasterizeFails_TextInjection(t *testing.T) {
+	store := media.NewFileMediaStore()
+
+	tmpFile := filepath.Join(t.TempDir(), "broken.svg")
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><unclosed`
+	require.NoError(t, os.WriteFile(tmpFile, []byte(svg), 0o600))
+
+	ref, err := store.Store(tmpFile, media.MediaMeta{
+		Filename:    "broken.svg",
+		ContentType: "image/svg+xml",
+	}, "test-scope")
+	require.NoError(t, err)
+
+	messages := []providers.Message{
+		{Role: "user", Content: "what is in this file", Media: []string{ref}},
+	}
+
+	result := resolveMediaRefs(messages, store, 10*1024*1024, "")
+
+	require.Len(t, result, 1)
+	assert.Empty(t, result[0].Media, "failed rasterization must not add a Media block")
+	assert.Contains(t, result[0].Content, "[Attached file \"broken.svg\"]",
+		"SVG markup must be injected as a document block")
+	assert.Contains(t, result[0].Content, "<unclosed",
+		"injection must carry the raw SVG source for the model to read")
+	assert.NotContains(t, result[0].Content, "[attachment unavailable:",
+		"Option B replaces the generic unavailable marker for SVG")
+}

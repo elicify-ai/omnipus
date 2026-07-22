@@ -106,6 +106,13 @@ func resolveMediaRefs(
 				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
+				} else if mime == "image/svg+xml" {
+					// Option B (ADR-051 RD1 extension): rasterization failed,
+					// but an SVG is XML text — inject the markup into Content
+					// so ANY model (including text-only ones) can reason about
+					// the image from its code. Never drop it silently.
+					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+					contentInjections = append(contentInjections, inj)
 				} else {
 					name := meta.Filename
 					if name == "" {
@@ -393,20 +400,21 @@ const maxImagePixels = 16 * 1024 * 1024
 
 // isImageFormatUnsupportedByGo reports whether the given mime is a real image
 // format that Go's stdlib + golang.org/x/image still cannot decode (the stdlib
-// covers PNG/JPEG/GIF, x/image adds BMP/TIFF/WebP; SVG, AVIF, HEIC, HEIF
-// have no bundled decoder). For these, the D2 path applies: the original
-// bytes are sent through as-is, the provider is expected to reject them, and
-// the media-retry code strips the block on the next attempt.
+// covers PNG/JPEG/GIF, x/image adds BMP/TIFF/WebP; SVG is rasterized to PNG
+// via oksvg/rasterx in encodeImageToDataURL, so it no longer appears here;
+// AVIF, HEIC, HEIF, ICO have no bundled decoder). For these, the D2 path
+// applies: the original bytes are sent through as-is, the provider is
+// expected to reject them, and the media-retry code strips the block on the
+// next attempt.
 //
-// FR-001 (ADR-051 spec): "AVIF/HEIC/SVG → fall through to D2 provider-rejection
+// FR-001 (ADR-051 spec): "AVIF/HEIC → fall through to D2 provider-rejection
 // downgrade/retry (the LLM call happens, provider rejects, we strip the
 // offending block, retry)." The prior implementation returned "" on decode
 // failure, which made the caller drop the attachment before the LLM call
 // ever happened — contradicting the FR-001 contract.
 func isImageFormatUnsupportedByGo(mime string) bool {
 	switch mime {
-	case "image/svg+xml",
-		"image/avif",
+	case "image/avif",
 		"image/heic",
 		"image/heif",
 		"image/x-icon":
@@ -417,10 +425,11 @@ func isImageFormatUnsupportedByGo(mime string) bool {
 
 // encodeImageToDataURL normalizes a decodable image to PNG and returns it as a
 // data URL. The pixel budget is checked before full decode to bound memory use.
-// For formats Go cannot decode (SVG, AVIF, HEIC), the original bytes are
-// returned as-is (FR-001 D2 path) so the LLM call still happens and the
-// provider's rejection triggers the media-retry strip. Returns an empty
-// string only when the input exceeds maxSize or the file is unreadable.
+// SVG is rasterized to PNG via the pure-Go oksvg/rasterx path (Option A). For
+// formats Go cannot decode (AVIF, HEIC, ICO), the original bytes are returned
+// as-is (FR-001 D2 path) so the LLM call still happens and the provider's
+// rejection triggers the media-retry strip. Returns an empty string only when
+// the input exceeds maxSize, the file is unreadable, or normalization fails.
 func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int) string {
 	if info.Size() > int64(maxSize) {
 		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
@@ -428,6 +437,14 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 			"max_size": maxSize,
 		})
 		return ""
+	}
+
+	// ADR-051 RD1 extension (Option A): SVG is XML, not a raster format, so
+	// DecodeConfig below can never read it. Rasterize to canonical PNG via
+	// the pure-Go oksvg/rasterx path instead — the provider receives an
+	// image it can actually see.
+	if mime == "image/svg+xml" {
+		return encodeSVGToDataURL(localPath, info, maxSize)
 	}
 
 	f, err := os.Open(localPath)

@@ -181,9 +181,14 @@ func isTextLike(mime, ext string) bool {
 	if strings.HasPrefix(mime, "text/") {
 		return true
 	}
+	// SVG is XML markup: a model can reason about the image from its source
+	// even when no raster path is available (ADR-051 RD1 extension, Option B).
+	if mime == "image/svg+xml" {
+		return true
+	}
 	switch ext {
 	case ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml",
-		".xml", ".html", ".htm", ".toml", ".ini", ".cfg", ".conf",
+		".xml", ".svg", ".html", ".htm", ".toml", ".ini", ".cfg", ".conf",
 		".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".rb", ".java",
 		".c", ".h", ".cpp", ".cc", ".cxx", ".cs", ".swift", ".kt",
 		".sh", ".bash", ".zsh", ".fish", ".ps1",
