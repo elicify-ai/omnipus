@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -116,10 +117,14 @@ func (t *PlanCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanCreateTool) Description() string {
 	return "Create a draft Plan — a Definition-of-Done-driven grouping of tasks for a complex, " +
-		"multi-step goal. Attach member tasks afterward with create_task(plan_id=...). Requires at " +
-		"least one Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. " +
-		"Call execute_plan once the plan's member tasks are attached to start autonomous execution " +
-		"with no further human approval."
+		"multi-step goal. Attach member tasks afterward with create_task(plan_id=..., write_set=..., " +
+		"stream=..., is_join=...). Requires at least one Definition-of-Done criterion (dod) — an " +
+		"agent-authored plan with none is rejected. Also requires rationale: the planning discipline " +
+		"behind the decomposition (e.g. which write-set/stream split was chosen and which member is " +
+		"the join). Call execute_plan once the plan's member tasks are attached to start autonomous " +
+		"execution with no further human approval — execute_plan runs plan-lint, which rejects " +
+		"overlapping parallel write_sets and convergence points with no authored join member " +
+		"(is_join=true + its own acceptance criteria)."
 }
 
 func (t *PlanCreateTool) Parameters() map[string]any {
@@ -171,8 +176,15 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 				"description": "Plan-level Definition of Done. REQUIRED: at least one criterion — an " +
 					"agent-authored plan with zero DoD criteria is rejected.",
 			},
+			"rationale": map[string]any{
+				"type": "string",
+				"description": "REQUIRED: the planning discipline behind this plan's decomposition — the " +
+					"'why' (e.g. the write-set/stream split chosen and the join points authored). " +
+					"1-4000 characters. Plan-lint and the owner-loop correction flow read this " +
+					"alongside member write_set/stream/is_join.",
+			},
 		},
-		"required": []string{"title", "owner_agent_id", "dod"},
+		"required": []string{"title", "owner_agent_id", "dod", "rationale"},
 	}
 }
 
@@ -251,6 +263,17 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("create_plan failed: %v", dErr))
 	}
 
+	// ADR-053 §Contract Surface / FR-156: rationale is required from this
+	// tool unconditionally — every caller is an agent (same collapse-to-
+	// strict-tier reasoning as the dod gate above).
+	rationale, _ := args["rationale"].(string)
+	if strings.TrimSpace(rationale) == "" {
+		return ErrorResult(
+			"rationale is required: an agent-authored plan must state the planning discipline " +
+				"behind its decomposition (ADR-053 §Contract Surface)",
+		)
+	}
+
 	wsID, wErr := t.resolvePlanWorkspaceID(ctx, args)
 	if wErr != nil {
 		return ErrorResult(fmt.Sprintf("could not resolve workspace: %v", wErr))
@@ -263,6 +286,7 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		Owner:        callerID,
 		CreatedBy:    callerID,
 		DoD:          dod,
+		Rationale:    rationale,
 	}
 	if goal, ok := args["goal"].(string); ok {
 		p.Goal = goal
@@ -456,6 +480,24 @@ func (t *PlanExecuteTool) Execute(_ context.Context, args map[string]any) *ToolR
 		if mErr != nil {
 			return ErrorResult(fmt.Sprintf(
 				"execute_plan rejected: %d member task(s) have no acceptance criteria", len(offenders)))
+		}
+		return ErrorResult(string(encoded))
+	}
+
+	// FR-156/FR-159 (G-16, US-11): plan-lint — reject overlapping parallel
+	// write_sets and join-less convergence points. Runs after the FR-084
+	// criteria gate (mirrors this function's existing gate ordering: the
+	// more fundamental "does every member even have a DoD" gap surfaces
+	// first) and before the single gated state transition below, so a
+	// rejected plan never reaches draft->approved.
+	if lerr := plan.Lint(p, members); lerr != nil {
+		payload := map[string]any{
+			"error":           lerr.Error(),
+			"lint_violations": lerr.Violations,
+		}
+		encoded, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return ErrorResult(fmt.Sprintf("execute_plan failed: %v", lerr))
 		}
 		return ErrorResult(string(encoded))
 	}

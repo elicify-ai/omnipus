@@ -46,6 +46,7 @@ func TestPlanCreateTool_Happy(t *testing.T) {
 		"goal":           "Ship the v1.0 release",
 		"owner_agent_id": "jim",
 		"dod":            validCriteriaArg(),
+		"rationale":      "Single serial member, no parallel decomposition needed for v1.0.",
 	})
 	if res.IsError {
 		t.Fatalf("create_plan: %s", res.ForLLM)
@@ -103,6 +104,95 @@ func TestPlanCreateTool_RejectsMissingDoD(t *testing.T) {
 	all, _ := planStore.List(plan.Filter{WorkspaceID: "ws-1"})
 	if len(all) != 0 {
 		t.Fatal("no plan should have been persisted")
+	}
+}
+
+// TestPlanCreateTool_RejectsMissingRationale proves create_plan requires
+// rationale unconditionally (ADR-053 §Contract Surface) — every caller of
+// this tool is an agent, mirroring the dod gate's own strict-tier collapse.
+func TestPlanCreateTool_RejectsMissingRationale(t *testing.T) {
+	t.Parallel()
+	planStore, _ := newPlanAndTaskStores(t)
+	tool := NewPlanCreateTool(planStore)
+	tool.SetOwnerValidator(allowOwner)
+
+	ctx := WithAgentID(context.Background(), "jim")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":          "No rationale plan",
+		"owner_agent_id": "jim",
+		"dod":            validCriteriaArg(),
+	})
+	if !res.IsError {
+		t.Fatal("expected rejection for missing rationale")
+	}
+	if !strings.Contains(res.ForLLM, "rationale") {
+		t.Errorf("unexpected rejection message: %s", res.ForLLM)
+	}
+
+	all, _ := planStore.List(plan.Filter{WorkspaceID: "ws-1"})
+	if len(all) != 0 {
+		t.Fatal("no plan should have been persisted")
+	}
+}
+
+// TestPlanCreateTool_RejectsWhitespaceOnlyRationale proves a
+// whitespace-only rationale is rejected the same as an absent one.
+func TestPlanCreateTool_RejectsWhitespaceOnlyRationale(t *testing.T) {
+	t.Parallel()
+	planStore, _ := newPlanAndTaskStores(t)
+	tool := NewPlanCreateTool(planStore)
+	tool.SetOwnerValidator(allowOwner)
+
+	ctx := WithAgentID(context.Background(), "jim")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":          "Whitespace rationale plan",
+		"owner_agent_id": "jim",
+		"dod":            validCriteriaArg(),
+		"rationale":      "   \n\t  ",
+	})
+	if !res.IsError {
+		t.Fatal("expected rejection for whitespace-only rationale")
+	}
+}
+
+// TestPlanCreateTool_PersistsRationale proves a supplied rationale round-trips
+// onto the persisted plan record.
+func TestPlanCreateTool_PersistsRationale(t *testing.T) {
+	t.Parallel()
+	planStore, _ := newPlanAndTaskStores(t)
+	tool := NewPlanCreateTool(planStore)
+	tool.SetOwnerValidator(allowOwner)
+
+	ctx := WithAgentID(context.Background(), "jim")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	const wantRationale = "Split into two lint-disjoint streams that converge at a single merge member."
+	res := tool.Execute(ctx, map[string]any{
+		"title":          "Rationale round-trip",
+		"owner_agent_id": "jim",
+		"dod":            validCriteriaArg(),
+		"rationale":      wantRationale,
+	})
+	if res.IsError {
+		t.Fatalf("create_plan: %s", res.ForLLM)
+	}
+
+	var out struct {
+		PlanID string `json:"plan_id"`
+	}
+	if err := json.Unmarshal([]byte(res.ForLLM), &out); err != nil {
+		t.Fatalf("parse result %q: %v", res.ForLLM, err)
+	}
+	got, err := planStore.Get(out.PlanID)
+	if err != nil {
+		t.Fatalf("get persisted plan: %v", err)
+	}
+	if got.Rationale != wantRationale {
+		t.Fatalf("expected rationale %q to persist, got %q", wantRationale, got.Rationale)
 	}
 }
 
@@ -194,6 +284,7 @@ func TestPlanCreateTool_ExplicitWorkspaceArg(t *testing.T) {
 		"owner_agent_id": "jim",
 		"workspace":      "ws-explicit",
 		"dod":            validCriteriaArg(),
+		"rationale":      "Explicit workspace override, single member.",
 	})
 	if res.IsError {
 		t.Fatalf("create_plan: %s", res.ForLLM)
@@ -318,6 +409,78 @@ func TestPlanExecuteTool_RejectsCriteriaGap(t *testing.T) {
 	}
 	if payload.TaskErrors[0].Reason != "task has no acceptance criteria" {
 		t.Errorf("unexpected reason: %s", payload.TaskErrors[0].Reason)
+	}
+
+	got, err := planStore.Get(p.ID)
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	if got.State != plan.StateDraft {
+		t.Errorf("plan state = %q, want draft (unchanged)", got.State)
+	}
+}
+
+// TestPlanExecuteTool_RejectsLintViolation proves execute_plan runs
+// plan-lint (ADR-053 FR-156/159, G-16) and rejects a plan whose two
+// parallel (no blocked_by ordering) member tasks declare overlapping
+// write_set paths — the rejection surfaces the structured violation list
+// and leaves the plan draft, mirroring RejectsCriteriaGap's own contract.
+func TestPlanExecuteTool_RejectsLintViolation(t *testing.T) {
+	t.Parallel()
+	planStore, taskStore := newPlanAndTaskStores(t)
+	p := &plan.Plan{
+		Title: "Lint-violating plan", WorkspaceID: "ws-1", OwnerAgentID: "jim",
+		CreatedBy: "jim",
+		DoD: []task.AcceptanceCriterion{{
+			Kind: task.KindProse, Text: "plan done",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+		}},
+	}
+	if err := planStore.Create(p); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+	criteria := []task.AcceptanceCriterion{{
+		Kind: task.KindProse, Text: "done",
+		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+	}}
+	for _, id := range []string{"stream-a", "stream-b"} {
+		tk := &task.Task{
+			ID: id, Title: "member " + id, Prompt: "do it", Action: task.ActionLLM,
+			AgentID: "worker", WorkspaceID: "ws-1", Status: task.StatusNext,
+			PlanID: p.ID, Criteria: criteria, WriteSet: []string{"shared/config.go"},
+		}
+		if err := taskStore.Create(tk); err != nil {
+			t.Fatalf("seed member task %s: %v", id, err)
+		}
+	}
+
+	tool := NewPlanExecuteTool(planStore, taskStore)
+	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
+	if !res.IsError {
+		t.Fatal("expected rejection for overlapping parallel write_sets")
+	}
+
+	var payload struct {
+		Error          string `json:"error"`
+		LintViolations []struct {
+			Kind      string   `json:"kind"`
+			MemberIDs []string `json:"member_ids"`
+			Paths     []string `json:"paths"`
+			Reason    string   `json:"reason"`
+		} `json:"lint_violations"`
+	}
+	if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+		t.Fatalf("expected structured lint_violations JSON, got %q: %v", res.ForLLM, err)
+	}
+	if len(payload.LintViolations) != 1 {
+		t.Fatalf("expected exactly 1 lint violation, got %d: %+v", len(payload.LintViolations), payload.LintViolations)
+	}
+	v := payload.LintViolations[0]
+	if v.Kind != "write_set_overlap" {
+		t.Errorf("unexpected violation kind: %s", v.Kind)
+	}
+	if len(v.Paths) == 0 || v.Paths[0] != "shared/config.go" {
+		t.Errorf("expected the overlapping path named, got %v", v.Paths)
 	}
 
 	got, err := planStore.Get(p.ID)

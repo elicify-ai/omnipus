@@ -146,6 +146,9 @@ func (a *restAPI) toWirePlan(p plan.Plan) gen.Plan {
 	if p.Description != "" {
 		out.Description = ptr(p.Description)
 	}
+	if p.Rationale != "" {
+		out.Rationale = ptr(p.Rationale)
+	}
 	phase := gen.PlanPlanPhase(p.EffectivePlanPhase())
 	out.PlanPhase = &phase
 	if p.FailedReason != "" {
@@ -535,6 +538,9 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 	if req.Description != nil {
 		p.Description = *req.Description
 	}
+	if req.Rationale != nil {
+		p.Rationale = *req.Rationale
+	}
 	if req.Dod != nil {
 		p.DoD = planDoDFromCreateWire(*req.Dod)
 	}
@@ -885,6 +891,16 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 	}
 	if len(offenders) > 0 {
 		writeJSON(w, http.StatusBadRequest, gen.PlanApproveError{TaskErrors: &offenders})
+		return
+	}
+
+	// FR-156/FR-159 (G-16, US-11): plan-lint — reject overlapping parallel
+	// write_sets and join-less convergence points. Runs after the FR-084
+	// criteria gate (same ordering as execute_plan's mirror of this
+	// handler, pkg/tools/plan.go) and before the single gated state
+	// transition below.
+	if lerr := plan.Lint(p, members); lerr != nil {
+		writeJSON(w, http.StatusBadRequest, gen.PlanApproveError{Error: ptr(lerr.Error())})
 		return
 	}
 
