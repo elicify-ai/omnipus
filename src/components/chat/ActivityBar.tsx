@@ -32,10 +32,12 @@
 import { useState } from 'react'
 import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
 import { ActivityAvatar } from './ActivityAvatar'
-import { ActivityPanel } from './ActivityPanel'
+import { ActivityPanel, type SessionAction, type SessionActionTarget } from './ActivityPanel'
 import { useRunningActivity } from '@/hooks/useRunningActivity'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 import { statusDot } from '@/lib/toolStatusConfig'
+import { useChatStore } from '@/store/chat'
+import { useUiStore } from '@/store/ui'
 
 const MAX_STACK_AVATARS = 4
 
@@ -53,6 +55,30 @@ function isFailedStatus(status: ActivityItem['status']): boolean {
 export function ActivityBar() {
   const { runningCount, running, recentlyFinished } = useRunningActivity()
   const [panelOpen, setPanelOpen] = useState(false)
+
+  // ADR-053 FE-5 affordance dispatch (design §4 H-1..H-6). PEEK is handled
+  // inside the panel; REPLY/STEER route through normal chat per FE-3 (the
+  // human answers in the composer — no per-session reply card); STOP sends
+  // a cancel targeting the child session id. The human→child direct-control
+  // REST surface (delegate.peek/respond/steer for a human principal) is not
+  // landed yet, so REPLY/STEER surface a toast pointing at the composer
+  // until it is — STOP has a real wire path today via cancelStream.
+  const onSessionAction = (action: SessionAction, target: SessionActionTarget) => {
+    if (action === 'stop') {
+      if (!target.sessionId) return
+      useChatStore.getState().cancelStream(target.sessionId)
+      return
+    }
+    if (action === 'reply' || action === 'steer') {
+      useUiStore.getState().addToast({
+        message:
+          action === 'reply'
+            ? 'Reply in chat to answer this session (FE-3 — answers route through the parent).'
+            : 'Steering this session routes through chat (FE-3). Type your steer in the composer.',
+        variant: 'default',
+      })
+    }
+  }
 
   const isRunning = runningCount > 0
   const failedRecent = recentlyFinished.filter((item) => isFailedStatus(item.status))
@@ -118,6 +144,7 @@ export function ActivityBar() {
         onOpenChange={setPanelOpen}
         running={running}
         recentlyFinished={recentlyFinished}
+        onSessionAction={onSessionAction}
       />
     </>
   )

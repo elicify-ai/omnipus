@@ -15,8 +15,14 @@ import type {
   GoalStatusFrame,
   LoopStatusFrame,
   JudgeVerdictFrame,
+  SubagentMessageFrame,
+  SubagentStateFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
+// ADR-053 FE-5: mid-span subagent_message/subagent_state frames feed the
+// Agent-View session list (ActivityPanel). Mirrors the judgeActivity ingress
+// precedent — forwarded here, never routed through a chat bucket.
+import { useSessionActivityStore } from '@/store/sessionActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -4269,6 +4275,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // whatsapp_pairing/notification pattern: accessed via getState()
           // at frame time, never routed through a session bucket).
           useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
+          break
+        }
+
+        case 'subagent_message':
+        case 'subagent_state': {
+          // ADR-053 FE-5 (design §4 H-1..H-6): mid-span frames riding the
+          // existing subagent_start/subagent_end bracket channel. These are
+          // flat UI projections (SubagentMessageFrame / SubagentStateFrame)
+          // that grow the ActivityPanel's span brackets into a live session
+          // list (latest progress/checkpoint/blocker/question/handback +
+          // 8-state lifecycle). Forwarded here to the dedicated store —
+          // accessed via getState() at frame time so chatStore stays
+          // decoupled (same pattern as judge_verdict above). NOT routed
+          // through a session bucket: these frames carry the CHILD's
+          // session_id, and their join key to the span is `span_id`, which
+          // the store keys on directly.
+          useSessionActivityStore.getState().apply(
+            frame as SubagentMessageFrame | SubagentStateFrame,
+          )
           break
         }
 
