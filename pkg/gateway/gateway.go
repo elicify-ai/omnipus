@@ -71,8 +71,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/state"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
@@ -1556,6 +1556,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// that lack LAST_SESSION.md. Runs once in a goroutine.
 	go agentLoop.BootstrapRecapPass(ctx)
 
+	// ADR-053 Phase 2 on-ramp: start the SessionMessageChan kind-router
+	// consumer. This is the MISSING consumer for the bus's 4th channel — until
+	// it runs, SessionMessageChan() has no drainer and any publisher would
+	// block. The consumer dispatches by kind: steer/respond → child steering
+	// queue; child->parent kinds → durable inbox Append + bounded typed wake;
+	// engine kinds → WS frame. Bound to ctx so it shuts down with the gateway.
+	// Honors session_messaging.enabled live (read per event) — when false the
+	// consumer drains-and-discards (channel stays unblocked) but no-ops.
+	smConsumerCancel := agentLoop.StartSessionMessageConsumer(ctx)
+	defer smConsumerCancel()
+
 	// Wire a second degraded check: report 503 when the agent loop has died.
 	runningServices.HealthServer.SetDegradedFunc(func() (bool, string) {
 		if agentLoopDead.Load() {
@@ -2275,6 +2286,33 @@ func setupAndStartServices(
 	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
 	intentLog := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"))
 	bootSweepCfg := agentLoop.GetConfig().Planning
+
+	// ADR-053 Phase 2 on-ramp: construct the durable S3 child->parent message
+	// inbox and inject it + the S2 lifecycle store into the delegate +
+	// message_parent tool surface for every registered agent. Until this runs,
+	// every session-control path in delegate/message_parent fail-closes on nil
+	// stores (the tools registered fail-closed during NewAgentLoop's first
+	// registerSharedTools pass, before this store existed). This is the keystone
+	// injection that makes the S2/S3 plane LIVE — mirrors SetPlanStore's
+	// late-binding discipline exactly (the store is constructed here, after
+	// NewAgentLoop returned, and re-wires the tool surface for every agent).
+	// session.NewMessageInboxStore's doc specifies "<OMNIPUS_HOME>/session_messages"
+	// as the conventional dir every consumer agrees on.
+	messageInboxStore := session.NewMessageInboxStore(filepath.Join(homePath, "session_messages"))
+	// Apply the live config's caps to the store so a session_messaging edit
+	// (hot-reloaded) is reflected on the next Append (the store's own caps are
+	// plain fields, re-read per call).
+	smCfg := agentLoop.GetConfig().SessionMessaging
+	messageInboxStore.ChildSendRatePerMinute = smCfg.EffectiveChildSendRatePerMinute()
+	messageInboxStore.ChildSendBodyBytes = smCfg.EffectiveChildSendBodyBytes()
+	messageInboxStore.ChildSendMaxDepth = smCfg.EffectiveChildSendMaxDepth()
+	messageInboxStore.InboxUnackedMax = smCfg.EffectiveInboxUnackedMax()
+	messageInboxStore.InboxPerTypeCeiling = smCfg.EffectiveInboxPerTypeCeiling()
+	agentLoop.SetSessionMessagingStores(messageInboxStore, lifecycleStore)
+	if agentLoop.GetMessageInboxStore() == nil {
+		return nil, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox")
+	}
+	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
 
 	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
 	// convention immediately below/above for a missing task store/executor

@@ -354,6 +354,27 @@ func validateBootConfig(cfg *Config) error {
 		)
 	}
 
+	// --- ADR-053 §8: session_messaging (FR-195's 21 keys) ---
+	// The kill-switch trio defaults to ENABLED (the plane is live on a fresh
+	// install). Numeric tunables default to the ADR §Contract Surface values
+	// when zero (SC-015: no magic constants). An operator who genuinely wants
+	// the plane off sets enabled:false explicitly; an all-zero section is
+	// treated as absent and seeded live (matching PlanningConfig's convention).
+	if !cfg.SessionMessaging.Enabled && !cfg.SessionMessaging.WakeEnabled && !cfg.SessionMessaging.AdjudicationEnabled {
+		cfg.SessionMessaging.Enabled = DefaultSessionMessagingEnabled
+		cfg.SessionMessaging.WakeEnabled = DefaultSessionMessagingWakeEnabled
+		cfg.SessionMessaging.AdjudicationEnabled = DefaultSessionMessagingAdjudicationEnabled
+	}
+	if cfg.SessionMessaging.ChildSendRatePerMinute == 0 {
+		cfg.SessionMessaging.ChildSendRatePerMinute = DefaultSMChildSendRatePerMinute
+	}
+	if cfg.SessionMessaging.InboxUnackedMax == 0 {
+		cfg.SessionMessaging.InboxUnackedMax = DefaultSMInboxUnackedMax
+	}
+	if cfg.SessionMessaging.InboxPerTypeCeiling == 0 {
+		cfg.SessionMessaging.InboxPerTypeCeiling = DefaultSMInboxPerTypeCeiling
+	}
+
 	// Apply defaults for ServeWorkspace durations.
 	if cfg.Tools.ServeWorkspace.MaxDurationSeconds == 0 {
 		cfg.Tools.ServeWorkspace.MaxDurationSeconds = 86400 // 24 h

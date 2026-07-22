@@ -433,6 +433,43 @@ func DefaultConfig() *Config {
 			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
 			VerifierWindowTokens: DefaultVerifierWindowTokens,
 		},
+		// SessionMessaging holds the ADR-053 §8 session-control-plane
+		// operability config (FR-195's 21 keys). Seeded explicitly so a fresh
+		// install's config.json is self-documenting and the plane is LIVE by
+		// default (enabled=true). validateBootConfig re-applies the same
+		// defaults for any field an operator zeroes out later.
+		SessionMessaging: SessionMessagingConfig{
+			Enabled:             DefaultSessionMessagingEnabled,
+			WakeEnabled:         DefaultSessionMessagingWakeEnabled,
+			AdjudicationEnabled: DefaultSessionMessagingAdjudicationEnabled,
+
+			ChildSendRatePerMinute: DefaultSMChildSendRatePerMinute,
+			ChildSendBody:          DefaultSMChildSendBodyBytes,
+			ChildSendDepth:         DefaultSMChildSendMaxDepth,
+
+			InboxUnackedMax:     DefaultSMInboxUnackedMax,
+			InboxPerTypeCeiling: DefaultSMInboxPerTypeCeiling,
+
+			SteerRatePerMinute: DefaultSMSteerRatePerMinute,
+			SteerBody:          DefaultSMSteerBodyBytes,
+
+			CancelGrace:   duration(DefaultSMCancelGrace),
+			NeedsInputTTL: duration(DefaultSMNeedsInputTTL),
+
+			WakeDebounce:   duration(DefaultSMWakeDebounce),
+			WakeMaxPerHour: DefaultSMWakeMaxPerHour,
+
+			IdleQuietWindow: duration(DefaultSMIdleQuietWindow),
+
+			TokenBudget: DefaultSMTokenBudget,
+
+			AttemptsMax:    DefaultSMAttemptsMax,
+			JudgeRoundsMax: DefaultSMJudgeRoundsMax,
+
+			MessageRetention:     DefaultSMMessageRetention,
+			AuditRetention:       DefaultSMAuditRetention,
+			UndeliveredRetention: DefaultSMUndeliveredRetention,
+		},
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
 			FilterMinLength:     8,
