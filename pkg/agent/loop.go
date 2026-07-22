@@ -159,6 +159,27 @@ type AgentLoop struct {
 	// unavailable" rather than panicking.
 	loopSched *LoopScheduler
 
+	// messageInboxStore is the durable S3 child->parent SessionMessage inbox
+	// (ADR-053 §Contract Surface, pkg/session/message_inbox.go). Constructed by
+	// the gateway AFTER NewAgentLoop returns (alongside lifecycleStore), then
+	// installed via SetSessionMessagingStores — which re-wires the delegate +
+	// message_parent tool surface for every registered agent with the real
+	// store, mirroring SetPlanStore's late-binding discipline exactly. nil on
+	// the FIRST registerSharedTools pass (inside NewAgentLoop, before the store
+	// exists) and in tests — the tools then fail-closed at Execute()
+	// (message_parent returns "tool not fully configured"; delegate's
+	// inbox/steer/cancel actions return "not configured"). See
+	// session_messaging_wire.go.
+	messageInboxStore *session.MessageInboxStore
+	// sessionLifecycleStoreForTools is the durable S2 session-lifecycle store
+	// (pkg/session/lifecycle.go), threaded to the delegate + message_parent
+	// tools so a child can read/park its own record and a parent can read a
+	// child's record. Distinct name from planEngine's own lifecycleStore
+	// reference to keep the two consumers (boot-sweep vs tool-surface) legible;
+	// both point at the SAME single *session.LifecycleStore instance the
+	// gateway constructs once.
+	sessionLifecycleStoreForTools *session.LifecycleStore
+
 	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
 	auditLogger   *audit.Logger
@@ -1657,6 +1678,16 @@ func registerSharedTools(
 
 			agent.Tools.Register(delegateTool)
 		}
+
+		// ADR-053 Phase 2 on-ramp (session_messaging_wire.go): wire the S2/S3
+		// session-control hooks onto THIS agent's delegate + message_parent
+		// tools. On the FIRST registerSharedTools pass (inside NewAgentLoop,
+		// before the gateway constructs the stores) the stores are nil → both
+		// tools register fail-closed (Execute returns "not configured"). The
+		// gateway's later SetSessionMessagingStores call re-runs this wiring
+		// with the real stores, mirroring SetPlanStore's late-binding
+		// discipline exactly. Safe on hot-reload (idempotent re-wire).
+		al.wireSessionMessagingForAgent(agent)
 
 		// Task tools — require a task store (available after first NewAgentLoop call).
 		if al.taskStore != nil {

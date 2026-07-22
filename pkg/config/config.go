@@ -167,6 +167,15 @@ type Config struct {
 	// precedence over these global values. No token/money fields (NFR-1).
 	Planning PlanningConfig `json:"planning,omitempty" yaml:"-"`
 
+	// SessionMessaging holds the ADR-053 §8 session-control-plane operability
+	// config (FR-195's 21 keys): the global kill switch (enabled), the wake
+	// kill switch (wake_enabled), and the caps/tunables the S2/S3 transport,
+	// durable inbox, and bounded typed wake consult. Live-reload: the consumer
+	// and tools read Enabled/WakeEnabled per event via the Effective* methods
+	// (never a boot snapshot), so flipping session_messaging.enabled in
+	// config.json takes effect without a restart (FR-196, SC-015).
+	SessionMessaging SessionMessagingConfig `json:"session_messaging,omitempty" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.

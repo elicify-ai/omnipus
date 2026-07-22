@@ -1,0 +1,302 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+// White-box integration tests for the ADR-053 Phase 2 session-control-plane
+// on-ramp (session_messaging_wire.go). Proves the plane is LIVE end-to-end at
+// the plumbing level (the g7 round-trip): the consumer drains the bus's 4th
+// channel and routes by kind — child->parent question → durable inbox Append +
+// bounded typed wake; parent->child steer → DeliverSessionMessage → child
+// steering queue — AND the kill switch (session_messaging.enabled=false)
+// neuters it live. Lives in `package agent` to reach the unexported consumer +
+// SetSessionMessagingStores directly.
+
+package agent
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+)
+
+// seedLifecycleRecord persists a minimal LifecycleRecord so the consumer can
+// resolve routing (agentID for steer; origin channel/chatID for wake).
+func seedLifecycleRecord(t *testing.T, ls *session.LifecycleStore, rec *session.LifecycleRecord) {
+	t.Helper()
+	if err := ls.Persist(rec); err != nil {
+		t.Fatalf("Persist lifecycle record %q: %v", rec.SessionID, err)
+	}
+}
+
+// enableSessionMessaging flips the session_messaging kill switch ON on the
+// loop's live config. The minimal test configs built by newAsyncNotifierTestLoop
+// have a zero-value SessionMessaging section (Enabled=false), so without this
+// the consumer correctly no-ops every event (FR-196). This both sets up the
+// positive test AND re-confirms the kill switch is the gate (flip it OFF in the
+// kill-switch test to prove the no-op).
+func enableSessionMessaging(al *AgentLoop) {
+	cfg := al.GetConfig()
+	cfg.SessionMessaging = config.SessionMessagingConfig{Enabled: true, WakeEnabled: true}
+}
+
+// waitFor polls cond until it returns true or the timeout elapses.
+func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %v", timeout)
+}
+
+// TestSessionMessagingConsumer_ChildToParent_QuestionReachesInboxAndWakes is the
+// keystone g7 round-trip at the plumbing level: publish a child->parent
+// `question` SessionMessage on the bus → the kind-router consumer drains it →
+// appends to the durable inbox (keyed to the parent owner key) AND fires the
+// bounded typed wake (observable as an inbound bus message from the
+// asyncNotifier). This proves the consumer + stores are wired live.
+func TestSessionMessagingConsumer_ChildToParent_QuestionReachesInboxAndWakes(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	enableSessionMessaging(al)
+
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	// Seed the PARENT's lifecycle record (owner key = "owner-chat-1") so the
+	// wake's origin routing (channel/chatID) resolves.
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "owner-chat-1",
+		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID:          "parent-agent",
+		OriginChannel:    "testchan",
+		OriginChatID:     "chat1",
+		ParentDurableKey: "owner-chat-1",
+	})
+	// Seed the CHILD's lifecycle record so the consumer could resolve it.
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "child-sess-1",
+		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID:          "child-agent",
+		OriginChannel:    "testchan",
+		OriginChatID:     "chat1",
+		ParentDurableKey: "owner-chat-1",
+	})
+
+	// Wire the stores (the keystone injection) + start the consumer.
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	// Publish a child->parent question on the bus's 4th channel.
+	var q generated.SessionMessage
+	if err := q.FromSessionMessageQuestion(generated.SessionMessageQuestion{
+		MessageId: "q-1", SessionId: "child-sess-1", CreatedAt: time.Now(),
+		Text: "which file should I edit?", Wait: true, CorrelationId: "corr-1",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageQuestion: %v", err)
+	}
+	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+		TargetSessionID: "owner-chat-1",
+		Message:         q,
+	}); err != nil {
+		t.Fatalf("PublishSessionMessage: %v", err)
+	}
+
+	// Assert the message reached the durable inbox (consumer routed it).
+	waitFor(t, 2*time.Second, func() bool {
+		msgs, _, _, err := inbox.Drain("owner-chat-1", "child-sess-1", "", 10)
+		return err == nil && len(msgs) == 1
+	})
+	msgs, _, _, _ := inbox.Drain("owner-chat-1", "child-sess-1", "", 10)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 inbox message after consumer drain, got %d", len(msgs))
+	}
+
+	// Assert the bounded typed wake fired — observable as an inbound bus
+	// message published by asyncNotifier.Notify (channel "system").
+	select {
+	case <-msgBus.InboundChan():
+		// wake fired — the message reached the inbox AND woke the parent.
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the question to fire a bounded typed wake (inbound bus message)")
+	}
+}
+
+// TestSessionMessagingConsumer_Handback_ReachesInbox proves the handback kind
+// (the terminal/pause boundary — the rung-0 evidence gate) also flows through
+// the consumer to the durable inbox.
+func TestSessionMessagingConsumer_Handback_ReachesInbox(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	enableSessionMessaging(al)
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "owner-hb",
+		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID:       "parent-hb",
+		OriginChannel: "tc", OriginChatID: "c1",
+		ParentDurableKey: "owner-hb",
+	})
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	var hb generated.SessionMessage
+	if err := hb.FromSessionMessageHandback(generated.SessionMessageHandback{
+		MessageId: "hb-1", SessionId: "child-hb", CreatedAt: time.Now(),
+		Mode: generated.SessionMessageHandbackMode("final"), ResultSoFar: "done, all tests pass",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageHandback: %v", err)
+	}
+	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+		TargetSessionID: "owner-hb", Message: hb,
+	}); err != nil {
+		t.Fatalf("PublishSessionMessage: %v", err)
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		msgs, _, _, err := inbox.Drain("owner-hb", "child-hb", "", 10)
+		return err == nil && len(msgs) == 1
+	})
+}
+
+// TestSessionMessagingConsumer_Steer_LandsInChildSteeringQueue proves the
+// parent->child path: publish a `steer` on the bus → consumer →
+// DeliverSessionMessage → the text lands in the child's steering-queue scope,
+// ready to inject at the child's next tool boundary.
+func TestSessionMessagingConsumer_Steer_LandsInChildSteeringQueue(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	enableSessionMessaging(al)
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	// Seed the child's lifecycle record so the consumer can resolve agentID.
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID:      "child-sess-2",
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID:        "child-agent-2",
+	})
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	var steer generated.SessionMessage
+	if err := steer.FromSessionMessageSteer(generated.SessionMessageSteer{
+		MessageId: "steer-1", SessionId: "child-sess-2", CreatedAt: time.Now(),
+		Text: "also add a test for the edge case",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageSteer: %v", err)
+	}
+	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+		TargetSessionID: "child-sess-2",
+		Message:         steer,
+	}); err != nil {
+		t.Fatalf("PublishSessionMessage: %v", err)
+	}
+
+	// The consumer forms the scope "agent:child-agent-2:child-sess-2".
+	scope := "agent:child-agent-2:child-sess-2"
+	waitFor(t, 2*time.Second, func() bool {
+		return al.pendingSteeringCountForScope(scope) == 1
+	})
+	drained := al.dequeueSteeringMessagesForScope(scope)
+	if len(drained) != 1 || drained[0].Content != "also add a test for the edge case" {
+		t.Fatalf("expected the steer text queued, got: %+v", drained)
+	}
+}
+
+// TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled proves FR-196:
+// session_messaging.enabled=false neuters the consumer live — it still drains
+// the channel (no publisher block) but performs NO dispatch (inbox stays empty).
+func TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	// Flip the kill switch OFF on the live config.
+	cfg := al.GetConfig()
+	cfg.SessionMessaging = config.SessionMessagingConfig{Enabled: false}
+
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	var p generated.SessionMessage
+	if err := p.FromSessionMessageProgress(generated.SessionMessageProgress{
+		MessageId: "p-1", SessionId: "child-sess-3", CreatedAt: time.Now(), Text: "working",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageProgress: %v", err)
+	}
+	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+		TargetSessionID: "owner-3",
+		Message:         p,
+	}); err != nil {
+		t.Fatalf("PublishSessionMessage: %v", err)
+	}
+
+	// Give the consumer a moment to drain + (not) dispatch.
+	time.Sleep(300 * time.Millisecond)
+	msgs, _, _, _ := inbox.Drain("owner-3", "child-sess-3", "", 10)
+	if len(msgs) != 0 {
+		t.Fatalf("kill switch ON: expected 0 inbox messages, got %d (consumer must no-op when disabled)", len(msgs))
+	}
+}
+
+// TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox proves the
+// DIRECT tool path is live: with the stores wired via SetSessionMessagingStores,
+// the message_parent tool registered on an agent appends directly to the
+// durable inbox on Execute (synchronous cap enforcement requires the direct
+// Append — FR-125 never-silent-drop). This is the in-band complement to the
+// bus-consumer path above.
+func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testing.T) {
+	al, _ := newAsyncNotifierTestLoop(t)
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "child-direct-1",
+		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID:          "child-agent-d",
+		ParentDurableKey: "owner-direct-1",
+	})
+	al.SetSessionMessagingStores(inbox, ls)
+
+	// The default agent now has a LIVE message_parent tool (reconstructed with
+	// the real stores by wireSessionMessagingForAgent).
+	agent := al.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("no default agent registered")
+	}
+	mpAny, ok := agent.Tools.Get("message_parent")
+	if !ok {
+		t.Fatal("message_parent tool not registered after SetSessionMessagingStores")
+	}
+	mp, ok := mpAny.(*tools.MessageParentTool)
+	if !ok {
+		t.Fatalf("message_parent tool is %T, want *tools.MessageParentTool", mpAny)
+	}
+	// Drive it: a progress message with the transcript session id set in
+	// context (message_parent reads it via ToolTranscriptSessionID).
+	ctx := tools.WithTranscriptSessionID(context.Background(), "child-direct-1")
+	res := mp.Execute(ctx, map[string]any{
+		"kind": "progress",
+		"text": "direct-path progress line",
+	})
+	if res.IsError {
+		t.Fatalf("message_parent Execute returned error: %s", res.ForLLM)
+	}
+	// The message must have reached the durable inbox directly.
+	msgs, _, _, _ := inbox.Drain("owner-direct-1", "child-direct-1", "", 10)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 inbox message from direct Execute, got %d", len(msgs))
+	}
+}
