@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
 )
 
@@ -68,7 +69,71 @@ func (r *Repo) Diff(fromHash, toHash string, writeSet []string) (*DiffEvidence, 
 	if err != nil {
 		return nil, fmt.Errorf("gitevidence: tree diff %s..%s: %w", fromHash, toHash, err)
 	}
+	return r.diffEvidenceFromChanges(changes, fromHash, toHash, writeSet)
+}
 
+// AttemptDiff returns the write-set-scoped diff of the LATEST boundary commit
+// against its parent — the per-attempt diff evidence the idle/plan Judge feeds
+// the prose verifier (G-3/G-15: "the Judge sees the real diff, not a transcript
+// window alone"). It resolves HEAD and walks one parent back, so callers that
+// only know the workspace (not a stored from-hash) still get a real, scoped
+// diff without reaching into go-git themselves.
+//
+// If HEAD is unborn (no commits yet) it returns an empty DiffEvidence —
+// nothing has been committed, so there is no diff to feed; the Judge degrades
+// to the transcript window + machine evidence. If HEAD is the root commit (no
+// parent), it diffs the root tree against an empty tree so the first attempt's
+// files still surface as insertions. writeSet scopes which changed paths are
+// included (nil/empty = every changed path, matching Diff's convention).
+func (r *Repo) AttemptDiff(writeSet []string) (*DiffEvidence, error) {
+	head, err := r.Head()
+	if err != nil {
+		return nil, fmt.Errorf("gitevidence: attempt diff: head: %w", err)
+	}
+	if head == "" {
+		return &DiffEvidence{}, nil // unborn — nothing committed yet
+	}
+	headCommit, err := r.repo.CommitObject(plumbing.NewHash(head))
+	if err != nil {
+		return nil, fmt.Errorf("gitevidence: attempt diff: load HEAD %s: %w", head, err)
+	}
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("gitevidence: attempt diff: HEAD tree: %w", err)
+	}
+
+	var fromTree *object.Tree
+	var fromHash string
+	if len(headCommit.ParentHashes) > 0 {
+		fromHash = headCommit.ParentHashes[0].String()
+		parentCommit, perr := r.repo.CommitObject(headCommit.ParentHashes[0])
+		if perr != nil {
+			return nil, fmt.Errorf("gitevidence: attempt diff: load parent %s: %w", fromHash, perr)
+		}
+		fromTree, err = parentCommit.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("gitevidence: attempt diff: parent tree: %w", err)
+		}
+	} else {
+		// Root commit (no parent): diff against an empty tree so every tracked
+		// file surfaces as an insertion — the first attempt's full write-set.
+		fromTree = &object.Tree{}
+	}
+
+	changes, err := fromTree.Diff(headTree)
+	if err != nil {
+		return nil, fmt.Errorf("gitevidence: attempt diff: tree diff: %w", err)
+	}
+	return r.diffEvidenceFromChanges(changes, fromHash, head, writeSet)
+}
+
+// diffEvidenceFromChanges is the shared change-set → DiffEvidence builder used
+// by both Diff (two named commits) and AttemptDiff (HEAD vs parent). It scopes
+// the merkletrie changes to writeSet and renders each kept change's unified
+// patch. errors return non-nil (the caller wraps with its own hash context).
+func (r *Repo) diffEvidenceFromChanges(
+	changes object.Changes, fromHash, toHash string, writeSet []string,
+) (*DiffEvidence, error) {
 	ev := &DiffEvidence{FromHash: fromHash, ToHash: toHash, Total: len(changes)}
 	for _, ch := range changes {
 		name := ch.To.Name

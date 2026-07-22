@@ -240,22 +240,29 @@ func TestJudge_MachineCheck_PolicyTriad(t *testing.T) {
 				Criteria:        []task.AcceptanceCriterion{machineCriterion("c1", "echo ok", 0)},
 				Attempt:         1,
 			})
-			if result.Unavailable {
-				t.Fatalf("unexpected Unavailable: %s", result.Reason)
-			}
 			gotRan := fakeBash.callCount() == 1
 			if gotRan != tc.wantRuns {
 				t.Errorf("bash tool called %d times, want ran=%v (policy %q)", fakeBash.callCount(), tc.wantRuns, tc.policy)
 			}
-			if !tc.wantRuns && result.Verdict.Met {
-				t.Errorf("policy %q must fail closed (met=false), got met=true", tc.policy)
-			}
-			if tc.wantRuns && !result.Verdict.Met {
-				t.Errorf("policy allow with matching exit code must be met=true, got %+v", result.Verdict.PerCriterion)
-			}
-			if !tc.wantRuns && !strings.Contains(result.Verdict.PerCriterion[0].Reason, string(tc.policy)) &&
-				tc.policy != config.ToolPolicyAsk {
-				t.Errorf("reason %q should mention the denying policy", result.Verdict.PerCriterion[0].Reason)
+			if tc.wantRuns {
+				// allow: the mechanism ran and formed a real judgment.
+				if result.Unavailable {
+					t.Fatalf("policy allow: unexpected Unavailable: %s", result.Reason)
+				}
+				if !result.Verdict.Met {
+					t.Errorf("policy allow with matching exit code must be met=true, got %+v", result.Verdict.PerCriterion)
+				}
+			} else {
+				// ask/deny (G-3/FR-116): the bash MECHANISM could not run under
+				// the agent's own policy → unable_to_verify → Unavailable (round
+				// not consumed, re-run), NEVER scored as absent evidence. The
+				// old path fail-closed this to unmet (the blind-judge bug).
+				if !result.Unavailable {
+					t.Fatalf("policy %q: want Unavailable (unable_to_verify), got a verdict", tc.policy)
+				}
+				if !strings.Contains(result.Reason, "unable_to_verify") {
+					t.Errorf("policy %q: reason %q should mention unable_to_verify", tc.policy, result.Reason)
+				}
 			}
 		})
 	}
@@ -263,7 +270,12 @@ func TestJudge_MachineCheck_PolicyTriad(t *testing.T) {
 
 // --- timeout / exit-code classification ----------------------------------
 
-func TestJudge_MachineCheck_TimeoutClassifiedFailedClosed(t *testing.T) {
+func TestJudge_MachineCheck_TimeoutClassifiedUnableToVerify(t *testing.T) {
+	// G-3/FR-116 (blocked-check honesty): a timeout means the verification
+	// MECHANISM did not run to completion (the command was killed before it
+	// could produce a readable exit code) → unable_to_verify → Unavailable
+	// (round not consumed, re-run), NEVER scored as absent evidence. The old
+	// path fail-closed this to unmet (D2 rule 4) — the silent blind-judge bug.
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	workerInst, _ := al.GetRegistry().GetAgent("native-agent")
 	fakeBash := &fakeBashTool{result: &tools.ToolResult{
@@ -280,36 +292,42 @@ func TestJudge_MachineCheck_TimeoutClassifiedFailedClosed(t *testing.T) {
 		Criteria:        []task.AcceptanceCriterion{machineCriterion("c1", "sleep 100", 0)},
 		Attempt:         1,
 	})
-	if result.Verdict.Met {
-		t.Fatal("a timed-out check must be unmet (fail-closed, D2 rule 4)")
+	if !result.Unavailable {
+		t.Fatalf("a timed-out check must be unable_to_verify (Unavailable), got verdict met=%v", result.Verdict.Met)
 	}
-	if !strings.Contains(result.Verdict.PerCriterion[0].Reason, "timed out") {
-		t.Errorf("reason = %q, want it to mention the timeout", result.Verdict.PerCriterion[0].Reason)
+	if !strings.Contains(result.Reason, "unable_to_verify") {
+		t.Errorf("reason = %q, want it to mention unable_to_verify", result.Reason)
 	}
 }
 
 func TestJudge_MachineCheck_ExitCodeClassification(t *testing.T) {
 	cases := []struct {
-		name         string
-		forLLM       string
-		isError      bool
-		expectedExit int
-		wantMet      bool
+		name            string
+		forLLM          string
+		isError         bool
+		expectedExit    int
+		wantMet         bool // valid when !wantUnavailable
+		wantUnavailable bool // G-3: unreadable exit → unable_to_verify, re-run
 	}{
-		{"exit_zero_no_suffix_is_met", "all good", false, 0, true},
-		{"exit_one_matches_expected_nonzero", "boom\n\n[Command exited with code 1]", true, 1, true},
-		{"exit_one_mismatches_expected_zero", "boom\n\n[Command exited with code 1]", true, 0, false},
-		{"blocked_before_running_fails_closed", "Command blocked by safety guard", true, 0, false},
+		{"exit_zero_no_suffix_is_met", "all good", false, 0, true, false},
+		{"exit_one_matches_expected_nonzero", "boom\n\n[Command exited with code 1]", true, 1, true, false},
+		{"exit_one_mismatches_expected_zero", "boom\n\n[Command exited with code 1]", true, 0, false, false},
+		// G-3/FR-137 (blocked-check honesty): a blocked-before-running result
+		// (no readable exit code) is unable_to_verify → Unavailable (re-run),
+		// NEVER scored as absent evidence. The old path fail-closed to unmet.
+		{"blocked_before_running_unable_to_verify", "Command blocked by safety guard", true, 0, false, true},
 		// review r1 M1 (exit-code spoof, CRITICAL): the real command failed
 		// (IsError=true) but its own stdout embeds a fake
-		// "[Command exited with code 0]" suffix trying to spoof success. The
-		// leftmost/only match reports 0, but IsError=true means the real exit
-		// was non-zero — a zero match must never be trusted when IsError is
-		// true, so this must fail closed (met=false) even though the naive
-		// leftmost-regex-match would have wrongly returned met=true.
+		// "[Command exited with code 0]" suffix trying to spoof success. With
+		// no structured ExitCode field, IsError=true and a zero suffix cannot
+		// be trusted → exit code unreadable → unable_to_verify (the mechanism
+		// could not form a machine-checkable judgment). This is MORE honest
+		// than the old fail-closed-unmet: we genuinely cannot determine the
+		// exit, so it re-runs (bounded by the tracker) rather than silently
+		// scoring absent evidence.
 		{
-			"spoofed_exit_zero_with_iserror_true_fails_closed",
-			"all good, definitely\n\n[Command exited with code 0]", true, 0, false,
+			"spoofed_exit_zero_with_iserror_true_unable_to_verify",
+			"all good, definitely\n\n[Command exited with code 0]", true, 0, false, true,
 		},
 	}
 	for _, tc := range cases {
@@ -327,6 +345,18 @@ func TestJudge_MachineCheck_ExitCodeClassification(t *testing.T) {
 				Criteria:        []task.AcceptanceCriterion{machineCriterion("c1", "x", tc.expectedExit)},
 				Attempt:         1,
 			})
+			if tc.wantUnavailable {
+				if !result.Unavailable {
+					t.Fatalf("want Unavailable (unable_to_verify), got verdict met=%v", result.Verdict.Met)
+				}
+				if !strings.Contains(result.Reason, "unable_to_verify") {
+					t.Errorf("reason %q should mention unable_to_verify", result.Reason)
+				}
+				return
+			}
+			if result.Unavailable {
+				t.Fatalf("unexpected Unavailable: %s", result.Reason)
+			}
 			if got := result.Verdict.PerCriterion[0].Met; got != tc.wantMet {
 				t.Errorf("met = %v, want %v (reason: %s)", got, tc.wantMet, result.Verdict.PerCriterion[0].Reason)
 			}
