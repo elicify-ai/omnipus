@@ -8,6 +8,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 func newTestLifecycleStore(t *testing.T) *LifecycleStore {
@@ -193,5 +195,38 @@ func TestNeedsInput_Expired(t *testing.T) {
 	n3 := &NeedsInput{CorrelationID: "c3"} // zero TTLDeadline
 	if n3.Expired(now) {
 		t.Error("expected zero TTLDeadline to never report Expired=true")
+	}
+}
+
+// MAJOR-4 / DoD-11: the domain OwnerScopeKind values MUST mirror the
+// generated SessionLifecycleRecordOwnerScopeKind wire enum one-for-one so a
+// natural cast (OwnerScopeKind → generated.SessionLifecycleRecordOwnerScopeKind)
+// produces schema-valid JSON without an explicit conversion. Previously the
+// domain used "parent_session_id"/"plan_id" while the wire enum used
+// "parent_session"/"plan" — two of three differed, while the type doc claimed
+// it "mirrors the generated enum one-for-one." This table test pins the
+// correspondence so any future drift fails here, not at a caller doing the cast.
+func TestOwnerScopeKind_MirrorsWireEnum(t *testing.T) {
+	specs := []struct {
+		name   string
+		domain OwnerScopeKind
+		wire   generated.SessionLifecycleRecordOwnerScopeKind
+	}{
+		{"parent_session", OwnerScopeParentSession, generated.SessionLifecycleRecordOwnerScopeKindParentSession},
+		{"plan", OwnerScopePlan, generated.SessionLifecycleRecordOwnerScopeKindPlan},
+		{"human", OwnerScopeHuman, generated.SessionLifecycleRecordOwnerScopeKindHuman},
+	}
+	for _, s := range specs {
+		t.Run(s.name, func(t *testing.T) {
+			if string(s.domain) != string(s.wire) {
+				t.Errorf("domain %q != wire %q — domain and wire enum have drifted; align pkg/session/lifecycle.go to pkg/api/generated", s.domain, s.wire)
+			}
+			if !s.wire.Valid() {
+				t.Errorf("wire value %q is not a valid generated enum member", s.wire)
+			}
+			if !IsValidOwnerScopeKind(s.domain) {
+				t.Errorf("domain value %q failed IsValidOwnerScopeKind", s.domain)
+			}
+		})
 	}
 }

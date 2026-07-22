@@ -1706,25 +1706,55 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 	// fail-closed DEFAULT (an omitted tag already resolved to
 	// owner_required at message_parent.go's Append time, FR-131) IS
 	// enforced here.
-	if t.inbox != nil {
-		if msgs, _, _, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, "", 0); derr == nil {
-			for _, m := range msgs {
-				kind, kerr := m.Discriminator()
-				if kerr != nil || kind != "question" {
-					continue
-				}
-				q, qerr := m.AsSessionMessageQuestion()
-				if qerr != nil || q.CorrelationId != correlationID {
-					continue
-				}
-				if q.Authority != nil && string(*q.Authority) == "owner_required" {
-					return ErrorResult(fmt.Sprintf(
-						"delegate: respond: question %q requires owner/human authority and cannot be "+
-							"answered by a parent directly (R§8.2)", correlationID,
-					))
-				}
-			}
+	//
+	// FAIL-CLOSED (MAJOR-2): the authority check is a POSITIVE confirmation
+	// that the target question is safe to answer, not a negative scan that
+	// silently passes when the question can't be inspected. Previously a
+	// Drain error OR a question excluded from the Drain result (ACKED by an
+	// earlier inbox_ack) let the check silently pass — letting a parent
+	// answer an owner_required question. Now every condition that prevents
+	// the target question from being positively inspected DENIES the
+	// respond:
+	//   1. inbox not configured → deny (can't verify authority)
+	//   2. Drain errors → deny (can't verify authority)
+	//   3. target question absent from the Drain (acked / never existed)
+	//      → deny (can't verify authority — R§8.2's fail-closed default)
+	// Only when the question IS found in the drain AND its authority is not
+	// owner_required does the respond proceed. Resolving the question
+	// independent of ack state would need a new inbox-store primitive
+	// (outside this wave's write-set); fail-closed-on-absent is the safe
+	// posture until that lands.
+	if t.inbox == nil {
+		return ErrorResult("delegate: respond: no message inbox configured to verify question authority")
+	}
+	msgs, _, _, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, "", 0)
+	if derr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", derr)).WithError(derr)
+	}
+	questionVerified := false
+	for _, m := range msgs {
+		kind, kerr := m.Discriminator()
+		if kerr != nil || kind != "question" {
+			continue
 		}
+		q, qerr := m.AsSessionMessageQuestion()
+		if qerr != nil || q.CorrelationId != correlationID {
+			continue
+		}
+		if q.Authority != nil && string(*q.Authority) == "owner_required" {
+			return ErrorResult(fmt.Sprintf(
+				"delegate: respond: question %q requires owner/human authority and cannot be "+
+					"answered by a parent directly (R§8.2)", correlationID,
+			))
+		}
+		questionVerified = true
+		break
+	}
+	if !questionVerified {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: question %q could not be verified in the inbox (it may be acked or absent) — "+
+				"denying by default to enforce owner_required authority (R§8.2)", correlationID,
+		))
 	}
 
 	next := *rec
@@ -1769,12 +1799,24 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		}
 		hard = b
 	}
-	if t.lifecycle != nil {
-		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil {
-			if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
-				return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
-			}
-		}
+	// FAIL-CLOSED (MAJOR-1): caller-ownership verification is MANDATORY —
+	// a Load error (not-found, corrupt tail, I/O) MUST NOT let the cancel
+	// fall through against whatever session_id the caller named (a cross-
+	// tenant DoS gated on an induced read error). Previously the ownership
+	// check only ran when Load SUCCEEDED, so any Load error skipped it and
+	// cancelHard/cancelSoft proceeded regardless. Now deny the cancel when
+	// the lifecycle store is unconfigured OR when Load errors, mirroring
+	// executeSteer/executeRespond/executeFollowUp's posture (the rest of
+	// ADR-053's fail-closed contract).
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", lerr))
+	}
+	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
 	}
 
 	if hard {
