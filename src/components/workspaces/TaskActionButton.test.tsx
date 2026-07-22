@@ -99,9 +99,13 @@ describe('taskActionFor — ADR-052 §6.8 button matrix, standalone task (no pla
   })
 })
 
-describe('taskActionFor — ADR-052 §6.8 button matrix, in-plan task (plan_id set)', () => {
-  it('in_progress → stop', () => {
-    expect(taskActionFor(makeTask({ plan_id: 'plan-1', status: 'in_progress' }))).toBe('stop')
+describe('taskActionFor — ADR-053 FE-4/D7, in-plan task (plan_id set) — STATUS ONLY', () => {
+  // FE-4/FR-145: plan members show status only across Board/List/Graph — no
+  // per-member ▶/■/Play in ANY status. The plan owns lifecycle (a per-member
+  // cancel with dependents bricks the plan — D7). This includes in_progress,
+  // which the old ADR-052 matrix special-cased to 'stop'; FE-4 removed that.
+  it('in_progress → none (the plan, not the operator, stops a member)', () => {
+    expect(taskActionFor(makeTask({ plan_id: 'plan-1', status: 'in_progress' }))).toBeNull()
   })
   it('inbox → none (the plan drives its start)', () => {
     expect(taskActionFor(makeTask({ plan_id: 'plan-1', status: 'inbox' }))).toBeNull()
@@ -150,14 +154,19 @@ describe('TaskActionButton — rendering per state (standalone)', () => {
   })
 })
 
-describe('TaskActionButton — rendering per state (in-plan)', () => {
-  it('renders Stop only while in_progress', () => {
-    renderButton(makeTask({ plan_id: 'plan-1', status: 'in_progress' }))
-    expect(screen.getByRole('button', { name: 'Stop task Draft the memo' })).toBeInTheDocument()
+describe('TaskActionButton — rendering per state (in-plan, FE-4/D7 status-only)', () => {
+  it('renders nothing for an in_progress plan member (the plan owns its lifecycle)', () => {
+    const { container } = renderButton(makeTask({ plan_id: 'plan-1', status: 'in_progress' }))
+    expect(container.querySelector('button')).toBeNull()
   })
 
   it('renders nothing for an idle in-plan member', () => {
     const { container } = renderButton(makeTask({ plan_id: 'plan-1', status: 'next' }))
+    expect(container.querySelector('button')).toBeNull()
+  })
+
+  it('renders nothing for a failed in-plan member (restart happens via the plan)', () => {
+    const { container } = renderButton(makeTask({ plan_id: 'plan-1', status: 'failed', cancel_reason: 'stopped_by_user' }))
     expect(container.querySelector('button')).toBeNull()
   })
 })

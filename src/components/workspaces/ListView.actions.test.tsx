@@ -77,13 +77,17 @@ describe('ListView — row action column (ADR-052 §6.8)', () => {
     expect(screen.queryByRole('button', { name: /task Task/ })).not.toBeInTheDocument()
   })
 
-  it('renders Stop ONLY for an in-plan member while in_progress, nothing otherwise', () => {
+  it('renders NO action for an in-plan member in ANY status — status only (ADR-053 FE-4/D7, FR-145)', () => {
+    // FE-4/D7: plan members show status only across Board/List/Graph — no
+    // per-member ▶/■/Play in any status, in_progress included. The plan owns
+    // member lifecycle; a per-member cancel with dependents would brick the
+    // plan. To adjust a member: Stop the plan → change → continue.
     const { rerender } = render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <ListView tasks={[makeTask({ plan_id: 'plan-1', status: 'in_progress', title: 'Member' })]} agents={[]} onTaskClick={vi.fn()} />
       </QueryClientProvider>,
     )
-    expect(screen.getByRole('button', { name: 'Stop task Member' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /task Member/ })).not.toBeInTheDocument()
 
     rerender(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>

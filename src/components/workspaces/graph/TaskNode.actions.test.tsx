@@ -145,3 +145,58 @@ describe('TaskNode — ▶/■ action button (ADR-052 §6.8)', () => {
     expect(onTaskClick).toHaveBeenCalledTimes(1)
   })
 })
+
+// ADR-053 FE-2 §7 (D7) — plan-member DAG signals on the Graph node: the join
+// member (authored convergence point that folds parallel streams) and the
+// write_set (lint-disjoint write footprint). Rendered through GraphView (same
+// visibility-hidden-under-.react-flow__node caveat as the action-button block
+// above — assert via container.querySelector on the stable data-testid).
+describe('TaskNode — plan-member signals: join member + write_set (ADR-053 FE-2 §7)', () => {
+  it('renders the Join badge and write_set paths for an authored join member', () => {
+    const { container } = renderGraph([
+      makeTask({
+        id: 'join-1',
+        plan_id: 'plan-1',
+        is_join: true,
+        write_set: ['src/schema.go', 'src/client.go'],
+        title: 'Assemble',
+      }),
+    ])
+    const meta = container.querySelector('[data-testid="task-node-planmeta-join-1"]')
+    expect(meta).not.toBeNull()
+    expect(meta?.textContent).toMatch(/Join/)
+    expect(meta?.textContent).toContain('src/schema.go')
+    expect(meta?.textContent).toContain('src/client.go')
+  })
+
+  it('renders the write_set chip but no Join badge for a non-join member', () => {
+    const { container } = renderGraph([
+      makeTask({ id: 'm-1', plan_id: 'plan-1', write_set: ['docs/spec.md'], title: 'Member' }),
+    ])
+    const meta = container.querySelector('[data-testid="task-node-planmeta-m-1"]')
+    expect(meta).not.toBeNull()
+    expect(meta?.textContent).not.toMatch(/Join/)
+    expect(meta?.textContent).toContain('docs/spec.md')
+  })
+
+  it('renders the Join badge alone for a join member that declares no write_set', () => {
+    const { container } = renderGraph([
+      makeTask({ id: 'j-2', plan_id: 'plan-1', is_join: true, title: 'Join only' }),
+    ])
+    const meta = container.querySelector('[data-testid="task-node-planmeta-j-2"]')
+    expect(meta).not.toBeNull()
+    expect(meta?.textContent).toMatch(/Join/)
+  })
+
+  it('renders no plan-meta row for a standalone task (no is_join / write_set)', () => {
+    const { container } = renderGraph([makeTask({ id: 'solo-1', title: 'Standalone' })])
+    expect(container.querySelector('[data-testid="task-node-planmeta-solo-1"]')).toBeNull()
+  })
+
+  it('renders no plan-meta row for an exploratory plan member with an empty write_set', () => {
+    const { container } = renderGraph([
+      makeTask({ id: 'exp-1', plan_id: 'plan-1', write_set: [], title: 'Exploratory' }),
+    ])
+    expect(container.querySelector('[data-testid="task-node-planmeta-exp-1"]')).toBeNull()
+  })
+})

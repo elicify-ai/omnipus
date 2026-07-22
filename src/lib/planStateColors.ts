@@ -131,3 +131,51 @@ export function planSecondaryChipLabel(plan: {
   }
   return null
 }
+
+// ── ADR-053 FE-2 §7 (D7, US-14) — Graph plan-phase chip ─────────────────────
+//
+// The Graph view surfaces the plan's runtime sub-phase as a chip beside the
+// state badge so an operator lands on actionable context when a plan tile
+// auto-switches to Graph (FE-2). `plan_phase` is a runtime-only sub-phase
+// while `state == running` (NOT a state itself — see planStateColors header).
+//
+// `awaiting_owner_correction` is the marquee case: the plan reached all-
+// terminal-but-unmet and durably holds for an owner correction. The goal-pill
+// crosswalk (R§8.10) reconstructs THIS persisted phase as "re-planning" (so
+// it survives restart, reconstructing as re-planning NOT "waiting_on_user").
+// FE-2 surfaces it as an operator-actionable warning chip — the owner must
+// append a correction (tail / supersede / targeted-retry) for the plan to
+// continue. The other non-idle sub-phases (dispatching/judging/synthesizing)
+// render as a quieter info chip — a live-progress hint, not actionable.
+
+export type PlanPhaseChipTone = 'warning' | 'info'
+
+export interface PlanPhaseChip {
+  label: string
+  tone: PlanPhaseChipTone
+}
+
+/**
+ * The Graph-view plan-phase chip (FE-2). Returns:
+ *  - `{ 'Re-planning — awaiting owner correction', 'warning' }` for
+ *    `plan_phase: 'awaiting_owner_correction'` (the durable re-planning hold);
+ *  - `{ '<Capitalized phase>', 'info' }` for the other non-idle running
+ *    sub-phases (dispatching / judging / synthesizing);
+ *  - `null` when there's nothing to surface (not running, `idle`, or no phase).
+ *
+ * `paused_reason` is intentionally NOT handled here — a paused running plan
+ * shows its pause via `planSecondaryChipLabel` elsewhere; this helper is the
+ * single source of truth for the FE-2 phase chip alone.
+ */
+export function planPhaseChip(plan: {
+  state: PlanState
+  plan_phase?: string
+}): PlanPhaseChip | null {
+  if (plan.state !== 'running') return null
+  const phase = plan.plan_phase
+  if (!phase || phase === 'idle') return null
+  if (phase === 'awaiting_owner_correction') {
+    return { label: 'Re-planning — awaiting owner correction', tone: 'warning' }
+  }
+  return { label: phase.charAt(0).toUpperCase() + phase.slice(1), tone: 'info' }
+}

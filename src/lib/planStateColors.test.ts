@@ -11,6 +11,7 @@ import {
   planStateColor,
   planStateLabel,
   planSecondaryChipLabel,
+  planPhaseChip,
   planDisplayColor,
 } from './planStateColors'
 
@@ -108,5 +109,37 @@ describe('planSecondaryChipLabel — R1 secondary chips (plan_phase / paused_rea
 
   it('returns null for a failed plan with no failed_reason', () => {
     expect(planSecondaryChipLabel({ state: 'failed' })).toBeNull()
+  })
+})
+
+describe('planPhaseChip — ADR-053 FE-2 §7 Graph plan-phase chip (D7, US-14)', () => {
+  it('surfaces awaiting_owner_correction as the re-planning warning (operator-actionable)', () => {
+    expect(planPhaseChip({ state: 'running', plan_phase: 'awaiting_owner_correction' })).toEqual({
+      label: 'Re-planning — awaiting owner correction',
+      tone: 'warning',
+    })
+  })
+
+  it.each([
+    ['dispatching', 'Dispatching'],
+    ['judging', 'Judging'],
+    ['synthesizing', 'Synthesizing'],
+  ] as const)('renders the %s sub-phase as a quieter info chip capitalized as %s', (phase, label) => {
+    expect(planPhaseChip({ state: 'running', plan_phase: phase })).toEqual({ label, tone: 'info' })
+  })
+
+  it('returns null for a running plan on the idle sub-phase (nothing to surface)', () => {
+    expect(planPhaseChip({ state: 'running', plan_phase: 'idle' })).toBeNull()
+  })
+
+  it('returns null for a running plan with no plan_phase', () => {
+    expect(planPhaseChip({ state: 'running' })).toBeNull()
+  })
+
+  it('returns null when not running (plan_phase is a runtime-only sub-phase)', () => {
+    expect(planPhaseChip({ state: 'approved', plan_phase: 'judging' })).toBeNull()
+    expect(planPhaseChip({ state: 'failed', plan_phase: 'awaiting_owner_correction' })).toBeNull()
+    expect(planPhaseChip({ state: 'draft', plan_phase: 'dispatching' })).toBeNull()
+    expect(planPhaseChip({ state: 'done' })).toBeNull()
   })
 })
