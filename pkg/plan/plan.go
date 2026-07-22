@@ -168,21 +168,35 @@ func ValidateRestartTransition(from State, failedReason FailedReason) error {
 // chip.
 type PlanPhase string
 
-// The four canonical plan phases. The empty string ("") on a fresh/never-run
-// Plan is treated as PhaseIdle by EffectivePlanPhase.
+// The canonical plan phases. The empty string ("") on a fresh/never-run Plan
+// is treated as PhaseIdle by EffectivePlanPhase.
+//
+// PhaseAwaitingOwnerCorrection (ADR-053 C1/FR-147) is the DURABLE plan
+// condition entered when an all-terminal DAG is judged UNMET by the plan Judge:
+// rather than burning another round re-judging identical evidence (the F2
+// round-burn gate, G-9), the plan parks at this phase while the plan-owner
+// SESSION sits at the durable lifecycle state `paused` (the 8-state S2 enum is
+// NOT inflated — awaiting-correction is a plan condition, not a session
+// state). It persists alongside LastUnmetTerminalSignature so the gate
+// SURVIVES RESTART (the standalone F2 fix was in-memory only and dropped one
+// spurious re-judge per restart). The boot sweep (FR-118/INV-9) EXEMPTS a
+// paused plan-owner session whose plan is in this phase from the
+// failed(interrupted) sweep.
 const (
-	PhaseDispatching  PlanPhase = "dispatching"
-	PhaseJudging      PlanPhase = "judging"
-	PhaseSynthesizing PlanPhase = "synthesizing"
-	PhaseIdle         PlanPhase = "idle"
+	PhaseDispatching             PlanPhase = "dispatching"
+	PhaseJudging                 PlanPhase = "judging"
+	PhaseSynthesizing            PlanPhase = "synthesizing"
+	PhaseIdle                    PlanPhase = "idle"
+	PhaseAwaitingOwnerCorrection PlanPhase = "awaiting_owner_correction"
 )
 
 // validPlanPhases is the set of allowed non-empty PlanPhase values.
 var validPlanPhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
-	PhaseDispatching:  true,
-	PhaseJudging:      true,
-	PhaseSynthesizing: true,
-	PhaseIdle:         true,
+	PhaseDispatching:             true,
+	PhaseJudging:                 true,
+	PhaseSynthesizing:            true,
+	PhaseIdle:                    true,
+	PhaseAwaitingOwnerCorrection: true,
 }
 
 // IsValidPlanPhase reports whether p is a known, explicit plan phase. The
@@ -290,6 +304,28 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	LastActivityAt string       `json:"last_activity_at,omitempty"`
 	PlanPhase      PlanPhase    `json:"plan_phase,omitempty"`
 	FailedReason   FailedReason `json:"failed_reason,omitempty"`
+	// LastUnmetTerminalSignature is the durable form of the F2 round-burn gate
+	// (ADR-053 C1/FR-147/INV-7). It holds the planTerminalSignature of the
+	// all-terminal member state most recently judged UNMET, persisted on the
+	// plan record so the "do not re-judge unchanged all-terminal state" gate
+	// SURVIVES RESTART (the shipped standalone F2 fix was an in-memory
+	// map[string]string on PlanEngine that dropped on every restart, burning
+	// one spurious JudgeRound per restart). The engine rehydrates its
+	// in-memory gate from this field at boot (bootReconcile). Meaningful only
+	// while PlanPhase == PhaseAwaitingOwnerCorrection; cleared when the plan
+	// (re)enters a fresh dispatch cycle (tryStartApprovedPlan).
+	LastUnmetTerminalSignature string `json:"last_unmet_terminal_signature,omitempty"`
+	// OwnerSessionID is the named durable linkage to the plan-owner AGENT
+	// session (ADR-053 m-3/FR-147) — the reciprocal of
+	// session.LifecycleRecord.OwnsPlanID. A top-level plan-owner session's
+	// owner_scope is `human` (not `plan_id`), so owner_scope alone cannot
+	// identify the plan; this field plus the session-side OwnsPlanID give the
+	// boot sweep a named plan<->owner-session linkage to resolve the
+	// awaiting-correction exemption (FR-118 exemption b) through. Populated by
+	// the Phase-2 owner loop that wraps plan execution; empty until then (the
+	// boot sweep resolves the exemption through the session-side OwnsPlanID,
+	// which is the reliable direction at boot regardless).
+	OwnerSessionID string `json:"owner_session_id,omitempty"`
 	// Progress is done/total over member tasks (R4/C19/M7). It is
 	// server-computed READ-TIME ONLY by scanning the task store for
 	// plan_id == this plan's ID (see ComputeProgress). json:"-" (review r1

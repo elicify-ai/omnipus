@@ -49,6 +49,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -142,6 +143,23 @@ const (
 	// pausedReasonOwnerDisabled is the PausedReason value set by
 	// PausePlansOwnedBy (FR-065).
 	pausedReasonOwnerDisabled = "owner_disabled"
+
+	// DefaultBootSweepBudgetSeconds is the default wall-clock budget for the
+	// boot sweep (FR-118 "within N s") when boot_sweep_budget_seconds is not
+	// configured. The sweep scans non-terminal sessions and persists
+	// failed(interrupted) records — a bounded, local-only operation, so 30 s
+	// is ample even for a large install while still bounding shutdown.
+	DefaultBootSweepBudgetSeconds = 30
+
+	// DefaultSnapshotMaxBytes is the default cap for the
+	// isNeedsInputReconstructable predicate's clause (4) "retained snapshot
+	// within snapshot_max_bytes" (R§8.6) when snapshot_max_bytes is not
+	// configured. Mirrors the delegate curated-context hard cap convention.
+	DefaultSnapshotMaxBytes = 256 * 1024
+
+	// failedReasonInterrupted is the LifecycleRecord.FailedReason value the
+	// boot sweep writes (FR-118: failed(interrupted)).
+	failedReasonInterrupted = "interrupted"
 )
 
 // PlanEngine is the single hybrid coordinator instance (ADR-049 D4). Exactly
@@ -169,6 +187,49 @@ type PlanEngine struct {
 	// cancelSessions nil-guards it the same way notifier/dispatcher calls do
 	// elsewhere in this file.
 	canceller sessionCanceller
+
+	// lifecycleStore, when set via SetLifecycleStore, supplies the durable
+	// 8-state session records the boot sweep (FR-118/G-13) reconciles at
+	// Start: every persisted non-terminal session with no live runtime turn
+	// becomes failed(interrupted) within BootSweepBudget, carrying its last
+	// checkpoint + undelivered messages, EXCEPT the two INV-9 exemptions (a
+	// reconstructable parked needs_input, and a paused plan-owner session
+	// whose plan is durably awaiting_owner_correction). Nil in a bare
+	// struct-literal test engine and in any deployment that has not yet wired
+	// the store — Start's sweep step no-ops cleanly when it is absent.
+	lifecycleStore *session.LifecycleStore
+	// bootSweepBudget bounds the wall-clock time the boot sweep may take
+	// (boot_sweep_budget_seconds, FR-118 "within N s"). Defaults to
+	// DefaultBootSweepBudgetSeconds when zero (SetBootSweepBudget / gateway
+	// wiring resolves the configured value).
+	bootSweepBudget time.Duration
+	// snapshotMaxBytes bounds a parked needs_input session's retained context
+	// snapshot for the isNeedsInputReconstructable predicate (R§8.6 clause 4).
+	snapshotMaxBytes int64
+	// agentResolver reports whether agentID still resolves at boot
+	// (R§8.6 clause 2 — "child identity still resolves"). Nil = treat all as
+	// resolving (the degradation a deployment without an agent registry
+	// supplies; the predicate's other clauses still hold).
+	agentResolver func(agentID string) bool
+	// sessionFailedHook is fired for every session swept to
+	// failed(interrupted) so a caller layer (the gateway) can emit the
+	// session.failed event / drive recovery (FR-118 deliverable 3). Best-effort:
+	// a hook failure is logged, never blocks the sweep.
+	sessionFailedHook func(sessionID, reason string)
+	// goalSemanticsVersioner reports the recorded trigger-semantics version
+	// of a goal-bearing session (N-15 live-upgrade re-baseline). Wired by
+	// Phase-2-C; nil until then, which means "unversioned" -> no re-baseline.
+	goalSemanticsVersioner func(sessionID string) int
+	// currentSemanticsVersionOverride, when >0, overrides the build constant
+	// currentTriggerSemanticsVersion for the N-15 comparison (test-only; lets
+	// a test simulate a post-bump build without waiting for a real bump).
+	currentSemanticsVersionOverride int
+	// intentLog, when set via SetIntentLog, is the write-ahead intent-log
+	// (FR-148/M4/INV-6) replayed at Start BEFORE bootReconcile so any
+	// committed-but-not-applied tail-append is applied to the plan/task stores
+	// before the engine reconciles plans against them. Nil = no replay (the
+	// Phase-2 owner loop that writes intents wires this).
+	intentLog *plan.IntentLog
 
 	clock        PlanEngineClock
 	tickInterval time.Duration
@@ -270,6 +331,67 @@ func NewPlanEngine(al *AgentLoop, planStore *plan.Store, taskStore *task.Store, 
 	// registry, both sides).
 	SetVerifierSessionRegistry(pe.verifierRegistry)
 	return pe
+}
+
+// SetLifecycleStore installs the durable session-lifecycle store the boot
+// sweep (FR-118/G-13) reconciles at Start. Optional: when unset, Start's
+// sweep step is a logged no-op (the engine still reconciles plans via
+// bootReconcile). The gateway wiring path calls this BEFORE Start so the
+// first boot sweep runs synchronously inside Start, folded into the one boot
+// reconciliation pass (ADR-053 §5 boot sweep / N-15).
+func (pe *PlanEngine) SetLifecycleStore(ls *session.LifecycleStore) {
+	pe.mu.Lock()
+	pe.lifecycleStore = ls
+	pe.mu.Unlock()
+}
+
+// SetBootSweepBudget sets the wall-clock budget for the boot sweep
+// (boot_sweep_budget_seconds, FR-118). Must be called before Start.
+func (pe *PlanEngine) SetBootSweepBudget(d time.Duration) {
+	pe.mu.Lock()
+	pe.bootSweepBudget = d
+	pe.mu.Unlock()
+}
+
+// SetSnapshotMaxBytes sets the retained-snapshot cap for the
+// isNeedsInputReconstructable predicate (R§8.6 clause 4).
+func (pe *PlanEngine) SetSnapshotMaxBytes(n int64) {
+	pe.mu.Lock()
+	pe.snapshotMaxBytes = n
+	pe.mu.Unlock()
+}
+
+// SetAgentResolver installs the "child identity still resolves at boot"
+// predicate (R§8.6 clause 2) used by isNeedsInputReconstructable. Optional.
+func (pe *PlanEngine) SetAgentResolver(fn func(agentID string) bool) {
+	pe.mu.Lock()
+	pe.agentResolver = fn
+	pe.mu.Unlock()
+}
+
+// SetSessionFailedHook installs the callback fired for every session the boot
+// sweep marks failed(interrupted) (FR-118 deliverable 3 — emit session.failed
+// / drive recovery). Best-effort: a hook error is logged, never blocks.
+func (pe *PlanEngine) SetSessionFailedHook(fn func(sessionID, reason string)) {
+	pe.mu.Lock()
+	pe.sessionFailedHook = fn
+	pe.mu.Unlock()
+}
+
+// SetGoalSemanticsVersioner installs the per-session trigger-semantics-version
+// resolver for the N-15 live-upgrade re-baseline. Wired by Phase-2-C.
+func (pe *PlanEngine) SetGoalSemanticsVersioner(fn func(sessionID string) int) {
+	pe.mu.Lock()
+	pe.goalSemanticsVersioner = fn
+	pe.mu.Unlock()
+}
+
+// SetIntentLog installs the write-ahead intent-log (FR-148/M4/INV-6) replayed
+// at Start. Optional; nil = no replay.
+func (pe *PlanEngine) SetIntentLog(il *plan.IntentLog) {
+	pe.mu.Lock()
+	pe.intentLog = il
+	pe.mu.Unlock()
 }
 
 // registry returns the verifier-session registry, lazily initializing it
@@ -405,7 +527,22 @@ func (pe *PlanEngine) Start(ctx context.Context) error {
 	}
 	pe.mu.Unlock()
 
+	// ADR-053 M4/FR-148/INV-6: replay the write-ahead intent-log BEFORE
+	// bootReconcile so any committed-but-not-applied tail-append is applied
+	// to the plan/task stores before the engine reconciles plans against them
+	// (an all-or-nothing correction must land before the engine observes plan
+	// state). No-ops cleanly when no intent log is wired or the log is empty.
+	pe.replayIntentLogs()
+
 	pe.bootReconcile(ctx)
+	// ADR-053 §5 boot sweep (FR-118/G-13/INV-9): reconcile every persisted
+	// non-terminal session with no live runtime turn to failed(interrupted)
+	// within the configured budget, folding the live-upgrade re-baseline
+	// (N-15) into the same single boot pass. Runs AFTER bootReconcile so the
+	// durable F2 gate is already rehydrated (an awaiting-correction plan's
+	// owner session is then correctly EXEMPTED by exemption b). No-ops
+	// cleanly when no lifecycle store is wired.
+	pe.runBootSweep(ctx)
 
 	pe.stoppedWG.Add(1)
 	go pe.runTickLoop()
@@ -581,8 +718,17 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 	// same planID), must always get a genuinely fresh judge round rather than
 	// being silently gated by a signature recorded during a prior life of
 	// this plan ID — clear it here, the sole approved->running transition
-	// point.
+	// point. Clears BOTH the in-memory map and the persisted
+	// LastUnmetTerminalSignature field (C1 — the durable gate must not
+	// outlive the dispatch cycle it was meant to gate), so a restart/Play
+	// resume after a C1 park gets a genuinely fresh round even if the member
+	// outcomes end up identical again.
 	pe.clearUnmetTerminalSignature(planID)
+	clearSig := ""
+	if _, cerr := pe.planStore.Update(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); cerr != nil {
+		logger.WarnCF("plan_engine", "could not clear durable unmet signature on start",
+			map[string]any{"plan_id": planID, "error": cerr.Error()})
+	}
 	logger.InfoCF("plan_engine", "plan admitted: approved->running", map[string]any{"plan_id": planID})
 
 	tasks, lerr := pe.taskStore.List(task.Filter{PlanID: updated.ID})
@@ -972,11 +1118,21 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	}
 
 	steering := buildPlanSteeringText(verdict)
-	dispatching := plan.PhaseDispatching
+	// ADR-053 C1/FR-147 (INV-2/INV-7): an UNMET verdict on an all-terminal DAG
+	// (the only kind of state the plan Judge ever fires on) durably parks the
+	// plan at plan_phase=awaiting_owner_correction — NOT back to dispatching —
+	// persisting the unmet terminal signature so the F2 round-burn gate
+	// survives restart. The plan-owner session sits at lifecycle `paused`
+	// (Phase-2 owner loop's responsibility); the boot sweep exempts that
+	// paused session from the failed(interrupted) sweep via OwnsPlanID ->
+	// plan.PlanPhase == awaiting_owner_correction (FR-118 exemption b).
+	awaiting := plan.PhaseAwaitingOwnerCorrection
+	sig := terminalSig
 	if _, uerr := pe.planStore.Update(current.ID, plan.Patch{
-		JudgeRounds:  &newRounds,
-		PlanPhase:    &dispatching,
-		HandoverText: &steering,
+		JudgeRounds:                &newRounds,
+		PlanPhase:                  &awaiting,
+		HandoverText:               &steering,
+		LastUnmetTerminalSignature: &sig,
 	}); uerr != nil {
 		logger.ErrorCF("plan_engine", "judge round: could not persist unmet verdict",
 			map[string]any{"plan_id": current.ID, "error": uerr.Error()})
@@ -987,6 +1143,11 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	// wait instead of re-judging the same evidence again. Recorded only
 	// after the store write above actually succeeds, so a persist failure
 	// (round effectively didn't happen) never blocks a legitimate retry.
+	// Persisted above (LastUnmetTerminalSignature) AND mirrored into the
+	// in-memory map here: the in-memory map is the in-process authority (it is
+	// cleared on tryStartApprovedPlan), the persisted field is the
+	// across-restart authority (rehydrated by bootReconcile) — together they
+	// close the standalone-F2 restart gap (C1).
 	pe.recordUnmetTerminalSignature(current.ID, terminalSig)
 	pe.wakeOwner(current.ID, current.OwnerAgentID, fmt.Sprintf(
 		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s",
@@ -1815,6 +1976,16 @@ func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) bool {
 // implement "blocked tasks whose deps are all done are advanced" and never
 // blindly re-dispatch an already in_progress task (ExecuteTask itself
 // guards on Status != next).
+//
+// ADR-053 C1/FR-147/FR-193 (INV-7 across restart): BEFORE re-running
+// processPlan, the in-memory F2 round-burn gate is REHYDRATED from each
+// running plan's persisted LastUnmetTerminalSignature. Without this, a
+// restart would drop the in-memory map and the very first processPlan tick
+// on an awaiting-owner-correction plan would burn one spurious JudgeRound
+// re-judging identical all-terminal evidence — exactly the standalone-F2
+// restart gap C1 closes. With it, processPlan -> beginPlanJudgeRound ->
+// unmetTerminalSignatureUnchanged sees the rehydrated entry and skips,
+// identical to the in-process behavior, and INV-7 holds across INV-9.
 func (pe *PlanEngine) bootReconcile(ctx context.Context) {
 	plans, err := pe.planStore.List(plan.Filter{})
 	if err != nil {
@@ -1822,12 +1993,23 @@ func (pe *PlanEngine) bootReconcile(ctx context.Context) {
 		return
 	}
 	running := 0
+	rehydrated := 0
 	for i := range plans {
 		if plans[i].State != plan.StateRunning {
 			continue
 		}
 		running++
+		// C1 durable rehydration: a plan parked at awaiting_owner_correction
+		// with a persisted unmet signature re-arms the in-memory gate so the
+		// unchanged all-terminal state is NOT re-judged on the first
+		// post-restart tick. Plans not in that phase have an empty persisted
+		// signature and skip this (their in-memory entry was never set).
+		if plans[i].LastUnmetTerminalSignature != "" {
+			pe.recordUnmetTerminalSignature(plans[i].ID, plans[i].LastUnmetTerminalSignature)
+			rehydrated++
+		}
 		pe.processPlan(ctx, plans[i].ID)
 	}
-	logger.InfoCF("plan_engine", "boot reconciliation complete", map[string]any{"running_plans_scanned": running})
+	logger.InfoCF("plan_engine", "boot reconciliation complete",
+		map[string]any{"running_plans_scanned": running, "unmet_signatures_rehydrated": rehydrated})
 }
