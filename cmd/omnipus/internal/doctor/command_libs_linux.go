@@ -298,3 +298,13 @@ func sonameExists(soname string) bool {
 	}
 	return false
 }
+
+// missingChromeLibsMachO is a no-op stub on Linux. The real Mach-O parser
+// lives in command_libs_darwin.go (ADR-052 Phase 3); this stub exists so
+// that command.go (which has no build tag and references
+// missingChromeLibsMachO in the "darwin" switch case) compiles on Linux.
+// The runtime GOOS gate prevents this from being called outside darwin.
+func missingChromeLibsMachO(binPath string) ([]string, error) {
+	_ = binPath
+	return nil, nil
+}

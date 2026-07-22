@@ -452,7 +452,13 @@ func checkBrowserPackageChrome() []warning {
 
 	var warnings []warning
 
-	if runtimepkg.GOOS == "linux" {
+	// WARN-BROWSER-005: in-process dependency walker. The implementation
+	// is OS-specific (ELF on Linux, Mach-O on macOS) but the WARN code
+	// and the diagnostic posture are the same: surface every dependency
+	// that does not resolve on the host so the operator can fix it
+	// before Chrome fails to launch at runtime.
+	switch runtimepkg.GOOS {
+	case "linux":
 		missing, elfErr := missingChromeLibsELF(chromeBin)
 		if elfErr != nil {
 			// Structural error reading the ELF — not the same as a clean
@@ -474,6 +480,29 @@ func checkBrowserPackageChrome() []warning {
 					strings.Join(missing, ", "),
 					strings.Join(debianMissingLibs(missing), " "),
 					strings.Join(rpmMissingLibs(missing), " "),
+				),
+			})
+		}
+	case "darwin":
+		missing, machoErr := missingChromeLibsMachO(chromeBin)
+		if machoErr != nil {
+			// Structural error reading the Mach-O — not the same as a
+			// clean "all libs present" result. Surface a WARN so the
+			// operator knows doctor couldn't run the check rather than
+			// seeing silence.
+			warnings = append(warnings, warning{
+				code: "WARN-BROWSER-005",
+				message: fmt.Sprintf(
+					"could not parse bundled chrome Mach-O: %s — Chrome may not launch. Reinstall the omnipus package to recover the integrity-verified payload.",
+					machoErr,
+				),
+			})
+		} else if len(missing) > 0 {
+			warnings = append(warnings, warning{
+				code: "WARN-BROWSER-005",
+				message: fmt.Sprintf(
+					"bundled chrome is missing required macOS libraries: %s. System libraries (/usr/lib, /System/Library) ship with macOS — a missing system dylib indicates macOS needs reinstallation. Bundled frameworks ship in the .app's Frameworks directory — a missing @rpath framework indicates the omnipus package is corrupt; reinstall it to recover the integrity-verified payload. The in-process Mach-O check is the primary defense (ADR-052 SEC-ADR052-008).",
+					strings.Join(missing, ", "),
 				),
 			})
 		}
