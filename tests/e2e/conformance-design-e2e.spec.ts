@@ -120,6 +120,145 @@ async function apiFetch<T = unknown>(
   return { ok: res.ok(), status: res.status(), body: body as T, raw }
 }
 
+// ── Plan / member helpers ───────────────────────────────────────────────────
+//
+// The REST contract (contracts/components/schemas/PlanCreateRequest.yaml +
+// TaskCreateRequest.yaml) does NOT accept a `members` array on plan create.
+// A Plan is created in `draft` state, then each member is added as a separate
+// Task via POST /tasks with `plan_id` set (same-workspace FK). Member DAG
+// ordering is expressed via `blocked_by` referencing ACTUAL task IDs (not
+// client labels), so members must be created in dependency order and the
+// label→id map resolved as we go.
+//
+// `bounds` uses { plan_judge_max_rounds, idle_expiry_days } (NOT max_rounds).
+// `dod` is an ARRAY of AcceptanceCriterion (NOT a string). Both are
+// additionalProperties:false under schema validation; even with validation
+// off, a string `dod` fails to decode into *[]AcceptanceCriterion.
+//
+// `owner_agent_id` must be a chat-target agent (IsChatTarget()==true — not a
+// worker / System Agent). The seeded core agent "jim" qualifies and is used
+// throughout. Every agent_id (plan owner AND member assignee) must be a
+// member of the workspace's team set (core_team ∪ delegation edges), so jim
+// is added to core_team at workspace create time.
+
+interface Criterion {
+  kind: 'prose' | 'check' | 'behavior'
+  text: string
+  author: { kind: 'user' | 'agent'; id: string }
+  status: 'pending' | 'met' | 'unmet'
+}
+
+interface MemberSpec {
+  label: string
+  title: string
+  prompt: string
+  write_set?: string[]
+  stream?: string
+  is_join?: boolean
+  /** Labels of members this one depends on; resolved to real task IDs. */
+  blocked_by_labels?: string[]
+  criteria: Criterion[]
+  max_attempts?: number
+}
+
+interface PlanFields {
+  title: string
+  goal?: string
+  description?: string
+  dod?: Criterion[]
+  bounds?: { plan_judge_max_rounds?: number; idle_expiry_days?: number }
+}
+
+const JIM_AGENT_ID = 'jim'
+
+function proseCriterion(text: string): Criterion {
+  return { kind: 'prose', text, author: { kind: 'user', id: 'admin' }, status: 'pending' }
+}
+
+async function createPlan(
+  page: Page,
+  workspaceId: string,
+  ownerAgentId: string,
+  fields: PlanFields,
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    workspace_id: workspaceId,
+    title: fields.title,
+    owner_agent_id: ownerAgentId,
+  }
+  if (fields.goal !== undefined) body.goal = fields.goal
+  if (fields.description !== undefined) body.description = fields.description
+  if (fields.dod !== undefined) body.dod = fields.dod
+  if (fields.bounds !== undefined) body.bounds = fields.bounds
+  const res = await apiFetch<{ id: string }>(
+    page,
+    'POST',
+    `/api/v1/workspaces/${workspaceId}/plans`,
+    body,
+  )
+  if (!res.ok) {
+    throw new Error(`createPlan: POST /plans failed ${res.status}: ${res.raw}`)
+  }
+  return res.body.id
+}
+
+async function createPlanMember(
+  page: Page,
+  workspaceId: string,
+  planId: string,
+  agentId: string,
+  member: MemberSpec & { blocked_by?: string[] },
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    title: member.title,
+    prompt: member.prompt,
+    action: 'llm',
+    workspace_id: workspaceId,
+    agent_id: agentId,
+    plan_id: planId,
+    criteria: member.criteria,
+  }
+  if (member.write_set !== undefined) body.write_set = member.write_set
+  if (member.stream !== undefined) body.stream = member.stream
+  if (member.is_join !== undefined) body.is_join = member.is_join
+  if (member.max_attempts !== undefined) body.max_attempts = member.max_attempts
+  if (member.blocked_by !== undefined && member.blocked_by.length > 0) {
+    body.blocked_by = member.blocked_by
+  }
+  const res = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/tasks', body)
+  if (!res.ok) {
+    throw new Error(
+      `createPlanMember (${member.label}): POST /tasks failed ${res.status}: ${res.raw}`,
+    )
+  }
+  return res.body.id
+}
+
+/**
+ * Create a draft plan plus its member tasks (in dependency order, resolving
+ * label→id for blocked_by). Returns the plan ID and the label→task-id map.
+ */
+async function createPlanWithMembers(
+  page: Page,
+  workspaceId: string,
+  ownerAgentId: string,
+  fields: PlanFields,
+  members: MemberSpec[],
+): Promise<{ planId: string; memberIds: Record<string, string> }> {
+  const planId = await createPlan(page, workspaceId, ownerAgentId, fields)
+  const memberIds: Record<string, string> = {}
+  for (const m of members) {
+    const blockedBy = (m.blocked_by_labels ?? [])
+      .map((l) => memberIds[l])
+      .filter((id): id is string => typeof id === 'string')
+    memberIds[m.label] = await createPlanMember(page, workspaceId, planId, ownerAgentId, {
+      ...m,
+      blocked_by: blockedBy,
+    })
+  }
+  return { planId, memberIds }
+}
+
 /**
  * Start a fresh chat session, route to a delegate-capable task agent, and
  * return when the composer is ready to receive input.
@@ -185,11 +324,14 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → verdict
   const activePill = page.locator('[data-testid="goal-pill-active"]')
   await expect(activePill).toBeVisible({ timeout: 60_000 })
 
-  // Differentiation test: the active pill's title attribute carries the
-  // full condition (GoalPillTray.tsx:152 title={frame.condition}). Assert
-  // a fragment of OUR condition is in that title — proving the pill is
-  // bound to OUR goal, not a generic empty state.
-  await expect(activePill.first()).toHaveAttribute('title', /goal met/, { timeout: 10_000 })
+  // Differentiation test: the active pill's aria-label carries the
+  // full condition (GoalPillTray.tsx:105 aria-label=`Goal: ${condition},
+  // state ${label}. Click to ...`). The pill button has NO `title`
+  // attribute — the condition is exposed via aria-label (and the
+  // expandable data-testid="goal-pill-condition" panel). Assert a
+  // fragment of OUR condition is in that aria-label — proving the pill
+  // is bound to OUR goal, not a generic empty state.
+  await expect(activePill.first()).toHaveAttribute('aria-label', /goal met/i, { timeout: 10_000 })
 
   // Wait for the worker turn to complete — assistant message counter advances.
   // The active-pill → worker-turn transition is automatic (goal_loop.go emits
@@ -265,35 +407,27 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
   await startFreshChatWithJim(page)
 
   // Create a workspace so the task has a real plan/team context. The
-  // createWorkspace REST call uses the same shape verifier-eval.spec.ts
-  // uses (POST /api/v1/workspaces with core_team).
+  // task's agent_id must be a member of the workspace's team set
+  // (core_team ∪ delegation edges — validateTaskAgentID, rest_tasks.go).
+  // We seed the core agent "jim" into core_team; jim is a chat-target
+  // agent (IsChatTarget()==true) and the proven native worker for
+  // action="llm" tasks (verifier-eval.spec.ts uses the same pattern).
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t1',
-    core_team: [],
+    core_team: [JIM_AGENT_ID],
   })
   if (!wsRes.ok) {
     throw new Error(`Conformance_t1: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   }
   const workspaceId = wsRes.body.id
 
-  // Discover a worker agent for the task. /api/v1/agents returns the
-  // seeded 4-base roster + user-created agents; we pick the first non-core
-  // agent so we exercise the "real task path" rather than the core roster.
-  const agentsRes = await apiFetch<Array<{ id: string; name: string; type: string }>>(
-    page,
-    'GET',
-    '/api/v1/agents',
-  )
-  if (!agentsRes.ok) {
-    throw new Error(`Conformance_t1: GET /agents failed ${agentsRes.status}: ${agentsRes.raw}`)
-  }
-  const worker = agentsRes.body.find((a) => a.type === 'Main' || a.type === 'Subagent')
-  if (!worker) {
-    throw new Error(
-      'BLOCKED: no Main/Subagent worker agent available — t1 conformance needs a ' +
-        'real task dispatch path. Seed a user-defined agent first.',
-    )
-  }
+  // Use the seeded core agent "jim" as the task assignee. (The prior
+  // implementation discovered a "Main"/"Subagent" agent via GET /agents
+  // and landed on the seeded "worker" sub-agent — but the worker was NOT
+  // in the workspace's core_team, so POST /tasks 400'd with "agent "worker"
+  // is not a member of this workspace's team". jim in core_team resolves
+  // the team-membership gate.)
+  const worker = { id: JIM_AGENT_ID }
 
   // Create the standalone task with a single criterion the LLM can satisfy.
   // action="llm" dispatches to the worker on the next processTick.
@@ -308,14 +442,7 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
       workspace_id: workspaceId,
       agent_id: worker.id,
       max_attempts: 3,
-      criteria: [
-        {
-          kind: 'prose',
-          text: 'the reply contains the word "done"',
-          author: { kind: 'user', id: 'admin' },
-          status: 'pending',
-        },
-      ],
+      criteria: [proseCriterion('the reply contains the word "done"')],
     },
   )
   if (!taskRes.ok) {
@@ -399,14 +526,7 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
     workspace_id: workspaceId,
     agent_id: worker.id,
     max_attempts: 3,
-    criteria: [
-      {
-        kind: 'prose',
-        text: 'the reply contains the word "done"',
-        author: { kind: 'user', id: 'admin' },
-        status: 'pending',
-      },
-    ],
+    criteria: [proseCriterion('the reply contains the word "done"')],
   })
   if (!stopRes0.ok) {
     throw new Error(`Conformance_t1: POST /tasks (stop target) failed ${stopRes0.status}: ${stopRes0.raw}`)
@@ -456,77 +576,50 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
   test.setTimeout(480_000)
   await startFreshChatWithJim(page)
 
-  // Setup: workspace + worker.
+  // Setup: workspace seeded with jim as the plan owner + member assignee.
+  // owner_agent_id must be a chat-target agent (IsChatTarget()==true); jim
+  // qualifies, the seeded "worker" sub-agent does not.
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t2',
-    core_team: [],
+    core_team: [JIM_AGENT_ID],
   })
   if (!wsRes.ok) throw new Error(`t2: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-
-  const agentsRes = await apiFetch<Array<{ id: string; name: string; type: string }>>(
-    page,
-    'GET',
-    '/api/v1/agents',
-  )
-  if (!agentsRes.ok) throw new Error(`t2: GET /agents failed ${agentsRes.status}: ${agentsRes.raw}`)
-  const owner = agentsRes.body.find((a) => a.type === 'Main' || a.type === 'Subagent')
-  if (!owner) throw new Error('BLOCKED: no Main/Subagent owner agent available for t2.')
+  const owner = { id: JIM_AGENT_ID }
 
   // Create a plan with TWO members. The plan-lint gate (G-16) requires
-  // disjoint write_sets per parallel member; we comply here.
-  const planRes = await apiFetch<{ id: string; status: string }>(
+  // disjoint write_sets per parallel member; we comply here. Members are
+  // created as separate tasks (POST /tasks with plan_id) in dependency
+  // order — blocked_by references real task IDs, resolved by
+  // createPlanWithMembers from the label map.
+  const { planId } = await createPlanWithMembers(
     page,
-    'POST',
-    `/api/v1/workspaces/${workspaceId}/plans`,
+    workspaceId,
+    owner.id,
     {
       title: 't2 conformance plan',
       goal: 'produce a verdict of met or unmet for both members',
       description: 'two serial members, each with a verifiable criterion',
-      owner_agent_id: owner.id,
-      dod: 'both members reach done and the plan Judge says met',
-      bounds: { max_rounds: 5 },
-      members: [
-        {
-          id: 'm1',
-          title: 'member one',
-          prompt: 'reply with the literal word alpha',
-          action: 'llm',
-          agent_id: owner.id,
-          write_set: ['out/m1.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'the reply contains the word "alpha"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'm2',
-          title: 'member two',
-          prompt: 'reply with the literal word beta',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['m1'],
-          write_set: ['out/m2.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'the reply contains the word "beta"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-      ],
+      bounds: { plan_judge_max_rounds: 5 },
     },
+    [
+      {
+        label: 'm1',
+        title: 'member one',
+        prompt: 'reply with the literal word alpha',
+        write_set: ['out/m1.txt'],
+        criteria: [proseCriterion('the reply contains the word "alpha"')],
+      },
+      {
+        label: 'm2',
+        title: 'member two',
+        prompt: 'reply with the literal word beta',
+        blocked_by_labels: ['m1'],
+        write_set: ['out/m2.txt'],
+        criteria: [proseCriterion('the reply contains the word "beta"')],
+      },
+    ],
   )
-  if (!planRes.ok) {
-    throw new Error(`t2: POST /plans failed ${planRes.status}: ${planRes.raw}`)
-  }
-  const planId = planRes.body.id
 
   // Approve (tiered-DoD + unconditional member-creation; ADR-049). This
   // is the "gated approve" node in the t2 diagram.
@@ -551,10 +644,9 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
   const deadline = Date.now() + 420_000
   let planStatus = ''
   let sawHold = false
-  let sawUnmetTransition = false
   let lastMetStatus = ''
   while (Date.now() < deadline) {
-    const poll = await apiFetch<{ status: string; member_met?: Record<string, boolean> }>(
+    const poll = await apiFetch<{ state: string }>(
       page,
       'GET',
       `/api/v1/plans/${planId}`,
@@ -562,13 +654,8 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
     if (!poll.ok) {
       throw new Error(`t2: GET /plans/{id} poll failed ${poll.status}: ${poll.raw}`)
     }
-    planStatus = poll.body.status
+    planStatus = poll.body.state
     if (planStatus === 'awaiting_owner_correction') sawHold = true
-    // Detect the unmet→hold transition (a round-burn signal in the drawn path).
-    if (poll.body.member_met) {
-      const anyUnmet = Object.values(poll.body.member_met).some((v) => v === false)
-      if (anyUnmet) sawUnmetTransition = true
-    }
     if (PLAN_TERMINAL_OR_HOLD.has(planStatus)) {
       lastMetStatus = planStatus
       break
@@ -604,10 +691,6 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
       lastMetStatus === 'failed',
     `t2 plan must terminate to a documented state — got "${lastMetStatus}".`,
   ).toBe(true)
-
-  // Silence "unused" warning for sawUnmetTransition without coupling it
-  // to an assertion (it's diagnostic for the F2 proof path).
-  void sawUnmetTransition
 })
 
 // ── Conformance_t3_PlanningReplanningE2E ─────────────────────────────────────
@@ -628,98 +711,64 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   test.setTimeout(480_000)
   await startFreshChatWithJim(page)
 
-  // Setup: workspace + owner agent.
+  // Setup: workspace seeded with jim (chat-target owner + member assignee).
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t3',
-    core_team: [],
+    core_team: [JIM_AGENT_ID],
   })
   if (!wsRes.ok) throw new Error(`t3: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-
-  const agentsRes = await apiFetch<Array<{ id: string; name: string; type: string }>>(
-    page,
-    'GET',
-    '/api/v1/agents',
-  )
-  if (!agentsRes.ok) throw new Error(`t3: GET /agents failed ${agentsRes.status}: ${agentsRes.raw}`)
-  const owner = agentsRes.body.find((a) => a.type === 'Main' || a.type === 'Subagent')
-  if (!owner) throw new Error('BLOCKED: no Main/Subagent owner agent available for t3.')
+  const owner = { id: JIM_AGENT_ID }
 
   // Create a plan with three members; m1 trivial criterion, m2 trivial
   // criterion, m3 explicitly UNMET (impossible criterion) so the plan
   // engine reaches unmet-all-done and the owner must re-plan.
-  const planRes = await apiFetch<{ id: string; status: string }>(
+  const { planId } = await createPlanWithMembers(
     page,
-    'POST',
-    `/api/v1/workspaces/${workspaceId}/plans`,
+    workspaceId,
+    owner.id,
     {
       title: 't3 conformance plan',
       goal: 'exercise the supersede + targeted-retry correction paths',
       description: 'owner re-plans after an unmet DoD adjudication',
-      owner_agent_id: owner.id,
-      dod: 'all members reach done with met criteria',
-      bounds: { max_rounds: 5 },
-      members: [
-        {
-          id: 'm1',
-          title: 'trivial one',
-          prompt: 'reply with alpha',
-          action: 'llm',
-          agent_id: owner.id,
-          write_set: ['out/t3/m1.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "alpha"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'm2',
-          title: 'trivial two',
-          prompt: 'reply with beta',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['m1'],
-          write_set: ['out/t3/m2.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "beta"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'm3',
-          title: 'impossible criterion',
-          prompt: 'try to satisfy a literal impossible criterion',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['m2'],
-          write_set: ['out/t3/m3.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              // Intentionally not satisfiable: the worker cannot output the
-              // sha512 of a value it cannot read. After attempts exhaust
-              // this member freezes; targeted-retry is the recovery path.
-              text: 'the reply contains the exact SHA-512 hash of the literal string "UNREADABLE_SENTINEL_X9K2"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-      ],
+      bounds: { plan_judge_max_rounds: 5 },
     },
+    [
+      {
+        label: 'm1',
+        title: 'trivial one',
+        prompt: 'reply with alpha',
+        write_set: ['out/t3/m1.txt'],
+        criteria: [proseCriterion('reply contains "alpha"')],
+      },
+      {
+        label: 'm2',
+        title: 'trivial two',
+        prompt: 'reply with beta',
+        blocked_by_labels: ['m1'],
+        write_set: ['out/t3/m2.txt'],
+        criteria: [proseCriterion('reply contains "beta"')],
+      },
+      {
+        label: 'm3',
+        title: 'impossible criterion',
+        prompt: 'try to satisfy a literal impossible criterion',
+        blocked_by_labels: ['m2'],
+        write_set: ['out/t3/m3.txt'],
+        criteria: [
+          {
+            kind: 'prose',
+            // Intentionally not satisfiable: the worker cannot output the
+            // sha512 of a value it cannot read. After attempts exhaust
+            // this member freezes; targeted-retry is the recovery path.
+            text: 'the reply contains the exact SHA-512 hash of the literal string "UNREADABLE_SENTINEL_X9K2"',
+            author: { kind: 'user', id: 'admin' },
+            status: 'pending',
+          },
+        ],
+      },
+    ],
   )
-  if (!planRes.ok) {
-    throw new Error(`t3: POST /plans failed ${planRes.status}: ${planRes.raw}`)
-  }
-  const planId = planRes.body.id
 
   // Approve + run. We don't poll for completion here — we exercise the
   // re-plan path while the plan is still running or just-reached
@@ -741,7 +790,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   const HOLD_DEADLINE = Date.now() + 420_000
   let planStatus = ''
   while (Date.now() < HOLD_DEADLINE) {
-    const poll = await apiFetch<{ status: string }>(
+    const poll = await apiFetch<{ state: string }>(
       page,
       'GET',
       `/api/v1/plans/${planId}`,
@@ -749,7 +798,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
     if (!poll.ok) {
       throw new Error(`t3: GET /plans/{id} poll failed ${poll.status}: ${poll.raw}`)
     }
-    planStatus = poll.body.status
+    planStatus = poll.body.state
     if (
       planStatus === 'awaiting_owner_correction' ||
       planStatus === 'done' ||
@@ -814,7 +863,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
     // single member retry.
     const RETRY_DEADLINE = Date.now() + 120_000
     while (Date.now() < RETRY_DEADLINE) {
-      const poll = await apiFetch<{ status: string }>(
+      const poll = await apiFetch<{ state: string }>(
         page,
         'GET',
         `/api/v1/plans/${planId}`,
@@ -822,7 +871,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
       if (!poll.ok) {
         throw new Error(`t3: post-correction poll failed ${poll.status}: ${poll.raw}`)
       }
-      if (poll.body.status !== 'awaiting_owner_correction') break
+      if (poll.body.state !== 'awaiting_owner_correction') break
       await page.waitForTimeout(2_000)
     }
   }
@@ -855,76 +904,45 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
 
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-g4',
-    core_team: [],
+    core_team: [JIM_AGENT_ID],
   })
   if (!wsRes.ok) throw new Error(`g4: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
+  const owner = { id: JIM_AGENT_ID }
 
-  const agentsRes = await apiFetch<Array<{ id: string; name: string; type: string }>>(
+  // CASE 1: disjoint write_sets — must be accepted at approve (G-16 happy
+  // path). Plan-lint runs at APPROVE (handlePlanApprove, rest_plans.go),
+  // not at create — so the plan + member tasks create fine, and the gate
+  // is exercised by the approve call below.
+  const { planId: disjointPlanId } = await createPlanWithMembers(
     page,
-    'GET',
-    '/api/v1/agents',
-  )
-  if (!agentsRes.ok) throw new Error(`g4: GET /agents failed ${agentsRes.status}: ${agentsRes.raw}`)
-  const owner = agentsRes.body.find((a) => a.type === 'Main' || a.type === 'Subagent')
-  if (!owner) throw new Error('BLOCKED: no Main/Subagent owner agent available for g4.')
-
-  // CASE 1: disjoint write_sets — must be accepted at approve (G-16 happy path).
-  const disjointRes = await apiFetch<{ id: string; status: string }>(
-    page,
-    'POST',
-    `/api/v1/workspaces/${workspaceId}/plans`,
+    workspaceId,
+    owner.id,
     {
       title: 'g4 disjoint plan',
       goal: 'lint passes',
-      owner_agent_id: owner.id,
-      dod: 'both members done',
-      bounds: { max_rounds: 3 },
-      members: [
-        {
-          id: 'a',
-          title: 'stream a',
-          prompt: 'reply alpha',
-          action: 'llm',
-          agent_id: owner.id,
-          write_set: ['g4/a.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "alpha"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'b',
-          title: 'stream b',
-          prompt: 'reply beta',
-          action: 'llm',
-          agent_id: owner.id,
-          write_set: ['g4/b.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "beta"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-      ],
+      bounds: { plan_judge_max_rounds: 3 },
     },
+    [
+      {
+        label: 'a',
+        title: 'stream a',
+        prompt: 'reply alpha',
+        write_set: ['g4/a.txt'],
+        criteria: [proseCriterion('reply contains "alpha"')],
+      },
+      {
+        label: 'b',
+        title: 'stream b',
+        prompt: 'reply beta',
+        write_set: ['g4/b.txt'],
+        criteria: [proseCriterion('reply contains "beta"')],
+      },
+    ],
   )
-  // Drawn-path assertion 1: the disjoint plan is accepted (200/201) —
-  // the lint gate (G-16) must PASS.
-  expect(
-    disjointRes.ok,
-    `g4: disjoint-write-sets plan must be accepted by lint (G-16). Got ${disjointRes.status}: ${disjointRes.raw}`,
-  ).toBe(true)
-  const disjointPlanId = disjointRes.body.id
 
-  // Approve the disjoint plan — must succeed.
+  // Approve the disjoint plan — must succeed (lint passes: disjoint
+  // write_sets on the two parallel members a/b).
   const approveDisjoint = await apiFetch<{ status: string }>(
     page,
     'POST',
@@ -933,88 +951,60 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
   )
   expect(
     approveDisjoint.ok,
-    `g4: disjoint plan approve must succeed. Got ${approveDisjoint.status}: ${approveDisjoint.raw}`,
+    `g4: disjoint plan approve must succeed (G-16 lint). Got ${approveDisjoint.status}: ${approveDisjoint.raw}`,
   ).toBe(true)
 
-  // CASE 2: OVERLAPPING write_sets — must be REJECTED at create OR approve
-  // (G-16 fail-closed: overlap → lint rejection). We assert create-time
-  // rejection (the canonical lint seam); approve-time rejection is also
-  // acceptable, but create-time is stricter.
-  const overlapRes = await apiFetch<{ id?: string; status: string }>(
+  // CASE 2: OVERLAPPING write_sets — must be REJECTED at approve
+  // (G-16 fail-closed: overlap → lint rejection). The plan + member tasks
+  // create fine (lint is an approve-time gate); the two parallel members
+  // x/y share the same write_set path, which lint rejects at approve.
+  const { planId: overlapPlanId } = await createPlanWithMembers(
     page,
-    'POST',
-    `/api/v1/workspaces/${workspaceId}/plans`,
+    workspaceId,
+    owner.id,
     {
       title: 'g4 overlapping plan',
       goal: 'lint rejects',
-      owner_agent_id: owner.id,
-      dod: 'both members done',
-      bounds: { max_rounds: 3 },
-      members: [
-        {
-          id: 'x',
-          title: 'stream x',
-          prompt: 'reply x',
-          action: 'llm',
-          agent_id: owner.id,
-          write_set: ['shared/conflict.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "x"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'y',
-          title: 'stream y',
-          prompt: 'reply y',
-          action: 'llm',
-          agent_id: owner.id,
-          // INTENTIONALLY overlapping with x's write_set — the same file path.
-          write_set: ['shared/conflict.txt'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "y"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-      ],
+      bounds: { plan_judge_max_rounds: 3 },
     },
+    [
+      {
+        label: 'x',
+        title: 'stream x',
+        prompt: 'reply x',
+        write_set: ['shared/conflict.txt'],
+        criteria: [proseCriterion('reply contains "x"')],
+      },
+      {
+        label: 'y',
+        title: 'stream y',
+        prompt: 'reply y',
+        // INTENTIONALLY overlapping with x's write_set — the same file path.
+        write_set: ['shared/conflict.txt'],
+        criteria: [proseCriterion('reply contains "y"')],
+      },
+    ],
   )
-  // Drawn-path assertion 2: the overlapping plan is REJECTED. Either at
-  // create (4xx) or at approve (the post-create lint run). A 2xx success
-  // here means the lint gate is missing or bypassed — BLOCKED.
-  if (overlapRes.ok) {
-    // Lint passed at create — try approve. If approve rejects, lint IS
-    // wired but at the approve gate instead. We accept that as
-    // "drawn-path proven" too.
-    const approveOverlap = await apiFetch<{ status: string }>(
-      page,
-      'POST',
-      `/api/v1/plans/${overlapRes.body.id}/approve`,
-      {},
-    )
-    expect(
-      !approveOverlap.ok,
-      `g4: overlapping-write-sets plan must be rejected by lint (G-16) — ` +
-        `create succeeded AND approve succeeded. The lint gate is missing. ` +
-        `Approve response: ${approveOverlap.status} ${approveOverlap.raw}`,
-    ).toBe(true)
-  } else {
-    // Rejection at create — the canonical drawn-path outcome. Differentiation:
-    // the disjoint plan was accepted AND approved; the overlapping plan was
-    // rejected. The lint gate differentiates.
-    expect(
-      overlapRes.status >= 400 && overlapRes.status < 500,
-      `g4: overlapping plan must be rejected with 4xx — got ${overlapRes.status}: ${overlapRes.raw}`,
-    ).toBe(true)
-  }
+
+  // Drawn-path assertion 2: the overlapping plan is REJECTED at approve
+  // by lint (G-16). A 2xx success here means the lint gate is missing or
+  // bypassed — BLOCKED.
+  const approveOverlap = await apiFetch<{ status: string }>(
+    page,
+    'POST',
+    `/api/v1/plans/${overlapPlanId}/approve`,
+    {},
+  )
+  expect(
+    !approveOverlap.ok,
+    `g4: overlapping-write-sets plan must be rejected by lint (G-16) at approve — ` +
+      `create succeeded AND approve succeeded. The lint gate is missing. ` +
+      `Approve response: ${approveOverlap.status} ${approveOverlap.raw}`,
+  ).toBe(true)
+  expect(
+    approveOverlap.status >= 400 && approveOverlap.status < 500,
+    `g4: overlapping plan approve must be rejected with 4xx — got ${approveOverlap.status}: ${approveOverlap.raw}`,
+  ).toBe(true)
 })
 
 // ── Conformance_g5_ShardAssembleE2E ──────────────────────────────────────────
@@ -1043,129 +1033,72 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
 
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-g5',
-    core_team: [],
+    core_team: [JIM_AGENT_ID],
   })
   if (!wsRes.ok) throw new Error(`g5: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-
-  const agentsRes = await apiFetch<Array<{ id: string; name: string; type: string }>>(
-    page,
-    'GET',
-    '/api/v1/agents',
-  )
-  if (!agentsRes.ok) throw new Error(`g5: GET /agents failed ${agentsRes.status}: ${agentsRes.raw}`)
-  const owner = agentsRes.body.find((a) => a.type === 'Main' || a.type === 'Subagent')
-  if (!owner) throw new Error('BLOCKED: no Main/Subagent owner agent available for g5.')
+  const owner = { id: JIM_AGENT_ID }
 
   // Topology (mirrors conformance_design_test.go's g5 dataset):
   //   schema → 3 disjoint shards → assemble
-  // The assemble member is the join with its OWN criteria (FR — first-class
-  // join member).
-  const planRes = await apiFetch<{ id: string; status: string }>(
+  // The assemble member is the join with its OWN criteria (first-class
+  // join member). Members are created as separate tasks (POST /tasks with
+  // plan_id); blocked_by references real task IDs, resolved from the
+  // label map by createPlanWithMembers.
+  const { planId, memberIds } = await createPlanWithMembers(
     page,
-    'POST',
-    `/api/v1/workspaces/${workspaceId}/plans`,
+    workspaceId,
+    owner.id,
     {
       title: 'g5 report-workbook',
       goal: 'serial schema, parallel shards, one assemble',
-      owner_agent_id: owner.id,
-      dod: 'all members done and the assemble member has its own criteria',
-      bounds: { max_rounds: 3 },
-      members: [
-        {
-          id: 'schema',
-          title: 'schema',
-          prompt: 'reply schema',
-          action: 'llm',
-          agent_id: owner.id,
-          write_set: ['g5/schema.json'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "schema"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'shard-a',
-          title: 'shard-a',
-          prompt: 'reply alpha',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['schema'],
-          write_set: ['g5/a.csv'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "alpha"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'shard-b',
-          title: 'shard-b',
-          prompt: 'reply beta',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['schema'],
-          write_set: ['g5/b.csv'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "beta"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'shard-c',
-          title: 'shard-c',
-          prompt: 'reply gamma',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['schema'],
-          write_set: ['g5/c.csv'],
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "gamma"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-        {
-          id: 'assemble',
-          title: 'assemble',
-          prompt: 'reply assemble',
-          action: 'llm',
-          agent_id: owner.id,
-          blocked_by: ['shard-a', 'shard-b', 'shard-c'],
-          write_set: ['g5/report.xlsx'],
-          is_join: true,
-          // First-class join — assemble carries its OWN criteria, not a
-          // bare edge. The drawn path requires this.
-          criteria: [
-            {
-              kind: 'prose',
-              text: 'reply contains "assembled"',
-              author: { kind: 'user', id: 'admin' },
-              status: 'pending',
-            },
-          ],
-        },
-      ],
+      bounds: { plan_judge_max_rounds: 3 },
     },
+    [
+      {
+        label: 'schema',
+        title: 'schema',
+        prompt: 'reply schema',
+        write_set: ['g5/schema.json'],
+        criteria: [proseCriterion('reply contains "schema"')],
+      },
+      {
+        label: 'shard-a',
+        title: 'shard-a',
+        prompt: 'reply alpha',
+        blocked_by_labels: ['schema'],
+        write_set: ['g5/a.csv'],
+        criteria: [proseCriterion('reply contains "alpha"')],
+      },
+      {
+        label: 'shard-b',
+        title: 'shard-b',
+        prompt: 'reply beta',
+        blocked_by_labels: ['schema'],
+        write_set: ['g5/b.csv'],
+        criteria: [proseCriterion('reply contains "beta"')],
+      },
+      {
+        label: 'shard-c',
+        title: 'shard-c',
+        prompt: 'reply gamma',
+        blocked_by_labels: ['schema'],
+        write_set: ['g5/c.csv'],
+        criteria: [proseCriterion('reply contains "gamma"')],
+      },
+      {
+        label: 'assemble',
+        title: 'assemble',
+        prompt: 'reply assemble',
+        blocked_by_labels: ['shard-a', 'shard-b', 'shard-c'],
+        write_set: ['g5/report.xlsx'],
+        is_join: true,
+        // First-class join — assemble carries its OWN criteria, not a
+        // bare edge. The drawn path requires this.
+        criteria: [proseCriterion('reply contains "assembled"')],
+      },
+    ],
   )
-  if (!planRes.ok) {
-    throw new Error(`g5: POST /plans failed ${planRes.status}: ${planRes.raw}`)
-  }
-  const planId = planRes.body.id
 
   // Drawn-path assertion 1: the plan-lint accepted this topology.
   // (Lint rejection here would mean the g5 topology itself is malformed.)
@@ -1181,36 +1114,57 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
       `got ${approveRes.status}: ${approveRes.raw}`,
   ).toBe(true)
 
-  // Drawn-path assertion 2: GET /plans/{id} preserves the assemble member
-  // as a first-class join with its OWN criteria (G-16 + g5 spec).
-  // We round-trip the plan and inspect the assemble member's criteria
-  // count. A round-trip with empty criteria on a member declared as
-  // is_join means the join is being silently demoted to a bare edge.
-  const roundtrip = await apiFetch<{ members?: Array<{ id: string; criteria?: unknown[] }> }>(
-    page,
-    'GET',
-    `/api/v1/plans/${planId}`,
-  )
-  expect(roundtrip.ok).toBe(true)
-  const assembleMember = (roundtrip.body.members ?? []).find((m) => m.id === 'assemble')
+  // Differentiation test: the topology round-tripped through the task
+  // store. The Plan wire schema does NOT expose a `members` array
+  // (membership is computed read-time from member tasks — Plan.yaml);
+  // so the first-class-join invariant is verified by round-tripping the
+  // assemble member TASK itself (GET /tasks/{id}), not GET /plans/{id}.
+  const assembleTaskId = memberIds['assemble']
+  const assembleRoundtrip = await apiFetch<{
+    is_join?: boolean
+    write_set?: string[]
+    criteria?: unknown[]
+    plan_id?: string
+  }>(page, 'GET', `/api/v1/tasks/${assembleTaskId}`)
   expect(
-    assembleMember !== undefined,
-    'g5: assemble member must round-trip through GET /plans/{id} (first-class join)',
+    assembleRoundtrip.ok,
+    `g5: GET /tasks/{assemble} failed ${assembleRoundtrip.status}: ${assembleRoundtrip.raw}`,
   ).toBe(true)
   expect(
-    Array.isArray(assembleMember!.criteria) && assembleMember!.criteria!.length > 0,
+    assembleRoundtrip.body.is_join === true,
+    `g5: assemble member must round-trip is_join=true (first-class join) — observed ${String(assembleRoundtrip.body.is_join)}.`,
+  ).toBe(true)
+  expect(
+    Array.isArray(assembleRoundtrip.body.criteria) &&
+      assembleRoundtrip.body.criteria!.length > 0,
     'g5: assemble member must carry its OWN criteria after round-trip — ' +
       'a bare-edge demotion breaks the first-class join invariant (g5 spec).',
   ).toBe(true)
-
-  // Differentiation test: the round-tripped plan must contain ALL 5 members
-  // (schema + 3 shards + assemble). A topology that drops a member at
-  // round-trip is a serialization bug that the g5 conformance cannot
-  // accept.
   expect(
-    (roundtrip.body.members ?? []).length,
-    `g5: round-tripped plan must contain all 5 members — got ${(roundtrip.body.members ?? []).length}.`,
-  ).toBe(5)
+    (assembleRoundtrip.body.write_set ?? []).includes('g5/report.xlsx'),
+    'g5: assemble member write_set must round-trip the join artifact path',
+  ).toBe(true)
+
+  // Differentiation test: ALL 5 members were created and are linked to
+  // this plan. A topology that drops a member at create is a
+  // serialization bug the g5 conformance cannot accept.
+  const expectedLabels = ['schema', 'shard-a', 'shard-b', 'shard-c', 'assemble']
+  expect(
+    expectedLabels.every((l) => typeof memberIds[l] === 'string'),
+    `g5: all 5 member labels must have created task IDs — missing: ${expectedLabels.filter((l) => !memberIds[l]).join(', ')}.`,
+  ).toBe(true)
+  // Each member task's plan_id must point back at this plan.
+  for (const label of expectedLabels) {
+    const m = await apiFetch<{ plan_id?: string }>(
+      page,
+      'GET',
+      `/api/v1/tasks/${memberIds[label]}`,
+    )
+    expect(
+      m.ok && m.body.plan_id === planId,
+      `g5: member "${label}" (${memberIds[label]}) plan_id must equal the plan — got ${m.body?.plan_id}.`,
+    ).toBe(true)
+  }
 })
 
 // ── Conformance_g6_SessionControlE2E ─────────────────────────────────────────
@@ -1413,38 +1367,36 @@ test('Conformance_bootsweep_E2E: post-restart boot sweep reconciles the active s
   ).toBe(true)
 
   // Differentiation test: the session list must be CONSISTENT with the
-  // boot sweep's reconcile pass — every session is in a terminal state
-  // OR a known-active state (the test's own fresh chat session). No
-  // session is left in a phantom state like "interrupted_pending" or
-  // "stale_running" — those would mean the sweep missed a row.
+  // boot sweep's reconcile pass — every session is in a state from the
+  // Session wire enum (contracts/components/schemas/Session.yaml):
+  //   active | archived | interrupted
+  // The boot sweep's job is to reconcile non-terminal (active, left over
+  // from a killed-mid-run gateway) sessions to `interrupted` at boot.
+  // No session is left in a phantom state outside that enum — those would
+  // mean the sweep missed a row (a CRIT-1 wedge signal).
   //
-  // We collect every status we see; the test passes if all are members
-  // of the closed set {terminal states, active-running, fresh-bootstrap}.
-  // Anything outside is a wedge signal.
-  const KNOWN_STATES = new Set([
-    'running',
-    'idle',
-    'completed',
-    'failed',
-    'failed_interrupted',
-    'stopped',
-    'needs_input',
-    'awaiting_owner_correction',
-  ])
+  // (The prior KNOWN_STATES set here used TASK/PLAN statuses — running /
+  // idle / completed / failed / failed_interrupted / etc. — which are NOT
+  // the Session wire enum and so every `active` session failed the
+  // membership check. The real enum is the three values below.)
+  const KNOWN_STATES = new Set(['active', 'archived', 'interrupted'])
   const observed = new Set<string>()
   for (const s of sessionsRes.body) observed.add(s.status)
   for (const s of observed) {
     expect(
       KNOWN_STATES.has(s),
-      `bootsweep: observed session status "${s}" outside the known-state set — ` +
-        'a wedge signal: the boot sweep did not reconcile this session.',
+      `bootsweep: observed session status "${s}" outside the Session wire enum ` +
+        '{active, archived, interrupted} — a wedge signal: the boot sweep did ' +
+        'not reconcile this session.',
     ).toBe(true)
   }
 
   // Drawn-path assertion 2: a fresh chat session created by this test
-  // appears in the session list and is in `running` or `idle` — the
-  // post-bootstrap state, NOT a phantom. We send a benign chat message
-  // and read the resulting session back via the list.
+  // appears in the session list and is in the `active` post-bootstrap
+  // state, NOT a phantom. We send a benign chat message and read the
+  // resulting session list back. The fresh session was already created
+  // by startFreshChatWithJim's `/new` above, so the count is at minimum
+  // stable (and grows if the chat creates an additional session row).
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await input.fill('hi')
@@ -1459,8 +1411,15 @@ test('Conformance_bootsweep_E2E: post-restart boot sweep reconciles the active s
   expect(afterRes.ok).toBe(true)
   expect(
     afterRes.body.length >= sessionsRes.body.length,
-    `bootsweep: session list must grow after the test's chat message — ` +
+    `bootsweep: session list must not shrink after the test's chat message — ` +
       `before=${sessionsRes.body.length} after=${afterRes.body.length}.`,
+  ).toBe(true)
+  // At least one session must be `active` (the fresh chat this test
+  // opened) — the post-bootstrap live state, not a phantom.
+  expect(
+    afterRes.body.some((s) => s.status === 'active'),
+    `bootsweep: at least one session must be active after the fresh chat — ` +
+      `observed statuses: ${[...new Set(afterRes.body.map((s) => s.status))].join(', ')}.`,
   ).toBe(true)
 
   void context
