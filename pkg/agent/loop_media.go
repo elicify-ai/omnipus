@@ -9,11 +9,11 @@ package agent
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
-	"image/png"
 	"io"
 	"os"
 	"strings"
@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/docextract"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/resize"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -398,38 +399,23 @@ func detectMIME(localPath string, meta media.MediaMeta) string {
 
 const maxImagePixels = 16 * 1024 * 1024
 
-// isImageFormatUnsupportedByGo reports whether the given mime is a real image
-// format that Go's stdlib + golang.org/x/image still cannot decode (the stdlib
-// covers PNG/JPEG/GIF, x/image adds BMP/TIFF/WebP; SVG is rasterized to PNG
-// via oksvg/rasterx in encodeImageToDataURL, so it no longer appears here;
-// AVIF, HEIC, HEIF, ICO have no bundled decoder). For these, the D2 path
-// applies: the original bytes are sent through as-is, the provider is
-// expected to reject them, and the media-retry code strips the block on the
-// next attempt.
+// encodeImageToDataURL normalizes a decodable image to the provider-friendly
+// canonical PNG and returns it as a data URL. SVG is rasterized to PNG via
+// the pure-Go oksvg/rasterx path (Option A, retained). All other formats
+// route through the resize pipeline (pkg/media/resize, FR-011/014/015):
+// PNG when it fits (canonical output), JPEG via the q90→q40 ladder when
+// PNG does not fit (FR-015). The pixel budget is checked before full
+// decode to bound memory use (FR-013).
 //
-// FR-001 (ADR-051 spec): "AVIF/HEIC → fall through to D2 provider-rejection
-// downgrade/retry (the LLM call happens, provider rejects, we strip the
-// offending block, retry)." The prior implementation returned "" on decode
-// failure, which made the caller drop the attachment before the LLM call
-// ever happened — contradicting the FR-001 contract.
-func isImageFormatUnsupportedByGo(mime string) bool {
-	switch mime {
-	case "image/avif",
-		"image/heic",
-		"image/heif",
-		"image/x-icon":
-		return true
-	}
-	return false
-}
-
-// encodeImageToDataURL normalizes a decodable image to PNG and returns it as a
-// data URL. The pixel budget is checked before full decode to bound memory use.
-// SVG is rasterized to PNG via the pure-Go oksvg/rasterx path (Option A). For
-// formats Go cannot decode (AVIF, HEIC, ICO), the original bytes are returned
-// as-is (FR-001 D2 path) so the LLM call still happens and the provider's
-// rejection triggers the media-retry strip. Returns an empty string only when
-// the input exceeds maxSize, the file is unreadable, or normalization fails.
+// FR-016 (ADR-051 Rev 4): the prior D2 passthrough for AVIF/HEIC/HEIF/ICO
+// is DELETED. These formats are not in the stdlib + x/image decoder set;
+// image.DecodeConfig fails on them, the function returns "", and the caller
+// routes the attachment to step 5 offload (workspace work/ + guidance).
+//
+// Returns an empty string when the input exceeds maxSize, the file is
+// unreadable, normalization fails, or the resize ladder reaches its floor
+// (ErrLadderFloor) — in every case the caller falls through to the
+// "[attachment unavailable: …]" marker or step 5 offload.
 func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int) string {
 	if info.Size() > int64(maxSize) {
 		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
@@ -458,26 +444,11 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		}
 	}()
 
-	// FR-001 D2 path: pass through formats Go cannot decode so the LLM
-	// call still happens and the media-retry code can strip the block on
-	// the next attempt. We bound the read to maxSize to prevent OOM.
-	if isImageFormatUnsupportedByGo(mime) {
-		data := make([]byte, info.Size())
-		n, readErr := io.ReadFull(io.LimitReader(f, int64(maxSize)+1), data)
-		if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-			logImageNormalizationFailure(localPath, mime, "unsupported-format-read-failed", readErr, nil)
-			return ""
-		}
-		if int64(n) > int64(maxSize) {
-			logImageNormalizationFailure(localPath, mime, "unsupported-format-oversize", nil, map[string]any{
-				"size":     n,
-				"max_size": maxSize,
-			})
-			return ""
-		}
-		return fmt.Sprintf("data:%s;base64,%s", mime, base64.StdEncoding.EncodeToString(data[:n]))
-	}
-
+	// FR-013: DecodeConfig pre-flight pixel guard. Order-independent
+	// product check catches the wide×tall bomb class (e.g. Width=10M,
+	// Height=2) that the prior integer-division Width>maxImagePixels/Height
+	// guard let through. Overflow routes to step 7 (honest marker); no
+	// image.Decode is attempted when this guard fires.
 	config, format, err := image.DecodeConfig(f)
 	if err != nil {
 		logImageNormalizationFailure(localPath, mime, "decode-config-failed", err, nil)
@@ -491,11 +462,6 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		})
 		return ""
 	}
-	// ADR-051 §RD1 pre-flight: the prior `Width > maxImagePixels/Height`
-	// was integer-division arithmetic and a crafted header (e.g.
-	// Width=10_000_000, Height=2) would slip through and the full
-	// decode below would still allocate ~150 MB. The product check is
-	// order-independent and catches the wide×tall bomb class.
 	pixels := uint64(config.Width) * uint64(config.Height)
 	if pixels > maxImagePixels {
 		logImageNormalizationFailure(localPath, mime, "pixel-budget-exceeded", nil, map[string]any{
@@ -522,24 +488,38 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		return ""
 	}
 
-	var normalized bytes.Buffer
-	if err := png.Encode(&normalized, decoded); err != nil {
-		logImageNormalizationFailure(localPath, mime, "encode-failed", err, map[string]any{
-			"format": decodedFormat,
-		})
-		return ""
-	}
-	if normalized.Len() > maxSize {
-		logImageNormalizationFailure(localPath, mime, "encoded-oversize", nil, map[string]any{
-			"format":       decodedFormat,
-			"encoded_size": normalized.Len(),
-			"max_size":     maxSize,
-		})
+	// FR-011/014/015: resize-to-fit. The pipeline picks PNG when it fits
+	// (canonical) and JPEG via the q90→q40 ladder when PNG doesn't.
+	// ErrLadderFloor routes to step 5 offload (no valid wire format
+	// exists at any size on the ladder).
+	result, err := resize.ResizeToFit(decoded, resize.Budget{
+		LongEdge: resize.DefaultLongEdge,
+		MaxBytes: maxSize,
+	})
+	if err != nil {
+		if errors.Is(err, resize.ErrLadderFloor) {
+			logImageNormalizationFailure(localPath, mime, "resize-ladder-floor", err, map[string]any{
+				"format":       decodedFormat,
+				"long_edge":    maxInt(config.Width, config.Height),
+				"budget_bytes": maxSize,
+			})
+		} else {
+			logImageNormalizationFailure(localPath, mime, "resize-failed", err, map[string]any{
+				"format": decodedFormat,
+			})
+		}
 		return ""
 	}
 
-	const prefix = "data:image/png;base64,"
-	return prefix + base64.StdEncoding.EncodeToString(normalized.Bytes())
+	prefix := "data:" + result.Mime + ";base64,"
+	return prefix + base64.StdEncoding.EncodeToString(result.Data)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func logImageNormalizationFailure(localPath, mime, reason string, err error, fields map[string]any) {
