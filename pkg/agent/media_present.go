@@ -95,6 +95,17 @@ func modelSupportsImage(catalog *capabilities.Catalog, model string) bool {
 	return catalog.Resolve(model).Supports(capabilities.ModalityImage)
 }
 
+// modelSupportsPDF is the step-1 capability gate (FR-010) for the PDF
+// modality — symmetric to modelSupportsImage. A nil catalog is optimistic
+// (FR-026): assume PDF-capable, so a wrong guess costs one outcome-based
+// step-4 retry rather than a dead turn.
+func modelSupportsPDF(catalog *capabilities.Catalog, model string) bool {
+	if catalog == nil {
+		return true
+	}
+	return catalog.Resolve(model).Supports(capabilities.ModalityPDF)
+}
+
 // incrementWorkspaceRef parses a media://workspace/<ws>/<id> ref and
 // increments its manifest refcount via the provided refcounter (FR-007a).
 // Non-workspace refs (legacy media://<uuid>, agent inline, pre-resolved

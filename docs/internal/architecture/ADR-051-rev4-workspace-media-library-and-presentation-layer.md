@@ -1,6 +1,6 @@
 # ADR-051 (Revision 4): Workspace Media Library + Capability-Aware Presentation Layer
 
-**Status:** Proposed (Revision 4 — supersedes ADR-051 Rev 3 §RD1, §RD2, §RD3; retains Rev 3 §RD4–§RD7 error-translation unchanged). **Grill round 1 (2026-07-22) findings C1/C2/M1–M6/m1–m3/O1 resolved into this revision; no re-grill per operator.**
+**Status:** Accepted (Revision 4 — supersedes ADR-051 Rev 3 §RD1, §RD2, §RD3; retains Rev 3 §RD4–§RD7 error-translation unchanged). **Grill round 1 (2026-07-22) findings C1/C2/M1–M6/m1–m3/O1 resolved into this revision; accepted per operator.**
 **Date:** 2026-07-22
 **Deciders:** operator Daniel Piatkowski (directive: full scope, `release/v0.1.1`); architect to draft.
 **Target release:** `release/v0.1.1` — **full scope, no split to v0.3.**

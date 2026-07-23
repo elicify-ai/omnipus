@@ -2703,9 +2703,12 @@ export function updateUserContext(content: string): Promise<void> {
 // UploadedFile — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/UploadedFile.yaml.
 
-export async function uploadFiles(sessionId: string, files: File[]): Promise<UploadFilesResponse> {
+export async function uploadFiles(sessionId: string, files: File[], workspaceId?: string): Promise<UploadFilesResponse> {
   const formData = new FormData()
   formData.append('session_id', sessionId)
+  if (workspaceId) {
+    formData.append('workspace_id', workspaceId)
+  }
   for (const file of files) {
     formData.append('files', file)
   }

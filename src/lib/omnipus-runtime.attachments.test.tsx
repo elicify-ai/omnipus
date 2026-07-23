@@ -63,7 +63,7 @@ describe('useOmnipusRuntime — native attachment flow', () => {
     })
 
     // The adapter must have uploaded the file...
-    expect(api.uploadFiles).toHaveBeenCalledWith('sess1', expect.arrayContaining([expect.any(File)]))
+    expect(api.uploadFiles).toHaveBeenCalledWith('sess1', expect.arrayContaining([expect.any(File)]), undefined)
     // ...and onNew must have threaded the media ref into our transport.
     expect(sendSpy).toHaveBeenCalledTimes(1)
     const [text, opts] = sendSpy.mock.calls[0]

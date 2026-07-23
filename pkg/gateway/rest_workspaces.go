@@ -523,6 +523,12 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/media[/{media_id}] — per-workspace media library (ADR-051 Rev 4).
+	if strings.Contains(rest, "/media") {
+		a.HandleWorkspaceMedia(w, r)
+		return
+	}
+
 	// /api/v1/workspaces/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")

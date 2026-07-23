@@ -123,6 +123,24 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
+			// FR-002: sha256-on-read verification for workspace refs. The path-
+			// returning resolver (ResolvePathWithCaller) intentionally skips the
+			// integrity check for transport-only consumers; the decode-bound agent
+			// loop path MUST verify before opening the file. A mismatch is terminal
+			// for this ref — route to step-7 honest marker.
+			if media.IsWorkspaceRef(ref) && meta.SHA256 != "" {
+				if err := verifyFileIntegrity(localPath, meta.SHA256); err != nil {
+					name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
+					logger.WarnCF("agent", "SHA-256 integrity check failed for workspace ref", map[string]any{
+						"ref":   ref,
+						"path":  localPath,
+						"error": err.Error(),
+					})
+					contentInjections = append(contentInjections, "[attachment unavailable: "+name+" (integrity check failed)]")
+					continue
+				}
+			}
+
 			info, err := os.Stat(localPath)
 			if err != nil {
 				name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
@@ -153,7 +171,7 @@ func resolveMediaRefsWithOffload(
 				// outcome-based step-4 retry.
 				var dataURL string
 				if modelSupportsImage(catalog, model) {
-					dataURL = encodeImageToDataURL(localPath, mime, info, maxSize)
+					dataURL = encodeImageToDataURL(localPath, mime, info, maxSize, resizeBudgetForModel(catalog, model, maxSize))
 				}
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
@@ -194,18 +212,33 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			// PDF: route to native document blocks for capable models, else extract text.
+			// PDF: route to native document blocks for capable models, else
+			// extract text. When the capability catalog says the model lacks
+			// the pdf modality (step-1 gate), skip native send and route to
+			// step-5 offload with document-class guidance, falling back to
+			// step-6 text extraction (FR-022) and step-7 honest marker.
 			if isPDF(mime, meta.Filename) {
-				if pdfCapableModel(model) {
+				if modelSupportsPDF(catalog, model) && pdfCapableModel(model) {
 					dataURL := encodePDFToDataURL(localPath, info, maxSize)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
 					} else {
-						// File too large or unreadable — fall back to text extraction.
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 						contentInjections = append(contentInjections, inj)
 					}
+				} else if !modelSupportsPDF(catalog, model) {
+					// Step-1 gate: text-only model + PDF → offload with
+					// document-class guidance + text extraction (step 5 + 6).
+					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
+						contentInjections = append(contentInjections, offInj+textInj)
+					} else {
+						contentInjections = append(contentInjections, textInj)
+					}
 				} else {
+					// Model not in the PDF-capable allow-list but capability
+					// gate passed (or catalog is nil/text-only model wasn't
+					// recognized) — extract text (step 6).
 					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 					contentInjections = append(contentInjections, inj)
 				}
@@ -485,11 +518,15 @@ const maxImagePixels = 16 * 1024 * 1024
 // image.DecodeConfig fails on them, the function returns "", and the caller
 // routes the attachment to step 5 offload (workspace work/ + guidance).
 //
-// Returns an empty string when the input exceeds maxSize, the file is
-// unreadable, normalization fails, or the resize ladder reaches its floor
+// Returns an empty string when the input exceeds maxSize (or budget.MaxBytes),
+// the file is unreadable, normalization fails, or the resize ladder reaches its floor
 // (ErrLadderFloor) — in every case the caller falls through to the
 // "[attachment unavailable: …]" marker or step 5 offload.
-func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int) string {
+//
+// budget is optional: when absent, defaults to 7680px long edge (the catalog
+// default) and maxSize for MaxBytes. Passing a non-zero budget overrides the
+// long-edge default and blends MaxBytes with the maxSize cap (the smaller wins).
+func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int, budget ...capabilities.ResizeBudget) string {
 	if info.Size() > int64(maxSize) {
 		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
 			"size":     info.Size(),
@@ -517,11 +554,7 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		}
 	}()
 
-	// FR-013: DecodeConfig pre-flight pixel guard. Order-independent
-	// product check catches the wide×tall bomb class (e.g. Width=10M,
-	// Height=2) that the prior integer-division Width>maxImagePixels/Height
-	// guard let through. Overflow routes to step 7 (honest marker); no
-	// image.Decode is attempted when this guard fires.
+	// FR-013: DecodeConfig pre-flight pixel guard.
 	config, format, err := image.DecodeConfig(f)
 	if err != nil {
 		logImageNormalizationFailure(localPath, mime, "decode-config-failed", err, nil)
@@ -561,21 +594,22 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		return ""
 	}
 
-	// FR-011/014/015: resize-to-fit. The pipeline picks PNG when it fits
-	// (canonical) and JPEG via the q90→q40 ladder when PNG doesn't.
-	// ErrLadderFloor routes to step 5 offload (no valid wire format
-	// exists at any size on the ladder).
-	//
-	// The budget shape is pkg/providers/capabilities.ResizeBudget
-	// (Wave 1 TD-M6: one canonical type, int64 bytes — no int cast at
-	// the budget boundary; legacy resize.Budget / DefaultLongEdge are
-	// retired). The long-edge default matches the catalog's FR-014
-	// fallback; maxSize is the legacy agents.defaults.max_media_size
-	// cap (see W1-CR-05; Wave 3 wires per-model budgets from the
-	// catalog).
+	// FR-011/014/015: resize-to-fit using the per-model budget from the
+	// capability catalog (FR-014), falling back to the legacy maxSize
+	// cap for MaxBytes. LongEdgePx from the catalog budget; MaxBytes
+	// blends the catalog budget with the per-agent max_media_size cap
+	// (the smaller of the two wins).
+	longEdgePx := 7680
+	maxBytes := int64(maxSize)
+	if len(budget) > 0 && budget[0].LongEdgePx > 0 {
+		longEdgePx = budget[0].LongEdgePx
+		if budget[0].MaxBytes > 0 && budget[0].MaxBytes < maxBytes {
+			maxBytes = budget[0].MaxBytes
+		}
+	}
 	result, err := resize.ResizeToFit(decoded, capabilities.ResizeBudget{
-		LongEdgePx: 7680,
-		MaxBytes:   int64(maxSize),
+		LongEdgePx: longEdgePx,
+		MaxBytes:   maxBytes,
 	})
 	if err != nil {
 		if errors.Is(err, resize.ErrLadderFloor) {
@@ -903,4 +937,43 @@ func offloadNoun(class string) (noun, capability string) {
 // text/markup.
 func buildOffloadInjection(workPath, class, model string) string {
 	return "\n\n[" + buildOffloadGuidance(class, model) + " File available at: " + workPath + "]"
+}
+
+// verifyFileIntegrity computes the sha256 digest of the file at path and
+// compares it against the expected hex-encoded digest. Returns nil on match,
+// or an error describing the mismatch (FR-002).
+func verifyFileIntegrity(path, expectedSHA256 string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("integrity check: open: %w", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("integrity check: read: %w", err)
+	}
+	actual := hex.EncodeToString(h.Sum(nil))
+	if actual != expectedSHA256 {
+		return fmt.Errorf("integrity check: sha256 mismatch: expected %s, actual %s", expectedSHA256, actual)
+	}
+	return nil
+}
+
+// resizeBudgetForModel returns the per-model resize budget from the capability
+// catalog (FR-014). When the catalog is nil or the model is unknown, falls back
+// to the catalog's DefaultResizeBudget (which is always non-zero post-validate
+// — see capabilities/seedFile.validate). The maxSize parameter caps MaxBytes
+// as an additional safety bound (agents.defaults.max_media_size).
+func resizeBudgetForModel(catalog *capabilities.Catalog, model string, maxSize int) capabilities.ResizeBudget {
+	if catalog != nil {
+		budget := catalog.Resolve(model).Budget()
+		if budget.LongEdgePx > 0 {
+			return budget
+		}
+	}
+	// Fallback default matching the catalog's seed default.
+	return capabilities.ResizeBudget{
+		LongEdgePx: 7680,
+		MaxBytes:   int64(maxSize),
+	}
 }

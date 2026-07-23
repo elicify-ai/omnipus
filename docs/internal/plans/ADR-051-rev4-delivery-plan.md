@@ -1,4 +1,4 @@
-# ADR-051 Rev 4 — Delivery Plan (v2 — corrections applied)
+# ADR-051 Rev 4 — Delivery Plan (v3 — accepted)
 
 **Scope:** ADR-051 Rev 4 (Workspace Media Library + Capability-Aware Presentation Layer)
 **Spec:** `docs/internal/specs/workspace-media-library-and-presentation-layer-spec.md` (1253 lines, 40 BDDs, 34 MUST/SHOULD FRs, traceability closed, two grill rounds applied)
@@ -6,7 +6,7 @@
 **Critical review (Stage 2):** `docs/internal/plans/ADR-051-rev4-delivery-plan-review.md` (verdict REVISE; 0 CRIT / 11 MAJOR / 7 MINOR / 5 OBSERVATION). All corrections folded into this v2.
 **Branch:** `sendfile-fix` (operator directive, 2026-07-22: no new branch). Implementation lands as stacked commits on the existing branch.
 **Author:** `Daniel Piatkowski <10800669+Daniel-Piatkowski@users.noreply.github.com>` (already configured globally on this pod).
-**Plan version:** v2 — pending final-pass review (Stage 2 round 2).
+**Plan version:** v3 — accepted.
 
 ---
 
@@ -225,6 +225,6 @@ The following are now **decided**, not open:
 
 ---
 
-*End of plan v2 — corrections applied. Pending Stage 2 final-pass review.*
+*End of plan v3 — accepted.*
 
 ## Goal active (no budget cap). Stage 1 plan written, Stage 2 review produced (REVISE). Now applying the 11 MAJOR + 7 MINOR + 5 OBS corrections to the plan (this v2), then will re-run the critical review once more for the final plan gate, then proceed to Stage 3 implementation.

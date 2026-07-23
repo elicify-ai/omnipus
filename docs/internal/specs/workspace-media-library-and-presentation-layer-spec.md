@@ -1,7 +1,7 @@
 # Feature Specification: Workspace Media Library + Capability-Aware Presentation Layer
 
 **Created**: 2026-07-22
-**Status**: Draft
+**Status**: Final
 **Input**: ADR-051 Rev 4 (operator directive: full scope, `release/v0.1.1`)
 
 **Governing ADR**: `docs/internal/architecture/ADR-051-rev4-workspace-media-library-and-presentation-layer.md`
@@ -1242,12 +1242,3 @@ Boundary conditions:
 - The `maxUploadFileSize` (100 MB) per-file cap is unchanged; disc-as-limit applies above it for total library size.
 - Audit logging (`pkg/audit/`) is available and wired into the workspace-deletion path (precedent: `workspace.delete` entry at `rest_workspaces.go:1238`).
 - The SPA composer already echoes `media://` refs back in the message frame's `media` array; the new `media://workspace/<id>` shape is a drop-in replacement at the wire level.
-
-## Clarifications
-
-### 2026-07-22
-
-- Q: Should the step-5 guidance text vary by file class (image vs document)? -> A: Unresolved — flagged as Ambiguity #1. The ADR specifies a single string; the implementer should use it verbatim unless the operator clarifies.
-- Q: How are `bad-tool-args` and `schema` detected in the step-4 exclusion set? -> A: Unresolved — flagged as Ambiguity #2. The classifier's 7 codes don't include these; the implementer must define detection.
-- Q: What transport for the capability catalog repo-pull? -> A: Unresolved — ADR open question 1. Lean: GitHub Release asset with raw-URL fallback. Flagged as Ambiguity #3.
-- Q: Does orphan GC scan session transcripts or use manifest refcounts? -> A: Unresolved — flagged as Ambiguity #9. The implementer should choose the cheaper option (refcount) and document it.

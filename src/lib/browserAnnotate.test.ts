@@ -62,7 +62,7 @@ describe('submitAnnotation', () => {
 
     await submitAnnotation({ comment: 'What does this do?', file: makeFile(), point: { x: 42, y: 84 }, sessionId: 'sess-1', agentId: 'agent-1' })
 
-    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)])
+    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)], undefined)
     expect(mockInspectBrowserElement).toHaveBeenCalledWith({
       session_id: 'sess-1',
       agent_id: 'agent-1',
@@ -164,7 +164,7 @@ describe('submitAnnotation', () => {
     ).rejects.toThrow(/active chat has changed/i)
     // The upload still happens (it's addressed to the pinned session, which
     // is valid on its own) — only the final send is refused.
-    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)])
+    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)], undefined)
     expect(sendMessageSpy).not.toHaveBeenCalled()
   })
 

@@ -61,15 +61,18 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/devices"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/state"
@@ -1898,6 +1901,26 @@ func setupAndStartServices(
 		fms.Start()
 	}
 
+	// Wire the workspace-library provider into the media store so
+	// media://workspace/<ws>/<id> refs resolve through the owning
+	// workspace's library (FR-028). Uses a sync.Map to cache opened
+	// libraries so repeated resolutions for the same workspace share
+	// one in-memory manifest.
+	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+		var libCache sync.Map
+		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
+			if cached, ok := libCache.Load(workspaceID); ok {
+				return cached.(*library.Library), nil
+			}
+			lib, err := library.New(homePath, workspaceID)
+			if err != nil {
+				return nil, err
+			}
+			libCache.Store(workspaceID, lib)
+			return lib, nil
+		})
+	}
+
 	runningServices.ChannelManager, err = channels.NewManager(
 		cfg,
 		runningServices.bundle,
@@ -2164,6 +2187,39 @@ func setupAndStartServices(
 			MaxResponseSize: chEntry.MaxResponseSize,
 			HTTPClient:      chEntry.HTTPClient,
 		})
+	}
+
+	// Build the capability catalog for model media-modality resolution
+	// (FR-024/FR-025/FR-026): seeded from embedded data, refreshed from
+	// the Omnipus GitHub release every 7 days.
+	capCatalog, catErr := capabilities.NewCatalog(
+		capabilities.EmbeddedSeed(),
+		capabilities.NewGHReleasePuller("elicify-ai", "omnipus", "providers_capabilities.json"),
+		&capFileStore{path: filepath.Join(homePath, "capabilities_catalog.json")},
+		slog.Default(),
+	)
+	if catErr != nil {
+		slog.Warn("gateway: capability catalog construction failed; model modality detection degraded", "error", catErr)
+	} else {
+		agentLoop.SetCapabilityCatalog(capCatalog)
+		// Start the 7-day background refresh (FR-025). Non-fatal: a pull
+		// failure retains last-known-good and is logged but does not abort
+		// the gateway or the refresh loop.
+		go func() {
+			const refreshInterval = 7 * 24 * time.Hour
+			ticker := time.NewTicker(refreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					if refreshErr := capCatalog.Refresh(ctx); refreshErr != nil {
+						slog.Warn("gateway: capability catalog refresh failed; last-known-good retained", "error", refreshErr)
+					}
+					cancel()
+				}
+			}
+		}()
 	}
 
 	api := &restAPI{
@@ -2450,7 +2506,72 @@ func setupAndStartServices(
 		fmt.Println("✓ Device event service started")
 	}
 
+	// Start the orphan GC scheduler: runs Library.OrphanGC across every
+	// workspace media library every hour (best-effort). A single failure
+	// (e.g. corrupted manifest) does not abort the loop — the error is
+	// logged and the next tick proceeds. Libraries with no orphan files
+	// are a fast no-op.
+	go func() {
+		const orphanInterval = 1 * time.Hour
+		ticker := time.NewTicker(orphanInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a := agentLoop
+				if a == nil {
+					continue
+				}
+				wsFiles, wsErr := listWorkspaceFiles(homePath)
+				if wsErr != nil {
+					slog.Warn("orphan-gc: list workspaces failed", "error", wsErr)
+					continue
+				}
+				for _, ws := range wsFiles {
+					lib, libErr := library.New(homePath, ws.ID)
+					if libErr != nil {
+						slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
+						continue
+					}
+					gcEntry, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+					if gcErr != nil {
+						slog.Warn("orphan-gc: run failed", "workspace_id", ws.ID, "error", gcErr)
+						continue
+					}
+					if len(gcEntry) > 0 {
+						slog.Info("orphan-gc: deleted orphan entries",
+							"workspace_id", ws.ID, "count", len(gcEntry))
+					}
+				}
+			}
+		}
+	}()
+
 	return runningServices, nil
+}
+
+// capFileStore implements capabilities.Store by persisting the catalog JSON
+// to a single file on disk. It is a gateway-private type; the capabilities
+// package defines the Store interface.
+type capFileStore struct {
+	path string
+	mu   sync.Mutex
+}
+
+func (s *capFileStore) Read(ctx context.Context) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (s *capFileStore) Write(ctx context.Context, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fileutil.WriteFileAtomic(s.path, data, 0o600)
 }
 
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) {

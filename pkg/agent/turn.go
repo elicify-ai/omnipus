@@ -1270,6 +1270,17 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 	// classifier still stamps a typed code on the entry for replay routing,
 	// but the user-visible text is the caller-provided copy verbatim.
 	llm := TranslateLLMError(providerErr, message)
+
+	// FR-017a: outcome-based relabel overrides the classifier's code for
+	// this turn when the outcome-based strip-retry succeeded. The relabeled
+	// code is always CodeMediaUnsupported, matching what the classifier
+	// would have returned had it classified the outcome rather than the
+	// trigger.
+	if ts.outcomeRelabel != "" {
+		llm.Code = ts.outcomeRelabel
+		llm.Message = defaultUserMessage(ts.outcomeRelabel)
+	}
+
 	written := message
 	if !isTrustedInternalStage(stage, kind) {
 		// Friendly short-circuit for rate-limit messages whose caller-supplied

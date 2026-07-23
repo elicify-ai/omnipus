@@ -25,6 +25,7 @@ import type {
 import { createSession, uploadFiles } from "@/lib/api";
 import { useSessionStore } from "@/store/session";
 import { useUiStore } from "@/store/ui";
+import { useWorkspacesStore } from "@/store/workspacesStore";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 /** A resolved upload: the agent-facing media ref plus display metadata. */
@@ -196,7 +197,8 @@ export const omnipusAttachmentAdapter = {
 
     let uploadResult: Awaited<ReturnType<typeof uploadFiles>>;
     try {
-      uploadResult = await uploadFiles(sessionId, [attachment.file]);
+      const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? undefined;
+      uploadResult = await uploadFiles(sessionId, [attachment.file], workspaceId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       useUiStore.getState().addToast({ message: `Upload failed for "${attachment.name}": ${msg}`, variant: "error" });

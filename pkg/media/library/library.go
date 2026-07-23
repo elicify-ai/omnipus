@@ -321,6 +321,22 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 	return entries
 }
 
+// Get returns the metadata for a single entry by id, or an error if the
+// entry does not exist. Unlike Read, it does not read or verify the raw
+// file bytes — it returns only the in-memory manifest projection.
+func (l *Library) Get(id string) (gen.MediaLibraryEntry, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	entry, exists := l.manifest[id]
+	if !exists {
+		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	return entry.projection(), nil
+}
+
 // fixtureSource is the internal-only MediaLibraryEntrySource used by
 // the package-private UploadFixture test helper. It is NOT exposed on
 // the wire — contracts/components/schemas/MediaLibraryEntry.yaml
@@ -328,24 +344,21 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 // that need a non-user-upload source reach it through UploadFixture.
 var fixtureSource gen.MediaLibraryEntrySource = "test_fixture"
 
-// Upload is the live entry point for new media. Source must be one of
-// gen.UserUpload (the production path); test fixtures use the
-// package-private UploadFixture helper instead of going through Upload
-// with an internal-only source value (Wave 1 TD-m1). gen.ToolOutput is
-// reserved for the persistent-storage layer that future work will add
-// (session-scoped tool outputs that never migrate to the library); it
-// is rejected here as ErrSourceNotAllowed so the wire enum's second
-// value cannot accidentally land in the manifest.
-func (l *Library) Upload(
+// uploadInternal is the shared streaming + sha256 + persist core used by
+// both Upload (production) and UploadFixture (test helpers). When
+// requireSourceIsProduction is true, only gen.UserUpload is accepted;
+// false accepts any source including fixtureSource.
+func (l *Library) uploadInternal(
 	filename string,
 	source gen.MediaLibraryEntrySource,
+	requireSourceIsProduction bool,
 	reader io.Reader,
 ) (string, gen.MediaLibraryEntry, error) {
 	filename, normalizeErr := normalizeFilename(filename)
 	if normalizeErr != nil {
 		return "", gen.MediaLibraryEntry{}, normalizeErr
 	}
-	if source != gen.UserUpload {
+	if requireSourceIsProduction && source != gen.UserUpload {
 		return "", gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrSourceNotAllowed, source)
 	}
 	if reader == nil {
@@ -452,6 +465,22 @@ func (l *Library) Upload(
 	return ref, projection, nil
 }
 
+// Upload is the live entry point for new media. Source must be one of
+// gen.UserUpload (the production path); test fixtures use the
+// package-private UploadFixture helper instead of going through Upload
+// with an internal-only source value (Wave 1 TD-m1). gen.ToolOutput is
+// reserved for the persistent-storage layer that future work will add
+// (session-scoped tool outputs that never migrate to the library); it
+// is rejected here as ErrSourceNotAllowed so the wire enum's second
+// value cannot accidentally land in the manifest.
+func (l *Library) Upload(
+	filename string,
+	source gen.MediaLibraryEntrySource,
+	reader io.Reader,
+) (string, gen.MediaLibraryEntry, error) {
+	return l.uploadInternal(filename, source, true, reader)
+}
+
 func (l *Library) Read(id string) ([]byte, gen.MediaLibraryEntry, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
@@ -533,6 +562,7 @@ func (l *Library) ResolvePathWithCaller(
 	return l.rawPath(mediaID), media.MediaMeta{
 		Filename:    entry.filename,
 		ContentType: entry.mime,
+		SHA256:      entry.sha256,
 		Source:      string(entry.source),
 	}, nil
 }
@@ -761,34 +791,17 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 			quarantined[id] = quarantinePath
 		}
 	}
+	// Snapshot the manifest entries before deletion so a persist failure can
+	// restore them directly from the preserved manifestEntry values, not from
+	// a rebuilt projection (TD-M11).
+	snapshot := make(map[string]manifestEntry, len(ids))
 	for _, id := range ids {
+		snapshot[id] = l.manifest[id].clone()
 		deleted = append(deleted, l.manifest[id].projection())
 		delete(l.manifest, id)
 	}
 	if err := l.persistLocked(); err != nil {
-		for _, projection := range deleted {
-			if projection.Id == nil {
-				continue
-			}
-			id := projection.Id.String()
-			// Roll back from a projection is best-effort: rebuild the
-			// manifestEntry from the projection. The projection lost
-			// nothing the rollback needs (refcount + last_seen are
-			// both on the projection).
-			rc, _ := newRefcount(derefInt(projection.Refcount))
-			l.manifest[id] = manifestEntry{
-				id:                 *projection.Id,
-				workspaceID:        derefString(projection.WorkspaceId),
-				filename:           projection.Filename,
-				mime:               derefString(projection.Mime),
-				size:               derefInt64(projection.Size),
-				sha256:             derefString(projection.Sha256),
-				uploadedAt:         derefTime(projection.UploadedAt),
-				source:             projection.Source,
-				refcount:           rc,
-				lastRefcountSeenAt: derefTime(projection.LastRefcountSeenAt),
-			}
-		}
+		l.manifest = snapshot
 		l.restoreQuarantined(quarantined)
 		return nil, err
 	}
@@ -1035,103 +1048,7 @@ func (l *Library) UploadFixture(
 	filename string,
 	reader io.Reader,
 ) (string, gen.MediaLibraryEntry, error) {
-	filename, normalizeErr := normalizeFilename(filename)
-	if normalizeErr != nil {
-		return "", gen.MediaLibraryEntry{}, normalizeErr
-	}
-	if reader == nil {
-		return "", gen.MediaLibraryEntry{}, errors.New("media library: upload reader is nil")
-	}
-	if mkdirErr := os.MkdirAll(l.path, 0o700); mkdirErr != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: create directory: %w", mkdirErr)
-	}
-
-	id := uuid.New()
-	temporary, createErr := os.CreateTemp(l.path, ".upload-*")
-	if createErr != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: create upload: %w", createErr)
-	}
-	temporaryPath := temporary.Name()
-	keepTemporary := true
-	defer func() {
-		if keepTemporary {
-			_ = temporary.Close()
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if chmodErr := temporary.Chmod(0o600); chmodErr != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: secure upload: %w", chmodErr)
-	}
-
-	prefix := make([]byte, mimeSniffBytes)
-	prefixLength, readErr := io.ReadFull(reader, prefix)
-	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: read upload prefix: %w", readErr)
-	}
-	prefix = prefix[:prefixLength]
-	hasher := sha256.New()
-	limited := io.LimitReader(io.MultiReader(bytes.NewReader(prefix), reader), MaxFileSize+1)
-	written, copyErr := io.Copy(io.MultiWriter(temporary, hasher), limited)
-	if copyErr != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: write upload: %w", copyErr)
-	}
-	if written > MaxFileSize {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("%w: %d > %d", ErrFileTooLarge, written, MaxFileSize)
-	}
-	if err := temporary.Sync(); err != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: sync upload: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: close upload: %w", err)
-	}
-
-	rawPath := l.rawPath(id.String())
-	if err := os.Rename(temporaryPath, rawPath); err != nil {
-		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: commit upload: %w", err)
-	}
-	keepTemporary = false
-
-	uploadedAt := l.now().UTC()
-	mime := http.DetectContentType(prefix)
-	size := written
-	digest := hex.EncodeToString(hasher.Sum(nil))
-	entry, entryErr := newManifestEntry(
-		id,
-		l.workspaceID,
-		filename,
-		mime,
-		size,
-		digest,
-		uploadedAt,
-		fixtureSource,
-		0,
-		uploadedAt,
-	)
-	if entryErr != nil {
-		removeErr := os.Remove(rawPath)
-		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return "", gen.MediaLibraryEntry{}, errors.Join(entryErr, fmt.Errorf("rollback: %w", removeErr))
-		}
-		return "", gen.MediaLibraryEntry{}, entryErr
-	}
-
-	l.mu.Lock()
-	l.manifest[id.String()] = entry
-	if persistErr := l.persistLocked(); persistErr != nil {
-		delete(l.manifest, id.String())
-		l.mu.Unlock()
-		removeErr := os.Remove(rawPath)
-		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			rollbackErr := fmt.Errorf("media library: rollback upload: %w", removeErr)
-			return "", gen.MediaLibraryEntry{}, errors.Join(persistErr, rollbackErr)
-		}
-		return "", gen.MediaLibraryEntry{}, persistErr
-	}
-	projection := l.manifest[id.String()].projection()
-	l.mu.Unlock()
-
-	ref := "media://workspace/" + l.workspaceID + "/" + id.String()
-	return ref, projection, nil
+	return l.uploadInternal(filename, fixtureSource, false, reader)
 }
 
 func normalizeFilename(filename string) (string, error) {

@@ -18,6 +18,7 @@
 import { uploadFiles, inspectBrowserElement } from '@/lib/api'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export interface SubmitAnnotationParams { // not-wire-format: local params for the annotate-submit orchestration, never serialized across the gateway/SPA boundary
   /** User's typed comment. Must be non-empty (caller validates before calling). */
@@ -72,7 +73,7 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
   }
 
-  const uploadResult = await uploadFiles(sessionId, [file])
+  const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)
   const uploaded = uploadResult.files[0]
   if (!uploaded?.ref) {
     throw new Error('Upload failed — no media reference was returned.')

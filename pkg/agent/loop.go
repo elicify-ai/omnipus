@@ -7413,6 +7413,16 @@ turnLoop:
 			// + the wrapped fmt.Errorf return for operator triage.
 			pe := errorToProviderError(err)
 			llm := TranslateLLMError(pe, err.Error())
+
+			// FR-017a: outcome-based relabel overrides the classifier's code
+			// for both the live WS frame AND the transcript write. The relabel
+			// applies to any error emitted by this turn after the outcome-based
+			// strip-retry succeeded.
+			if ts.outcomeRelabel != "" {
+				llm.Code = ts.outcomeRelabel
+				llm.Message = UserMessageForCode(ts.outcomeRelabel)
+			}
+
 			al.emitEvent(
 				EventKindError,
 				ts.eventMeta("runTurn", "turn.error"),
@@ -7621,6 +7631,13 @@ turnLoop:
 				// to the assistant / bus / transcript.
 				pe := errorToProviderError(err)
 				llm := TranslateLLMError(pe, err.Error())
+
+				// FR-017a: outcome-based relabel override for this turn.
+				if ts.outcomeRelabel != "" {
+					llm.Code = ts.outcomeRelabel
+					llm.Message = UserMessageForCode(ts.outcomeRelabel)
+				}
+
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),

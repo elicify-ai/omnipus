@@ -102,8 +102,9 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 	// firing as before — the per-class guards and the strip helpers are
 	// unchanged.
 	if code == CodeMediaUnsupported {
-		result, _ := ts.applyMediaDowngrade(callMessages)
+		result, mc := ts.applyMediaDowngrade(callMessages)
 		result.Trigger = TriggerClassifierPrimary
+		result.MediaClass = mc
 		return result
 	}
 
@@ -122,8 +123,9 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 	if !callMessagesCarryMedia(callMessages) {
 		return MediaDowngradeResult{}
 	}
-	result, _ := ts.applyMediaDowngrade(callMessages)
+	result, mc := ts.applyMediaDowngrade(callMessages)
 	result.Trigger = TriggerOutcomeFallback
+	result.MediaClass = mc
 	return result
 }
 

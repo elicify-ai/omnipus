@@ -65,7 +65,7 @@ describe('omnipusAttachmentAdapter', () => {
     const pending = await omnipusAttachmentAdapter.add({ file: mkFile('report.docx', DOCX) })
     const complete = await omnipusAttachmentAdapter.send(pending)
 
-    expect(api.uploadFiles).toHaveBeenCalledWith('sess_existing', [pending.file])
+    expect(api.uploadFiles).toHaveBeenCalledWith('sess_existing', [pending.file], undefined)
     expect(complete.status).toEqual({ type: 'complete' })
 
     const resolved = takeResolvedUpload(pending.id)
@@ -119,7 +119,7 @@ describe('omnipusAttachmentAdapter', () => {
     await omnipusAttachmentAdapter.send(pending)
 
     expect(api.createSession).toHaveBeenCalledWith('jim')
-    expect(api.uploadFiles).toHaveBeenCalledWith('sess_new', [pending.file])
+    expect(api.uploadFiles).toHaveBeenCalledWith('sess_new', [pending.file], undefined)
     expect(useSessionStore.getState().activeSessionId).toBe('sess_new')
   })
 

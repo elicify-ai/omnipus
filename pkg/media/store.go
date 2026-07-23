@@ -40,6 +40,7 @@ const SessionInlineScopePrefix = "tool:inline:session:"
 type MediaMeta struct {
 	Filename      string
 	ContentType   string
+	SHA256        string        // hex-encoded sha256 digest; empty when unavailable (legacy refs)
 	Source        string        // "telegram", "discord", "tool:image-gen", etc.
 	CleanupPolicy CleanupPolicy // defaults to CleanupPolicyDeleteOnCleanup
 }
