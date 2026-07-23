@@ -3048,9 +3048,8 @@ export interface components {
              */
             readonly id: string;
             /**
-             * Format: uuid
-             * @description UUID of the workspace that owns this library entry. The discriminator at ref shape media://workspace/<workspace_id>/<id> — every MediaLibraryEntry is bound to exactly one workspace; the cross-workspace guard (FR-028a) reads this field to enforce membership.
-             * @example 7c9e6679-7425-40de-944b-e07fc1f90ae7
+             * @description Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>.
+             * @example 01KY6SHW51CV7FMMHP5Y9SWB7P
              */
             workspace_id: string;
             /**

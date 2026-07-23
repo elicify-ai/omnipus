@@ -2384,7 +2384,7 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
   .passthrough();
 export const MediaLibraryEntry = z.object({
   id: z.string().uuid(),
-  workspace_id: z.string().uuid(),
+  workspace_id: z.string().min(1).max(64),
   filename: z.string().min(1).max(256),
   mime: z.string(),
   size: z.number().int().gte(0).lte(104857600),

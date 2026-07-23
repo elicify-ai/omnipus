@@ -5579,8 +5579,8 @@ type MediaLibraryEntry struct {
 	// UploadedAt RFC3339 UTC upload timestamp.
 	UploadedAt *time.Time `json:"uploaded_at,omitempty"`
 
-	// WorkspaceId UUID of the workspace that owns this library entry. The discriminator at ref shape media://workspace/<workspace_id>/<id> — every MediaLibraryEntry is bound to exactly one workspace; the cross-workspace guard (FR-028a) reads this field to enforce membership.
-	WorkspaceId openapi_types.UUID `json:"workspace_id"`
+	// WorkspaceId Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
