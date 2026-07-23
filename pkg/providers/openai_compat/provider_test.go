@@ -302,11 +302,22 @@ func TestProviderChat_JSONHTTPErrorDoesNotReportHTML(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "Status: 400") {
-		t.Fatalf("expected status code in error, got %v", err)
+	pe, ok := err.(*common.ProviderError)
+	if !ok {
+		t.Fatalf("expected *common.ProviderError, got %T", err)
 	}
-	if strings.Contains(err.Error(), "returned HTML instead of JSON") {
-		t.Fatalf("expected non-HTML http error, got %v", err)
+	if pe.Status != http.StatusBadRequest {
+		t.Fatalf("expected status %d in ProviderError.Status, got %d", http.StatusBadRequest, pe.Status)
+	}
+	if !strings.Contains(pe.Body, "bad request") {
+		t.Fatalf("expected JSON body content in ProviderError.Body, got %q", pe.Body)
+	}
+	if strings.Contains(pe.ContentType, "text/html") {
+		t.Fatalf("expected non-HTML content-type in ProviderError.ContentType, got %q", pe.ContentType)
+	}
+	// A JSON error must not be misclassified as an HTML error.
+	if pe.Err != nil && strings.Contains(pe.Err.Error(), "returned HTML instead of JSON") {
+		t.Fatalf("expected non-HTML http error, got %v", pe.Err)
 	}
 }
 
@@ -351,14 +362,21 @@ func TestProviderChat_HTMLResponsesReturnHelpfulError(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			if !strings.Contains(err.Error(), fmt.Sprintf("Status: %d", tt.statusCode)) {
-				t.Fatalf("expected status code in error, got %v", err)
+			pe, ok := err.(*common.ProviderError)
+			if !ok {
+				t.Fatalf("expected *common.ProviderError, got %T", err)
 			}
-			if !strings.Contains(err.Error(), "returned HTML instead of JSON") {
-				t.Fatalf("expected helpful HTML error, got %v", err)
+			if pe.Status != tt.statusCode {
+				t.Fatalf("expected status %d in ProviderError.Status, got %d", tt.statusCode, pe.Status)
 			}
-			if !strings.Contains(err.Error(), "check api_base or proxy configuration") {
-				t.Fatalf("expected configuration hint, got %v", err)
+			if !strings.Contains(pe.Body, "<html") {
+				t.Fatalf("expected HTML body content in ProviderError.Body, got %q", pe.Body)
+			}
+			if pe.Err == nil || !strings.Contains(pe.Err.Error(), "returned HTML instead of JSON") {
+				t.Fatalf("expected helpful HTML error in ProviderError.Err, got %v", pe.Err)
+			}
+			if pe.Err == nil || !strings.Contains(pe.Err.Error(), "check api_base or proxy configuration") {
+				t.Fatalf("expected configuration hint in ProviderError.Err, got %v", pe.Err)
 			}
 		})
 	}
@@ -407,11 +425,23 @@ func TestProviderChat_LargeHTMLResponsePreviewIsTruncated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "Body:   <!DOCTYPE html><html><body>") {
-		t.Fatalf("expected html preview in error, got %v", err)
+	pe, ok := err.(*common.ProviderError)
+	if !ok {
+		t.Fatalf("expected *common.ProviderError, got %T", err)
 	}
-	if !strings.Contains(err.Error(), "...") {
-		t.Fatalf("expected truncated preview, got %v", err)
+	if pe.Status != http.StatusBadGateway {
+		t.Fatalf("expected status %d in ProviderError.Status, got %d", http.StatusBadGateway, pe.Status)
+	}
+	// The full body is carried for classification...
+	if !strings.Contains(pe.Body, "<!DOCTYPE html><html><body>") {
+		t.Fatalf("expected HTML body content in ProviderError.Body, got %q", pe.Body)
+	}
+	// ...but the log preview is truncated.
+	if !strings.HasSuffix(pe.BodyPreview, "...") {
+		t.Fatalf("expected truncated preview (\"...\" suffix) in ProviderError.BodyPreview, got %q", pe.BodyPreview)
+	}
+	if len(pe.BodyPreview) >= len(pe.Body) {
+		t.Fatalf("expected preview shorter than full body (preview=%d, body=%d)", len(pe.BodyPreview), len(pe.Body))
 	}
 }
 
