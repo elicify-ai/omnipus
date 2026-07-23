@@ -92,7 +92,7 @@ func testLogger() *slog.Logger {
 // and contains at least one model. This is the freeze-gate regression guard:
 // a syntactically broken seed fails the build.
 func TestParseSeed_EmbeddedFile(t *testing.T) {
-	data := embeddedSeed()
+	data := EmbeddedSeed()
 	require.NotEmpty(t, data, "embedded seed must not be empty")
 	s, err := ParseSeed(data)
 	require.NoError(t, err)

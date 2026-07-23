@@ -34,6 +34,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -209,6 +210,27 @@ type AgentLoop struct {
 	// NewBrowserCoordinator, which builds the ownership-marker path
 	// (<homePath>/browser/shared-chrome.pid) from it.
 	homePath string
+
+	// capabilityCatalog (ADR-051 Rev 4, Wave 3 T9) is the step-1 capability
+	// gate source for the presentation chain (FR-010). Constructed from the
+	// compiled-in seed at NewAgentLoop time so the gate works without gateway
+	// boot wiring; the gateway may inject a puller-equipped catalog via
+	// SetCapabilityCatalog (FR-025 repo-pull). Nil → optimistic (FR-026).
+	// Guarded by mu (the struct's primary RWMutex).
+	capabilityCatalog *capabilities.Catalog
+
+	// workspaceLibCache (FR-007a) caches per-workspace media libraries for
+	// manifest-refcount accounting. Keyed by workspace ID. Lazily populated
+	// by getWorkspaceLibrary; refcount mutations go through the cached
+	// instance so a workspace always sees consistent refcount state.
+	workspaceLibCache sync.Map // map[string]*library.Library
+
+	// sessionRefcounts (FR-007a) tracks the per-session manifest-refcount
+	// state (workspace ID + seen-set) so CloseSession can run the matching
+	// decrement pass. Keyed by transcript session ID. Populated by
+	// getTurnRefcounter during turns; drained by
+	// decrementSessionMediaRefcounts at session close.
+	sessionRefcounts sync.Map // map[string]*sessionRefcountState
 
 	// Tier 1/3 deps — stored so WireTier13Deps can re-run on hot reload.
 	// Without this, hot-reload would drop web_serve, workspace.shell, and
@@ -612,6 +634,19 @@ func NewAgentLoop(
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
+
+	// ADR-051 Rev 4 (Wave 3 T9): construct the capability catalog from the
+	// compiled-in seed so the step-1 presentation gate (FR-010) works
+	// immediately, without gateway boot wiring. The gateway may later inject
+	// a puller-equipped catalog via SetCapabilityCatalog (FR-025 repo-pull).
+	// A construction failure is non-fatal — nil catalog → optimistic (FR-026).
+	if catalog, catErr := capabilities.NewCatalog(capabilities.EmbeddedSeed(), nil, nil, nil); catErr != nil {
+		logger.WarnCF("agent", "Capability catalog construction failed; presentation gate degrades to optimistic", map[string]any{
+			"error": catErr.Error(),
+		})
+	} else {
+		al.capabilityCatalog = catalog
+	}
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -5965,6 +6000,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnMediaStore := al.GetMediaStore()
 	// Snapshot the channel manager for the same reason.
 	turnChannelManager := al.getChannelManager()
+	// ADR-051 Rev 4 (Wave 3 T9): snapshot the capability catalog and the
+	// per-session manifest refcounter for the presentation chain. Both are
+	// nil-safe (nil catalog → optimistic gate; nil refcounter → no tracking),
+	// so legacy/no-workspace turns degrade gracefully.
+	turnCatalog := al.getCapabilityCatalog()
+	turnRefcounter := al.getTurnRefcounter(ts.opts.WorkspaceID, ts.transcriptSessionID)
 
 	var turnCtx context.Context
 	var turnCancel context.CancelFunc
@@ -6268,7 +6309,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
 	messages = resolveMediaRefsWithOffload(
 		messages, turnMediaStore, maxMediaSize, ts.agent.Model,
-		&offloadSink{workDir: wsDir},
+		&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 	)
 
 	if !ts.opts.NoHistory {
@@ -6302,7 +6343,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			)
 			messages = resolveMediaRefsWithOffload(
 				messages, turnMediaStore, maxMediaSize, ts.agent.Model,
-				&offloadSink{workDir: wsDir},
+				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 			)
 		}
 	}
@@ -6467,7 +6508,7 @@ turnLoop:
 		if len(pendingMessages) > 0 {
 			resolvedPending := resolveMediaRefsWithOffload(
 				pendingMessages, turnMediaStore, maxMediaSize, activeModel,
-				&offloadSink{workDir: wsDir},
+				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 			)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {

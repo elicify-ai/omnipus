@@ -55,6 +55,16 @@ import (
 // model as a filesystem path + format-aware guidance line (FR-020/020a/021).
 // A nil sink disables offload — the chain degrades to the step-7 honest marker.
 //
+// A non-nil capability catalog applies the step-1 gate (FR-010): if the model
+// lacks the image modality, native image send (step 2) is skipped and the file
+// routes directly to step 5 offload. A nil catalog is optimistic (FR-026) — the
+// gate always passes and a wrong guess costs one outcome-based step-4 retry.
+//
+// A non-nil refcounter tracks manifest refcounts for workspace library refs
+// (FR-007a): each workspace ref processed here increments the manifest
+// refcount (per-session deduped); the matching decrement fires at session
+// cleanup. A nil refcounter disables tracking (legacy/no-workspace turns).
+//
 // Returns a new slice; original messages are not mutated.
 func resolveMediaRefs(
 	messages []providers.Message,
@@ -62,19 +72,23 @@ func resolveMediaRefs(
 	maxSize int,
 	model string,
 ) []providers.Message {
-	return resolveMediaRefsWithOffload(messages, store, maxSize, model, nil)
+	return resolveMediaRefsWithOffload(messages, store, maxSize, model, nil, nil, nil)
 }
 
 // resolveMediaRefsWithOffload is the full presentation path: the legacy
-// resolveMediaRefs behaviour plus step-5 offload (FR-020/020a/021/022) when sink
-// is non-nil. The four-argument resolveMediaRefs is a thin wrapper that calls
-// this with a nil sink so existing call sites preserve their exact behaviour.
+// resolveMediaRefs behaviour plus step-1 capability gate (catalog),
+// step-5 offload (sink, FR-020/020a/021/022) and manifest refcount
+// tracking (rc, FR-007a) when the respective arguments are non-nil. The
+// four-argument resolveMediaRefs is a thin wrapper that calls this with
+// nil sink/catalog/rc so existing call sites preserve their exact behaviour.
 func resolveMediaRefsWithOffload(
 	messages []providers.Message,
 	store media.MediaStore,
 	maxSize int,
 	model string,
 	sink *offloadSink,
+	catalog *capabilities.Catalog,
+	rc workspaceRefcounter,
 ) []providers.Message {
 	if store == nil {
 		return messages
@@ -120,10 +134,27 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
+			// FR-007a: record that this turn references the workspace
+			// library file (per-session-deduped increment). Legacy
+			// media://<uuid> and agent-inline refs are no-ops (no manifest
+			// entry). Errors are logged-not-fatal inside the helper.
+			incrementWorkspaceRef(rc, ref)
+
 			mime := detectMIME(localPath, meta)
 
 			if strings.HasPrefix(mime, "image/") {
-				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)
+				// Step 1 — capability gate (FR-010). If the catalog says
+				// the model lacks the image modality, skip native send
+				// (step 2 normalize/resize + step 3 native block + step 4
+				// outcome retry) and route directly to the step 5/6/7
+				// fallback — the same path encodeImageToDataURL's failure
+				// takes. A nil catalog is optimistic (FR-026): the gate
+				// always passes and a wrong guess self-corrects via the
+				// outcome-based step-4 retry.
+				var dataURL string
+				if modelSupportsImage(catalog, model) {
+					dataURL = encodeImageToDataURL(localPath, mime, info, maxSize)
+				}
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
 				} else if mime == "image/svg+xml" {

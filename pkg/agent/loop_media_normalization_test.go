@@ -101,14 +101,15 @@ func TestEncodeImageToDataURL_NormalizesTIFFToPNG(t *testing.T) {
 }
 
 func TestEncodeImageToDataURL_NonDecodableReturnsEmpty(t *testing.T) {
-	// ADR-051 FR-001 (D2 path): AVIF/HEIC are NOT decoded by Go's stdlib
-	// + x/image and (unlike SVG) have no pure-Go rasterizer. They must NOT
-	// be dropped before the LLM call — they pass through as-is so the
-	// provider's rejection triggers the media-retry strip on the next
-	// attempt. The prior behavior returned "" here, which made
-	// resolveMediaRefs drop the attachment entirely — exactly the bug the
-	// spec says to avoid. Assert the passthrough: the original bytes come
-	// back as a data URL carrying the ORIGINAL mime (not re-encoded as PNG).
+	// ADR-051 Rev 4 FR-016: the Rev-3 D2 passthrough for AVIF/HEIC/HEIF/ICO
+	// is DELETED. These formats have no pure-Go decoder; image.DecodeConfig
+	// fails on them, and encodeImageToDataURL returns "" (empty). The caller
+	// (resolveMediaRefsWithOffload) then routes the attachment to step 5
+	// offload (FR-020) — copied into work/ with guidance — instead of
+	// emitting a data URL carrying the ORIGINAL mime, which every provider
+	// would reject. The prior behavior (passthrough) produced a guaranteed
+	// 4xx dead-turn; the new behavior (empty → offload) keeps the turn alive.
+	//
 	// (SVG was removed from this path when the oksvg/rasterx rasterizer
 	// landed — see TestEncodeImageToDataURL_SVGRasterizesToPNG.)
 	path := filepath.Join(t.TempDir(), "image.avif")
@@ -117,9 +118,10 @@ func TestEncodeImageToDataURL_NonDecodableReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	dataURL := encodeImageToDataURL(path, "image/avif", info, 1<<20)
-	require.NotEmpty(t, dataURL, "AVIF must pass through to the LLM (D2 path), not be dropped")
-	require.True(t, strings.HasPrefix(dataURL, "data:image/avif;base64,"),
-		"passthrough must carry the original avif mime, got %q", dataURL)
+	// FR-016: no passthrough — the function returns empty for undecodable
+	// formats, signaling the caller to route to step 5 offload.
+	require.Empty(t, dataURL,
+		"AVIF must NOT pass through (FR-016 deleted D2); empty return routes the caller to step 5 offload")
 }
 
 func TestEncodeImageToDataURL_PixelBomb_Rejected(t *testing.T) {

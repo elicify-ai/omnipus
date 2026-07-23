@@ -15,9 +15,11 @@ import _ "embed"
 //go:embed data/providers_capabilities_seed.json
 var seedJSON []byte
 
-// embeddedSeed returns the compiled-in seed JSON. Exposed for tests and
-// diagnostic tooling; NewCatalog takes the seed data as a parameter so
-// callers can swap in fixtures.
-func embeddedSeed() []byte {
+// EmbeddedSeed returns the compiled-in seed JSON. It is the guaranteed
+// last-resort source of model-capability data (FR-024): even when no Store
+// is configured, the network is unreachable, and the GitHub Release + raw
+// fallback both fail, the gateway boots with this seed. Callers pass it to
+// NewCatalog so they can swap in fixtures for tests.
+func EmbeddedSeed() []byte {
 	return seedJSON
 }

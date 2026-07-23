@@ -44,6 +44,16 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// AgentLoop literals built directly in tests without NewAgentLoop).
 	al.approvalGrants.ClearSession(sessionID)
 
+	// ADR-051 Rev 4 (FR-007a, Wave 3 T9): decrement the manifest refcount
+	// for every workspace library file this session referenced. The matching
+	// increment fired during the turn's resolveMediaRefs pass; without this
+	// decrement orphan GC would never reach refcount==0 on a file that is
+	// no longer referenced. Runs unconditionally (same reasoning as
+	// forgetSession/ClearSession above) and is nil-receiver-safe.
+	if al != nil {
+		al.decrementSessionMediaRefcounts(sessionID)
+	}
+
 	// Use GetConfig() (holds al.mu.RLock) so that a PUT /settings/memory that
 	// hot-swaps the config via SwapConfig is immediately visible here — a direct
 	// al.cfg read races with SwapConfig's write and may see the pre-PUT value.
