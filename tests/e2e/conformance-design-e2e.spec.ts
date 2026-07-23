@@ -387,11 +387,13 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → verdict
   const activePill = page.locator('[data-testid="goal-pill-active"]')
   await expect(activePill).toBeVisible({ timeout: 60_000 })
 
-  // Differentiation test: the active pill's aria-label carries the
-  // full condition (GoalPillTray.tsx:105 aria-label=`Goal: ${condition},
-  // state ${label}. Click to ...`). Assert a fragment of OUR condition is
-  // in that aria-label — proving the pill is bound to OUR goal.
-  await expect(activePill.first()).toHaveAttribute('aria-label', /check: true/i, { timeout: 10_000 })
+  // Differentiation test: the active pill's aria-label carries GoalCondition
+  // (compiled.Prompt after marker extraction — "please continue" here, not
+  // the raw [check:] marker). Assert a fragment of OUR prompt is in that
+  // aria-label — proving the pill is bound to OUR goal.
+  await expect(activePill.first()).toHaveAttribute('aria-label', /please continue/i, {
+    timeout: 10_000,
+  })
 
   // Wait for the worker turn to complete — assistant message counter advances.
   // The active-pill → worker-turn transition is automatic (goal_loop.go emits
