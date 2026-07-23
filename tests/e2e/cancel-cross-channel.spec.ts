@@ -754,10 +754,13 @@ test(
     // Cancel the turn.
     await stopBtn.click()
 
-    // Wait for cancel to complete. Allow 15s — under suite load the LLM cancel
-    // propagation can take several seconds after the stop button is clicked.
-    await expect(stopBtn).not.toBeVisible({ timeout: 15_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+    // Wait for cancel to complete. Under suite load (llm-agents shard) the
+    // OpenRouter cancel + gateway turn teardown can exceed 15s — the stop
+    // button stays on aria-label="Stopping..." until the turn fully ends.
+    // Match the T24a/T24b cascade budget (test.slow() already multiplies
+    // the test timeout); give the button 60s to clear.
+    await expect(stopBtn).not.toBeVisible({ timeout: 60_000 })
+    await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
 
     // Allow audit flush (audit writes are synchronous on the gateway path, but
     // give a short settling window).
