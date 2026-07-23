@@ -64,6 +64,22 @@ func minimalSeedJSON() []byte {
 	}`)
 }
 
+// completeSeedJSON wraps a partial JSON body with the required catalog
+// metadata fields (version, schema_version, updated_at, source). The
+// body must NOT include a leading '{' — it is the comma-separated list
+// of field:json pairs that goes inside the top-level object. Used by
+// tests that compose minimal seed JSONs inline.
+//
+// Example:
+//
+//	completeSeedJSON(`"models":[...],"default_resize_budget":{...}`)
+//
+// → `{"version":"test","schema_version":"1.0.0","updated_at":"2026-07-23T00:00:00Z","source":"test-fixture","models":[...],"default_resize_budget":{...}}`
+func completeSeedJSON(innerJSON string) string {
+	return `{"version":"test","schema_version":"1.0.0","updated_at":"2026-07-23T00:00:00Z","source":"test-fixture",` +
+		innerJSON
+}
+
 // testLogger discards log output. Use a real slog logger if a test
 // needs to assert log content.
 func testLogger() *slog.Logger {
@@ -116,10 +132,18 @@ func TestParseSeed_RejectsMalformed(t *testing.T) {
 // TestParseSeed_RejectsBadBudget asserts negative or zero budgets are rejected.
 func TestParseSeed_RejectsBadBudget(t *testing.T) {
 	cases := map[string]string{
-		"default long_edge zero": `{"models":[{"id":"x","provider":"y","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":0,"max_bytes":1}}`,
-		"default max_bytes zero": `{"models":[{"id":"x","provider":"y","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":0}}`,
-		"model long_edge zero":   `{"models":[{"id":"x","provider":"y","input_modalities":["text"],"resize_budget":{"long_edge_px":0,"max_bytes":1}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
-		"model max_bytes zero":   `{"models":[{"id":"x","provider":"y","input_modalities":["text"],"resize_budget":{"long_edge_px":1,"max_bytes":0}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		"default long_edge zero": completeSeedJSON(
+			`"models":[{"id":"x","provider":"y","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":0,"max_bytes":1}}`,
+		),
+		"default max_bytes zero": completeSeedJSON(
+			`"models":[{"id":"x","provider":"y","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":0}}`,
+		),
+		"model long_edge zero": completeSeedJSON(
+			`"models":[{"id":"x","provider":"y","input_modalities":["text"],"resize_budget":{"long_edge_px":0,"max_bytes":1}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		),
+		"model max_bytes zero": completeSeedJSON(
+			`"models":[{"id":"x","provider":"y","input_modalities":["text"],"resize_budget":{"long_edge_px":1,"max_bytes":0}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -133,13 +157,10 @@ func TestParseSeed_RejectsBadBudget(t *testing.T) {
 
 // TestParseSeed_RejectsDupIDs asserts duplicate model ids are rejected.
 func TestParseSeed_RejectsDupIDs(t *testing.T) {
-	body := `{
-		"models": [
-			{"id":"a","provider":"p","input_modalities":["text"]},
-			{"id":"a","provider":"p","input_modalities":["text"]}
-		],
-		"default_resize_budget":{"long_edge_px":1,"max_bytes":1}
-	}`
+	body := completeSeedJSON(`"models":[
+		{"id":"a","provider":"p","input_modalities":["text"]},
+		{"id":"a","provider":"p","input_modalities":["text"]}
+	],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`)
 	_, err := ParseSeed([]byte(body))
 	assert.Error(t, err)
 }
@@ -148,10 +169,9 @@ func TestParseSeed_RejectsDupIDs(t *testing.T) {
 
 // TestParseSeed_RejectsEmptyMods asserts every model has at least one modality.
 func TestParseSeed_RejectsEmptyMods(t *testing.T) {
-	body := `{
-		"models":[{"id":"x","provider":"p","input_modalities":[]}],
-		"default_resize_budget":{"long_edge_px":1,"max_bytes":1}
-	}`
+	body := completeSeedJSON(
+		`"models":[{"id":"x","provider":"p","input_modalities":[]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	)
 	_, err := ParseSeed([]byte(body))
 	assert.Error(t, err)
 }
@@ -161,16 +181,290 @@ func TestParseSeed_RejectsEmptyMods(t *testing.T) {
 // TestParseSeed_AcceptsUnknownModalities asserts the parser accepts unknown
 // modality values for forward compatibility — the orchestrator may not yet
 // recognize them, but the seed can carry new modalities (e.g. "3d") ahead of
-// runtime support.
+// runtime support. The validated Model carries the typed Modality slice; the
+// KnownModality set is the runtime's recognition boundary (forward-compat
+// unknown values are recorded as-is).
 func TestParseSeed_AcceptsUnknownModalities(t *testing.T) {
-	body := `{
-		"models":[{"id":"x","provider":"p","input_modalities":["text","3d","hologram"]}],
-		"default_resize_budget":{"long_edge_px":1,"max_bytes":1}
-	}`
+	body := completeSeedJSON(
+		`"models":[{"id":"x","provider":"p","input_modalities":["text","3d","hologram"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	)
 	s, err := ParseSeed([]byte(body))
 	require.NoError(t, err)
 	require.Len(t, s.Models, 1)
-	assert.Equal(t, []string{"text", "3d", "hologram"}, s.Models[0].InputModalities)
+	got := s.Models[0].InputModalities
+	require.Len(t, got, 3)
+	assert.Equal(t, ModalityText, got[0])
+	assert.Equal(t, Modality("3d"), got[1])
+	assert.Equal(t, Modality("hologram"), got[2])
+	assert.False(t, KnownModality[got[1]], "forward-compat unknown is not in KnownModality")
+	assert.False(t, KnownModality[got[2]], "forward-compat unknown is not in KnownModality")
+	assert.True(t, KnownModality[got[0]], "text is in KnownModality")
+}
+
+// ── TD-M5 new tests (Wave 1 r1) ──────────────────────────────────────────────
+
+// TestParseSeed_RejectsEmptyModality asserts that an input_modalities
+// slice containing a single empty string is rejected — the validator
+// walks every element and rejects empty modality values (the
+// documented invariant; an empty value is not a valid modality).
+func TestParseSeed_RejectsEmptyModality(t *testing.T) {
+	body := completeSeedJSON(
+		`"models":[{"id":"x","provider":"p","input_modalities":[""]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	)
+	_, err := ParseSeed([]byte(body))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+}
+
+// TestParseSeed_RejectsDuplicateModality asserts that an
+// input_modalities slice with duplicate values is rejected — the
+// validator enforces a set, not a multiset (a model's modality set is
+// semantically a set, even when the wire shape is a JSON array).
+func TestParseSeed_RejectsDuplicateModality(t *testing.T) {
+	body := completeSeedJSON(
+		`"models":[{"id":"x","provider":"p","input_modalities":["text","text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	)
+	_, err := ParseSeed([]byte(body))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+}
+
+// TestParseSeed_RequiresTextModality asserts the text-invariant — every
+// model must list "text" in its input_modalities. A model advertising
+// only image/audio/video (or any non-text set) is rejected outright;
+// the orchestrator's capability gate always treats text as supported,
+// so a model without text is a wire-level bug, not a runtime feature.
+func TestParseSeed_RequiresTextModality(t *testing.T) {
+	body := completeSeedJSON(
+		`"models":[{"id":"vision-only","provider":"p","input_modalities":["image"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	)
+	_, err := ParseSeed([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "text")
+}
+
+// TestParseSeed_RejectsEmptyProvider asserts the provider invariant —
+// every model must declare a non-empty provider. The provider id is
+// the carrier for downstream routing in pkg/providers (region, auth
+// profile, billing); a missing provider is non-routable.
+func TestParseSeed_RejectsEmptyProvider(t *testing.T) {
+	body := completeSeedJSON(
+		`"models":[{"id":"x","provider":"","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	)
+	_, err := ParseSeed([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "provider")
+}
+
+// TestParseSeed_RejectsInvalidResizeBudget asserts the per-model
+// resize_budget invariant — when a model DOES declare a resize_budget,
+// the long_edge_px and max_bytes must be strictly positive. Zero or
+// negative values are rejected (the validator does not silently clamp
+// to the catalog default; an explicit zero is a wire-level bug).
+func TestParseSeed_RejectsInvalidResizeBudget(t *testing.T) {
+	cases := map[string]string{
+		"model long_edge zero": completeSeedJSON(
+			`"models":[{"id":"x","provider":"p","input_modalities":["text"],"resize_budget":{"long_edge_px":0,"max_bytes":1}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		),
+		"model long_edge negative": completeSeedJSON(
+			`"models":[{"id":"x","provider":"p","input_modalities":["text"],"resize_budget":{"long_edge_px":-1,"max_bytes":1}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		),
+		"model max_bytes zero": completeSeedJSON(
+			`"models":[{"id":"x","provider":"p","input_modalities":["text"],"resize_budget":{"long_edge_px":1,"max_bytes":0}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		),
+		"model max_bytes negative": completeSeedJSON(
+			`"models":[{"id":"x","provider":"p","input_modalities":["text"],"resize_budget":{"long_edge_px":1,"max_bytes":-1}}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseSeed([]byte(body))
+			require.Error(t, err, "%s should fail", name)
+			assert.Contains(t, err.Error(), "resize_budget",
+				"%s error must name resize_budget (got: %v)", name, err)
+		})
+	}
+}
+
+// ── TD-M5 catalog metadata validation (Wave 1 r1) ────────────────────────────
+
+// TestParseSeed_RejectsMissingSchemaVersion asserts the schema_version
+// invariant — the catalog metadata must include a non-empty
+// schema_version. A missing/empty schema_version is rejected outright;
+// the operator must declare the seed's schema version so consumers can
+// gate on it.
+func TestParseSeed_RejectsMissingSchemaVersion(t *testing.T) {
+	body := `{"version":"v1","updated_at":"2026-07-23T00:00:00Z","source":"test",` +
+		`"models":[{"id":"x","provider":"p","input_modalities":["text"]}],` +
+		`"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`
+	_, err := ParseSeed([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema_version")
+}
+
+// TestParseSeed_RejectsMissingUpdatedAt asserts the updated_at invariant
+// — the catalog metadata must include a non-zero timestamp. A missing
+// timestamp is rejected (the embed-time freeze gate is undefined without
+// a recorded validation date).
+func TestParseSeed_RejectsMissingUpdatedAt(t *testing.T) {
+	body := `{"version":"v1","schema_version":"1.0.0","source":"test",` +
+		`"models":[{"id":"x","provider":"p","input_modalities":["text"]}],` +
+		`"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`
+	_, err := ParseSeed([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "updated_at")
+}
+
+// TestParseSeed_RejectsMissingSource asserts the source invariant — the
+// catalog metadata must include a non-empty source string (the freeze-
+// gate re-validation report path). A missing source is rejected.
+func TestParseSeed_RejectsMissingSource(t *testing.T) {
+	body := `{"version":"v1","schema_version":"1.0.0","updated_at":"2026-07-23T00:00:00Z",` +
+		`"models":[{"id":"x","provider":"p","input_modalities":["text"]}],` +
+		`"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`
+	_, err := ParseSeed([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source")
+}
+
+// ── TD-M5 Version semver comparison (Wave 1 r1) ──────────────────────────────
+
+// TestVersion_SemverComparison asserts the semver-aware comparison
+// (TD-M5 bug fix): semver-parseable strings compare numerically across
+// major/minor/patch, so v10 > v2 (the lexical bug) and v1.2.3 < v1.10.0
+// (the minor-axis bug). Non-semver strings fall back to lexical
+// comparison.
+func TestVersion_SemverComparison(t *testing.T) {
+	cases := []struct {
+		a, b     string
+		wantSign int // -1, 0, +1
+		why      string
+	}{
+		// The headline bug fix: v10 > v2 (lexical would say v10 < v2).
+		{"v10", "v2", +1, "v10 > v2 (semver numeric)"},
+		{"v2", "v10", -1, "v2 < v10 (semver numeric)"},
+		// The minor-axis bug fix: v1.2.3 < v1.10.0.
+		{"v1.2.3", "v1.10.0", -1, "v1.2.3 < v1.10.0 (semver numeric minor)"},
+		{"v1.10.0", "v1.2.3", +1, "v1.10.0 > v1.2.3 (semver numeric minor)"},
+		// Patch axis.
+		{"v1.2.10", "v1.2.2", +1, "v1.2.10 > v1.2.2 (semver numeric patch)"},
+		// Equality.
+		{"v1.2.3", "v1.2.3", 0, "v1.2.3 == v1.2.3"},
+		// Shorthand expansion.
+		{"v1", "v1.0.0", 0, "v1 == v1.0.0 (shorthand)"},
+		{"v1.2", "v1.2.0", 0, "v1.2 == v1.2.0 (shorthand)"},
+		{"v1", "v1.0.1", -1, "v1 < v1.0.1 (shorthand treated as v1.0.0)"},
+		// Prerelease (§11): prerelease sorts BEFORE no-prerelease.
+		{"v1.0.0-rc1", "v1.0.0", -1, "prerelease < stable (semver §11)"},
+		{"v1.0.0", "v1.0.0-rc1", +1, "stable > prerelease (semver §11)"},
+		{"v1.0.0-rc1", "v1.0.0-rc1", 0, "same prerelease is equal"},
+		// Non-semver fallback: lexical.
+		{"2026-07-23", "2026-07-22", +1, "date lexical (later date > earlier)"},
+		{"v1-older", "v2-current", -1, "non-semver lexical (v1-older < v2-current)"},
+		{"2026-07-23", "v1.0.0", -1, "date-string vs semver falls back to lexical"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.why, func(t *testing.T) {
+			a, err := ParseVersion(tc.a)
+			require.NoError(t, err)
+			b, err := ParseVersion(tc.b)
+			require.NoError(t, err)
+			got := a.Compare(b)
+			// Compare the sign of the comparison.
+			gotSign := sign(got)
+			if gotSign != tc.wantSign {
+				t.Errorf("Compare(%q, %q) = %d (sign %d), want sign %d\n  version A: %+v\n  version B: %+v",
+					tc.a, tc.b, got, gotSign, tc.wantSign, a, b)
+			}
+		})
+	}
+}
+
+// sign returns -1/0/+1 for a negative/zero/positive value.
+func sign(v int) int {
+	if v < 0 {
+		return -1
+	}
+	if v > 0 {
+		return 1
+	}
+	return 0
+}
+
+// TestVersion_IsSemver is a small sanity check that ParseVersion
+// correctly identifies semver vs non-semver strings — the runtime
+// uses IsSemver to decide whether to compare numerically or lexically.
+func TestVersion_IsSemver(t *testing.T) {
+	cases := []struct {
+		s    string
+		want bool
+	}{
+		{"v1", true},
+		{"v1.2", true},
+		{"v1.2.3", true},
+		{"v1.2.3-rc1", true},
+		{"v10.0.0", true},
+		{"v1.0.0+build", false}, // build metadata not supported by parser
+		{"", false},
+		{"2026-07-23", false},
+		{"v1-older", false},
+		{"v-1", false},
+		{"v1.", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.s, func(t *testing.T) {
+			v, err := ParseVersion(tc.s)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, v.IsSemver(), "IsSemver(%q)", tc.s)
+		})
+	}
+}
+
+// TestCatalog_Refresh_VersionRegressSemver asserts the regression check
+// uses semver comparison: a current "v10.0.0" with a pulled "v2.0.0"
+// (which would be a downgrade under ANY ordering) is rejected, AND
+// a current "v1.0.0" with a pulled "v1.0.10" (which is an UPGRADE
+// under semver but a DOWNGRADE under the old lexical comparison) is
+// rejected by the old code but ACCEPTED by the new code. This is the
+// live regression test for the v10 < v2 bug.
+func TestCatalog_Refresh_VersionRegressSemver(t *testing.T) {
+	store := &memStore{
+		data: []byte(completeSeedJSON(
+			`"version": "v10.0.0","models": [{"id":"current","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		)),
+	}
+	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
+	require.NoError(t, err)
+	require.Equal(t, "v10.0.0", c.Version().String())
+
+	// Pulled "v2.0.0" — numerically < current "v10.0.0"; semver
+	// regression (the OLD code's lexical comparison would have ACCEPTED
+	// this as an upgrade because "v10" < "v2" lexically).
+	puller := &fakePuller{data: []byte(completeSeedJSON(
+		`"version": "v2.0.0","models": [{"id":"older","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))}
+	c.puller = puller
+
+	refreshErr := c.Refresh(context.Background())
+	require.Error(t, refreshErr, "v2.0.0 must regress below v10.0.0 (semver)")
+	assert.Contains(t, refreshErr.Error(), "regressed")
+
+	// Now flip: current "v1.0.0" with pulled "v1.0.10" — semver upgrade,
+	// accepted.
+	store.data = []byte(completeSeedJSON(
+		`"version": "v1.0.0","models": [{"id":"current","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))
+	c, err = NewCatalog(minimalSeedJSON(), nil, store, testLogger())
+	require.NoError(t, err)
+	require.Equal(t, "v1.0.0", c.Version().String())
+
+	puller2 := &fakePuller{data: []byte(completeSeedJSON(
+		`"version": "v1.0.10","models": [{"id":"newer","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))}
+	c.puller = puller2
+
+	require.NoError(t, c.Refresh(context.Background()), "v1.0.10 must be accepted as an upgrade over v1.0.0 (semver)")
+	assert.Equal(t, "v1.0.10", c.Version().String(), "version upgrades to v1.0.10")
 }
 
 // ── Test #8 ──────────────────────────────────────────────────────────────────
@@ -225,11 +519,9 @@ func (m *memStore) Write(_ context.Context, data []byte) error {
 // the embedded seed on boot (last-known-good preserved across restarts).
 func TestNewCatalog_HydratesFromStore(t *testing.T) {
 	store := &memStore{
-		data: []byte(`{
-			"version": "store-2026-07-22",
-			"models": [{"id": "from-store","provider":"p","input_modalities":["text","image"]}],
-			"default_resize_budget": {"long_edge_px": 4096, "max_bytes": 5242880}
-		}`),
+		data: []byte(completeSeedJSON(
+			`"version":"store-2026-07-22","models":[{"id": "from-store","provider":"p","input_modalities":["text","image"]}],"default_resize_budget": {"long_edge_px": 4096, "max_bytes": 5242880}}`,
+		)),
 	}
 	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
 	require.NoError(t, err)
@@ -242,7 +534,7 @@ func TestNewCatalog_HydratesFromStore(t *testing.T) {
 	}
 	assert.True(t, ids["from-store"])
 	assert.False(t, ids["gpt-4o"], "embedded seed entry must not appear when Store hydrates first")
-	assert.Equal(t, "store-2026-07-22", c.Version())
+	assert.Equal(t, "store-2026-07-22", c.Version().String())
 	assert.Equal(t, ResizeBudget{LongEdgePx: 4096, MaxBytes: 5242880}, c.DefaultResizeBudget())
 }
 
@@ -257,7 +549,7 @@ func TestNewCatalog_FallsBackToSeedOnStoreError(t *testing.T) {
 	require.NoError(t, err)
 	models := c.Models()
 	assert.Len(t, models, 2, "embedded seed must hydrate when Store fails")
-	assert.Equal(t, "test-2026-07-23", c.Version())
+	assert.Equal(t, "test-2026-07-23", c.Version().String())
 }
 
 // ── Test #11 ─────────────────────────────────────────────────────────────────
@@ -269,7 +561,7 @@ func TestCatalog_Resolve_KnownModel(t *testing.T) {
 	require.NoError(t, err)
 	m := c.Resolve("gpt-4o")
 	assert.Equal(t, "gpt-4o", m.ID())
-	assert.Equal(t, []string{"text", "image"}, m.InputModalities())
+	assert.Equal(t, []Modality{ModalityText, ModalityImage}, m.InputModalities())
 	budget := m.Budget()
 	assert.Equal(t, 8000, budget.LongEdgePx)
 	assert.Equal(t, int64(20971520), budget.MaxBytes)
@@ -292,7 +584,7 @@ func TestCatalog_Resolve_UnknownModel_Optimistic(t *testing.T) {
 	require.NoError(t, err)
 	m := c.Resolve("unknown-future-model-2099")
 	assert.Equal(t, "unknown-future-model-2099", m.ID())
-	assert.Equal(t, []string{"text", "image"}, m.InputModalities(), "optimistic default = text + image")
+	assert.Equal(t, []Modality{ModalityText, ModalityImage}, m.InputModalities(), "optimistic default = text + image")
 	budget := m.Budget()
 	assert.Equal(t, c.DefaultResizeBudget(), budget,
 		"optimistic model's budget matches the catalog default (TD-M6)")
@@ -342,26 +634,17 @@ func TestResolvedModel_AlwaysCarriesBudget(t *testing.T) {
 
 // TestSeedValidate_DefaultBudgetApplied (Wave 1 TD-M6) asserts that a
 // seed model lacking a resize_budget gets the catalog default applied
-// during validate — the post-validate Seed.Models[i].ResizeBudget is
-// guaranteed non-nil. The catalog default can be overridden per-model
-// (inline resize_budget wins) but is always present after validation.
+// during validate — the post-validate Model.ResizeBudget is guaranteed
+// non-zero. The catalog default can be overridden per-model (inline
+// resize_budget wins) but is always present after validation.
 func TestSeedValidate_DefaultBudgetApplied(t *testing.T) {
-	body := []byte(`{
-		"version": "test-2026-07-23",
-		"schema_version": "1.0.0",
-		"updated_at": "2026-07-23T00:00:00Z",
-		"source": "test-fixture",
-		"models": [
-			{"id": "no-budget-model", "provider": "p", "input_modalities": ["text"]}
-		],
-		"default_resize_budget": {"long_edge_px": 1234, "max_bytes": 567890}
-	}`)
+	body := []byte(completeSeedJSON(`"version": "test-2026-07-23","models": [
+		{"id": "no-budget-model", "provider": "p", "input_modalities": ["text"]}
+	],"default_resize_budget": {"long_edge_px": 1234, "max_bytes": 567890}}`))
 	s, err := ParseSeed(body)
 	require.NoError(t, err)
 	require.Len(t, s.Models, 1)
 	got := s.Models[0].ResizeBudget
-	require.NotNil(t, got,
-		"post-validate model DTO must carry a non-nil ResizeBudget (TD-M6)")
 	assert.Equal(t, 1234, got.LongEdgePx, "default LongEdgePx applied to missing-budget model")
 	assert.Equal(t, int64(567890), got.MaxBytes, "default MaxBytes applied to missing-budget model")
 }
@@ -373,35 +656,26 @@ func TestSeedValidate_DefaultBudgetApplied(t *testing.T) {
 // default loop: a comparison with the default inside the loop must
 // not overwrite an explicit budget.
 func TestSeedValidate_InlineBudgetWinsOverDefault(t *testing.T) {
-	body := []byte(`{
-		"version": "test-2026-07-23",
-		"schema_version": "1.0.0",
-		"updated_at": "2026-07-23T00:00:00Z",
-		"source": "test-fixture",
-		"models": [
-			{"id": "explicit-budget", "provider": "p", "input_modalities": ["text"], "resize_budget": {"long_edge_px": 9876, "max_bytes": 4321}},
-			{"id": "default-budget",   "provider": "p", "input_modalities": ["text"]}
-		],
-		"default_resize_budget": {"long_edge_px": 1234, "max_bytes": 567890}
-	}`)
+	body := []byte(completeSeedJSON(`"version": "test-2026-07-23","models": [
+		{"id": "explicit-budget", "provider": "p", "input_modalities": ["text"], "resize_budget": {"long_edge_px": 9876, "max_bytes": 4321}},
+		{"id": "default-budget",   "provider": "p", "input_modalities": ["text"]}
+	],"default_resize_budget": {"long_edge_px": 1234, "max_bytes": 567890}}`))
 	s, err := ParseSeed(body)
 	require.NoError(t, err)
 	require.Len(t, s.Models, 2)
 
-	byID := map[string]modelDTO{}
+	byID := map[string]Model{}
 	for _, m := range s.Models {
 		byID[m.ID] = m
 	}
 
 	explicit, ok := byID["explicit-budget"]
 	require.True(t, ok)
-	require.NotNil(t, explicit.ResizeBudget, "explicit model must carry its inline budget")
 	assert.Equal(t, 9876, explicit.ResizeBudget.LongEdgePx, "inline LongEdgePx preserved")
 	assert.Equal(t, int64(4321), explicit.ResizeBudget.MaxBytes, "inline MaxBytes preserved")
 
 	def, ok := byID["default-budget"]
 	require.True(t, ok)
-	require.NotNil(t, def.ResizeBudget, "default-budget model must have the catalog default applied")
 	assert.Equal(t, 1234, def.ResizeBudget.LongEdgePx, "catalog default LongEdgePx applied")
 	assert.Equal(t, int64(567890), def.ResizeBudget.MaxBytes, "catalog default MaxBytes applied")
 }
@@ -444,11 +718,9 @@ func (f *fakePuller) Pull(context.Context) ([]byte, error) {
 // TestCatalog_Refresh_PullsAndApplies asserts a successful Pull updates the
 // in-memory state and persists the new data to Store.
 func TestCatalog_Refresh_PullsAndApplies(t *testing.T) {
-	pulled := []byte(`{
-		"version": "z-2026-07-24",
-		"models": [{"id": "new-model","provider":"p","input_modalities":["text"]}],
-		"default_resize_budget": {"long_edge_px": 1, "max_bytes": 1}
-	}`)
+	pulled := []byte(completeSeedJSON(
+		`"version": "z-2026-07-24","models": [{"id": "new-model","provider":"p","input_modalities":["text"]}],"default_resize_budget": {"long_edge_px": 1, "max_bytes": 1}}`,
+	))
 	puller := &fakePuller{data: pulled}
 	store := &memStore{}
 	c, err := NewCatalog(minimalSeedJSON(), puller, store, testLogger())
@@ -457,7 +729,7 @@ func TestCatalog_Refresh_PullsAndApplies(t *testing.T) {
 	err = c.Refresh(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, puller.hits, "puller should be called exactly once")
-	assert.Equal(t, "z-2026-07-24", c.Version(), "version updates to the pulled value")
+	assert.Equal(t, "z-2026-07-24", c.Version().String(), "version updates to the pulled value")
 	models := c.Models()
 	foundNew := false
 	for _, m := range models {
@@ -521,26 +793,24 @@ func TestCatalog_Refresh_InvalidJSON(t *testing.T) {
 // ── Test #17 ─────────────────────────────────────────────────────────────────
 
 // TestCatalog_Refresh_VersionRegress asserts that a pulled catalog with a
-// lexicographically smaller version than the current catalog is rejected.
-// This guards against an operator reverting a release without realizing it
-// (e.g. raw fallback returning a stale tag).
+// version smaller than the current catalog is rejected. Version comparison
+// is semver-aware (numeric when both sides parse as semver; lexical
+// otherwise) — the catalog retains last-known-good either way. This guards
+// against an operator reverting a release without realizing it (e.g. raw
+// fallback returning a stale tag).
 func TestCatalog_Refresh_VersionRegress(t *testing.T) {
 	store := &memStore{
-		data: []byte(`{
-			"version": "v2-current",
-			"models": [{"id":"current","provider":"p","input_modalities":["text"]}],
-			"default_resize_budget":{"long_edge_px":1,"max_bytes":1}
-		}`),
+		data: []byte(completeSeedJSON(
+			`"version": "v2-current","models": [{"id":"current","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		)),
 	}
 	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
 	require.NoError(t, err)
-	require.Equal(t, "v2-current", c.Version())
+	require.Equal(t, "v2-current", c.Version().String())
 
-	puller := &fakePuller{data: []byte(`{
-		"version": "v1-older",
-		"models": [{"id":"older","provider":"p","input_modalities":["text"]}],
-		"default_resize_budget":{"long_edge_px":1,"max_bytes":1}
-	}`)}
+	puller := &fakePuller{data: []byte(completeSeedJSON(
+		`"version": "v1-older","models": [{"id":"older","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))}
 	c.puller = puller
 
 	refreshErr := c.Refresh(context.Background())
@@ -623,11 +893,13 @@ func TestCatalog_DefaultResizeBudget(t *testing.T) {
 
 // TestCatalog_VersionAndSource asserts Version/Source expose the seed's
 // metadata so operators can tell at runtime whether they're running the
-// embedded seed or a freshly pulled catalog.
+// embedded seed or a freshly pulled catalog. Version is parsed into a
+// Version type (semver-aware when parseable; the raw string is reachable
+// via Version.String()).
 func TestCatalog_VersionAndSource(t *testing.T) {
 	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
 	require.NoError(t, err)
-	assert.Equal(t, "test-2026-07-23", c.Version())
+	assert.Equal(t, "test-2026-07-23", c.Version().String())
 	assert.Equal(t, "test-fixture", c.Source())
 	assert.False(t, c.UpdatedAt().IsZero())
 }
@@ -676,7 +948,7 @@ func TestOptimisticModel_DirectAPI(t *testing.T) {
 	require.NoError(t, err)
 	m := c.OptimisticModel("foo-bar")
 	assert.Equal(t, "foo-bar", m.ID())
-	assert.Equal(t, []string{"text", "image"}, m.InputModalities())
+	assert.Equal(t, []Modality{ModalityText, ModalityImage}, m.InputModalities())
 }
 
 // ── Optional: integration with real catalog file via fileutil-style read ────

@@ -26,11 +26,24 @@
 //     per-workspace override paths; operators edit the seed file directly and
 //     publish a new catalog release, which the next pull picks up.
 //
+// # Two-stage parse (Wave 1 TD-M5)
+//
+//   - seedFile is the permissive JSON DTO. It maps the wire shape 1:1
+//     and allows zero values everywhere; the operator can edit the
+//     seed without learning the validation rules.
+//   - Seed is the validated, invariant-bearing domain. The validate
+//     transform (seedFile.validate) projects the DTO into the domain
+//     and enforces: catalog metadata non-empty; default + per-model
+//     ResizeBudget positive; each model.ID non-empty and unique; each
+//     model.Provider non-empty; each model.InputModalities non-empty,
+//     non-duplicate, and including ModalityText; the catalog default
+//     applied to any model that omitted a ResizeBudget.
+//
 // # Concurrency invariants (Wave 1 TD-M3 + TD-M4)
 //
 //   - model is private. Resolve returns a *resolvedModel handle that
 //     exposes only accessor methods (Supports / Budget / ID / Provider).
-//     The handle is a deep-owned copy — the slice, the budget pointer, and
+//     The handle is a deep-owned copy — the slice, the budget, and
 //     the notes string are all independent of catalog state. External
 //     mutation through the handle cannot corrupt catalog state.
 //   - Refresh acquires a dedicated refreshMu (separate from the
@@ -76,30 +89,30 @@ type ResizeBudget struct {
 	MaxBytes int64 `json:"max_bytes"`
 }
 
-// model is the private, invariant-bearing catalog entry. The exposed
-// API surface is the *resolvedModel handle returned by Resolve and the
-// accessor methods on it; the underlying catalog state lives here and
-// is never returned to callers directly.
+// model is the private, invariant-bearing in-memory catalog entry.
+// The exposed API surface is the *resolvedModel handle returned by
+// Resolve and the accessor methods on it; the underlying catalog state
+// lives here and is never returned to callers directly.
 //
 // resizeBudget is a value type (not a pointer) — the invariant
 // "every post-validate model carries a non-zero budget" is enforced
-// by Seed.validate, which mutates the DTO slice in place to apply
-// the catalog default to any model that omitted one (Wave 1 TD-M6).
+// by seedFile.validate, which finalizes the validated Model before
+// projection.
 type model struct {
 	id              string
 	provider        string
-	inputModalities []string
+	inputModalities []Modality
 	resizeBudget    ResizeBudget
 	notes           string
 }
 
 // resolvedModel is the read-only accessor handle returned by Resolve
-// and from Models(). All slices and pointers are deep copies; the
+// and from Models(). All slices and the budget are deep copies; the
 // handle cannot mutate catalog state.
 type resolvedModel struct {
 	id              string
 	provider        string
-	inputModalities []string
+	inputModalities []Modality
 	resizeBudget    ResizeBudget // value, not pointer — guaranteed non-zero
 	notes           string
 }
@@ -109,7 +122,7 @@ type resolvedModel struct {
 // supported only when the model's slice explicitly carries them — the
 // forward-compat rule the seed validator applies (an unknown modality
 // is recorded as-is) preserves its truth value here.
-func (r *resolvedModel) Supports(modality string) bool {
+func (r *resolvedModel) Supports(modality Modality) bool {
 	for _, m := range r.inputModalities {
 		if m == modality {
 			return true
@@ -141,19 +154,19 @@ func (r *resolvedModel) Notes() string {
 }
 
 // InputModalities returns a copy of the model's modality slice.
-func (r *resolvedModel) InputModalities() []string {
-	out := make([]string, len(r.inputModalities))
+func (r *resolvedModel) InputModalities() []Modality {
+	out := make([]Modality, len(r.inputModalities))
 	copy(out, r.inputModalities)
 	return out
 }
 
 // resolve returns a deep-owned resolvedModel view of m. The input's
-// ResizeBudget is always populated (Wave 1 TD-M6: Seed.validate
-// guarantees every post-validate model DTO carries a non-nil budget,
-// and the internal model stores ResizeBudget by value). Caller MUST
-// hold the read lock.
+// ResizeBudget is always populated (Wave 1 TD-M6: seedFile.validate
+// guarantees every post-validate Model carries a non-zero budget, and
+// the internal model stores ResizeBudget by value). Caller MUST hold
+// the read lock.
 func (c *Catalog) resolve(m model) *resolvedModel {
-	modalities := append([]string(nil), m.inputModalities...)
+	modalities := append([]Modality(nil), m.inputModalities...)
 	return &resolvedModel{
 		id:              m.id,
 		provider:        m.provider,
@@ -185,21 +198,46 @@ type Store interface {
 	Write(ctx context.Context, data []byte) error
 }
 
-// Seed is the parsed in-memory representation of the embedded
-// data/providers_capabilities_seed.json. The Catalog holds a map of model
-// keyed by id plus the catalog-wide default resize budget.
+// Seed is the validated, invariant-bearing domain catalog. Constructed
+// by seedFile.validate from the permissive JSON DTO; never built
+// directly from raw JSON by external callers.
 type Seed struct {
-	Version             string       `json:"version"`
-	SchemaVersion       string       `json:"schema_version"`
-	UpdatedAt           time.Time    `json:"updated_at"`
-	Source              string       `json:"source"`
-	Models              []modelDTO   `json:"models"`
-	DefaultResizeBudget ResizeBudget `json:"default_resize_budget"`
+	Version             Version
+	SchemaVersion       string
+	UpdatedAt           time.Time
+	Source              string
+	Models              []Model
+	DefaultResizeBudget ResizeBudget
+}
+
+// Model is the validated, invariant-bearing domain catalog entry.
+// Every field is guaranteed non-zero/non-empty after validate except
+// ResizeBudget which is guaranteed non-zero (the catalog default is
+// applied to any model that omitted one).
+type Model struct {
+	ID              string
+	Provider        string
+	InputModalities []Modality
+	ResizeBudget    ResizeBudget
+	Notes           string
+}
+
+// seedFile is the permissive JSON DTO of the catalog. It maps the wire
+// shape 1:1 and allows zero values everywhere; the validate transform
+// produces the validated Seed. Kept unexported because external
+// callers should never see the unvalidated shape.
+type seedFile struct {
+	Version             string        `json:"version"`
+	SchemaVersion       string        `json:"schema_version"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+	Source              string        `json:"source"`
+	Models              []modelDTO    `json:"models"`
+	DefaultResizeBudget *ResizeBudget `json:"default_resize_budget"`
 }
 
 // modelDTO is the wire shape of a single catalog entry in the seed JSON.
-// Validated by Seed.validate (Wave 1 TD-M5) before being projected onto
-// the internal model type.
+// Validated by seedFile.validate (Wave 1 TD-M5) before being projected
+// onto the validated Model type.
 type modelDTO struct {
 	ID              string        `json:"id"`
 	Provider        string        `json:"provider"`
@@ -208,26 +246,134 @@ type modelDTO struct {
 	Notes           string        `json:"notes,omitempty"`
 }
 
-// toModel projects the validated DTO onto the private model type.
-// All invariants must already have been checked by Seed.validate —
-// in particular, d.ResizeBudget is guaranteed non-nil after validate
-// (Wave 1 TD-M6: the catalog default is applied to any DTO that
-// omitted one). The internal type uses ResizeBudget by value so the
-// invariant "every post-validate model carries a non-zero budget"
-// is unrepresentable in the in-memory model.
-func (d modelDTO) toModel() model {
-	out := model{
-		id:       d.ID,
-		provider: d.Provider,
-		// ResizeBudget invariant: post-validate DTO always has a non-nil
-		// ResizeBudget (validate applies the catalog default when missing).
-		resizeBudget: *d.ResizeBudget,
-		notes:        d.Notes,
+// validate parses the seedFile's wire data into the validated Seed.
+// All catalog invariants are enforced here (Wave 1 TD-M5):
+//
+//   - Catalog metadata: schema_version, updated_at, source are
+//     non-empty. The seed version string is parsed into a Version
+//     (semver-aware when parseable; lexical fallback otherwise). The
+//     parsed Version is used by Catalog.Refresh for the regression
+//     check so that semver-parseable updates compare numerically
+//     (v10 > v2 — the lexical bug fix).
+//   - DefaultResizeBudget has positive LongEdgePx and positive MaxBytes.
+//   - Each model.ID is non-empty and unique.
+//   - Each model.Provider is non-empty.
+//   - Each model.InputModalities is non-empty, contains no empty or
+//     duplicate values, and includes ModalityText.
+//   - Each model.ResizeBudget, when present, has positive LongEdgePx
+//     and positive MaxBytes. Models without one inherit the catalog
+//     default (Wave 1 TD-M6 invariant: every post-validate Model
+//     carries a non-zero budget).
+//
+// The two-stage parse (DTO then validate) is the explicit split
+// required by Wave 1 TD-M5: the wire shape is permissive, the domain
+// is invariant-bearing.
+func (f seedFile) validate() (Seed, error) {
+	if f.SchemaVersion == "" {
+		return Seed{}, fmt.Errorf("schema_version must be non-empty")
 	}
-	if d.InputModalities != nil {
-		out.inputModalities = append([]string(nil), d.InputModalities...)
+	if f.UpdatedAt.IsZero() {
+		return Seed{}, fmt.Errorf("updated_at must be non-zero")
 	}
-	return out
+	if f.Source == "" {
+		return Seed{}, fmt.Errorf("source must be non-empty")
+	}
+
+	parsedVersion, err := ParseVersion(f.Version)
+	if err != nil {
+		return Seed{}, fmt.Errorf("version: %w", err)
+	}
+
+	if f.DefaultResizeBudget == nil {
+		return Seed{}, fmt.Errorf("default_resize_budget is required")
+	}
+	if f.DefaultResizeBudget.LongEdgePx <= 0 {
+		return Seed{}, fmt.Errorf(
+			"default_resize_budget.long_edge_px must be > 0, got %d",
+			f.DefaultResizeBudget.LongEdgePx,
+		)
+	}
+	if f.DefaultResizeBudget.MaxBytes <= 0 {
+		return Seed{}, fmt.Errorf(
+			"default_resize_budget.max_bytes must be > 0, got %d",
+			f.DefaultResizeBudget.MaxBytes,
+		)
+	}
+
+	out := Seed{
+		Version:             parsedVersion,
+		SchemaVersion:       f.SchemaVersion,
+		UpdatedAt:           f.UpdatedAt,
+		Source:              f.Source,
+		DefaultResizeBudget: *f.DefaultResizeBudget,
+		Models:              make([]Model, 0, len(f.Models)),
+	}
+
+	seen := make(map[string]bool, len(f.Models))
+	for i, m := range f.Models {
+		if m.ID == "" {
+			return Seed{}, fmt.Errorf("models[%d].id must be non-empty", i)
+		}
+		if seen[m.ID] {
+			return Seed{}, fmt.Errorf("models[%d].id %q is duplicated", i, m.ID)
+		}
+		seen[m.ID] = true
+		if m.Provider == "" {
+			return Seed{}, fmt.Errorf("models[%d].id %q: provider must be non-empty", i, m.ID)
+		}
+		if len(m.InputModalities) == 0 {
+			return Seed{}, fmt.Errorf("models[%d].id %q has empty input_modalities", i, m.ID)
+		}
+		hasText := false
+		modalSeen := make(map[string]bool, len(m.InputModalities))
+		modalities := make([]Modality, 0, len(m.InputModalities))
+		for j, ms := range m.InputModalities {
+			if ms == "" {
+				return Seed{}, fmt.Errorf("models[%d].id %q: input_modalities[%d] is empty", i, m.ID, j)
+			}
+			if modalSeen[ms] {
+				return Seed{}, fmt.Errorf("models[%d].id %q: input_modalities has duplicate %q", i, m.ID, ms)
+			}
+			modalSeen[ms] = true
+			modalities = append(modalities, Modality(ms))
+			if Modality(ms) == ModalityText {
+				hasText = true
+			}
+		}
+		if !hasText {
+			return Seed{}, fmt.Errorf(
+				"models[%d].id %q: input_modalities must include %q (every model supports text)",
+				i, m.ID, ModalityText,
+			)
+		}
+		// Wave 1 TD-M6: apply the catalog default in place to any model
+		// that omitted a ResizeBudget. After this branch, every post-validate
+		// Model carries a non-zero budget by value.
+		budget := out.DefaultResizeBudget
+		if m.ResizeBudget != nil {
+			if m.ResizeBudget.LongEdgePx <= 0 {
+				return Seed{}, fmt.Errorf(
+					"models[%d].id %q: resize_budget.long_edge_px must be > 0, got %d",
+					i, m.ID, m.ResizeBudget.LongEdgePx,
+				)
+			}
+			if m.ResizeBudget.MaxBytes <= 0 {
+				return Seed{}, fmt.Errorf(
+					"models[%d].id %q: resize_budget.max_bytes must be > 0, got %d",
+					i, m.ID, m.ResizeBudget.MaxBytes,
+				)
+			}
+			budget = *m.ResizeBudget
+		}
+		out.Models = append(out.Models, Model{
+			ID:              m.ID,
+			Provider:        m.Provider,
+			InputModalities: modalities,
+			ResizeBudget:    budget,
+			Notes:           m.Notes,
+		})
+	}
+	return out, nil
 }
 
 // Catalog is the live in-memory model capability registry.
@@ -243,7 +389,7 @@ type Catalog struct {
 	stateMu       sync.RWMutex
 	models        map[string]model
 	defaultBudget ResizeBudget
-	version       string
+	version       Version
 	updatedAt     time.Time
 	source        string
 
@@ -269,94 +415,21 @@ type logger interface {
 // ParseSeed parses the embedded seed JSON. Used by tests and by
 // NewCatalog; exported so callers can inspect the seed without constructing
 // a Catalog (e.g. for documentation generators, smoke tests).
+//
+// Two-stage parse: the wire bytes are first unmarshaled into the
+// permissive seedFile DTO, then validated by seedFile.validate which
+// produces the invariant-bearing Seed. A validation failure returns
+// a descriptive error and the zero Seed.
 func ParseSeed(data []byte) (Seed, error) {
-	var s Seed
-	if err := json.Unmarshal(data, &s); err != nil {
+	var f seedFile
+	if err := json.Unmarshal(data, &f); err != nil {
 		return Seed{}, fmt.Errorf("capabilities: parse seed: %w", err)
 	}
-	if err := s.validate(); err != nil {
+	s, err := f.validate()
+	if err != nil {
 		return Seed{}, fmt.Errorf("capabilities: validate seed: %w", err)
 	}
 	return s, nil
-}
-
-// validate enforces the seed schema invariants (Wave 1 TD-M5) and
-// finalizes the per-model ResizeBudget so every post-validate DTO is
-// guaranteed non-nil (Wave 1 TD-M6).
-//
-//   - DefaultResizeBudget has positive LongEdgePx and positive MaxBytes.
-//   - Each model.ID is non-empty and unique.
-//   - Each model.Provider is non-empty.
-//   - Each model.InputModalities is non-empty, contains "text" (the
-//     text-invariant — every model supports text), and has no empty or
-//     duplicate values.
-//   - ResizeBudget, when present, has positive LongEdgePx and positive MaxBytes.
-//   - After validation: every model.ResizeBudget is non-nil (the catalog
-//     default is applied in place to any model that omitted one).
-func (s *Seed) validate() error {
-	if s.DefaultResizeBudget.LongEdgePx <= 0 {
-		return fmt.Errorf("default_resize_budget.long_edge_px must be > 0, got %d", s.DefaultResizeBudget.LongEdgePx)
-	}
-	if s.DefaultResizeBudget.MaxBytes <= 0 {
-		return fmt.Errorf("default_resize_budget.max_bytes must be > 0, got %d", s.DefaultResizeBudget.MaxBytes)
-	}
-	seen := make(map[string]bool, len(s.Models))
-	for i, m := range s.Models {
-		if m.ID == "" {
-			return fmt.Errorf("models[%d].id must be non-empty", i)
-		}
-		if seen[m.ID] {
-			return fmt.Errorf("models[%d].id %q is duplicated", i, m.ID)
-		}
-		seen[m.ID] = true
-		if m.Provider == "" {
-			return fmt.Errorf("models[%d].id %q: provider must be non-empty", i, m.ID)
-		}
-		if len(m.InputModalities) == 0 {
-			return fmt.Errorf("models[%d].id %q has empty input_modalities", i, m.ID)
-		}
-		hasText := false
-		modalSeen := make(map[string]bool, len(m.InputModalities))
-		for j, modality := range m.InputModalities {
-			if modality == "" {
-				return fmt.Errorf("models[%d].id %q: input_modalities[%d] is empty", i, m.ID, j)
-			}
-			if modalSeen[modality] {
-				return fmt.Errorf("models[%d].id %q: input_modalities has duplicate %q", i, m.ID, modality)
-			}
-			modalSeen[modality] = true
-			if modality == "text" {
-				hasText = true
-			}
-		}
-		if !hasText {
-			return fmt.Errorf("models[%d].id %q: input_modalities must include %q (every model supports text)", i, m.ID, "text")
-		}
-		if m.ResizeBudget != nil {
-			if m.ResizeBudget.LongEdgePx <= 0 {
-				return fmt.Errorf(
-					"models[%d].id %q: resize_budget.long_edge_px must be > 0, got %d",
-					i, m.ID, m.ResizeBudget.LongEdgePx,
-				)
-			}
-			if m.ResizeBudget.MaxBytes <= 0 {
-				return fmt.Errorf(
-					"models[%d].id %q: resize_budget.max_bytes must be > 0, got %d",
-					i, m.ID, m.ResizeBudget.MaxBytes,
-				)
-			}
-		}
-	}
-	// Wave 1 TD-M6: apply the catalog default in place to any model that
-	// omitted a ResizeBudget. After this loop, every model DTO carries a
-	// non-nil budget so toModel can dereference without a nil check.
-	for i := range s.Models {
-		if s.Models[i].ResizeBudget == nil {
-			budget := s.DefaultResizeBudget
-			s.Models[i].ResizeBudget = &budget
-		}
-	}
-	return nil
 }
 
 // NewCatalog constructs a Catalog from the embedded seed plus the puller and
@@ -414,11 +487,15 @@ func (c *Catalog) applySeed(s Seed) {
 	defer c.stateMu.Unlock()
 	c.models = make(map[string]model, len(s.Models))
 	for _, m := range s.Models {
-		c.models[m.ID] = m.toModel()
+		c.models[m.ID] = model{
+			id:              m.ID,
+			provider:        m.Provider,
+			inputModalities: append([]Modality(nil), m.InputModalities...),
+			resizeBudget:    m.ResizeBudget,
+			notes:           m.Notes,
+		}
 	}
-	if s.DefaultResizeBudget.LongEdgePx > 0 && s.DefaultResizeBudget.MaxBytes > 0 {
-		c.defaultBudget = s.DefaultResizeBudget
-	}
+	c.defaultBudget = s.DefaultResizeBudget
 	c.version = s.Version
 	c.updatedAt = s.UpdatedAt
 	c.source = s.Source
@@ -443,7 +520,7 @@ func (c *Catalog) optimistic(modelID string) *resolvedModel {
 	return &resolvedModel{
 		id:              modelID,
 		provider:        "",
-		inputModalities: []string{"text", "image"},
+		inputModalities: []Modality{ModalityText, ModalityImage},
 		resizeBudget:    c.defaultBudget,
 		notes:           "optimistic default for unknown model (FR-026)",
 	}
@@ -457,9 +534,11 @@ func (c *Catalog) OptimisticModel(modelID string) *resolvedModel {
 }
 
 // HasModal reports whether the catalog entry for modelID accepts the given
-// modality (FR-026 optimistic default for unknown models).
+// modality (FR-026 optimistic default for unknown models). The modality
+// parameter is a string for caller convenience (the SPA passes the
+// literal from the wire); it is parsed into a Modality for the lookup.
 func (c *Catalog) HasModal(modelID, modality string) bool {
-	return c.Resolve(modelID).Supports(modality)
+	return c.Resolve(modelID).Supports(Modality(modality))
 }
 
 // ModelSnapshot is a single (id, accessor handle) pair returned by
@@ -493,8 +572,9 @@ func (c *Catalog) DefaultResizeBudget() ResizeBudget {
 	return c.defaultBudget
 }
 
-// Version returns the catalog version string from the seed/refresh source.
-func (c *Catalog) Version() string {
+// Version returns the parsed catalog version from the seed/refresh source.
+// Callers that need the raw string call Version.String().
+func (c *Catalog) Version() Version {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	return c.version
@@ -534,6 +614,10 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 }
 
 // refreshLocked runs the Refresh transaction. Caller MUST hold c.refreshMu.
+//
+// Validate runs inside the serialized transaction (on both initial load
+// and on every refresh) — a malformed seed is rejected and the
+// last-known-good is retained (Wave 1 TD-M5).
 func (c *Catalog) refreshLocked(ctx context.Context) error {
 	// 1. Pull.
 	data, err := c.puller.Pull(ctx)
@@ -541,17 +625,22 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 		c.logger.Warn("capabilities: pull failed; retaining last-known-good", "error", err)
 		return err
 	}
-	// 2. Parse.
+	// 2. Parse + validate (the two-stage parse; invalid JSON or invalid
+	// invariants are both rejected here, last-known-good retained).
 	s, err := ParseSeed(data)
 	if err != nil {
 		c.logger.Warn("capabilities: pulled catalog invalid; retaining last-known-good", "error", err)
 		return err
 	}
 	// 3. Version check (under stateMu; the apply is the only state-mutating step).
+	//    Version.Compare is semver-aware: semver-parseable strings compare
+	//    numerically (v10 > v2); non-semver strings fall back to lexical
+	//    comparison (which preserves chronological ordering for ISO-date
+	//    version strings like the embedded seed's "2026-07-23").
 	c.stateMu.RLock()
 	currentVersion := c.version
 	c.stateMu.RUnlock()
-	if currentVersion != "" && s.Version != "" && s.Version < currentVersion {
+	if currentVersion.raw != "" && s.Version.raw != "" && s.Version.Compare(currentVersion) < 0 {
 		c.logger.Warn("capabilities: pulled version regressed; retaining last-known-good",
 			"pulled", s.Version, "current", currentVersion)
 		return fmt.Errorf("pulled catalog version %q regressed below current %q", s.Version, currentVersion)
