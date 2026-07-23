@@ -474,7 +474,7 @@ func TestStep4_ClassifierPrimaryPathUnchanged(t *testing.T) {
 // "image" off-context — without matching any pinned media-rejection
 // substring — STILL triggers the outcome-based fallback, because the
 // classifier is inconclusive on this 4xx. The fallback exists exactly
-// for the "unrecognised phrasing" tail (FR-017 + round-1 grill C1 /
+// for the "unrecognized phrasing" tail (FR-017 + round-1 grill C1 /
 // round-2 grill F-L8-2). A regression here would silently kill the
 // dead-turn guarantee for any provider that invents a new phrasing.
 func TestStep4_ClassifierSubstringFalsePositive_OutcomeFires(t *testing.T) {
@@ -497,7 +497,7 @@ func TestStep4_ClassifierSubstringFalsePositive_OutcomeFires(t *testing.T) {
 	// match + media present + status not in {401,403,413} + no
 	// exclusion substring. This is the spec's BDD row 1013 case
 	// (Gemini 'Unsupported MIME type: image/svg+xml') — the provider's
-	// body phrasing is unrecognised to the classifier but the rejection
+	// body phrasing is unrecognized to the classifier but the rejection
 	// IS a media failure, so the fallback must self-heal.
 	result := TryMediaDowngrade(ts, callMessages, pe)
 	fired := result.Applied
@@ -639,7 +639,7 @@ func TestClassifier_CodeUnknown_ForUnrecognizedBody400(t *testing.T) {
 // locks the inverse invariant: every code that the classifier
 // currently maps to a SPECIFIC verdict from a 4xx must keep
 // returning that specific verdict — the CodeUnknown broadening for
-// residual 4xx must NOT regress the recognised-shape paths.
+// residual 4xx must NOT regress the recognized-shape paths.
 //
 // Together with TestClassifier_CodeUnknown_ForUnrecognizedBody400
 // this pair defines the classifier vs. gate contract: residual 4xx

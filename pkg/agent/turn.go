@@ -248,7 +248,7 @@ type turnState struct {
 	// shape. Hoisted here (was a per-iteration reset in the loop retry block)
 	// so a turn can NEVER fire more than one media downgrade-retry, matching
 	// the ADR-051 invariant "at most one media rejection → at most one
-	// downgrade-retry". Initialised to false (zero value of atomic.Bool).
+	// downgrade-retry". Initialized to false (zero value of atomic.Bool).
 	mediaRetryDone atomic.Bool
 
 	// imageRetryDone is the per-turn guard for IMAGE-only downgrades. The
@@ -262,7 +262,7 @@ type turnState struct {
 	// outcome-based strip-retry fallback fires AND the subsequent LLM
 	// call succeeds, this field is stamped with CodeMediaUnsupported so
 	// any later classifier-driven emission for this turn (warn logs,
-	// audit, transcript) carries the outcome-labelled verdict rather
+	// audit, transcript) carries the outcome-labeled verdict rather
 	// than the original (inconclusive) classifier verdict. Empty when
 	// no outcome-based retry succeeded this turn — the classifier's own
 	// verdict governs in that case. Written by the loop call site
@@ -318,7 +318,7 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 // outcomeRelabelCode returns the FR-017a outcome-labeller verdict for
 // this turn, or "" if no relabel is in effect. Consult this at emit
 // sites to decide between the raw classifier verdict and the
-// outcome-labelled one.
+// outcome-labeled one.
 func (ts *turnState) outcomeRelabelCode() LLMErrorCode {
 	if ts == nil {
 		return ""

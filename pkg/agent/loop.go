@@ -6247,9 +6247,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// CURRENT session learns immediately — the transcript write alone
 				// only becomes visible after a reload.
 				//
-				// Wave 1 (ADR-051 §RD5 MAJ-003): sanitise the model_switch
+				// Wave 1 (ADR-051 §RD5 MAJ-003): sanitize the model_switch
 				// message via the classifier so the model name does not leak
-				// into the assistant-facing copy. The classifier recognises
+				// into the assistant-facing copy. The classifier recognizes
 				// the "could not switch to model" shape via substring and
 				// emits a generic message; raw stays in logger.WarnCF for
 				// operator triage.

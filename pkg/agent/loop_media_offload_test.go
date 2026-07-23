@@ -178,7 +178,7 @@ func TestOffloadSink_NilReceiver_DegradesGracefully(t *testing.T) {
 
 // TestResolveMediaRefs_AVIF_NoSink_DegradesToMarker (H1-M2 degraded path): with
 // no offload sink, an undecodable image still produces an honest marker rather
-// than failing the turn. The 4-arg wrapper preserves the existing behaviour
+// than failing the turn. The 4-arg wrapper preserves the existing behavior
 // exercised by the Wave-3-owned tests.
 func TestResolveMediaRefs_AVIF_NoSink_DegradesToMarker(t *testing.T) {
 	store := media.NewFileMediaStore()

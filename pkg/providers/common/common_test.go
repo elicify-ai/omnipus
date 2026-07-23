@@ -652,8 +652,12 @@ func TestHandleErrorResponse_PreservesFullBodyUpToCap(t *testing.T) {
 	pe, ok := got.(*ProviderError)
 	require.True(t, ok, "HandleErrorResponse must return *ProviderError (not a plain error)")
 	assert.Equal(t, http.StatusBadRequest, pe.Status)
-	assert.Contains(t, pe.Body, incident,
-		"the full body (including the substring past byte 512) must be preserved on pe.Body — the classifier consumes it")
+	assert.Contains(
+		t,
+		pe.Body,
+		incident,
+		"the full body (including the substring past byte 512) must be preserved on pe.Body — the classifier consumes it",
+	)
 }
 
 // TestHandleErrorResponse_PartialBodyOnReadFailure verifies that a body

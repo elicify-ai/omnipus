@@ -57,7 +57,7 @@ const (
 	// CodeToolArgs: tool-call argument format error (FR-018 / ADR-051
 	// Rev 4). Pinned body substring: "invalid tool arguments". Excluded
 	// from the outcome-based strip-retry fallback so a malformed
-	// tool-call is not mis-labelled as media_unsupported. Status
+	// tool-call is not mis-labeled as media_unsupported. Status
 	// codes that already map to a specific code (401/403/413) still
 	// win over the body substring — the body substring is a SECONDARY
 	// detector, the status-code path is the PRIMARY gate.
@@ -111,25 +111,25 @@ var userMessages = map[LLMErrorCode]string{
 }
 
 // defaultUserMessage returns the canonical user-facing message for code.
-// Falls back to CodeUnknown when an unrecognised code slips through (e.g. a
+// Falls back to CodeUnknown when an unrecognized code slips through (e.g. a
 // future code added in another package without an entry here) so callers
 // always have a non-empty, generic message to emit.
 func defaultUserMessage(code LLMErrorCode) string {
 	if msg, ok := userMessages[code]; ok && msg != "" {
 		return msg
 	}
-	// Unrecognised code — log a warning so the operator knows a code is
+	// Unrecognized code — log a warning so the operator knows a code is
 	// slipping through without a user-facing message (SFH-W1-02). This is
 	// NOT a silent fallback; the warning provides observability for any
 	// code added in the future without a matching userMessages entry.
-	log.Printf("[agent] WARN: unrecognised LLM error code %q — using generic fallback", code)
+	log.Printf("[agent] WARN: unrecognized LLM error code %q — using generic fallback", code)
 	return userMessages[CodeUnknown]
 }
 
 // UserMessageForCode returns the canonical user-facing message for code.
 // Exported for tests (and any external caller that needs to look up the
 // generic copy without running the full classifier). Falls back to the
-// CodeUnknown copy when code is unrecognised.
+// CodeUnknown copy when code is unrecognized.
 func UserMessageForCode(code LLMErrorCode) string {
 	return defaultUserMessage(code)
 }
@@ -285,7 +285,7 @@ func isRateLimitMessage(body string) bool {
 // toolArgsSubstrings are the body substrings that identify a tool-call
 // argument format error. Pinned by ADR-051 Rev 4 (FR-018). Match is
 // case-insensitive. Excluded from the outcome-based strip-retry
-// fallback so a malformed tool-call is never mis-labelled as
+// fallback so a malformed tool-call is never mis-labeled as
 // media_unsupported.
 var toolArgsSubstrings = []string{
 	"invalid tool arguments",
@@ -753,7 +753,7 @@ func providerErrorFromChain(err error) *ProviderError {
 		}
 	}
 	// Fallthrough: a FailoverError without an inner pe (timeout, context
-	// cancelled). Body stays empty; classifier falls back to Err.
+	// canceled). Body stays empty; classifier falls back to Err.
 	var fe *providers.FailoverError
 	if errors.As(err, &fe) {
 		return ProviderErrorFromFailover(fe)

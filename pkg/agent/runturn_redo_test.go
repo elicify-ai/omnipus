@@ -78,7 +78,7 @@ func TestTryMediaDowngrade_NilTurnStateIsSafe(t *testing.T) {
 }
 
 // TestTryMediaDowngrade_NonMediaCodeDoesNotRetry locks the
-// classifier-gated behaviour: only CodeMediaUnsupported triggers the
+// classifier-gated behavior: only CodeMediaUnsupported triggers the
 // retry. Auth / rate-limit / context-overflow / content-policy must
 // NOT fire the downgrade.
 func TestTryMediaDowngrade_NonMediaCodeDoesNotRetry(t *testing.T) {

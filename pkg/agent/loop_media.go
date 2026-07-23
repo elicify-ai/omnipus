@@ -76,11 +76,11 @@ func resolveMediaRefs(
 }
 
 // resolveMediaRefsWithOffload is the full presentation path: the legacy
-// resolveMediaRefs behaviour plus step-1 capability gate (catalog),
+// resolveMediaRefs behavior plus step-1 capability gate (catalog),
 // step-5 offload (sink, FR-020/020a/021/022) and manifest refcount
 // tracking (rc, FR-007a) when the respective arguments are non-nil. The
 // four-argument resolveMediaRefs is a thin wrapper that calls this with
-// nil sink/catalog/rc so existing call sites preserve their exact behaviour.
+// nil sink/catalog/rc so existing call sites preserve their exact behavior.
 func resolveMediaRefsWithOffload(
 	messages []providers.Message,
 	store media.MediaStore,
@@ -546,8 +546,8 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 		return ""
 	}
 
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		logImageNormalizationFailure(localPath, mime, "rewind-failed", err, map[string]any{
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		logImageNormalizationFailure(localPath, mime, "rewind-failed", seekErr, map[string]any{
 			"format": format,
 		})
 		return ""

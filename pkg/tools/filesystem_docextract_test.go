@@ -27,8 +27,8 @@ func makeDocxBytes(t *testing.T, paragraphs ...string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ct.Write([]byte(contentTypes)); err != nil {
-		t.Fatal(err)
+	if _, writeErr := ct.Write([]byte(contentTypes)); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	var xmlBuf strings.Builder
@@ -69,8 +69,8 @@ func makeXlsxBytes(t *testing.T, rows [][]string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ct.Write([]byte(contentTypes)); err != nil {
-		t.Fatal(err)
+	if _, writeErr := ct.Write([]byte(contentTypes)); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	var sheetBuf strings.Builder

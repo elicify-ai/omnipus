@@ -807,9 +807,9 @@ func TestStore_RegistryPersistsAcrossBoot(t *testing.T) {
 	}
 
 	// Both refs must resolve to their original on-disk paths after reload.
-	got1, err := store2.Resolve(ref1)
-	if err != nil {
-		t.Fatalf("ref1 %q must resolve after registry reload: %v", ref1, err)
+	got1, resolveErr := store2.Resolve(ref1)
+	if resolveErr != nil {
+		t.Fatalf("ref1 %q must resolve after registry reload: %v", ref1, resolveErr)
 	}
 	if got1 != p1 {
 		t.Errorf("Resolve(ref1) = %q, want %q", got1, p1)

@@ -119,7 +119,11 @@ func TestGenerate_RequiredMatchingPropertyReturnsValueType(t *testing.T) {
 	}
 	want := "Payload ErrorPayload `json:\"payload\"`"
 	if !strings.Contains(string(src), want) {
-		t.Fatalf("generated source does not contain %q (required field must be a value type, no pointer, no omitempty):\n%s", want, src)
+		t.Fatalf(
+			"generated source does not contain %q (required field must be a value type, no pointer, no omitempty):\n%s",
+			want,
+			src,
+		)
 	}
 }
 
@@ -161,7 +165,11 @@ func TestGenerate_RefPropertyShortCircuits(t *testing.T) {
 	// the generator does NOT crash and does NOT produce a `struct{...}` shape.
 	want := "Payload *ErrorPayload `json:\"payload,omitempty\"`"
 	if !strings.Contains(string(src), want) {
-		t.Fatalf("generated source does not contain %q (ref must short-circuit to the regular $ref resolver):\n%s", want, src)
+		t.Fatalf(
+			"generated source does not contain %q (ref must short-circuit to the regular $ref resolver):\n%s",
+			want,
+			src,
+		)
 	}
 }
 
