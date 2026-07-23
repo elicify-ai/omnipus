@@ -853,7 +853,7 @@ func copyToWorkDir(srcPath, workDir, safeName string) (dest string, err error) {
 	if !isWithinWorkDir(dest, cleanDir) {
 		return "", fmt.Errorf("offload copy escapes work dir: %q", safeName)
 	}
-	if err := os.MkdirAll(cleanDir, 0o700); err != nil {
+	if err = os.MkdirAll(cleanDir, 0o700); err != nil {
 		return "", err
 	}
 	in, err := os.Open(srcPath)
