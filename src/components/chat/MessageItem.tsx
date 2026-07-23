@@ -268,6 +268,7 @@ export function MessageItem({ message }: MessageItemProps) {
           && message.errorDetail.length > 0 && (
           <details className="px-1 mt-1 group/error-detail" data-testid="error-detail-disclosure">
             <summary
+              tabIndex={0}
               className={cn(
                 'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
                 'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',

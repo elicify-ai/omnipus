@@ -7228,6 +7228,39 @@ Returns HTTP 201 on success.
     ],
   },
   {
+    method: "delete",
+    path: "/workspaces/:id/media/:media_id",
+    alias: "deleteWorkspaceMedia",
+    description: `Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "media_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/workspaces/:id/media/attachments",
     alias: "createWorkspaceMediaAttachment",

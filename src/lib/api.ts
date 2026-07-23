@@ -164,6 +164,8 @@ import {
   MailboxListResponse as MailboxListResponseSchema,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectResponse as BrowserInspectResponseSchema,
+  // ADR-051 Rev 4 — workspace media library (contract-first #8):
+  MediaLibraryEntry as MediaLibraryEntrySchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -411,6 +413,9 @@ import type {
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
+  // ADR-051 Rev 4 — workspace media library (contract-first #8):
+  MediaLibraryEntry,
+  MediaAttachmentRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -554,6 +559,9 @@ export type {
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
+  // ADR-051 Rev 4 — workspace media library (contract-first #8):
+  MediaLibraryEntry,
+  MediaAttachmentRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -3220,6 +3228,8 @@ export const workspacesQueryKeys = {
   detail: (id: string) => ['workspaces', id] as const,
   delegation: (id: string) => ['workspaces', id, 'delegation'] as const,
   instructions: (id: string) => ['workspaces', id, 'instructions'] as const,
+  // ADR-051 Rev 4 — workspace media library (Slice H):
+  media: (workspaceId: string) => ['workspaces', workspaceId, 'media'] as const,
 }
 
 export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
@@ -3258,6 +3268,54 @@ export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promi
 
 export function deleteWorkspace(id: string): Promise<void> {
   return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── ADR-051 Rev 4 — Workspace Media Library (Slice H) ─────────────────────────
+//
+// The workspace media library is the persistent home for user uploads
+// (`workspaces/<ws>/media/`). The SPA surface is a workspace Media tab that
+// lists entries (GET /workspaces/{id}/media) + explicit delete (FR-008), and a
+// composer picker that attaches an existing library entry to a chat message by
+// its `media://workspace/<workspace_id>/<media_id>` ref (FR-022) without
+// re-uploading. Wire types are the generated MediaLibraryEntry /
+// MediaAttachmentRequest (contract-first #8) — never hand-written.
+
+/**
+ * List a workspace's media-library entries (GET /workspaces/{id}/media).
+ * Returns the full manifest; raw bytes are fetched on demand via /media/{ref}.
+ */
+export function fetchWorkspaceMedia(workspaceId: string): Promise<MediaLibraryEntry[]> {
+  return request<MediaLibraryEntry[]>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/media`,
+    undefined,
+    z.array(MediaLibraryEntrySchema) as ZodType<MediaLibraryEntry[]>,
+  )
+}
+
+/**
+ * Explicitly delete one workspace media-library entry (FR-008). Removes the
+ * raw bytes + manifest entry; the server emits a media.delete audit event
+ * (FR-033). Returns 204 No Content.
+ */
+export function deleteWorkspaceMedia(workspaceId: string, mediaId: string): Promise<void> {
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/media/${encodeURIComponent(mediaId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+/**
+ * Register a workspace library entry as a chat attachment (FR-022,
+ * POST /workspaces/{id}/media/attachments) without re-uploading the file.
+ * Returns 204 No Content; the SPA threads the `media://workspace/<ws>/<id>`
+ * ref into the outgoing message frame via the library-attachment store.
+ */
+export function attachWorkspaceMedia(workspaceId: string, mediaId: string): Promise<void> {
+  const body: MediaAttachmentRequest = { media_id: mediaId }
+  return request<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/media/attachments`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
 }
 
 // ── Per-workspace delegation graph (M5) ─────────────────────────────────────────

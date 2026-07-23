@@ -2357,7 +2357,11 @@ export interface paths {
         get: operations["getWorkspaceMedia"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a workspace media-library entry (FR-008)
+         * @description Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found).
+         */
+        delete: operations["deleteWorkspaceMedia"];
         options?: never;
         head?: never;
         patch?: never;
@@ -13007,6 +13011,31 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MediaLibraryEntry"];
                 };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteWorkspaceMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Media-library entry ID. */
+                media_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The media-library entry (bytes + manifest) was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];

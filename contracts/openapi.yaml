@@ -5535,6 +5535,37 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteWorkspaceMedia
+      summary: Delete a workspace media-library entry (FR-008)
+      description: >
+        Removes a single media-library entry (raw bytes + manifest entry) from
+        the workspace library. Emits a media.delete audit event (FR-033).
+        Idempotent against a concurrently-deleted entry (404 if not found).
+      tags:
+      - Workspace Media
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: media_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Media-library entry ID.
+      responses:
+        '204':
+          description: The media-library entry (bytes + manifest) was deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
 
   /workspaces/{id}/delegation:
     get:

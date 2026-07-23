@@ -8,6 +8,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
 import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
+import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
@@ -84,6 +85,10 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   // Fires only on workspaceId change — tab switches don't re-run this.
   useEffect(() => {
     if (!workspaceId || workspaceId === 'inbox') return
+    // ADR-051 Rev 4 (Slice H): drop any staged library attachments when the
+    // active workspace changes — their media://workspace/<ws>/<id> refs are
+    // scoped to the previous workspace and must not leak into the new one.
+    clearLibraryAttachments()
     enterWorkspaceChat(workspaceId)
   }, [workspaceId, enterWorkspaceChat])
 

@@ -122,6 +122,7 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
       'list',
       'graph',
       'calendar',
+      'media',
       'team',
     ])
   })
@@ -284,7 +285,7 @@ describe('WorkspaceTabBar — workspace-name button (settings entry, full strip)
     expect(nameButton).toBeInTheDocument()
     expect(nameButton.getAttribute('role')).toBe('tab')
     // Inside the tablist (not a stray sibling) — and first in DOM order,
-    // ahead of all six view tabs.
+    // ahead of all seven view tabs.
     expect(tablist.contains(nameButton)).toBe(true)
     expect(tablist.children[0]).toBe(nameButton)
   })

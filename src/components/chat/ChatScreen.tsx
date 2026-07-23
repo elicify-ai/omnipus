@@ -65,6 +65,7 @@ import { shouldRenderSubagentSpan, shouldRenderToolCall } from '@/lib/toolVisibi
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
+import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMediaLibrary'
 import { cn, initialOf } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
@@ -1007,6 +1008,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           && message.errorDetail.length > 0 && (
           <details className="px-1 mt-1" data-testid="error-detail-disclosure">
             <summary
+              tabIndex={0}
               className={cn(
                 'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
                 'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
@@ -2263,6 +2265,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <Plus size={16} />
           </ComposerPrimitive.AddAttachment>
 
+          {/* ADR-051 Rev 4 (Slice H) — attach an existing workspace-library
+              entry without re-uploading (FR-022). Disabled alongside the file
+              attach button in read-only / disconnected sessions. */}
+          <ComposerMediaLibraryButton disabled={attachDisabled} tabIndex={5} />
+
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
@@ -2540,9 +2547,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         {/* Pending attachments — native AssistantUI composer attachments. Shows a
             chip for each attached file (via the attach (+) button, drag-drop, or
             paste); the AttachmentAdapter (src/lib/attachment-adapter.ts) uploads
-            them on send and threads the media:// ref into our transport via onNew. */}
+            them on send and threads the media:// ref into our transport via onNew.
+            LibraryAttachmentChips renders staged workspace-library reuse refs
+            (ADR-051 Rev 4 / Slice H) alongside them. */}
         <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+          <LibraryAttachmentChips />
         </div>
 
       </div>

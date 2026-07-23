@@ -7,6 +7,7 @@ import {
   Graph,
   CalendarBlank,
   UsersThree,
+  FolderOpen,
   Tray,
   CaretDown,
 } from '@phosphor-icons/react'
@@ -19,7 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 
-// The workspace container surface: 6 view tabs (+ the workspace-name →
+// The workspace container surface: 7 view tabs (+ the workspace-name →
 // settings item). Each tab is a deep-linkable sub-route under
 // /workspaces/$workspaceId. Chat is the default landing tab.
 export const WORKSPACE_TABS = [
@@ -28,6 +29,7 @@ export const WORKSPACE_TABS = [
   { segment: 'list', label: 'List', Icon: ListBullets },
   { segment: 'graph', label: 'Graph', Icon: Graph },
   { segment: 'calendar', label: 'Calendar', Icon: CalendarBlank },
+  { segment: 'media', label: 'Media', Icon: FolderOpen },
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
   // not a view. It's reached by clicking the workspace NAME in the top bar
@@ -83,7 +85,7 @@ interface WorkspaceTabBarProps {
  * that slides between tabs with a spring transition.
  *
  * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem (1152px): full strip — 6 view tabs (+ the workspace-name →
+ *   ≥ 72rem (1152px): full strip — 7 view tabs (+ the workspace-name →
  *     settings item) (hidden @6xl:flex)
  *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex
  *     @6xl:hidden) — also carries a settings entry, since narrow viewports
@@ -109,7 +111,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           NO overflow-x-auto: a scrollable tablist let mouse-wheel/touch
           gestures scroll the menu itself up/down (overflow containers clip +
           scroll BOTH axes) — chrome must never move. The strip's content is
-          bounded (6 view tabs + the workspace-name → settings item, name
+          bounded (7 view tabs + the workspace-name → settings item, name
           truncated) so overflow can't occur. ─────── */}
       <div
         role="tablist"
