@@ -44,6 +44,15 @@
       ]
     },
     {
+      "group": "llm-conformance",
+      "key_slot": "c",
+      "port": 6067,
+      "solo": true,
+      "specs": [
+        "tests/e2e/conformance-design-e2e.spec.ts"
+      ]
+    },
+    {
       "group": "ui",
       "key_slot": "c",
       "port": 6063,
