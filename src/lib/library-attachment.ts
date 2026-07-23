@@ -21,7 +21,7 @@
 import { useSyncExternalStore } from 'react'
 
 /** One pending library-ref attachment, drained by onNew on send. */
-export interface LibraryAttachment {
+export interface LibraryAttachment { // not-wire-format: client-side UI store for pending composer attachments; never serialized over the wire
   /** Stable client-side id (used as the React key + remove target). */
   id: string
   /** The media-library entry id (UUID) within the workspace. */
