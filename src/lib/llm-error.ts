@@ -1,3 +1,8 @@
+import type {
+  LLMError as GeneratedLLMError,
+  LLMErrorReplay as GeneratedLLMErrorReplay,
+} from '@/lib/api/generated/asyncapi-types'
+
 /**
  * llm-error.ts — ADR-051 SPA-side error translation.
  *
@@ -9,55 +14,20 @@
  * frame that may pre-date the contract (legacy frames lack it).
  *
  * Wire types live in `src/lib/api/generated/asyncapi-types.ts`
- * (`LLMError`, `LLMErrorReplay`) — this module intentionally re-declares
- * only the SHAPE of those payloads as plain TS types so the chat store
- * can stay decoupled from the generated barrel. The union of codes is
- * mirrored from the generated `LLMError['code']` enum; if the spec adds
- * a new code, regenerate the contract and add it here in the same PR.
+ * (`LLMError`, `LLMErrorReplay`) — this module aliases them so the chat
+ * store can stay decoupled from the generated barrel's exact name while
+ * remaining pinned to the regenerated enum union (compile-time gate via
+ * `Record<LLMErrorCode, string>` below — adding a new code without
+ * regenerating and updating the copy map fails `tsc -b --noEmit`).
  *
  * NOT a wire type (no `json:` tags, never crosses the gateway boundary) —
- * display-only. Per CLAUDE.md hard-constraint #8 this is explicitly not a
- * hand-written wire type; the canonical wire types are the generated ones.
+ * display-only. Per CLAUDE.md hard-constraint #8 the canonical wire types
+ * are the generated ones; this file aliases them rather than mirroring
+ * them so the manually-maintained surface can never drift from the spec.
  */
-
-/**
- * The 7 stable backend error codes (see ADR-051 / `LLMError.code` in the
- * AsyncAPI contract). Kept as a literal union (not an enum) so it stays
- * plain JSON-serializable data and matches the generated `LLMError['code']`
- * type without an import cycle.
- */
-export type LLMErrorCode =
-  | 'media_unsupported'
-  | 'provider_rejected'
-  | 'rate_limited'
-  | 'network'
-  | 'content_policy'
-  | 'context_too_long'
-  | 'unknown'
-
-/**
- * Display-side mirror of the generated `LLMError` wire payload.
- * `{ code, message, retryable, detail? }` — `detail` is optional and only
- * surfaced when `verboseChatEnabled` is on (see `getLLMErrorDisplay`).
- */
-export interface LLMError {
-  code: LLMErrorCode
-  message: string
-  retryable: boolean
-  detail?: string
-}
-
-/**
- * Display-side mirror of the generated `LLMErrorReplay` wire payload.
- * Same as `LLMError` minus the verbose-only `detail` field — the replay
- * path strips provider internals before persisting, so history never
- * carries them.
- */
-export interface LLMErrorReplay {
-  code: LLMErrorCode
-  message: string
-  retryable: boolean
-}
+export type LLMError = GeneratedLLMError
+export type LLMErrorReplay = GeneratedLLMErrorReplay
+export type LLMErrorCode = GeneratedLLMError['code']
 
 /**
  * Generic, user-facing copy per error code. Always shown regardless of the
@@ -68,6 +38,10 @@ export interface LLMErrorReplay {
  *
  * Copy is intentionally actionable — tells the user what happened and what
  * (if anything) they can do.
+ *
+ * The `Record<LLMErrorCode, string>` shape is a compile-time gate: adding
+ * a new code to the generated AsyncAPI types without updating this map
+ * fails `tsc -b --noEmit`.
  */
 export const codeToDisplay: Record<LLMErrorCode, string> = {
   media_unsupported:
