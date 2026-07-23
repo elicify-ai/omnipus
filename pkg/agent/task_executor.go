@@ -761,6 +761,14 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 	maxAttempts := planningCfg.EffectiveTaskMaxAttempts(t.MaxAttempts)
 	hardCeiling := 2 * maxAttempts
 
+	// FR-178: AttemptCount (per member/task scope) and the plan's JudgeRounds
+	// (per goal/plan scope) are TWO DISTINCT brakes, never conflated. This
+	// function is the SOLE writer of Task.AttemptCount — it never touches the
+	// owning plan's JudgeRounds, symmetric to PlanEngine.applyJudgeRoundOutcome
+	// Locked being the sole writer of JudgeRounds (which never touches
+	// AttemptCount). Whichever trips first stops its OWN scope locally; an
+	// attempts-exhaustion here fails the TASK, it does not trip the plan's
+	// rounds brake. Pinned by TestAttemptsVsRounds_DistinctBrakes.
 	newAttempt := t.AttemptCount + 1
 	nextStatus := task.StatusNext
 	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
