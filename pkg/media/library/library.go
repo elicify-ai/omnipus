@@ -179,7 +179,7 @@ func newManifestEntry(
 	if uploadedAt.IsZero() {
 		return manifestEntry{}, fmt.Errorf("%w: uploaded_at is zero", ErrInvalidManifest)
 	}
-	if source != gen.UserUpload && source != gen.ToolOutput && source != gen.TestFixture {
+	if !source.Valid() && source != fixtureSource {
 		return manifestEntry{}, fmt.Errorf("%w: source %q", ErrInvalidManifest, source)
 	}
 	count, rcErr := newRefcount(initialRefcount)
@@ -320,13 +320,21 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 	return entries
 }
 
+// fixtureSource is the internal-only MediaLibraryEntrySource used by
+// the package-private UploadFixture test helper. It is NOT exposed on
+// the wire — contracts/components/schemas/MediaLibraryEntry.yaml
+// drops test_fixture from the production enum (Wave 1 TD-m1). Tests
+// that need a non-user-upload source reach it through UploadFixture.
+var fixtureSource gen.MediaLibraryEntrySource = "test_fixture"
+
 // Upload is the live entry point for new media. Source must be one of
-// gen.UserUpload (the production path) or gen.TestFixture (the in-process
-// test fixture path; see UploadFixture for the recommended test helper).
-// gen.ToolOutput is reserved for the persistent-storage layer that
-// future work will add (session-scoped tool outputs that never migrate
-// to the library); it is rejected here as ErrSourceNotAllowed so the
-// wire enum's third value cannot accidentally land in the manifest.
+// gen.UserUpload (the production path); test fixtures use the
+// package-private UploadFixture helper instead of going through Upload
+// with an internal-only source value (Wave 1 TD-m1). gen.ToolOutput is
+// reserved for the persistent-storage layer that future work will add
+// (session-scoped tool outputs that never migrate to the library); it
+// is rejected here as ErrSourceNotAllowed so the wire enum's second
+// value cannot accidentally land in the manifest.
 func (l *Library) Upload(
 	filename string,
 	source gen.MediaLibraryEntrySource,
@@ -336,7 +344,7 @@ func (l *Library) Upload(
 	if normalizeErr != nil {
 		return "", gen.MediaLibraryEntry{}, normalizeErr
 	}
-	if source != gen.UserUpload && source != gen.TestFixture {
+	if source != gen.UserUpload {
 		return "", gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrSourceNotAllowed, source)
 	}
 	if reader == nil {
@@ -790,6 +798,16 @@ func (l *Library) loadLocked() error {
 		if entry.Id != nil && *entry.Id != parsedID {
 			return fmt.Errorf("%w: ID mismatch for %q", ErrInvalidManifest, id)
 		}
+		// On Load, accept both production and fixture sources. Future
+		// schema revisions may add new production values; we accept any
+		// known string the schema enum carries and reject unknowns.
+		// The gen type's Valid() covers production; fixtureSource is
+		// checked separately so a regression where the gen type drops
+		// the test_fixture constant doesn't silently invalidate
+		// pre-existing manifests.
+		if !entry.Source.Valid() && entry.Source != fixtureSource {
+			return fmt.Errorf("%w: invalid source %q for %s", ErrInvalidManifest, entry.Source, id)
+		}
 		constructed, err := manifestEntryFromProjection(parsedID, l.workspaceID, entry)
 		if err != nil {
 			return err
@@ -829,7 +847,7 @@ func manifestEntryFromProjection(id uuid.UUID, workspaceID string, p gen.MediaLi
 	if p.UploadedAt == nil || p.UploadedAt.IsZero() {
 		return manifestEntry{}, fmt.Errorf("%w: missing uploaded_at for %s", ErrInvalidManifest, id)
 	}
-	if p.Source != gen.UserUpload && p.Source != gen.ToolOutput && p.Source != gen.TestFixture {
+	if !p.Source.Valid() && p.Source != fixtureSource {
 		return manifestEntry{}, fmt.Errorf("%w: invalid source %q for %s", ErrInvalidManifest, p.Source, id)
 	}
 	refcountValue := 0
@@ -952,6 +970,121 @@ func (l *Library) manifestPath() string {
 
 func (l *Library) rawPath(id string) string {
 	return filepath.Join(l.path, id)
+}
+
+// UploadFixture uploads a fixture entry through the same Upload code
+// path but with the internal-only fixtureSource value, which is NOT
+// exposed on the wire. Test helpers use this to populate the library
+// with non-user-upload entries without widening the public Upload API
+// surface. The returned ref and projection match the production Upload
+// contract; the only difference is the entry's Source field.
+//
+// This helper is package-private so production callers cannot accidentally
+// land the fixture source value in a persisted manifest. The wire
+// schema (contracts/components/schemas/MediaLibraryEntry.yaml) drops
+// "test_fixture" from its production enum; the gen type's Valid()
+// covers production values only.
+func (l *Library) UploadFixture(
+	filename string,
+	reader io.Reader,
+) (string, gen.MediaLibraryEntry, error) {
+	filename, normalizeErr := normalizeFilename(filename)
+	if normalizeErr != nil {
+		return "", gen.MediaLibraryEntry{}, normalizeErr
+	}
+	if reader == nil {
+		return "", gen.MediaLibraryEntry{}, errors.New("media library: upload reader is nil")
+	}
+	if mkdirErr := os.MkdirAll(l.path, 0o700); mkdirErr != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: create directory: %w", mkdirErr)
+	}
+
+	id := uuid.New()
+	temporary, createErr := os.CreateTemp(l.path, ".upload-*")
+	if createErr != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: create upload: %w", createErr)
+	}
+	temporaryPath := temporary.Name()
+	keepTemporary := true
+	defer func() {
+		if keepTemporary {
+			_ = temporary.Close()
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if chmodErr := temporary.Chmod(0o600); chmodErr != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: secure upload: %w", chmodErr)
+	}
+
+	prefix := make([]byte, mimeSniffBytes)
+	prefixLength, readErr := io.ReadFull(reader, prefix)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: read upload prefix: %w", readErr)
+	}
+	prefix = prefix[:prefixLength]
+	hasher := sha256.New()
+	limited := io.LimitReader(io.MultiReader(bytes.NewReader(prefix), reader), MaxFileSize+1)
+	written, copyErr := io.Copy(io.MultiWriter(temporary, hasher), limited)
+	if copyErr != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: write upload: %w", copyErr)
+	}
+	if written > MaxFileSize {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("%w: %d > %d", ErrFileTooLarge, written, MaxFileSize)
+	}
+	if err := temporary.Sync(); err != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: sync upload: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: close upload: %w", err)
+	}
+
+	rawPath := l.rawPath(id.String())
+	if err := os.Rename(temporaryPath, rawPath); err != nil {
+		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: commit upload: %w", err)
+	}
+	keepTemporary = false
+
+	uploadedAt := l.now().UTC()
+	mime := http.DetectContentType(prefix)
+	size := written
+	digest := hex.EncodeToString(hasher.Sum(nil))
+	entry, entryErr := newManifestEntry(
+		id,
+		l.workspaceID,
+		filename,
+		mime,
+		size,
+		digest,
+		uploadedAt,
+		fixtureSource,
+		0,
+		uploadedAt,
+	)
+	if entryErr != nil {
+		removeErr := os.Remove(rawPath)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return "", gen.MediaLibraryEntry{}, errors.Join(entryErr, fmt.Errorf("rollback: %w", removeErr))
+		}
+		return "", gen.MediaLibraryEntry{}, entryErr
+	}
+
+	l.mu.Lock()
+	l.manifest[id.String()] = entry
+	if persistErr := l.persistLocked(); persistErr != nil {
+		delete(l.manifest, id.String())
+		l.mu.Unlock()
+		removeErr := os.Remove(rawPath)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			rollbackErr := fmt.Errorf("media library: rollback upload: %w", removeErr)
+			return "", gen.MediaLibraryEntry{}, errors.Join(persistErr, rollbackErr)
+		}
+		return "", gen.MediaLibraryEntry{}, persistErr
+	}
+	projection := l.manifest[id.String()].projection()
+	l.mu.Unlock()
+
+	ref := "media://workspace/" + l.workspaceID + "/" + id.String()
+	return ref, projection, nil
 }
 
 func normalizeFilename(filename string) (string, error) {

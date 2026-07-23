@@ -2390,7 +2390,7 @@ export const MediaLibraryEntry = z.object({
   size: z.number().int().gte(0).lte(104857600),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   uploaded_at: z.string().datetime({ offset: true }),
-  source: z.enum(["user_upload", "tool_output", "test_fixture"]),
+  source: z.enum(["user_upload", "tool_output"]),
   refcount: z.number().int().gte(0).optional(),
   last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
 }).strict();

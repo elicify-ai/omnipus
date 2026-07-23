@@ -35,9 +35,13 @@ func newWorkspaceLibrary(t *testing.T, now *time.Time) (*library.Library, string
 
 func uploadFixture(t *testing.T, lib *library.Library, filename string, data []byte) (string, gen.MediaLibraryEntry) {
 	t.Helper()
-	ref, entry, err := lib.Upload(filename, gen.TestFixture, bytes.NewReader(data))
+	// Use the package-private UploadFixture helper (Wave 1 TD-m1): the
+	// test_fixture source value is NOT a production wire value and has
+	// been dropped from contracts/components/schemas/MediaLibraryEntry.yaml.
+	// The public Upload path now only accepts gen.UserUpload (production).
+	ref, entry, err := lib.UploadFixture(filename, bytes.NewReader(data))
 	if err != nil {
-		t.Fatalf("Upload(%q) error = %v", filename, err)
+		t.Fatalf("UploadFixture(%q) error = %v", filename, err)
 	}
 	return ref, entry
 }
@@ -159,8 +163,8 @@ func TestWorkspaceLibrary_Manifest_HasSHA256AndUploadedAt(t *testing.T) {
 		}
 		t.Fatalf("WorkspaceId = %q, want %q", got, workspaceID)
 	}
-	if entry.Source != gen.TestFixture {
-		t.Fatalf("Source = %q, want %q", entry.Source, gen.TestFixture)
+	if entry.Source != "test_fixture" {
+		t.Fatalf("Source = %q, want %q", entry.Source, "test_fixture")
 	}
 	if entry.Refcount == nil || *entry.Refcount != 0 {
 		t.Fatalf("Refcount = %v, want 0", entry.Refcount)

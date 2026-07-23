@@ -3080,11 +3080,11 @@ export interface components {
              */
             readonly uploaded_at: string;
             /**
-             * @description Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
+             * @description Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
              * @example user_upload
              * @enum {string}
              */
-            source: "user_upload" | "tool_output" | "test_fixture";
+            source: "user_upload" | "tool_output";
             /** @description Server-maintained count of persisted message or session references. Required on every entry (FR-007a / Wave 1 TD-M2). */
             readonly refcount?: number;
             /**

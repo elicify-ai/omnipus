@@ -1096,16 +1096,13 @@ func (e McpServerCreateTransport) Valid() bool {
 
 // Defines values for MediaLibraryEntrySource.
 const (
-	TestFixture MediaLibraryEntrySource = "test_fixture"
-	ToolOutput  MediaLibraryEntrySource = "tool_output"
-	UserUpload  MediaLibraryEntrySource = "user_upload"
+	ToolOutput MediaLibraryEntrySource = "tool_output"
+	UserUpload MediaLibraryEntrySource = "user_upload"
 )
 
 // Valid indicates whether the value is a known member of the MediaLibraryEntrySource enum.
 func (e MediaLibraryEntrySource) Valid() bool {
 	switch e {
-	case TestFixture:
-		return true
 	case ToolOutput:
 		return true
 	case UserUpload:
@@ -5573,7 +5570,7 @@ type MediaLibraryEntry struct {
 	// Size Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
 	Size *int64 `json:"size,omitempty"`
 
-	// Source Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
+	// Source Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
 	Source MediaLibraryEntrySource `json:"source"`
 
 	// UploadedAt RFC3339 UTC upload timestamp.
@@ -5583,7 +5580,7 @@ type MediaLibraryEntry struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
+// MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
 type MediaLibraryEntrySource string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
