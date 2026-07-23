@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,6 +67,12 @@ func nextMember(id string) *task.Task {
 	return &task.Task{ID: id, Title: id, WorkspaceID: "ws", Status: task.StatusNext}
 }
 
+// ownerCaller returns the CorrectionCaller matching the owner identity seeded
+// by mustSeedAwaitingCorrection (OwnerAgentID "owner", no OwnerSessionID).
+func ownerCaller() CorrectionCaller {
+	return CorrectionCaller{AgentID: "owner"}
+}
+
 // --- Tests ----------------------------------------------------------------
 
 // TestAutoReset_ExcludesFrozenDoneMembers (G-10): on an append correction,
@@ -79,7 +86,7 @@ func TestAutoReset_ExcludesFrozenDoneMembers(t *testing.T) {
 	failed := failedMember("m-failed")
 	mustSeedAwaitingCorrection(t, h, "p-auto", done, failed)
 
-	_, err := h.pe.AppendCorrection(ctx, "p-auto", CorrectionRequest{
+	_, err := h.pe.AppendCorrection(ctx, "p-auto", ownerCaller(), CorrectionRequest{
 		Verb:                CorrectionAppend,
 		FalsifiedAssumption: "assumed the failed member would succeed",
 		TailMembers: []task.Task{{
@@ -121,7 +128,7 @@ func TestSupersede_MarksDoneMemberIgnored(t *testing.T) {
 	failed := failedMember("m-failed")
 	mustSeedAwaitingCorrection(t, h, "p-sup", done, failed)
 
-	_, err := h.pe.AppendCorrection(ctx, "p-sup", CorrectionRequest{
+	_, err := h.pe.AppendCorrection(ctx, "p-sup", ownerCaller(), CorrectionRequest{
 		Verb:                CorrectionSupersede,
 		SupersededMemberID:  "m-supersede",
 		FalsifiedAssumption: "assumed the done member's outcome was correct",
@@ -161,7 +168,7 @@ func TestTargetedRetry_RetriesTransientFailed(t *testing.T) {
 	done := doneMember("m-done")
 	mustSeedAwaitingCorrection(t, h, "p-retry", target, other, done)
 
-	_, err := h.pe.AppendCorrection(ctx, "p-retry", CorrectionRequest{
+	_, err := h.pe.AppendCorrection(ctx, "p-retry", ownerCaller(), CorrectionRequest{
 		Verb:                CorrectionTargetedRetry,
 		RetriedMemberID:     "m-target",
 		FalsifiedAssumption: "assumed the transient failure was permanent",
@@ -477,7 +484,7 @@ func TestCorrection_DoDStaysImmutable(t *testing.T) {
 	mustCreateTask(t, h.tasks, failedMember("m-fail-imm"))
 	h.pe.recordUnmetTerminalSignature("p-imm", "sig-p-imm")
 
-	_, err := h.pe.AppendCorrection(ctx, "p-imm", CorrectionRequest{
+	_, err := h.pe.AppendCorrection(ctx, "p-imm", ownerCaller(), CorrectionRequest{
 		Verb:   CorrectionAppend,
 		Reason: "test immutability",
 		TailMembers: []task.Task{{
@@ -509,11 +516,122 @@ func TestCorrection_NotInAwaitingPhase_Rejected(t *testing.T) {
 	// Plan is in State=running, PlanPhase=dispatching (default), NOT awaiting.
 	mustCreateTask(t, h.tasks, nextMember("m-next"))
 
-	_, err := h.pe.AppendCorrection(ctx, "p-bad", CorrectionRequest{
+	_, err := h.pe.AppendCorrection(ctx, "p-bad", ownerCaller(), CorrectionRequest{
 		Verb:        CorrectionAppend,
 		TailMembers: []task.Task{{ID: "m-x", Title: "x", WorkspaceID: "ws", Status: task.StatusNext}},
 	})
 	if err == nil {
 		t.Fatal("AppendCorrection should reject a plan not in awaiting_owner_correction")
 	}
+}
+
+// TestAppendCorrection_NonOwner_Rejected (sec-MAJOR-2, FR-143/G-11): only the
+// plan's owner may correct it. A non-owner caller — wrong agent ID, empty
+// agent identity, or a session that does not match the plan's durable
+// OwnerSessionID — is rejected with ErrCorrectionNotOwner BEFORE any state
+// mutation: no revision commits, no member resets, no phase change. The gate
+// also runs before the phase check, so a non-owner cannot probe plan state
+// via error differentiation.
+func TestAppendCorrection_NonOwner_Rejected(t *testing.T) {
+	ctx := context.Background()
+
+	newReq := func() CorrectionRequest {
+		return CorrectionRequest{
+			Verb:   CorrectionAppend,
+			Reason: "attempted correction",
+			TailMembers: []task.Task{{
+				ID: "m-tail-x", Title: "tail", WorkspaceID: "ws", Status: task.StatusNext,
+			}},
+		}
+	}
+
+	// assertNoMutation verifies the rejection left plan + members untouched.
+	assertNoMutation := func(t *testing.T, h *planEngineHarness, planID string) {
+		t.Helper()
+		p, err := h.plans.Get(planID)
+		if err != nil {
+			t.Fatalf("get plan %q: %v", planID, err)
+		}
+		if p.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
+			t.Errorf("plan phase changed to %q on a rejected correction; want awaiting_owner_correction",
+				p.EffectivePlanPhase())
+		}
+		if p.LastUnmetTerminalSignature == "" {
+			t.Error("durable unmet signature was cleared on a rejected correction")
+		}
+		f, err := h.tasks.Get("m-failed-" + planID)
+		if err != nil {
+			t.Fatalf("get failed member: %v", err)
+		}
+		if f.Status != task.StatusFailed {
+			t.Errorf("failed member was mutated to %s on a rejected correction; want failed", f.Status)
+		}
+		if tail, _ := h.tasks.Get("m-tail-x"); tail != nil {
+			t.Error("tail member was created on a rejected correction")
+		}
+	}
+
+	t.Run("wrong agent ID", func(t *testing.T) {
+		h := newCorrectionHarness(t)
+		mustSeedAwaitingCorrection(t, h, "p-no1", failedMember("m-failed-p-no1"))
+
+		_, err := h.pe.AppendCorrection(ctx, "p-no1", CorrectionCaller{AgentID: "intruder"}, newReq())
+		if !errors.Is(err, ErrCorrectionNotOwner) {
+			t.Fatalf("want ErrCorrectionNotOwner, got %v", err)
+		}
+		assertNoMutation(t, h, "p-no1")
+	})
+
+	t.Run("empty agent identity", func(t *testing.T) {
+		h := newCorrectionHarness(t)
+		mustSeedAwaitingCorrection(t, h, "p-no2", failedMember("m-failed-p-no2"))
+
+		_, err := h.pe.AppendCorrection(ctx, "p-no2", CorrectionCaller{}, newReq())
+		if !errors.Is(err, ErrCorrectionNotOwner) {
+			t.Fatalf("want ErrCorrectionNotOwner, got %v", err)
+		}
+		assertNoMutation(t, h, "p-no2")
+	})
+
+	t.Run("session mismatch when OwnerSessionID set", func(t *testing.T) {
+		h := newCorrectionHarness(t)
+		p := mustSeedAwaitingCorrection(t, h, "p-no3", failedMember("m-failed-p-no3"))
+		ownerSession := "plan:p-no3"
+		if _, err := h.plans.Update(p.ID, plan.Patch{OwnerSessionID: &ownerSession}); err != nil {
+			t.Fatalf("set owner session: %v", err)
+		}
+
+		_, err := h.pe.AppendCorrection(ctx, "p-no3",
+			CorrectionCaller{AgentID: "owner", SessionID: "session:someone-else"}, newReq())
+		if !errors.Is(err, ErrCorrectionNotOwner) {
+			t.Fatalf("want ErrCorrectionNotOwner, got %v", err)
+		}
+		assertNoMutation(t, h, "p-no3")
+	})
+
+	t.Run("owner with matching session accepted", func(t *testing.T) {
+		h := newCorrectionHarness(t)
+		p := mustSeedAwaitingCorrection(t, h, "p-yes1", failedMember("m-failed-p-yes1"))
+		ownerSession := "plan:p-yes1"
+		if _, err := h.plans.Update(p.ID, plan.Patch{OwnerSessionID: &ownerSession}); err != nil {
+			t.Fatalf("set owner session: %v", err)
+		}
+
+		_, err := h.pe.AppendCorrection(ctx, "p-yes1",
+			CorrectionCaller{AgentID: "owner", SessionID: "plan:p-yes1"}, newReq())
+		if err != nil {
+			t.Fatalf("owner correction with matching session should succeed: %v", err)
+		}
+	})
+
+	t.Run("gate precedes phase check (no state probing)", func(t *testing.T) {
+		h := newCorrectionHarness(t)
+		// Plan is running but in dispatching phase (NOT awaiting correction).
+		mustCreateRunningPlan(t, h.plans, "p-no4", "owner")
+
+		_, err := h.pe.AppendCorrection(ctx, "p-no4", CorrectionCaller{AgentID: "intruder"}, newReq())
+		if !errors.Is(err, ErrCorrectionNotOwner) {
+			t.Fatalf("non-owner must get ErrCorrectionNotOwner even on a wrong-phase plan; got %v", err)
+		}
+	})
 }

@@ -2055,6 +2055,31 @@ const (
 	CorrectionTargetedRetry CorrectionVerb = CorrectionVerb(plan.RevisionTargetedRetry)
 )
 
+// ErrCorrectionNotOwner is returned by AppendCorrection when the invoking
+// principal is not the plan's owner (sec-MAJOR-2, FR-143/G-11). Corrections
+// mutate plan state, so only the owner identity recorded on the plan
+// (OwnerAgentID / OwnerSessionID, pkg/plan/plan.go) may issue one.
+var ErrCorrectionNotOwner = errors.New("plan_engine: correction caller is not the plan owner")
+
+// CorrectionCaller identifies the principal invoking AppendCorrection
+// (sec-MAJOR-2). The engine gates every correction on this identity matching
+// the plan's durable owner linkage:
+//   - AgentID must be non-empty and equal to the plan's OwnerAgentID.
+//   - When the plan's OwnerSessionID is populated (Phase-2 owner loop,
+//     m-3/FR-147), SessionID must equal it. When OwnerSessionID is still
+//     empty (owner session not yet opened), the agent match alone gates.
+//
+// Callers (REST handler, system tool, or the owner-correction loop) MUST
+// resolve the invoking principal's real agent/session identity — there is no
+// "trusted internal caller" bypass.
+//
+// not-wire-format: engine-internal type; the REST/tool layer maps its
+// authenticated principal to this.
+type CorrectionCaller struct {
+	AgentID   string
+	SessionID string
+}
+
 // CorrectionRequest is an owner correction to an unmet DoD (FR-143/G-11). The
 // owner issues one of three verbs; each records a revision entry committed
 // transactionally via the intent-log (INV-6/N-8).
@@ -2202,9 +2227,12 @@ func (pe *PlanEngine) newRevisionID(planID string) string {
 // --- AppendCorrection (FR-143/G-11, the main correction handler) -----------
 
 // AppendCorrection processes an owner correction to an unmet DoD (FR-143/G-11).
-// The plan MUST be in awaiting_owner_correction. The correction commits
-// transactionally via the intent-log (INV-6/N-8): AppendIntent →
-// MarkCommitted → Apply → MarkDone. After the commit:
+// The plan MUST be in awaiting_owner_correction. The caller MUST be the plan's
+// owner (sec-MAJOR-2): the owner-authority gate runs BEFORE any state
+// inspection or mutation, so a non-owner learns nothing about the plan and
+// cannot change it. The correction commits transactionally via the intent-log
+// (INV-6/N-8): AppendIntent → MarkCommitted → Apply → MarkDone. After the
+// commit:
 //   - For append/supersede: auto-reset ALL live-round failed members (excludes
 //     frozen/done members — G-10).
 //   - For targeted_retry: reset ONLY the specified failed member (no full
@@ -2213,13 +2241,27 @@ func (pe *PlanEngine) newRevisionID(planID string) string {
 //     honest-exit path (G-10).
 //   - The durable unmet signature is cleared (INV-7: correction = new activity).
 //   - The DoD stays immutable (G-11).
-func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, req CorrectionRequest) (*CorrectionResult, error) {
+func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, caller CorrectionCaller, req CorrectionRequest) (*CorrectionResult, error) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
 
 	p, err := pe.planStore.Get(planID)
 	if err != nil {
 		return nil, fmt.Errorf("plan_engine: AppendCorrection: get plan %q: %w", planID, err)
+	}
+	// Owner-authority gate (sec-MAJOR-2): only the plan's owner may correct
+	// it. Runs before any state/phase inspection so a non-owner cannot probe
+	// plan state via error differentiation, and before any mutation.
+	if caller.AgentID == "" {
+		return nil, fmt.Errorf("%w: plan %q: caller agent identity is empty", ErrCorrectionNotOwner, planID)
+	}
+	if caller.AgentID != p.OwnerAgentID {
+		return nil, fmt.Errorf("%w: plan %q: caller agent %q is not owner %q",
+			ErrCorrectionNotOwner, planID, caller.AgentID, p.OwnerAgentID)
+	}
+	if p.OwnerSessionID != "" && caller.SessionID != p.OwnerSessionID {
+		return nil, fmt.Errorf("%w: plan %q: caller session does not match the plan's owner session",
+			ErrCorrectionNotOwner, planID)
 	}
 	if p.State != plan.StateRunning {
 		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is %s, not running", planID, p.State)
