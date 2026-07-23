@@ -72,7 +72,7 @@ func resolveMediaRefs(
 	maxSize int,
 	model string,
 ) []providers.Message {
-	return resolveMediaRefsWithOffload(messages, store, maxSize, model, nil, nil, nil)
+	return resolveMediaRefsWithOffload(messages, store, maxSize, model, nil, nil, nil, "")
 }
 
 // resolveMediaRefsWithOffload is the full presentation path: the legacy
@@ -81,6 +81,11 @@ func resolveMediaRefs(
 // tracking (rc, FR-007a) when the respective arguments are non-nil. The
 // four-argument resolveMediaRefs is a thin wrapper that calls this with
 // nil sink/catalog/rc so existing call sites preserve their exact behavior.
+//
+// callerWorkspace is the turn's workspace ID (FR-028a). It MUST be set for
+// media://workspace/<ws>/<id> refs; empty is the legacy posture (global
+// registry only). Without it, workspace-library attachments fail closed
+// with ErrWorkspaceContextRequired and surface as [attachment unavailable].
 func resolveMediaRefsWithOffload(
 	messages []providers.Message,
 	store media.MediaStore,
@@ -89,9 +94,15 @@ func resolveMediaRefsWithOffload(
 	sink *offloadSink,
 	catalog *capabilities.Catalog,
 	rc workspaceRefcounter,
+	callerWorkspace string,
 ) []providers.Message {
 	if store == nil {
 		return messages
+	}
+
+	resolveOpts := media.ResolveOpts{}
+	if callerWorkspace != "" {
+		resolveOpts = media.WithCallerWorkspace(callerWorkspace)
 	}
 
 	result := make([]providers.Message, len(messages))
@@ -112,7 +123,7 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+			localPath, meta, err := store.ResolveWithMetaOpts(ref, resolveOpts)
 			if err != nil {
 				name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
 				logger.WarnCF("agent", "Failed to resolve media ref — attachment unavailable", map[string]any{

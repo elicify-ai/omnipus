@@ -6314,6 +6314,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	messages = resolveMediaRefsWithOffload(
 		messages, turnMediaStore, maxMediaSize, ts.agent.Model,
 		&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
+		ts.opts.WorkspaceID,
 	)
 
 	if !ts.opts.NoHistory {
@@ -6348,6 +6349,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			messages = resolveMediaRefsWithOffload(
 				messages, turnMediaStore, maxMediaSize, ts.agent.Model,
 				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
+				ts.opts.WorkspaceID,
 			)
 		}
 	}
@@ -6513,6 +6515,7 @@ turnLoop:
 			resolvedPending := resolveMediaRefsWithOffload(
 				pendingMessages, turnMediaStore, maxMediaSize, activeModel,
 				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
+				ts.opts.WorkspaceID,
 			)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {

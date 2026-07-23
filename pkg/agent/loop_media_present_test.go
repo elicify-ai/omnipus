@@ -134,7 +134,7 @@ func TestPresentation_Step1Gate_TextOnlyModel_RoutesToOffload(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil)
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
 
 	require.Len(t, result, 1)
 	// No image data URL — the gate skipped native send.
@@ -164,7 +164,7 @@ func TestPresentation_Step1Gate_VisionModel_Proceeds(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, nil, catalog, nil)
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, nil, catalog, nil, "")
 
 	require.Len(t, result, 1)
 	// Step 2 ran: the image is a normalized PNG data URL.
@@ -191,7 +191,7 @@ func TestPresentation_Step1Gate_NilCatalog_Optimistic(t *testing.T) {
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
 	// nil catalog → optimistic → step 2 runs even for an unknown model.
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "some-unknown-model", nil, nil, nil)
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "some-unknown-model", nil, nil, nil, "")
 
 	require.Len(t, result, 1)
 	require.Len(t, result[0].Media, 1, "nil catalog = optimistic; image is normalized")
@@ -225,7 +225,7 @@ func TestPresentation_Step1Gate_TextOnlyModel_SVG_GetsOffloadPlusMarkup(t *testi
 	msgs := []providers.Message{
 		{Role: "user", Content: "what shape is this", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil)
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
 
 	require.Len(t, result, 1)
 	// Gate blocked rasterization: no data URL.
@@ -375,7 +375,7 @@ func TestE2E_AnyFileAnyModel_UsefulTurn(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this attachment", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil)
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
 
 	require.Len(t, result, 1, "chain must produce a result message")
 	// SC-003: useful turn — AVIF routes to offload, not the dead-end marker,
@@ -411,7 +411,7 @@ func TestE2E_TextOnlyModel_ImageSurvivesAsOffload(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this image", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil)
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
 
 	require.Len(t, result, 1, "chain must produce a result message")
 	// The image survives as offload, not as a native send: no data URL.
