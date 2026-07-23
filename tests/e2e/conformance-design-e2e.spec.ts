@@ -685,19 +685,24 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
     `t2: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`,
   ).toBe(true)
 
-  // Wait for the plan to reach an awaiting_owner_correction / done state.
-  // We poll GET /plans/{id} which is the deterministic contract check.
-  const PLAN_TERMINAL_OR_HOLD = new Set([
-    'done',
-    'awaiting_owner_correction',
-    'failed',
-  ])
+  // Wait for the plan to reach an awaiting_owner_correction / done / failed
+  // state. We poll GET /plans/{id} which is the deterministic contract check.
+  //
+  // IMPORTANT: the plan's hold ("awaiting_owner_correction") is a SUB-PHASE
+  // of State=running, NOT a top-level state. The 5-value state machine is
+  // draft/approved/running/done/failed; an unmet plan stays State=running
+  // with plan_phase="awaiting_owner_correction" (Plan.yaml:80, plan.go:190).
+  // The Go integration conformance (#541, TestConformance_t2_PlanLifecycle_Design
+  // line 891) checks EffectivePlanPhase() — the e2e poll must check BOTH
+  // state (for done/failed) AND plan_phase (for awaiting_owner_correction).
+  const HOLD_PHASE = 'awaiting_owner_correction'
   const deadline = Date.now() + 420_000
-  let planStatus = ''
+  let planState = ''
+  let planPhase = ''
   let sawHold = false
-  let lastMetStatus = ''
+  let reachedTerminalOrHold = false
   while (Date.now() < deadline) {
-    const poll = await apiFetch<{ state: string }>(
+    const poll = await apiFetch<{ state: string; plan_phase?: string }>(
       page,
       'GET',
       `/api/v1/plans/${planId}`,
@@ -705,42 +710,44 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
     if (!poll.ok) {
       throw new Error(`t2: GET /plans/{id} poll failed ${poll.status}: ${poll.raw}`)
     }
-    planStatus = poll.body.state
-    if (planStatus === 'awaiting_owner_correction') sawHold = true
-    if (PLAN_TERMINAL_OR_HOLD.has(planStatus)) {
-      lastMetStatus = planStatus
+    planState = poll.body.state
+    planPhase = poll.body.plan_phase ?? ''
+    if (planPhase === HOLD_PHASE) sawHold = true
+    if (planState === 'done' || planState === 'failed' || planPhase === HOLD_PHASE) {
+      reachedTerminalOrHold = true
       break
     }
     await page.waitForTimeout(3_000)
   }
 
-  // Drawn-path assertion: the plan reached a terminal-or-hold state.
-  // A t2 plan that wedges in "approved" or "running" past the budget
+  // Drawn-path assertion: the plan reached a terminal-or-hold condition.
+  // A t2 plan that wedges in "approved"/"running"+non-hold past the budget
   // means the plan-engine loop is broken.
   expect(
-    PLAN_TERMINAL_OR_HOLD.has(planStatus),
-    `Plan ${planId} must reach done/awaiting_owner_correction/failed within 420s — observed "${planStatus}".`,
+    reachedTerminalOrHold,
+    `Plan ${planId} must reach state=done/failed or plan_phase=awaiting_owner_correction within 420s — observed state="${planState}" phase="${planPhase}".`,
   ).toBe(true)
 
   // Differentiation test: if a hold was reached, it must be the
-  // awaiting_owner_correction gate, NOT a "failed" cliff. The F2 proof
-  // is exactly this: an unmet-plan should HOLD, not silently re-judge.
+  // awaiting_owner_correction phase (State stays "running"), NOT a "failed"
+  // cliff. The F2 proof is exactly this: an unmet plan should HOLD, not
+  // silently re-judge.
   if (sawHold) {
     expect(
-      planStatus === 'awaiting_owner_correction',
-      `A t2 plan that emitted awaiting_owner_correction must NOT have been silently ` +
-        `re-judged into done or failed (F2 proof). Observed final status: "${planStatus}".`,
+      planPhase === HOLD_PHASE,
+      `A t2 plan that reached awaiting_owner_correction must NOT have been silently ` +
+        `re-judged past the hold (F2 proof). Observed final state="${planState}" phase="${planPhase}".`,
     ).toBe(true)
   }
 
   // Either the plan reached done (full ladder success) OR it reached the
-  // awaiting-owner-correction hold (the F2 fix path). Both are valid
-  // drawn-path outcomes for t2; what we MUST NOT see is a wedge.
+  // awaiting-owner-correction hold (the F2 fix path) OR it failed. All three
+  // are valid drawn-path outcomes for t2; what we MUST NOT see is a wedge.
   expect(
-    lastMetStatus === 'done' ||
-      lastMetStatus === 'awaiting_owner_correction' ||
-      lastMetStatus === 'failed',
-    `t2 plan must terminate to a documented state — got "${lastMetStatus}".`,
+    planState === 'done' ||
+      planState === 'failed' ||
+      planPhase === HOLD_PHASE,
+    `t2 plan must terminate to a documented state/phase — got state="${planState}" phase="${planPhase}".`,
   ).toBe(true)
 })
 
@@ -839,10 +846,17 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   // Wait for the plan to reach awaiting_owner_correction (the gate the
   // owner appends from — G-9, F2 proof). The bounded wait is intentional;
   // we need a deterministic stop point to assert on.
+  //
+  // The hold is plan_phase="awaiting_owner_correction" (a SUB-PHASE of
+  // State=running), not a top-level state — see the t2 poll comment. We
+  // break on state=done/failed OR plan_phase=awaiting_owner_correction.
+  const HOLD_PHASE = 'awaiting_owner_correction'
   const HOLD_DEADLINE = Date.now() + 420_000
-  let planStatus = ''
+  let planState = ''
+  let planPhase = ''
+  let reachedHold = false
   while (Date.now() < HOLD_DEADLINE) {
-    const poll = await apiFetch<{ state: string }>(
+    const poll = await apiFetch<{ state: string; plan_phase?: string }>(
       page,
       'GET',
       `/api/v1/plans/${planId}`,
@@ -850,21 +864,19 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
     if (!poll.ok) {
       throw new Error(`t3: GET /plans/{id} poll failed ${poll.status}: ${poll.raw}`)
     }
-    planStatus = poll.body.state
-    if (
-      planStatus === 'awaiting_owner_correction' ||
-      planStatus === 'done' ||
-      planStatus === 'failed'
-    ) {
+    planState = poll.body.state
+    planPhase = poll.body.plan_phase ?? ''
+    if (planState === 'done' || planState === 'failed' || planPhase === HOLD_PHASE) {
+      reachedHold = true
       break
     }
     await page.waitForTimeout(3_000)
   }
 
-  // Drawn-path assertion 1: the plan reached an owner-actionable state.
+  // Drawn-path assertion 1: the plan reached an owner-actionable condition.
   expect(
-    ['awaiting_owner_correction', 'done', 'failed'].includes(planStatus),
-    `t3 plan must reach awaiting_owner_correction/done/failed — observed "${planStatus}".`,
+    reachedHold,
+    `t3 plan must reach state=done/failed or plan_phase=awaiting_owner_correction — observed state="${planState}" phase="${planPhase}".`,
   ).toBe(true)
 
   // If the plan is in awaiting_owner_correction, exercise the
@@ -872,7 +884,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   // /plans/{id} with a new revision entry. The wire contract for
   // revision_entry is the three verbs: append / supersede / targeted_retry
   // (G-11, R-ThreeVerbs unit test).
-  if (planStatus === 'awaiting_owner_correction') {
+  if (planPhase === HOLD_PHASE) {
     const correctionRes = await apiFetch<{ status: string }>(
       page,
       'PUT',
@@ -911,11 +923,12 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
       )
     }
     // After a successful correction append, poll for the plan to move
-    // out of awaiting_owner_correction. A 120s budget is plenty for a
-    // single member retry.
+    // out of plan_phase=awaiting_owner_correction. A 120s budget is plenty
+    // for a single member retry. (The hold is a plan_phase, not a state —
+    // see the t3 poll comment above.)
     const RETRY_DEADLINE = Date.now() + 120_000
     while (Date.now() < RETRY_DEADLINE) {
-      const poll = await apiFetch<{ state: string }>(
+      const poll = await apiFetch<{ state: string; plan_phase?: string }>(
         page,
         'GET',
         `/api/v1/plans/${planId}`,
@@ -923,7 +936,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
       if (!poll.ok) {
         throw new Error(`t3: post-correction poll failed ${poll.status}: ${poll.raw}`)
       }
-      if (poll.body.state !== 'awaiting_owner_correction') break
+      if ((poll.body.plan_phase ?? '') !== HOLD_PHASE) break
       await page.waitForTimeout(2_000)
     }
   }
