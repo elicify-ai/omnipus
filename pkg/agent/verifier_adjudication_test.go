@@ -117,8 +117,9 @@ type spyRegistry struct {
 	unregisterCalls []string
 }
 
-func (s *spyRegistry) Register(unitID, sessionID string) {
+func (s *spyRegistry) Register(unitID, sessionID string) error {
 	s.registerCalls = append(s.registerCalls, struct{ unitID, sessionID string }{unitID, sessionID})
+	return nil
 }
 
 func (s *spyRegistry) Unregister(unitID string) {

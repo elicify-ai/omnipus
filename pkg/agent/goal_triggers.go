@@ -330,9 +330,19 @@ func (al *AgentLoop) runGoalAdjudication(
 
 	if jr.Unavailable {
 		// D7 / D14: judge rate-limited/down → judge_unavailable pill, NO round
-		// consumed, no verdict recorded. The idle quiet-window re-arms on the
-		// next tick (the verifier registry entry is gone once the attempt
-		// abandoned); a claim path leaves it for the next natural turn.
+		// consumed, no verdict recorded.
+		//
+		// corr-MAJOR-2 (idleSettling wedge — REAL BUG): the IDLE path sets the
+		// idleSettling marker (goalMarkIdleSettling true) BEFORE dispatching
+		// this adjudication. If we return here WITHOUT clearing it, every
+		// subsequent PlanEngine tick early-returns on goalIsIdleSettling and
+		// the goal is wedged in judge_unavailable forever (until a user msg /
+		// /goal clear) — the old "re-arms next tick" comment below was wrong,
+		// because the marker (not the registry entry) is the gate that
+		// suppresses the re-fire. Clear it so the next quiet-window re-fires
+		// ONCE the Judge recovers (re-arm, not wedge). This is a no-op on the
+		// CLAIM path, which never sets the marker.
+		al.goalMarkIdleSettling(sessionID, false)
 		logger.WarnCF("agent", "goal trigger: judge unavailable, round not consumed",
 			map[string]any{"session_id": sessionID, "reason": jr.Reason, "claim_text_len": len(claimText)})
 		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds, jr.Reason, goalPillJudgeUnavailable)
@@ -482,6 +492,23 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	if agentInst == nil {
 		logger.WarnCF("agent", "goal idle settle: could not resolve agent",
 			map[string]any{"session_id": sessionID, "agent_id": s.ActiveAgentID})
+		return
+	}
+
+	// corr-MAJOR-1 (idle-path budget brake): the CLAIM path already brakes on
+	// TokenBudget().Exhausted() (goal_loop.go's checkGoalLoopAfterTurn), but
+	// the IDLE adjudication path did NOT — it would burn a Judge turn PAST the
+	// cap. Gate the idle adjudication the same way: when exhausted, do NOT fire
+	// (the goal brakes honestly instead of silently over-spending). Surface
+	// the budget-exhausted pill/handover, mirroring the claim path's brake
+	// exactly. No double-debit: the Judge never runs (we return before
+	// runGoalAdjudication), so zero rounds are consumed here.
+	if tb := al.TokenBudget(); tb != nil && tb.Exhausted() {
+		handover := fmt.Sprintf(
+			"Goal %q stopped: the overall token budget is exhausted (consumed %d tokens).",
+			s.GoalCondition, tb.Consumed())
+		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, handover)
+		al.clearGoal(sessionID, store, FailedReasonBudgetExhausted)
 		return
 	}
 
@@ -646,8 +673,26 @@ func (al *AgentLoop) handleBareGoalClaim(
 		GoalRoundsUsed:   &newRound,
 		GoalLatestReason: &reason,
 	}); perr != nil {
-		logger.WarnCF("agent", "goal trigger: could not persist bare-claim round cost",
-			map[string]any{"session_id": sessionID, "error": perr.Error()})
+		// bare-claim M3 sibling (gate honesty): the SAME persist-and-WARN
+		// defect Fix-1's silent-M3 fixed in runGoalAdjudication. Do NOT
+		// silently continue on an un-persisted round counter — the exhaustion
+		// gate (newRound >= maxRounds above) re-reads GoalRoundsUsed from the
+		// store on the next bare claim; on a write failure the store stays at
+		// the OLD value while this branch proceeded as if newRound were
+		// consumed, so the gate would never fire and the goal could re-loop on
+		// the same attempt number indefinitely (each re-fire re-prompting the
+		// worker). Abort: the round is NOT counted (emit the OLD counter, not
+		// newRound), and no follow-up is dispatched (so the worker isn't
+		// re-prompted on a counter the store can't durably advance). The
+		// failure is surfaced loudly (ERROR + system transcript).
+		logger.ErrorCF("agent", "goal trigger: bare-claim round-advance persist failed; aborting to keep round gate honest",
+			map[string]any{"session_id": sessionID, "attempt": newRound, "max_rounds": maxRounds, "error": perr.Error()})
+		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, fmt.Sprintf(
+			"Goal %q: could not persist the bare-claim round counter (%v). The round was not counted and no follow-up was dispatched — investigate storage and retry.",
+			meta.GoalCondition, perr))
+		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, maxRounds,
+			"round-advance persist failed (goal paused)", goalPillActive)
+		return true
 	}
 	al.emitGoalStatusFrame(sessionID, meta.GoalCondition, newRound, maxRounds, reason, goalPillActive)
 	if result != nil {

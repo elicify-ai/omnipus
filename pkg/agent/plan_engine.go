@@ -1004,7 +1004,18 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan, tasks []task.Task) {
 	// verifierUnitForPlan key runVerifierAdjudication upserts the real id
 	// through (F1: both sides must agree on this key) before dispatching the
 	// verifier's turn.
-	pe.registry().Register(verifierUnitForPlan(p.ID), "")
+	if regErr := pe.registry().Register(verifierUnitForPlan(p.ID), ""); regErr != nil {
+		// CAS guard (corr-MAJOR-3, G-1): a LIVE verifier session already holds
+		// this plan unit — a judge round is already in flight. Release the
+		// round slot and bail rather than launching a duplicate round whose
+		// verifier turn would race the in-flight one (exactly-once violation).
+		// The phase=judging set above is owned by the in-flight round's own
+		// lifecycle from here.
+		release()
+		logger.WarnCF("plan_engine", "plan judge: round already in-flight; CAS rejected placeholder registration",
+			map[string]any{"plan_id": p.ID})
+		return
+	}
 
 	pe.judgeWG.Add(1)
 	go pe.runPlanJudgeRound(p.ID, release)

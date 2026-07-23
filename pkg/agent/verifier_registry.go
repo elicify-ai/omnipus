@@ -54,7 +54,20 @@
 // verifier session, which is the actual guarantee FR-029/FR-037 require.
 package agent
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrVerifierSessionHeld is returned by Register's compare-and-set when unit
+// already holds a LIVE (non-empty) verifier session that DIFFERS from the one
+// being registered — a concurrent adjudication is already in flight for this
+// unit and must not be silently clobbered (corr-MAJOR-3, G-1 "exactly once").
+// A blind overwrite here would orphan the Stop fan-out's cancel target AND let
+// a second Judge LLM turn race the first (lost update on GoalRoundsUsed,
+// double-debit). The placeholder-upgrade path (existing "" → real id) and
+// idempotent re-registration (existing == incoming) are NOT errors.
+var ErrVerifierSessionHeld = errors.New("verifier session already held for unit")
 
 // verifierUnitForPlan, verifierUnitForTask, and verifierUnitForGoal are the
 // single source of truth for the verifier-session registry's key scheme
@@ -81,11 +94,22 @@ type VerifierSessionRegistry interface {
 	// live verifier session adjudicating unit. Callers that have not yet
 	// created the verifier session MAY register an empty verifierSessionID
 	// as a "claimed" placeholder and Register AGAIN with the real ID once
-	// the session exists — Register is an idempotent upsert, not
-	// create-once. Whichever call is dispatch-side MUST run BEFORE the
+	// the session exists. Whichever call is dispatch-side MUST run BEFORE the
 	// verifier's own turn is dispatched (FR-029/FR-037's synchronous-
 	// assignment rule) so a concurrent Stop can never race past it.
-	Register(unit, verifierSessionID string)
+	//
+	// CAS semantics (corr-MAJOR-3, G-1 "exactly once"): Register is a
+	// compare-and-set, NOT a blind upsert. It returns nil (success) when the
+	// unit is absent, holds an empty placeholder (upgrade to the real id), or
+	// already holds the SAME verifierSessionID (idempotent). It returns
+	// ErrVerifierSessionHeld — and does NOT clobber the existing entry — when
+	// unit already holds a LIVE (non-empty) verifier session that DIFFERS from
+	// verifierSessionID: a concurrent adjudication is in flight and a second
+	// one must not displace it (the lost update would orphan the Stop fan-out's
+	// cancel target and let two Judge turns race). A caller that receives
+	// ErrVerifierSessionHeld MUST back off (treat as unavailable/no-round), not
+	// retry-and-overwrite.
+	Register(unit, verifierSessionID string) error
 
 	// Unregister removes unit's entry, if any. Idempotent — unregistering an
 	// absent (or already-removed) unit is a no-op.
@@ -120,13 +144,30 @@ func NewVerifierSessionRegistry() VerifierSessionRegistry {
 	return &verifierSessionRegistry{sessions: make(map[string]string)}
 }
 
-func (r *verifierSessionRegistry) Register(unit, verifierSessionID string) {
+// Register is a compare-and-set (corr-MAJOR-3, G-1). See the
+// VerifierSessionRegistry.Register doc for the full CAS contract. In short:
+// absent / empty-placeholder / idempotent re-registration → nil (success); a
+// LIVE (non-empty) DIFFERENT session already holds unit → ErrVerifierSessionHeld
+// (existing entry is preserved, not clobbered).
+func (r *verifierSessionRegistry) Register(unit, verifierSessionID string) error {
 	if unit == "" {
-		return
+		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	existing, ok := r.sessions[unit]
+	if ok && existing != "" && existing != verifierSessionID {
+		// A LIVE (non-empty) verifier session that differs from the incoming
+		// one already holds this unit — a concurrent adjudication is in
+		// flight. Do NOT clobber it: the lost update would orphan the Stop
+		// fan-out's cancel target and let a second Judge turn race the first
+		// (violating G-1's "exactly once"). The placeholder-upgrade path
+		// (existing == "" → real id) and idempotent re-registration
+		// (existing == incoming) fall through to the write below.
+		return ErrVerifierSessionHeld
+	}
 	r.sessions[unit] = verifierSessionID
+	return nil
 }
 
 func (r *verifierSessionRegistry) Unregister(unit string) {

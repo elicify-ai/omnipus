@@ -18,18 +18,31 @@ func TestVerifierSessionRegistry_RegisterLookupUnregister(t *testing.T) {
 		t.Fatal("Lookup on an unregistered unit should report ok=false")
 	}
 
-	r.Register("plan-1", "verifier-sess-1")
+	if err := r.Register("plan-1", "verifier-sess-1"); err != nil {
+		t.Fatalf("first Register(plan-1) returned err: %v", err)
+	}
 	got, ok := r.Lookup("plan-1")
 	if !ok || got != "verifier-sess-1" {
 		t.Fatalf("Lookup(plan-1) = (%q, %v), want (verifier-sess-1, true)", got, ok)
 	}
 
-	// Register is an upsert: a second call with a different (or empty)
-	// session id overwrites, it does not create a second entry or error.
-	r.Register("plan-1", "verifier-sess-2")
+	// CAS (corr-MAJOR-3): a second Register with a DIFFERENT non-empty
+	// session id against a LIVE entry must be REJECTED — the existing live
+	// session is preserved, not clobbered (G-1 exactly-once). This is the
+	// behavior change from the old blind-upsert.
+	if err := r.Register("plan-1", "verifier-sess-2"); err != ErrVerifierSessionHeld {
+		t.Fatalf("Register(plan-1, verifier-sess-2) over a live different session = err=%v, want ErrVerifierSessionHeld", err)
+	}
 	got, ok = r.Lookup("plan-1")
-	if !ok || got != "verifier-sess-2" {
-		t.Fatalf("after upsert: Lookup(plan-1) = (%q, %v), want (verifier-sess-2, true)", got, ok)
+	if !ok || got != "verifier-sess-1" {
+		t.Fatalf("after rejected CAS: Lookup(plan-1) = (%q, %v), want (verifier-sess-1, true) — entry must NOT be clobbered", got, ok)
+	}
+
+	// Idempotent re-registration of the SAME live session id is allowed (not
+	// an error) — the placeholder-upgrade and dispatch-side re-confirm paths
+	// rely on this.
+	if err := r.Register("plan-1", "verifier-sess-1"); err != nil {
+		t.Fatalf("idempotent Register(plan-1, verifier-sess-1) = err=%v, want nil", err)
 	}
 
 	r.Unregister("plan-1")
@@ -40,7 +53,9 @@ func TestVerifierSessionRegistry_RegisterLookupUnregister(t *testing.T) {
 	// Unregistering an absent unit is a no-op, not an error/panic.
 	r.Unregister("never-registered")
 	r.Unregister("")
-	r.Register("", "should-be-ignored") // empty unit is a no-op per doc contract
+	if err := r.Register("", "should-be-ignored"); err != nil {
+		t.Fatalf("Register with an empty unit must be a no-op (nil), got %v", err)
+	}
 	if _, ok := r.Lookup(""); ok {
 		t.Fatal("Register with an empty unit must be a no-op")
 	}
