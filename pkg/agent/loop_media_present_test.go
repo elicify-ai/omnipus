@@ -341,3 +341,84 @@ func TestModelSupportsImage_CatalogGates(t *testing.T) {
 	assert.True(t, modelSupportsImage(textOnly, "not-in-catalog"),
 		"unknown model → optimistic (FR-026)")
 }
+
+// ── E2E (env-gated, spec test #33 / #34) ─────────────────────────────────────
+//
+// Per the spec's E2E gating rule (TDD plan header, line 915): all provider-
+// touching E2E tests MUST be gated behind env vars and skip when unset — no
+// live provider calls in default CI. OMNIPUS_E2E_VISION_MODEL /
+// OMNIPUS_E2E_NO_VISION_MODEL carry the model id under test; when absent these
+// t.Skip cleanly (CI green). When present they drive the full 7-step
+// presentation chain — the deterministic "any file, any model → useful turn"
+// guarantee (SC-003) — against that real model id. A live HTTP provider call
+// is a future hook (OMNIPUS_E2E_PROVIDER_KEY); the env gate is the required
+// minimum and what CI honors.
+
+// TestE2E_AnyFileAnyModel_UsefulTurn (spec test #33, SC-003): upload an AVIF
+// (a format no provider accepts natively and no pure-Go decoder can normalize)
+// and run the full presentation chain against a vision-capable model. The turn
+// MUST be useful — the file offloads to work/ with guidance, never a dead turn
+// or a raw error surfaced to the user. Gated behind OMNIPUS_E2E_VISION_MODEL.
+func TestE2E_AnyFileAnyModel_UsefulTurn(t *testing.T) {
+	model := os.Getenv("OMNIPUS_E2E_VISION_MODEL")
+	if model == "" {
+		t.Skip("skipping media E2E; set OMNIPUS_E2E_VISION_MODEL=<model-id> to run")
+	}
+	store := media.NewFileMediaStore()
+	ref, _ := storeFile(t, store, "photo.avif", "image/avif", []byte("unsupported-fake-bytes"))
+
+	workDir := filepath.Join(t.TempDir(), "work")
+	sink := &offloadSink{workDir: workDir}
+	catalog := mustCatalog(t, visionSeedJSON(t, model))
+
+	msgs := []providers.Message{
+		{Role: "user", Content: "describe this attachment", Media: []string{ref}},
+	}
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil)
+
+	require.Len(t, result, 1, "chain must produce a result message")
+	// SC-003: useful turn — AVIF routes to offload, not the dead-end marker,
+	// because an offload sink is configured.
+	assert.NotContains(t, result[0].Content, "attachment unavailable",
+		"AVIF must not dead-end at the honest marker when an offload sink exists")
+	// AVIF has no pure-Go decoder → no image data URL is emitted (FR-016:
+	// no passthrough); it offloads with guidance + a reachable path instead.
+	assert.Empty(t, result[0].Media, "AVIF must not be sent as a data URL to any model")
+	assert.Contains(t, result[0].Content, "Cannot read this image with "+model,
+		"useful turn: offload guidance names the model")
+	assert.Contains(t, result[0].Content, workDir,
+		"useful turn: the offloaded copy's filesystem path is injected (agent can read it)")
+}
+
+// TestE2E_TextOnlyModel_ImageSurvivesAsOffload (spec test #34, US-5 AC1): a
+// text-only model must never receive an image block (step 1 capability gate),
+// but the image still "survives" — it offloads to work/ with guidance so the
+// turn is useful, never silently stripped/lost. Gated behind
+// OMNIPUS_E2E_NO_VISION_MODEL.
+func TestE2E_TextOnlyModel_ImageSurvivesAsOffload(t *testing.T) {
+	model := os.Getenv("OMNIPUS_E2E_NO_VISION_MODEL")
+	if model == "" {
+		t.Skip("skipping media E2E; set OMNIPUS_E2E_NO_VISION_MODEL=<model-id> to run")
+	}
+	store := media.NewFileMediaStore()
+	ref, _ := storeFile(t, store, "img.png", "image/png", realPNGBytes())
+
+	workDir := filepath.Join(t.TempDir(), "work")
+	sink := &offloadSink{workDir: workDir}
+	catalog := mustCatalog(t, textOnlySeedJSON(t, model))
+
+	msgs := []providers.Message{
+		{Role: "user", Content: "describe this image", Media: []string{ref}},
+	}
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil)
+
+	require.Len(t, result, 1, "chain must produce a result message")
+	// The image survives as offload, not as a native send: no data URL.
+	assert.Empty(t, result[0].Media,
+		"text-only model must not receive an image data URL (capability gate)")
+	// And it is not dropped — the offload path + guidance are present.
+	assert.Contains(t, result[0].Content, "Cannot read this image with "+model,
+		"image survives: offload guidance present")
+	assert.Contains(t, result[0].Content, workDir,
+		"image survives: the offloaded copy is reachable at the injected path")
+}

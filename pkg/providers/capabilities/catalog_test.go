@@ -38,6 +38,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -986,3 +987,83 @@ func TestErrChecksumMismatch_ExportedIs(t *testing.T) {
 // fields in fixtures; we don't reference time in test bodies to keep this
 // header section clean).
 var _ = time.Time{}
+
+// ── Concurrent Refresh serialization (TA-3 carry-forward, Wave 1 TD-M4) ──────
+
+// TestCatalog_Refresh_ConcurrentSerialization asserts the carry-forward
+// invariant that concurrent Refresh calls are fully serialized by refreshMu
+// (catalog.go:400,611) — no two Refresh transactions (pull → parse →
+// version-check → apply → store) interleave. The Wave 1 refactor that made
+// Refresh "private model + serialized" (TD-M4-major) is only meaningful if a
+// concurrency test pins it; without serialization, overlapping apply/Store
+// steps would race the in-memory catalog state and the last-known-good write.
+//
+// A concurrency-detecting puller tracks the high-water mark of simultaneously
+// in-flight Pull calls. Under refreshMu serialization the max is exactly 1
+// (each Pull runs alone); without it the max rises with the goroutine count.
+// Traces to: spec TA-3 carry-forward; ADR-051 Rev 4 FR-025; SC-009.
+func TestCatalog_Refresh_ConcurrentSerialization(t *testing.T) {
+	pulled := []byte(completeSeedJSON(
+		`"version": "z-2026-07-25","models": [{"id": "concurrent-model","provider":"p","input_modalities":["text"]}],"default_resize_budget": {"long_edge_px": 1, "max_bytes": 1}}`,
+	))
+	puller := &concurrencyTrackingPuller{data: pulled}
+	c, err := NewCatalog(minimalSeedJSON(), puller, &memStore{}, testLogger())
+	require.NoError(t, err)
+
+	const n = 32
+	var wg sync.WaitGroup
+	wg.Add(n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			// Error is irrelevant here — some refreshes are idempotent
+			// re-applies of the same version; we only care that each ran
+			// the serialized transaction (and thus drove one Pull).
+			_ = c.Refresh(context.Background())
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	// Serialization invariant: refreshMu held the Pull inside an exclusive
+	// transaction, so no two Pulls ever overlapped (max in-flight == 1).
+	maxInFlight := puller.maxInFlight.Load()
+	assert.Equal(t, int32(1), maxInFlight,
+		"refreshMu must serialize Refresh so pulls never overlap (max in-flight observed = %d)", maxInFlight)
+	// Every Refresh drove exactly one Pull (the non-nil puller path).
+	assert.Equal(t, int32(n), puller.hits.Load(),
+		"each of %d concurrent Refresh calls must drive exactly one Pull", n)
+	// Final state is internally consistent after N concurrent refreshes —
+	// the last-applied version won cleanly, no torn state.
+	assert.Equal(t, "z-2026-07-25", c.Version().String(),
+		"final catalog version is the pulled value (no corruption under concurrent refresh)")
+}
+
+// concurrencyTrackingPuller is a controllable Puller that records the
+// high-water mark of simultaneously in-flight Pull calls. The brief sleep
+// widens the window in which an unserialized Refresh would overlap another
+// Pull, so a serialization regression is observed rather than passing by
+// lucky scheduling.
+type concurrencyTrackingPuller struct {
+	data        []byte
+	hits        atomic.Int32
+	inFlight    atomic.Int32
+	maxInFlight atomic.Int32
+}
+
+func (c *concurrencyTrackingPuller) Pull(context.Context) ([]byte, error) {
+	c.hits.Add(1)
+	cur := c.inFlight.Add(1)
+	// Record the high-water mark of concurrent in-flight pulls.
+	for {
+		m := c.maxInFlight.Load()
+		if cur <= m || c.maxInFlight.CompareAndSwap(m, cur) {
+			break
+		}
+	}
+	time.Sleep(time.Millisecond) // widen the overlap window
+	c.inFlight.Add(-1)
+	return c.data, nil
+}

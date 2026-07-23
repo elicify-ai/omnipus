@@ -752,3 +752,91 @@ func TestRefToScopeConsistency(t *testing.T) {
 		t.Error("refToScope should still contain ref3")
 	}
 }
+
+// TestStore_RegistryPersistsAcrossBoot (spec regression table, round-1 M3
+// fix) is the only direct coverage of pkg/media/registry.go's Save→Load
+// round-trip — currently untested on main (verified: LoadRegistry/SaveRegistry
+// at registry.go:51,105 had no dedicated test). It asserts that every ref +
+// meta registered before a restart still resolves after SaveRegistry writes
+// registry.json and a fresh store LoadRegistry's it back. Traces to: SC-008
+// (legacy media://<uuid> refs survive restart); the namespace-split backward-
+// compatibility guarantee (FR-029). LoadRegistry drops entries whose backing
+// file is gone, so the fixtures live under the same OMNIPUS_HOME and persist
+// across the two stores.
+func TestStore_RegistryPersistsAcrossBoot(t *testing.T) {
+	// TempDir() keys off OMNIPUS_HOME; pin it to a per-test dir so
+	// registryPath() resolves to a real file and the media files survive
+	// between the two stores. t.Setenv auto-restores the prior value.
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	dir := filepath.Join(home, "media")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir media dir: %v", err)
+	}
+	p1 := createTempFile(t, dir, "persist-a.jpg")
+	p2 := createTempFile(t, dir, "persist-b.png")
+
+	store1 := NewFileMediaStore()
+	ref1, err := store1.Store(p1, MediaMeta{
+		Filename:      "persist-a.jpg",
+		ContentType:   "image/jpeg",
+		Source:        "upload:webchat",
+		CleanupPolicy: CleanupPolicyForgetOnly,
+	}, "scope-persist-a")
+	if err != nil {
+		t.Fatalf("Store p1: %v", err)
+	}
+	ref2, err := store1.Store(p2, MediaMeta{
+		Filename:    "persist-b.png",
+		ContentType: "image/png",
+		Source:      "telegram",
+	}, "scope-persist-b")
+	if err != nil {
+		t.Fatalf("Store p2: %v", err)
+	}
+
+	// Persist the in-memory ref→path/meta index to disk (atomic temp+rename).
+	store1.SaveRegistry()
+
+	// A NEW store in a fresh process would call LoadRegistry at boot
+	// (gateway.go boot sequence). NewFileMediaStore does not auto-load.
+	store2 := NewFileMediaStore()
+	if err := store2.LoadRegistry(); err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+
+	// Both refs must resolve to their original on-disk paths after reload.
+	got1, err := store2.Resolve(ref1)
+	if err != nil {
+		t.Fatalf("ref1 %q must resolve after registry reload: %v", ref1, err)
+	}
+	if got1 != p1 {
+		t.Errorf("Resolve(ref1) = %q, want %q", got1, p1)
+	}
+	got2, err := store2.Resolve(ref2)
+	if err != nil {
+		t.Fatalf("ref2 %q must resolve after registry reload: %v", ref2, err)
+	}
+	if got2 != p2 {
+		t.Errorf("Resolve(ref2) = %q, want %q", got2, p2)
+	}
+
+	// Meta must survive the round-trip.
+	_, meta, err := store2.ResolveWithMeta(ref1)
+	if err != nil {
+		t.Fatalf("ResolveWithMeta(ref1): %v", err)
+	}
+	if meta.Filename != "persist-a.jpg" {
+		t.Errorf("meta.Filename = %q, want %q", meta.Filename, "persist-a.jpg")
+	}
+	if meta.ContentType != "image/jpeg" {
+		t.Errorf("meta.ContentType = %q, want %q", meta.ContentType, "image/jpeg")
+	}
+
+	// A ref that was never registered must still fail to resolve (no false
+	// positives from a stale/partial registry).
+	if _, err := store2.Resolve("media://never-registered"); err == nil {
+		t.Error("Resolve must fail for a ref absent from the registry")
+	}
+}
