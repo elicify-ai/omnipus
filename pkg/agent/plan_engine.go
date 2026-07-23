@@ -2563,28 +2563,46 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 	}, nil
 }
 
-// recordMemberResumePoint resolves and logs the gitevidence checkpoint for a
-// member being resumed via Play (D13: "resume from last git commit"). If no
-// commitResolver is wired, the resume is a fresh attempt (signalled in the
-// log). The actual work-tree restore happens at dispatch time in the
-// gitevidence layer — the engine records the intent here.
+// recordMemberResumePoint resolves the gitevidence checkpoint for a member
+// being resumed via Play (D13: "resume from last git commit") and PERSISTS it
+// on the task record as ResumeFromCommit — the resume baseline the worker turn
+// and plan Judge consume (the next attempt's diff is measured from this hash).
+//
+// If no commitResolver is wired, or the resolver returns no commit (unborn
+// repo / nested-repo degrade / member never committed), ResumeFromCommit is
+// cleared to "" — the FR-155 fresh-attempt fallback, signalled in the log. The
+// task was already RestartReset to `next` by the caller, which cleared any
+// stale ResumeFromCommit; this call sets the value for the new generation.
 func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 	pe.mu.Lock()
 	cr := pe.commitResolver
 	pe.mu.Unlock()
-	if cr == nil {
+
+	var hash string
+	switch {
+	case cr == nil:
 		logger.InfoCF("plan_engine", "member resume: fresh attempt (no commit resolver)",
 			map[string]any{"plan_id": planID, "task_id": taskID})
-		return
+	default:
+		h, err := cr.LastMemberCommit(planID, taskID)
+		if err != nil || h == "" {
+			logger.InfoCF("plan_engine", "member resume: fresh attempt (no boundary commit)",
+				map[string]any{"plan_id": planID, "task_id": taskID, "error": fmt.Sprintf("%v", err)})
+		} else {
+			hash = h
+			logger.InfoCF("plan_engine", "member resume: from commit",
+				map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash})
+		}
 	}
-	hash, err := cr.LastMemberCommit(planID, taskID)
-	if err != nil || hash == "" {
-		logger.InfoCF("plan_engine", "member resume: fresh attempt (no boundary commit)",
-			map[string]any{"plan_id": planID, "task_id": taskID, "error": fmt.Sprintf("%v", err)})
-		return
+
+	// Persist the resolved baseline (hash, or "" for fresh attempt) on the
+	// task so the worker turn / Judge start from it. Best-effort: a store
+	// failure is logged, not fatal — the resume still proceeds (as a fresh
+	// attempt if the hash couldn't be recorded).
+	if _, err := pe.taskStore.Update(taskID, task.Patch{ResumeFromCommit: &hash}); err != nil {
+		logger.WarnCF("plan_engine", "member resume: could not persist resume_from_commit",
+			map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "error": err.Error()})
 	}
-	logger.InfoCF("plan_engine", "member resume: from commit",
-		map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash})
 }
 
 // --- Owner-gaming-DoD guards (N-2) -----------------------------------------

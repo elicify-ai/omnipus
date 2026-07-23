@@ -2323,6 +2323,15 @@ func setupAndStartServices(
 		// pass runs synchronously inside Start).
 		planEngine.SetLifecycleStore(lifecycleStore)
 		planEngine.SetIntentLog(intentLog)
+		// D13/G-12 Play-from-commit: install the gitevidence-backed resume
+		// resolver so Play resumes a failed/cancelled member from its last
+		// boundary commit (FR-144). The resolver degrades PER WORKSPACE
+		// (nested-repo / no-commit / unmaterialized work dir -> fresh attempt,
+		// FR-155), so it is wired unconditionally; a nil resolver here would
+		// mask a valid evidence repo on one workspace with a nested-repo
+		// degrade on another. It resolves the workspace lazily from the task
+		// record at Play time, so no workspace needs to be open at boot.
+		planEngine.SetCommitResolver(agent.NewLastMemberCommitResolver(tStore, homePath))
 		if bsec := bootSweepCfg.EffectiveBootSweepBudgetSeconds(); bsec > 0 {
 			planEngine.SetBootSweepBudget(time.Duration(bsec) * time.Second)
 		}

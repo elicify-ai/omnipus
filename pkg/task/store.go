@@ -568,6 +568,13 @@ type Patch struct {
 	// *outer nil = clear the override (inherit the global PlanningConfig
 	// default), *outer non-nil = set to that value.
 	MaxAttempts **int
+	// ResumeFromCommit is the runtime plan engine's write path for
+	// Task.ResumeFromCommit (ADR-053 D13/G-12). A non-nil pointer to "" clears
+	// it (fresh attempt — the explicit no-commit fallback). Server-set only:
+	// the REST/PATCH wire seam MUST NOT accept this field from a client (it is
+	// scoped out of the client PATCH surface); only the plan engine writes it
+	// during Play.
+	ResumeFromCommit *string
 	// AttemptCount is the runtime goal-loop's own write path for
 	// Task.AttemptCount (ADR-049 D7/R4/C17). Server-set only — the REST/PATCH
 	// wire boundary must never accept this field from a client; only the
@@ -897,6 +904,9 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		}
 		t.AttemptCount = *patch.AttemptCount
 	}
+	if patch.ResumeFromCommit != nil {
+		t.ResumeFromCommit = *patch.ResumeFromCommit
+	}
 	if patch.Surface != nil {
 		if !IsValidSurface(*patch.Surface) {
 			return nil, verr("invalid surface %q", *patch.Surface)
@@ -1040,6 +1050,12 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.Result = ""
 	t.Artifacts = nil
 	t.SessionID = ""
+	// Clear any stale Play resume baseline (D13/G-12). PlayPlan calls
+	// recordMemberResumePoint immediately after this reset to set a fresh
+	// value (the last boundary commit, or "" for a fresh attempt); clearing
+	// here also covers the standalone-restart path, where the field is
+	// meaningless.
+	t.ResumeFromCommit = ""
 	t.StartedAt = ""
 	t.CompletedAt = ""
 	t.FollowedUp = false
