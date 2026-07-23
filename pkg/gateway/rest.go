@@ -4889,6 +4889,12 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// settings are non-sensitive operational knobs without blast-radius risk).
 	cm.RegisterHTTPHandler("/api/v1/settings/memory", a.withAuth(a.HandleMemorySettings))
 
+	// Token-budget settings endpoint (ADR-053 D12/R§8.3, FE-6 / US-13): readable
+	// by any authenticated user, same posture as /settings/memory. GET returns
+	// the live spend accounting; PUT persists the restart-gated ceiling (the live
+	// spend lever is Stop/cancel, not a live token cut — R§8.3e/FR-177).
+	cm.RegisterHTTPHandler("/api/v1/settings/token-budget", a.withAuth(a.HandleTokenBudgetSettings))
+
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — the audit log contains every privileged action,
 	// tool-use trace, and LLM request; gated behind authentication only under

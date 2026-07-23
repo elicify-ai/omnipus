@@ -55,7 +55,7 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 // String returns the canonical time.Duration string form.
 func (d duration) String() string { return time.Duration(d).String() }
 
-// ADR-053 §8 operability — the session_messaging config section (FR-195's 21
+// ADR-053 §8 operability — the session_messaging config section (FR-195's 20
 // keys). Defaults mirror the ADR §Contract Surface "Caps" and the constants in
 // pkg/session/message_inbox.go / pkg/agent/async_notifier.go. Applied by
 // validateBootConfig (validator.go) and seeded by DefaultConfig (defaults.go).
@@ -97,16 +97,13 @@ const (
 	DefaultSMAttemptsMax    = 3
 	DefaultSMJudgeRoundsMax = 20
 
-	// Token budget for the session-messaging plane's own accounting.
-	DefaultSMTokenBudget = 0 // 0 = no per-plane token cap (FR-195 token_budget)
-
 	// Retention horizons (days). 0 = retain indefinitely (sweep is advisory).
 	DefaultSMMessageRetention     = 30
 	DefaultSMAuditRetention       = 90
 	DefaultSMUndeliveredRetention = 7
 )
 
-// SessionMessagingConfig holds the 21 session_messaging keys (FR-195). All
+// SessionMessagingConfig holds the 20 session_messaging keys (FR-195). All
 // live-reload-capable: the consumer and tools read Enabled/WakeEnabled per
 // event via the Effective* resolvers (never a boot-time snapshot), so an
 // operator flipping session_messaging.enabled in config.json takes effect
@@ -142,9 +139,6 @@ type SessionMessagingConfig struct {
 
 	// --- Idle quiet window (1) ---
 	IdleQuietWindow duration `json:"idle_quiet_window,omitempty"`
-
-	// --- Token budget (1) ---
-	TokenBudget int `json:"token_budget,omitempty"`
 
 	// --- Round/attempt bounds (2) ---
 	AttemptsMax    int `json:"attempts_max,omitempty"`
