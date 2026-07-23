@@ -3042,12 +3042,19 @@ export interface components {
          */
         MediaLibraryEntry: {
             /**
+             * Format: uuid
              * @description UUID media identifier within the workspace library.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
-            id: string;
+            readonly id: string;
             /**
-             * @description Original user-visible filename.
+             * Format: uuid
+             * @description UUID of the workspace that owns this library entry. The discriminator at ref shape media://workspace/<workspace_id>/<id> — every MediaLibraryEntry is bound to exactly one workspace; the cross-workspace guard (FR-028a) reads this field to enforce membership.
+             * @example 7c9e6679-7425-40de-944b-e07fc1f90ae7
+             */
+            workspace_id: string;
+            /**
+             * @description Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
              * @example diagram.png
              */
             filename: string;
@@ -3055,29 +3062,30 @@ export interface components {
              * @description MIME type sniffed from the stored bytes.
              * @example image/png
              */
-            mime: string;
+            readonly mime: string;
             /**
              * Format: int64
-             * @description Raw file size in bytes.
+             * @description Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
              * @example 204800
              */
-            size: number;
+            readonly size: number;
             /**
              * @description Lowercase hexadecimal SHA-256 digest verified on every read.
              * @example 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
              */
-            sha256: string;
+            readonly sha256: string;
             /**
              * Format: date-time
              * @description RFC3339 UTC upload timestamp.
              * @example 2026-07-22T14:22:00Z
              */
-            uploaded_at: string;
+            readonly uploaded_at: string;
             /**
-             * @description Origin that added the file to the workspace library.
-             * @example upload:webchat
+             * @description Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
+             * @example user_upload
+             * @enum {string}
              */
-            source: string;
+            source: "user_upload" | "tool_output" | "test_fixture";
             /** @description Optional server-maintained count of persisted message or session references. */
             readonly refcount?: number;
             /**
@@ -3092,17 +3100,11 @@ export interface components {
          */
         MediaAttachmentRequest: {
             /**
-             * @description ID of the MediaLibraryEntry to attach.
+             * Format: uuid
+             * @description UUID of the MediaLibraryEntry to attach.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             media_id: string;
-            /** @description Optional text to inject for this attachment instead of the automatic presentation-layer content. Omit to use the default presentation path. */
-            content_injection_override?: string;
-            /**
-             * Format: int32
-             * @description Optional zero-based position among the message attachments.
-             */
-            position?: number;
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {

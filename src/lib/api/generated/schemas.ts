@@ -2383,21 +2383,20 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
   .partial()
   .passthrough();
 export const MediaLibraryEntry = z.object({
-  id: z.string().min(1),
-  filename: z.string().min(1),
-  mime: z.string().min(1),
-  size: z.number().int().gte(0),
+  id: z.string().uuid(),
+  workspace_id: z.string().uuid(),
+  filename: z.string().min(1).max(256),
+  mime: z.string(),
+  size: z.number().int().gte(0).lte(104857600),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   uploaded_at: z.string().datetime({ offset: true }),
-  source: z.string().min(1),
+  source: z.enum(["user_upload", "tool_output", "test_fixture"]),
   refcount: z.number().int().gte(0).optional(),
   last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
-});
+}).strict();
 export const MediaAttachmentRequest = z.object({
-  media_id: z.string().min(1),
-  content_injection_override: z.string().max(16384).optional(),
-  position: z.number().int().gte(0).optional(),
-});
+  media_id: z.string().max(36).uuid(),
+}).strict();
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -7237,7 +7236,7 @@ Returns HTTP 201 on success.
       {
         name: "body",
         type: "Body",
-        schema: MediaAttachmentRequest,
+        schema: z.object({ media_id: z.string().max(36).uuid() }).strict(),
       },
       {
         name: "id",

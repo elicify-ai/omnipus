@@ -110,23 +110,78 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 # list is a deliberate manual mapping (W2-9 fix). The runtime result is the
 # same as if the YAML were `additionalProperties: false` AND we chained
 # `.strict()`: unknown fields are rejected.
-STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p"}
+STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p MediaLibraryEntry MediaAttachmentRequest"}
 STRICT_RAW="$GEN/_schemas.generated.tmp.ts"
 for name in $STRICT_SCHEMAS; do
-  if grep -q "^export const ${name}:" "$STRICT_RAW"; then
+  # Match either a typed (export const Name: z.ZodType<Name> = …) or untyped
+  # (export const Name = …) declaration. CR-01 (Wave 0 code-reviewer):
+  # schemas emitted without a type annotation (the openapi-zod-client default
+  # since v1.18.3) silently missed the strict-schema postprocessor and
+  # accepted-and-stripped unknown keys at runtime.
+  if grep -qE "^export const ${name}(:| =)" "$STRICT_RAW"; then
     # Append .strict() to the last .something() chain in the schema definition.
     # Generator emits:  export const Name: z.ZodType<Name> = z.object({...});
+    #                  or: export const Name = z.object({...});
     #                  or: .object({...}).partial().passthrough();
     # Rewrite to:        ... .partial().passthrough().strict();
     #                  or: z.object({...}).strict();
     awk -v name="$name" '
-      /^export const '"$name"':/ { in_block = 1; buf = $0; next }
+      /^export const '"$name"'(:| =)/ { in_block = 1; buf = $0; next }
       in_block && /;/ { buf = buf "\n" $0; gsub(/;$/, ".strict();", buf); print buf; in_block = 0; next }
       in_block { buf = buf "\n" $0; next }
       { print }
     ' "$STRICT_RAW" > "$STRICT_RAW.tmp" && mv "$STRICT_RAW.tmp" "$STRICT_RAW"
   fi
 done
+
+# Post-process: append `.strict()` to the INLINE body schema of operations
+# whose request body references a STRICT_SCHEMA. The openapi-zod-client
+# generator inlines the body schema (instead of emitting a `Name` reference)
+# when the schema complexity is below the generator's threshold
+# (--complexity-threshold, default 4). For a single-field body like
+# MediaAttachmentRequest after the holistic m-1 field-drop, the body
+# becomes `z.object({ media_id: z.string().max(36).uuid() })` inline — and
+# the inline object has no `.strict()` enforcement at the body-schema
+# validation point, defeating CR-01's intent. The narrow fix below
+# rewrites such inline bodies to add `.strict()` when they correspond to
+# a strict schema (matched by operation alias).
+STRICT_BODY_ALIASES=${STRICT_BODY_ALIASES:-"createWorkspaceMediaAttachment"}
+node - "$STRICT_RAW" $STRICT_BODY_ALIASES <<'NODE_SCRIPT'
+const fs = require("fs");
+const [path, ...names] = process.argv.slice(2);
+let src = fs.readFileSync(path, "utf8");
+// For each strict-body alias, scan every inline body schema and add
+// .strict() if the nearest preceding `alias:` is one of the strict-body
+// aliases. This is necessary because the openapi-zod-client generator
+// inlines single-field object schemas at the body-schema position instead
+// of emitting a `Name` reference.
+for (const alias of names) {
+  const re = new RegExp(
+    `name:\\s*"body",\\s*\\n\\s*type:\\s*"Body",\\s*\\n\\s*schema:\\s*(z\\.object\\(\\{[^}]*\\}\\))\\s*(,)`,
+    "g",
+  );
+  let replaced = false;
+  src = src.replace(re, (m, obj, comma, offset) => {
+    if (replaced) return m;
+    // Look backwards from the match for the nearest `alias:` line and
+    // verify it matches one of our strict-body aliases.
+    const before = src.slice(0, offset);
+    const lastAlias = before.match(/alias:\s*"([^"]+)"/g);
+    if (!lastAlias) return m;
+    const lastAliasName = lastAlias[lastAlias.length - 1].match(/"([^"]+)"/)[1];
+    if (names.includes(lastAliasName)) {
+      replaced = true;
+      return m.replace(/\}\)\s*,\s*$/, "}).strict(),");
+    }
+    return m;
+  });
+  if (!replaced) {
+    console.error(`strict-body inline rewrite: no body schema inside operation '${names.join(", ")}' found — operation renamed or schema inlined differently?`);
+    process.exit(1);
+  }
+}
+fs.writeFileSync(path, src);
+NODE_SCRIPT
 
 # ── Discriminated-union fix-up (AgentCreateRequest oneOf, 2026-07-03).
 # The template pins every schema to its emitted TS type via

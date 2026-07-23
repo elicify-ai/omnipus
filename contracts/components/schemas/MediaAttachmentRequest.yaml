@@ -9,17 +9,7 @@ required:
 properties:
   media_id:
     type: string
-    minLength: 1
-    description: ID of the MediaLibraryEntry to attach.
+    format: uuid
+    maxLength: 36
+    description: UUID of the MediaLibraryEntry to attach.
     example: "550e8400-e29b-41d4-a716-446655440000"
-  content_injection_override:
-    type: string
-    maxLength: 16384
-    description: >
-      Optional text to inject for this attachment instead of the automatic
-      presentation-layer content. Omit to use the default presentation path.
-  position:
-    type: integer
-    format: int32
-    minimum: 0
-    description: Optional zero-based position among the message attachments.

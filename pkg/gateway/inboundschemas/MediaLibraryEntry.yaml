@@ -6,6 +6,7 @@ type: object
 additionalProperties: false
 required:
   - id
+  - workspace_id
   - filename
   - mime
   - size
@@ -15,40 +16,59 @@ required:
 properties:
   id:
     type: string
-    minLength: 1
+    format: uuid
+    readOnly: true
     description: UUID media identifier within the workspace library.
     example: "550e8400-e29b-41d4-a716-446655440000"
+  workspace_id:
+    type: string
+    format: uuid
+    description: UUID of the workspace that owns this library entry. The discriminator at ref shape media://workspace/<workspace_id>/<id> — every MediaLibraryEntry is bound to exactly one workspace; the cross-workspace guard (FR-028a) reads this field to enforce membership.
+    example: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
   filename:
     type: string
     minLength: 1
-    description: Original user-visible filename.
+    maxLength: 256
+    description: Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
     example: "diagram.png"
   mime:
     type: string
-    minLength: 1
+    readOnly: true
     description: MIME type sniffed from the stored bytes.
     example: "image/png"
   size:
     type: integer
     format: int64
     minimum: 0
-    description: Raw file size in bytes.
+    maximum: 104857600
+    readOnly: true
+    description: Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
     example: 204800
   sha256:
     type: string
     pattern: "^[a-f0-9]{64}$"
+    readOnly: true
     description: Lowercase hexadecimal SHA-256 digest verified on every read.
     example: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   uploaded_at:
     type: string
     format: date-time
+    readOnly: true
     description: RFC3339 UTC upload timestamp.
     example: "2026-07-22T14:22:00Z"
   source:
     type: string
-    minLength: 1
-    description: Origin that added the file to the workspace library.
-    example: "upload:webchat"
+    enum:
+      - user_upload
+      - tool_output
+      - test_fixture
+    description: >
+      Origin that added the file to the workspace library. Encodes the
+      ADR-051 Rev 4 two-mechanism split (user uploads = persistent;
+      agent-generated tool output = session-scoped, never migrated into
+      the library). test_fixture is reserved for in-process fixture
+      uploads used by tests; never emitted by the live upload path.
+    example: "user_upload"
   refcount:
     type: integer
     minimum: 0

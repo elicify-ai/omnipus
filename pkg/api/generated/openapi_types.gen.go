@@ -1094,6 +1094,27 @@ func (e McpServerCreateTransport) Valid() bool {
 	}
 }
 
+// Defines values for MediaLibraryEntrySource.
+const (
+	TestFixture MediaLibraryEntrySource = "test_fixture"
+	ToolOutput  MediaLibraryEntrySource = "tool_output"
+	UserUpload  MediaLibraryEntrySource = "user_upload"
+)
+
+// Valid indicates whether the value is a known member of the MediaLibraryEntrySource enum.
+func (e MediaLibraryEntrySource) Valid() bool {
+	switch e {
+	case TestFixture:
+		return true
+	case ToolOutput:
+		return true
+	case UserUpload:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageAttachmentsType.
 const (
 	MessageAttachmentsTypeAudio MessageAttachmentsType = "audio"
@@ -5525,45 +5546,45 @@ type McpToolsListResponse_Item struct {
 
 // MediaAttachmentRequest Request to attach an existing workspace media-library entry to a chat message without uploading the file again.
 type MediaAttachmentRequest struct {
-	// ContentInjectionOverride Optional text to inject for this attachment instead of the automatic presentation-layer content. Omit to use the default presentation path.
-	ContentInjectionOverride *string `json:"content_injection_override,omitempty"`
-
-	// MediaId ID of the MediaLibraryEntry to attach.
-	MediaId string `json:"media_id"`
-
-	// Position Optional zero-based position among the message attachments.
-	Position *int32 `json:"position,omitempty"`
+	// MediaId UUID of the MediaLibraryEntry to attach.
+	MediaId openapi_types.UUID `json:"media_id"`
 }
 
 // MediaLibraryEntry Metadata for one persistent file in a workspace media library. Raw bytes are stored separately and verified against sha256 before presentation.
 type MediaLibraryEntry struct {
-	// Filename Original user-visible filename.
+	// Filename Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
 	Filename string `json:"filename"`
 
 	// Id UUID media identifier within the workspace library.
-	Id string `json:"id"`
+	Id *openapi_types.UUID `json:"id,omitempty"`
 
 	// LastRefcountSeenAt Optional RFC3339 UTC timestamp of the latest refcount observation.
 	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
 
 	// Mime MIME type sniffed from the stored bytes.
-	Mime string `json:"mime"`
+	Mime *string `json:"mime,omitempty"`
 
 	// Refcount Optional server-maintained count of persisted message or session references.
 	Refcount *int `json:"refcount,omitempty"`
 
 	// Sha256 Lowercase hexadecimal SHA-256 digest verified on every read.
-	Sha256 string `json:"sha256"`
+	Sha256 *string `json:"sha256,omitempty"`
 
-	// Size Raw file size in bytes.
-	Size int64 `json:"size"`
+	// Size Raw file size in bytes. Server-enforced 100 MB cap (maxUploadFileSize per ADR-051 Rev 4).
+	Size *int64 `json:"size,omitempty"`
 
-	// Source Origin that added the file to the workspace library.
-	Source string `json:"source"`
+	// Source Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
+	Source MediaLibraryEntrySource `json:"source"`
 
 	// UploadedAt RFC3339 UTC upload timestamp.
-	UploadedAt time.Time `json:"uploaded_at"`
+	UploadedAt *time.Time `json:"uploaded_at,omitempty"`
+
+	// WorkspaceId UUID of the workspace that owns this library entry. The discriminator at ref shape media://workspace/<workspace_id>/<id> — every MediaLibraryEntry is bound to exactly one workspace; the cross-workspace guard (FR-028a) reads this field to enforce membership.
+	WorkspaceId openapi_types.UUID `json:"workspace_id"`
 }
+
+// MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.
+type MediaLibraryEntrySource string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
