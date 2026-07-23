@@ -43,3 +43,42 @@ func TestWriteStruct_ThreeWayCollisionErrors(t *testing.T) {
 		t.Errorf("expected error message to contain 'three-way', got: %v", err)
 	}
 }
+
+// TestGenerateUsesMatchingNamedInlinePayload verifies the happy-path branch of
+// matchingNamedInlineGoType: when a property's inline shape exactly matches a
+// sibling named schema named `<OwnerWithoutFrame><PascalCase(propName)>`, the
+// generator emits a pointer (`*ErrorPayload`) for the optional field — the same
+// shape that the prior hand-adjustment to asyncapi_types.gen.go produced. This
+// is the regression test for the inline-mirror-of-named-schema pattern.
+func TestGenerateUsesMatchingNamedInlinePayload(t *testing.T) {
+	payloadShape := func() *schema {
+		return &schema{
+			schemaType: "object",
+			properties: map[string]*schema{
+				"message": {schemaType: "string"},
+			},
+			propertyOrder: []string{"message"},
+			required:      map[string]bool{"message": true},
+		}
+	}
+	schemas := map[string]*schema{
+		"ErrorFrame": {
+			schemaType: "object",
+			properties: map[string]*schema{
+				"payload": payloadShape(),
+			},
+			propertyOrder: []string{"payload"},
+			required:      map[string]bool{},
+		},
+		"ErrorPayload": payloadShape(),
+	}
+
+	src, err := generate(schemas)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	want := "Payload *ErrorPayload `json:\"payload,omitempty\"`"
+	if !strings.Contains(string(src), want) {
+		t.Fatalf("generated source does not contain %q:\n%s", want, src)
+	}
+}
