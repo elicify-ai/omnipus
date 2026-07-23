@@ -814,9 +814,9 @@ func TestStore_RegistryPersistsAcrossBoot(t *testing.T) {
 	if got1 != p1 {
 		t.Errorf("Resolve(ref1) = %q, want %q", got1, p1)
 	}
-	got2, err := store2.Resolve(ref2)
-	if err != nil {
-		t.Fatalf("ref2 %q must resolve after registry reload: %v", ref2, err)
+	got2, resolveErr2 := store2.Resolve(ref2)
+	if resolveErr2 != nil {
+		t.Fatalf("ref2 %q must resolve after registry reload: %v", ref2, resolveErr2)
 	}
 	if got2 != p2 {
 		t.Errorf("Resolve(ref2) = %q, want %q", got2, p2)

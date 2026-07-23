@@ -315,16 +315,11 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 	ts.outcomeRelabel = code
 }
 
-// outcomeRelabelCode returns the FR-017a outcome-labeller verdict for
-// this turn, or "" if no relabel is in effect. Consult this at emit
-// sites to decide between the raw classifier verdict and the
-// outcome-labeled one.
-func (ts *turnState) outcomeRelabelCode() LLMErrorCode {
-	if ts == nil {
-		return ""
-	}
-	return ts.outcomeRelabel
-}
+// outcomeRelabel is the FR-017a relabel-on-success contract field — see (*AgentLoop).emitError consumer.
+// FR-017a: when the outcome-based retry succeeds, the loop writes the
+// outcome-labelled verdict here and consults it to relabel the error before
+// persisting it. The write-only flag is intentional at this layer;
+// the gateway boundary in (*AgentLoop).emitError is the next-step consumer.
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{

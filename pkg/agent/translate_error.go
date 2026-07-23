@@ -522,7 +522,7 @@ func buildDetail(pe *ProviderError, message string) string {
 			parts = append(parts, "status="+itoa(pe.Status))
 		}
 		if len(pe.Body) > 0 {
-			preview := strings.TrimSpace(string(pe.Body))
+			preview := strings.TrimSpace(pe.Body)
 			if len(preview) > 512 {
 				preview = preview[:512] + "..."
 			}

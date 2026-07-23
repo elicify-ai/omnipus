@@ -4179,7 +4179,7 @@ func TestContract_OperationResult_NoValidation_Valid(t *testing.T) {
 // TestErrorFrame_PayloadOmitEmpty is the ADR-051 B2 regression: when
 // ErrorFrame.Payload is *ErrorPayload (pointer), encoding/json's omitempty
 // tag must actually OMIT the field for a nil payload. With the old value
-// struct shape, encoding/json serialised every error frame with
+// struct shape, encoding/json serialized every error frame with
 // `payload:{llm_error:{code:"",message:"",retryable:false}}`, violating the
 // LLMError schema (empty code/message fails enum+minLength) and causing the
 // SPA Zod validator to drop the frame silently.
@@ -4199,7 +4199,7 @@ func TestErrorFrame_PayloadOmitEmpty(t *testing.T) {
 	rawPop, err := json.Marshal(popFrame)
 	require.NoError(t, err)
 	assert.Contains(t, string(rawPop), `"payload"`,
-		"populated payload must serialise")
+		"populated payload must serialize")
 	assert.Contains(t, string(rawPop), `"llm_error"`,
 		"payload.llm_error must be present")
 	assert.Contains(t, string(rawPop), `"code":"rate_limited"`,
@@ -4237,7 +4237,7 @@ func TestReplayErrorFrame_PayloadOmitEmpty(t *testing.T) {
 	rawPop, err := json.Marshal(popFrame)
 	require.NoError(t, err)
 	assert.Contains(t, string(rawPop), `"payload"`,
-		"populated payload must serialise")
+		"populated payload must serialize")
 	assert.Contains(t, string(rawPop), `"code":"rate_limited"`,
 		"payload.llm_error.code must carry the classifier code")
 }

@@ -1289,8 +1289,8 @@ func TestTriggerOverlapGuard_RecordsSkippedOccurrence(t *testing.T) {
 	// Force the overlap guard: SpawnReset returns ErrAlreadyRunning while the
 	// task is in_progress (mirrors TestTriggerOverlapGuard's technique).
 	inProgress := task.StatusInProgress
-	if _, err := store.Update(tsk.ID, task.Patch{Status: &inProgress}); err != nil {
-		t.Fatalf("store.Update to in_progress: %v", err)
+	if _, updateErr := store.Update(tsk.ID, task.Patch{Status: &inProgress}); updateErr != nil {
+		t.Fatalf("store.Update to in_progress: %v", updateErr)
 	}
 
 	clk.Advance(2 * time.Minute)
@@ -1406,8 +1406,8 @@ func TestTriggerOverlapGuard_SuppressesSkipWhenOccurrenceAlreadyRunNow(t *testin
 	// own natural scheduled fire arrives (mirrors TestTriggerOverlapGuard's
 	// technique for forcing the overlap guard).
 	inProgress := task.StatusInProgress
-	if _, err := store.Update(tsk.ID, task.Patch{Status: &inProgress}); err != nil {
-		t.Fatalf("store.Update to in_progress: %v", err)
+	if _, updateErr := store.Update(tsk.ID, task.Patch{Status: &inProgress}); updateErr != nil {
+		t.Fatalf("store.Update to in_progress: %v", updateErr)
 	}
 
 	clk.Advance(2 * time.Minute)
