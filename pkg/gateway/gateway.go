@@ -2822,6 +2822,16 @@ func restartServices(
 			slog.Warn("media: failed to load persisted registry", "error", loadErr)
 		}
 		fms.Start()
+		// Re-wire workspace-library provider onto the new store (same shared
+		// AgentLoop cache as boot) so media://workspace/ refs keep resolving
+		// after hot reload.
+		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
+			lib := al.GetWorkspaceLibrary(workspaceID)
+			if lib == nil {
+				return nil, fmt.Errorf("workspace library unavailable for %q", workspaceID)
+			}
+			return lib, nil
+		})
 	}
 	// Swap the live pointer first so uploads arriving after this point use the
 	// new store (closes the N-D reload-swap window).
