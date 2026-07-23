@@ -303,6 +303,39 @@ func TestDelegateTool_Respond_WrongCorrelationRejected(t *testing.T) {
 	}
 }
 
+// TestDelegateTool_Respond_RejectsCrossOwnerAccess (sec-MAJOR-3) proves the
+// producer-side parent-of gate covers the respond action: a session that is
+// NOT the recorded parent of the target child cannot respond to it. This is
+// the steer/response counterpart of TestDelegateTool_Steer_RejectsCrossOwnerAccess
+// — verifyCallerOwnsSession (delegate.go) runs BEFORE the needs_input/
+// correlation/authority checks, so a non-parent is rejected up front regardless
+// of whether it guessed a valid correlation_id.
+func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
+	tool, lc, _, _ := newADR053TestTool(t)
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-co", State: session.LifecycleNeedsInput,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-A",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		NeedsInput: &session.NeedsInput{CorrelationID: "corr-co", TTLDeadline: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+
+	// A DIFFERENT parent (parent-B) tries to respond to child-co (owned by
+	// parent-A). It supplies the correct correlation_id to prove the rejection
+	// is on OWNERSHIP, not a correlation mismatch.
+	ctx := WithTranscriptSessionID(context.Background(), "parent-B")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-co", "correlation_id": "corr-co", "text": "hijack answer",
+	})
+	if !result.IsError {
+		t.Fatal("expected cross-owner respond to be rejected, got success")
+	}
+	if !strings.Contains(result.ForLLM, "not owned") {
+		t.Errorf("expected the rejection to cite ownership, got: %s", result.ForLLM)
+	}
+}
+
 func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
