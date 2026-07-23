@@ -240,26 +240,26 @@ func (p *GHReleasePuller) verify(ctx context.Context, data []byte, assetURL stri
 	client := p.client()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
 	if err != nil {
-		// Treat request construction failure as a soft skip — never block on
-		// a malformed URL.
-		return nil
+		return fmt.Errorf("capabilities: checksum request construction: %w", err)
 	}
 	req.Header.Set("User-Agent", p.UserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		// Soft skip: transport failure on checksum fetch does not invalidate
-		// the catalog body.
-		return nil
+		return fmt.Errorf("capabilities: checksum fetch: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		// No sidecar at this URL — soft skip (releases without sidecars
-		// are still trusted by virtue of the GitHub Release signing path).
+	if resp.StatusCode == http.StatusNotFound {
+		// No sidecar at this URL — legitimate skip (releases without
+		// sidecars are still trusted by virtue of the GitHub Release
+		// signing path).
 		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("capabilities: checksum status: %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<10)) // 1 KB cap on the checksum file
 	if err != nil {
-		return nil
+		return fmt.Errorf("capabilities: checksum read: %w", err)
 	}
 	expected := strings.TrimSpace(string(body))
 	// sha256sum format: "<hex>  " or just "<hex>". Accept both.
@@ -267,7 +267,7 @@ func (p *GHReleasePuller) verify(ctx context.Context, data []byte, assetURL stri
 		expected = expected[:idx]
 	}
 	if expected == "" {
-		return nil
+		return fmt.Errorf("capabilities: checksum sidecar is empty")
 	}
 	got := sha256.Sum256(data)
 	gotHex := hex.EncodeToString(got[:])

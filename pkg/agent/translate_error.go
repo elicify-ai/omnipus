@@ -16,6 +16,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -117,6 +118,11 @@ func defaultUserMessage(code LLMErrorCode) string {
 	if msg, ok := userMessages[code]; ok && msg != "" {
 		return msg
 	}
+	// Unrecognised code — log a warning so the operator knows a code is
+	// slipping through without a user-facing message (SFH-W1-02). This is
+	// NOT a silent fallback; the warning provides observability for any
+	// code added in the future without a matching userMessages entry.
+	log.Printf("[agent] WARN: unrecognised LLM error code %q — using generic fallback", code)
 	return userMessages[CodeUnknown]
 }
 
