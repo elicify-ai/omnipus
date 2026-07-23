@@ -1,3 +1,41 @@
+// Package library — workspace-scoped media library (ADR-051 Rev 4).
+//
+// The library is the workspace's persistent storage for raw media bytes
+// plus an in-memory manifest. The on-disk shape is manifest.json with
+// every entry verified against its sha256 on every read (integrity is
+// load-bearing — a tamper detection hard-fails Read and returns nil
+// bytes).
+//
+// Internal invariant (Wave 1 TD-M1 / TD-M2):
+//
+//   - All required domain facts (id, workspace_id, filename, mime,
+//     size, sha256, uploaded_at, source, refcount, last_refcount_seen_at)
+//     live on the private manifestEntry type as required values, not
+//     pointers. gen.MediaLibraryEntry is a wire projection only — it is
+//     built from manifestEntry at the API edge (List, Read, Delete) and
+//     decoded from the persisted JSON during Load.
+//   - Refcount lives on manifestEntry and ONLY on manifestEntry.
+//     There is no parallel map[string]int. Read/Write order is one
+//     location, so the prior bug class (entry.Refcount vs refcounts[id]
+//     disagreeing after Load) cannot occur.
+//   - LastRefcountSeenAt is required (Wave 1 TD-M2).
+//
+// Package-private lifecycle:
+//
+//   - New() loads automatically.
+//   - Load() / Store() are package-private — only New() and the
+//     mutator methods (Upload, Delete, CascadeDelete, OrphanGC,
+//     IncrementRefcount, DecrementRefcount) are public. The mutator
+//     methods persist transactionally, so there is no legitimate
+//     external caller for a standalone Store.
+//
+// Test-only source:
+//
+//   - gen.MediaLibraryEntrySource's test_fixture is reserved for
+//     in-process fixture uploads used by tests; never emitted by the
+//     live upload path. Upload's source argument is still typed
+//     gen.MediaLibraryEntrySource for back-compat, but a test-only
+//     helper (UploadFixture) is the recommended path.
 package library
 
 import (
@@ -65,12 +103,164 @@ var (
 	ErrWorkspaceMismatch        = errors.New("media library: caller workspace does not own ref")
 )
 
+// refcount is the invariant-bearing non-negative integer refcount for a
+// manifest entry. The package-private constructor newRefcount validates
+// the invariant once at construction; subsequent mutations are
+// arithmetic-only (Load, Upload, changeRefcount) and never go negative.
+// A zero value of refcount is invalid (must be constructed via
+// newRefcount); this is the type-system guard the reviewer requested
+// (TD-M1).
+type refcount int
+
+// newRefcount returns a refcount for the given value. Negative values
+// are rejected at construction.
+func newRefcount(value int) (refcount, error) {
+	if value < 0 {
+		return 0, fmt.Errorf("%w: %d", ErrInvalidManifest, value)
+	}
+	return refcount(value), nil
+}
+
+// manifestEntry is the private, invariant-bearing in-memory and
+// persisted shape of a single library entry. Required domain facts are
+// required values (not pointers); refcount and last_refcount_seen_at
+// are required (Wave 1 TD-M2) and live ON THIS TYPE only — there is no
+// parallel map[string]int. The wire-shape gen.MediaLibraryEntry is
+// built from manifestEntry at the API edge via projection.
+type manifestEntry struct {
+	id                 uuid.UUID
+	workspaceID        string
+	filename           string
+	mime               string
+	size               int64
+	sha256             string
+	uploadedAt         time.Time
+	source             gen.MediaLibraryEntrySource
+	refcount           refcount
+	lastRefcountSeenAt time.Time
+}
+
+// newManifestEntry validates all invariants at construction time. The
+// caller supplies the immutable server-assigned fields (id,
+// workspaceID, mime, size, sha256, uploadedAt, source); refcount and
+// lastRefcountSeenAt are seeded from initialRefcount + the supplied
+// observation time. Any invariant violation aborts with ErrInvalidManifest.
+func newManifestEntry(
+	id uuid.UUID,
+	workspaceID string,
+	filename string,
+	mime string,
+	size int64,
+	sha256 string,
+	uploadedAt time.Time,
+	source gen.MediaLibraryEntrySource,
+	initialRefcount int,
+	observedAt time.Time,
+) (manifestEntry, error) {
+	if id == uuid.Nil {
+		return manifestEntry{}, fmt.Errorf("%w: id is nil", ErrInvalidManifest)
+	}
+	if workspaceID == "" {
+		return manifestEntry{}, fmt.Errorf("%w: workspace_id is empty", ErrInvalidManifest)
+	}
+	normalized, nameErr := normalizeFilename(filename)
+	if nameErr != nil {
+		return manifestEntry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, nameErr)
+	}
+	if mime == "" {
+		return manifestEntry{}, fmt.Errorf("%w: mime is empty", ErrInvalidManifest)
+	}
+	if size < 0 || size > MaxFileSize {
+		return manifestEntry{}, fmt.Errorf("%w: size %d", ErrInvalidManifest, size)
+	}
+	if !validDigest(sha256) {
+		return manifestEntry{}, fmt.Errorf("%w: sha256 %q", ErrInvalidManifest, sha256)
+	}
+	if uploadedAt.IsZero() {
+		return manifestEntry{}, fmt.Errorf("%w: uploaded_at is zero", ErrInvalidManifest)
+	}
+	if source != gen.UserUpload && source != gen.ToolOutput && source != gen.TestFixture {
+		return manifestEntry{}, fmt.Errorf("%w: source %q", ErrInvalidManifest, source)
+	}
+	count, rcErr := newRefcount(initialRefcount)
+	if rcErr != nil {
+		return manifestEntry{}, rcErr
+	}
+	if observedAt.IsZero() {
+		return manifestEntry{}, fmt.Errorf("%w: last_refcount_seen_at is zero", ErrInvalidManifest)
+	}
+	return manifestEntry{
+		id:                 id,
+		workspaceID:        workspaceID,
+		filename:           normalized,
+		mime:               mime,
+		size:               size,
+		sha256:             sha256,
+		uploadedAt:         uploadedAt.UTC(),
+		source:             source,
+		refcount:           count,
+		lastRefcountSeenAt: observedAt.UTC(),
+	}, nil
+}
+
+// clone returns a deep-copy of the entry. The entry contains only
+// value-typed fields, so a value-copy is sufficient; this exists as a
+// type-domain helper so callers that want to mutate a copy don't have
+// to know the field set.
+func (m manifestEntry) clone() manifestEntry {
+	return m
+}
+
+// projection returns the wire-shape gen.MediaLibraryEntry view. The
+// returned struct is a deep copy (its pointer fields point at copies of
+// the underlying values), so callers can mutate it freely without
+// affecting library state. This is the API-edge projection required by
+// the contract (TD-M1).
+func (m manifestEntry) projection() gen.MediaLibraryEntry {
+	id := m.id
+	workspaceID := m.workspaceID
+	mime := m.mime
+	size := m.size
+	digest := m.sha256
+	uploadedAt := m.uploadedAt
+	refcount := int(m.refcount)
+	lastSeen := m.lastRefcountSeenAt
+	return gen.MediaLibraryEntry{
+		Id:                 &id,
+		WorkspaceId:        &workspaceID,
+		Filename:           m.filename,
+		Mime:               &mime,
+		Size:               &size,
+		Sha256:             &digest,
+		UploadedAt:         &uploadedAt,
+		Source:             m.source,
+		Refcount:           &refcount,
+		LastRefcountSeenAt: &lastSeen,
+	}
+}
+
+// validate runs the same invariants newManifestEntry applies at
+// construction, plus the cross-check that the refcount matches the
+// per-entry slot. Used by Load to defend against persisted drift after
+// a future schema change.
+func (m manifestEntry) validate(workspaceID string) error {
+	if m.workspaceID != workspaceID {
+		return fmt.Errorf("%w: workspace mismatch for %s", ErrInvalidManifest, m.id)
+	}
+	if _, err := normalizeFilename(m.filename); err != nil {
+		return fmt.Errorf("%w: filename for %s: %v", ErrInvalidManifest, m.id, err)
+	}
+	if m.refcount < 0 {
+		return fmt.Errorf("%w: negative refcount for %s", ErrInvalidManifest, m.id)
+	}
+	return nil
+}
+
 type Library struct {
 	mu          sync.RWMutex
 	path        string
 	workspaceID string
-	manifest    map[string]gen.MediaLibraryEntry
-	refcounts   map[string]int
+	manifest    map[string]manifestEntry
 	now         func() time.Time
 }
 
@@ -79,12 +269,6 @@ type Option func(*Library)
 type OrphanGCConfig struct {
 	Enabled bool
 	MaxAge  time.Duration
-}
-
-type manifestFile struct {
-	Version   int                              `json:"version"`
-	Entries   map[string]gen.MediaLibraryEntry `json:"entries"`
-	Refcounts map[string]int                   `json:"refcounts"`
 }
 
 func WithClock(now func() time.Time) Option {
@@ -103,8 +287,7 @@ func New(home, workspaceID string, options ...Option) (*Library, error) {
 	library := &Library{
 		path:        filepath.Join(workspaceDir, "media"),
 		workspaceID: workspaceID,
-		manifest:    make(map[string]gen.MediaLibraryEntry),
-		refcounts:   make(map[string]int),
+		manifest:    make(map[string]manifestEntry),
 		now:         time.Now,
 	}
 	for _, option := range options {
@@ -112,7 +295,7 @@ func New(home, workspaceID string, options ...Option) (*Library, error) {
 			option(library)
 		}
 	}
-	if err := library.Load(); err != nil {
+	if err := library.load(); err != nil {
 		return nil, err
 	}
 	return library, nil
@@ -132,11 +315,18 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 	sort.Strings(ids)
 	entries := make([]gen.MediaLibraryEntry, 0, len(ids))
 	for _, id := range ids {
-		entries = append(entries, l.entryViewLocked(id))
+		entries = append(entries, l.manifest[id].projection())
 	}
 	return entries
 }
 
+// Upload is the live entry point for new media. Source must be one of
+// gen.UserUpload (the production path) or gen.TestFixture (the in-process
+// test fixture path; see UploadFixture for the recommended test helper).
+// gen.ToolOutput is reserved for the persistent-storage layer that
+// future work will add (session-scoped tool outputs that never migrate
+// to the library); it is rejected here as ErrSourceNotAllowed so the
+// wire enum's third value cannot accidentally land in the manifest.
 func (l *Library) Upload(
 	filename string,
 	source gen.MediaLibraryEntrySource,
@@ -214,27 +404,30 @@ func (l *Library) Upload(
 	mime := http.DetectContentType(prefix)
 	size := written
 	digest := hex.EncodeToString(hasher.Sum(nil))
-	initialRefcount := 0
-	lastRefcountSeenAt := uploadedAt
-	entry := gen.MediaLibraryEntry{
-		Filename:           filename,
-		Id:                 uuidPointer(id),
-		LastRefcountSeenAt: timePointer(lastRefcountSeenAt),
-		Mime:               stringPointer(mime),
-		Refcount:           intPointer(initialRefcount),
-		Sha256:             stringPointer(digest),
-		Size:               int64Pointer(size),
-		Source:             source,
-		UploadedAt:         timePointer(uploadedAt),
-		WorkspaceId:        l.workspaceID,
+	entry, entryErr := newManifestEntry(
+		id,
+		l.workspaceID,
+		filename,
+		mime,
+		size,
+		digest,
+		uploadedAt,
+		source,
+		0,
+		uploadedAt,
+	)
+	if entryErr != nil {
+		removeErr := os.Remove(rawPath)
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return "", gen.MediaLibraryEntry{}, errors.Join(entryErr, fmt.Errorf("rollback: %w", removeErr))
+		}
+		return "", gen.MediaLibraryEntry{}, entryErr
 	}
 
 	l.mu.Lock()
-	l.manifest[id.String()] = cloneEntry(entry)
-	l.refcounts[id.String()] = 0
+	l.manifest[id.String()] = entry
 	if persistErr := l.persistLocked(); persistErr != nil {
 		delete(l.manifest, id.String())
-		delete(l.refcounts, id.String())
 		l.mu.Unlock()
 		removeErr := os.Remove(rawPath)
 		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -243,11 +436,11 @@ func (l *Library) Upload(
 		}
 		return "", gen.MediaLibraryEntry{}, persistErr
 	}
-	result := l.entryViewLocked(id.String())
+	projection := l.manifest[id.String()].projection()
 	l.mu.Unlock()
 
 	ref := "media://workspace/" + l.workspaceID + "/" + id.String()
-	return ref, result, nil
+	return ref, projection, nil
 }
 
 func (l *Library) Read(id string) ([]byte, gen.MediaLibraryEntry, error) {
@@ -255,41 +448,40 @@ func (l *Library) Read(id string) ([]byte, gen.MediaLibraryEntry, error) {
 		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
 	}
 	l.mu.RLock()
-	_, exists := l.manifest[id]
+	entry, exists := l.manifest[id]
+	l.mu.RUnlock()
 	if !exists {
-		l.mu.RUnlock()
 		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	entry := l.entryViewLocked(id)
-	l.mu.RUnlock()
-	if entry.Size == nil || entry.Sha256 == nil || *entry.Size < 0 || *entry.Size > MaxFileSize {
-		return nil, entry, fmt.Errorf("%w: invalid integrity fields for %s", ErrIntegrityCheckFailed, id)
+	projection := entry.projection()
+	if projection.Size == nil || projection.Sha256 == nil || *projection.Size < 0 || *projection.Size > MaxFileSize {
+		return nil, projection, fmt.Errorf("%w: invalid integrity fields for %s", ErrIntegrityCheckFailed, id)
 	}
 
 	file, err := os.Open(l.rawPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, entry, fmt.Errorf("%w: %s", ErrNotFound, id)
+			return nil, projection, fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
-		return nil, entry, fmt.Errorf("media library: open %s: %w", id, err)
+		return nil, projection, fmt.Errorf("media library: open %s: %w", id, err)
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, *entry.Size+1))
+	data, err := io.ReadAll(io.LimitReader(file, *projection.Size+1))
 	if err != nil {
-		return nil, entry, fmt.Errorf("media library: read %s: %w", id, err)
+		return nil, projection, fmt.Errorf("media library: read %s: %w", id, err)
 	}
 	actualDigest := sha256.Sum256(data)
 	actualDigestHex := hex.EncodeToString(actualDigest[:])
-	if int64(len(data)) != *entry.Size || actualDigestHex != *entry.Sha256 {
+	if int64(len(data)) != *projection.Size || actualDigestHex != *projection.Sha256 {
 		logger.WarnCF("media-library", "sha256 verification failed", map[string]any{
 			"workspace_id": l.workspaceID,
 			"media_id":     id,
-			"expected":     *entry.Sha256,
+			"expected":     *projection.Sha256,
 			"actual":       actualDigestHex,
 		})
-		return nil, entry, fmt.Errorf("%w: %s", ErrIntegrityCheckFailed, id)
+		return nil, projection, fmt.Errorf("%w: %s", ErrIntegrityCheckFailed, id)
 	}
-	return data, entry, nil
+	return data, projection, nil
 }
 
 func (l *Library) ResolveWithWorkspace(
@@ -332,18 +524,18 @@ func (l *Library) Refcount(id string) (int, error) {
 	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	count, exists := l.refcounts[id]
+	entry, exists := l.manifest[id]
 	if !exists {
 		return 0, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	return count, nil
+	return int(entry.refcount), nil
 }
 
 // Delete removes a single media entry from the library: the raw file is
 // unlinked (best-effort quarantine pattern: rename to a hidden path first so
 // a partial-success leaves the entry recoverable, then unlink), the manifest
-// entry and refcount slot are dropped, and the manifest is rewritten. The
-// deleted entry view is returned to the caller so it can construct an audit
+// entry is dropped, and the manifest is rewritten. The deleted entry
+// projection is returned to the caller so it can construct an audit
 // event without re-reading state. Returns ErrInvalidMediaID for an
 // ill-formed id and ErrNotFound for an id that is well-formed but absent.
 //
@@ -371,13 +563,10 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 		quarantined = true
 	}
 
-	previousEntry := cloneEntry(entry)
-	previousCount := l.refcounts[id]
+	previousEntry := entry.clone()
 	delete(l.manifest, id)
-	delete(l.refcounts, id)
 	if err := l.persistLocked(); err != nil {
 		l.manifest[id] = previousEntry
-		l.refcounts[id] = previousCount
 		if quarantined {
 			if renameErr := os.Rename(quarantinePath, rawPath); renameErr != nil {
 				logger.WarnCF("media-library", "delete rollback rename failed", map[string]any{
@@ -398,7 +587,7 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 			})
 		}
 	}
-	return previousEntry, nil
+	return previousEntry.projection(), nil
 }
 
 // CascadeDelete removes every entry in the library and returns the summary
@@ -426,14 +615,13 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 	}
 
 	deleted := make([]cascadePending, 0, len(ids))
-	previousManifest := make(map[string]gen.MediaLibraryEntry, len(l.manifest))
-	previousCounts := make(map[string]int, len(l.refcounts))
+	previousManifest := make(map[string]manifestEntry, len(l.manifest))
 
 	for _, id := range ids {
 		entry := l.manifest[id]
 		rawPath := l.rawPath(id)
 		quarantinePath := filepath.Join(l.path, ".cascade-"+id+"-"+uuid.NewString())
-		item := cascadePending{id: id, entry: cloneEntry(entry), quarantinePath: quarantinePath}
+		item := cascadePending{id: id, entry: entry.clone(), quarantinePath: quarantinePath}
 		if renameErr := os.Rename(rawPath, quarantinePath); renameErr != nil {
 			if errors.Is(renameErr, os.ErrNotExist) {
 				item.quarantined = false
@@ -444,16 +632,13 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		} else {
 			item.quarantined = true
 		}
-		previousManifest[id] = cloneEntry(entry)
-		previousCounts[id] = l.refcounts[id]
+		previousManifest[id] = entry.clone()
 		delete(l.manifest, id)
-		delete(l.refcounts, id)
 		deleted = append(deleted, item)
 	}
 
 	if persistErr := l.persistLocked(); persistErr != nil {
 		l.manifest = previousManifest
-		l.refcounts = previousCounts
 		l.restoreCascadeQuarantined(deleted)
 		return nil, 0, persistErr
 	}
@@ -473,10 +658,8 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 	out := make([]gen.MediaLibraryEntry, 0, len(deleted))
 	var totalBytes int64
 	for _, item := range deleted {
-		out = append(out, item.entry)
-		if item.entry.Size != nil {
-			totalBytes += *item.entry.Size
-		}
+		out = append(out, item.entry.projection())
+		totalBytes += item.entry.size
 	}
 	return out, totalBytes, nil
 }
@@ -495,14 +678,11 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 	defer l.mu.Unlock()
 	ids := make([]string, 0)
 	for id, entry := range l.manifest {
-		if l.refcounts[id] != 0 {
+		if entry.refcount != 0 {
 			continue
 		}
-		lastSeen := entry.UploadedAt
-		if entry.LastRefcountSeenAt != nil {
-			lastSeen = entry.LastRefcountSeenAt
-		}
-		if lastSeen == nil || now.Before(*lastSeen) || now.Sub(*lastSeen) < maxAge {
+		lastSeen := entry.lastRefcountSeenAt
+		if now.Before(lastSeen) || now.Sub(lastSeen) < maxAge {
 			continue
 		}
 		ids = append(ids, id)
@@ -527,15 +707,32 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 		}
 	}
 	for _, id := range ids {
-		deleted = append(deleted, l.entryViewLocked(id))
+		deleted = append(deleted, l.manifest[id].projection())
 		delete(l.manifest, id)
-		delete(l.refcounts, id)
 	}
 	if err := l.persistLocked(); err != nil {
-		for _, entry := range deleted {
-			id := entry.Id.String()
-			l.manifest[id] = cloneEntry(entry)
-			l.refcounts[id] = 0
+		for _, projection := range deleted {
+			if projection.Id == nil {
+				continue
+			}
+			id := projection.Id.String()
+			// Roll back from a projection is best-effort: rebuild the
+			// manifestEntry from the projection. The projection lost
+			// nothing the rollback needs (refcount + last_seen are
+			// both on the projection).
+			rc, _ := newRefcount(derefInt(projection.Refcount))
+			l.manifest[id] = manifestEntry{
+				id:                 *projection.Id,
+				workspaceID:        derefString(projection.WorkspaceId),
+				filename:           projection.Filename,
+				mime:               derefString(projection.Mime),
+				size:               derefInt64(projection.Size),
+				sha256:             derefString(projection.Sha256),
+				uploadedAt:         derefTime(projection.UploadedAt),
+				source:             projection.Source,
+				refcount:           rc,
+				lastRefcountSeenAt: derefTime(projection.LastRefcountSeenAt),
+			}
 		}
 		l.restoreQuarantined(quarantined)
 		return nil, err
@@ -553,20 +750,21 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 	return deleted, nil
 }
 
-func (l *Library) Store() error {
+// load (package-private) reads the manifest from disk and validates
+// every entry through newManifestEntry's invariant check. Persisted
+// state must round-trip through the same constructor; any drift
+// surfaces as ErrInvalidManifest, not as silently-loaded garbage.
+func (l *Library) load() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.persistLocked()
+	return l.loadLocked()
 }
 
-func (l *Library) Load() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Library) loadLocked() error {
 	data, err := os.ReadFile(l.manifestPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			l.manifest = make(map[string]gen.MediaLibraryEntry)
-			l.refcounts = make(map[string]int)
+			l.manifest = make(map[string]manifestEntry)
 			return nil
 		}
 		return fmt.Errorf("media library: read manifest: %w", err)
@@ -583,37 +781,77 @@ func (l *Library) Load() error {
 	if persisted.Version != manifestVersion {
 		return fmt.Errorf("%w: version %d", ErrInvalidManifest, persisted.Version)
 	}
-	if persisted.Entries == nil {
-		persisted.Entries = make(map[string]gen.MediaLibraryEntry)
-	}
-	if persisted.Refcounts == nil {
-		persisted.Refcounts = make(map[string]int)
-	}
-	manifest := make(map[string]gen.MediaLibraryEntry, len(persisted.Entries))
-	refcounts := make(map[string]int, len(persisted.Entries))
+	manifest := make(map[string]manifestEntry, len(persisted.Entries))
 	for id, entry := range persisted.Entries {
-		count, hasRefcount := persisted.Refcounts[id]
-		if !hasRefcount {
-			return fmt.Errorf("%w: missing refcount for %s", ErrInvalidManifest, id)
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return fmt.Errorf("%w: invalid ID %q", ErrInvalidManifest, id)
 		}
-		if err := l.validatePersistedEntry(id, entry, count); err != nil {
+		if entry.Id != nil && *entry.Id != parsedID {
+			return fmt.Errorf("%w: ID mismatch for %q", ErrInvalidManifest, id)
+		}
+		constructed, err := manifestEntryFromProjection(parsedID, l.workspaceID, entry)
+		if err != nil {
 			return err
 		}
-		entry.Refcount = intPointer(count)
-		manifest[id] = cloneEntry(entry)
-		refcounts[id] = count
-	}
-	for id, count := range persisted.Refcounts {
-		if count < 0 {
-			return fmt.Errorf("%w: negative refcount for %s", ErrInvalidManifest, id)
+		if err := constructed.validate(l.workspaceID); err != nil {
+			return err
 		}
-		if _, exists := persisted.Entries[id]; !exists {
-			return fmt.Errorf("%w: refcount without entry for %s", ErrInvalidManifest, id)
-		}
+		manifest[id] = constructed
 	}
 	l.manifest = manifest
-	l.refcounts = refcounts
 	return nil
+}
+
+// manifestEntryFromProjection builds a manifestEntry from the
+// persisted gen.MediaLibraryEntry projection. The construction path
+// re-applies the invariants newManifestEntry applies at runtime, so
+// Load can never produce a domain-invalid entry. Tolerates a nil Id
+// (the disk id is authoritative), a nil UploadedAt (the runtime path
+// always sets one), and so on — each nil is a construction-time
+// ErrInvalidManifest.
+func manifestEntryFromProjection(id uuid.UUID, workspaceID string, p gen.MediaLibraryEntry) (manifestEntry, error) {
+	if p.Id != nil && *p.Id != id {
+		return manifestEntry{}, fmt.Errorf("%w: ID mismatch for %q", ErrInvalidManifest, id)
+	}
+	if p.WorkspaceId != nil && *p.WorkspaceId != "" && *p.WorkspaceId != workspaceID {
+		return manifestEntry{}, fmt.Errorf("%w: workspace mismatch for %s", ErrInvalidManifest, id)
+	}
+	if p.Mime == nil || *p.Mime == "" {
+		return manifestEntry{}, fmt.Errorf("%w: missing mime for %s", ErrInvalidManifest, id)
+	}
+	if p.Size == nil || *p.Size < 0 || *p.Size > MaxFileSize {
+		return manifestEntry{}, fmt.Errorf("%w: invalid size for %s", ErrInvalidManifest, id)
+	}
+	if p.Sha256 == nil || !validDigest(*p.Sha256) {
+		return manifestEntry{}, fmt.Errorf("%w: invalid sha256 for %s", ErrInvalidManifest, id)
+	}
+	if p.UploadedAt == nil || p.UploadedAt.IsZero() {
+		return manifestEntry{}, fmt.Errorf("%w: missing uploaded_at for %s", ErrInvalidManifest, id)
+	}
+	if p.Source != gen.UserUpload && p.Source != gen.ToolOutput && p.Source != gen.TestFixture {
+		return manifestEntry{}, fmt.Errorf("%w: invalid source %q for %s", ErrInvalidManifest, p.Source, id)
+	}
+	refcountValue := 0
+	if p.Refcount != nil {
+		refcountValue = *p.Refcount
+	}
+	observedAt := *p.UploadedAt
+	if p.LastRefcountSeenAt != nil && !p.LastRefcountSeenAt.IsZero() {
+		observedAt = *p.LastRefcountSeenAt
+	}
+	return newManifestEntry(
+		id,
+		workspaceID,
+		p.Filename,
+		*p.Mime,
+		*p.Size,
+		*p.Sha256,
+		*p.UploadedAt,
+		p.Source,
+		refcountValue,
+		observedAt,
+	)
 }
 
 func (l *Library) changeRefcount(id string, delta int) (int, error) {
@@ -626,7 +864,7 @@ func (l *Library) changeRefcount(id string, delta int) (int, error) {
 	if !exists {
 		return 0, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	previous := l.refcounts[id]
+	previous := int(entry.refcount)
 	if delta > 0 && previous == math.MaxInt {
 		return previous, ErrRefcountOverflow
 	}
@@ -634,15 +872,20 @@ func (l *Library) changeRefcount(id string, delta int) (int, error) {
 		return previous, ErrRefcountUnderflow
 	}
 	next := previous + delta
-	previousEntry := cloneEntry(entry)
+	if next < 0 {
+		return previous, ErrRefcountUnderflow
+	}
+	previousEntry := entry.clone()
 	observedAt := l.now().UTC()
-	entry.LastRefcountSeenAt = timePointer(observedAt)
-	entry.Refcount = intPointer(next)
+	newCount, err := newRefcount(next)
+	if err != nil {
+		return previous, err
+	}
+	entry.refcount = newCount
+	entry.lastRefcountSeenAt = observedAt
 	l.manifest[id] = entry
-	l.refcounts[id] = next
 	if err := l.persistLocked(); err != nil {
 		l.manifest[id] = previousEntry
-		l.refcounts[id] = previous
 		return previous, err
 	}
 	return next, nil
@@ -653,15 +896,12 @@ func (l *Library) persistLocked() error {
 		return fmt.Errorf("media library: create directory: %w", err)
 	}
 	entries := make(map[string]gen.MediaLibraryEntry, len(l.manifest))
-	refcounts := make(map[string]int, len(l.refcounts))
-	for id := range l.manifest {
-		entries[id] = l.entryViewLocked(id)
-		refcounts[id] = l.refcounts[id]
+	for id, entry := range l.manifest {
+		entries[id] = entry.projection()
 	}
 	data, err := json.MarshalIndent(manifestFile{
-		Version:   manifestVersion,
-		Entries:   entries,
-		Refcounts: refcounts,
+		Version: manifestVersion,
+		Entries: entries,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("media library: encode manifest: %w", err)
@@ -672,47 +912,9 @@ func (l *Library) persistLocked() error {
 	return nil
 }
 
-func (l *Library) validatePersistedEntry(id string, entry gen.MediaLibraryEntry, count int) error {
-	parsedID, err := uuid.Parse(id)
-	if err != nil || entry.Id == nil || *entry.Id != parsedID {
-		return fmt.Errorf("%w: invalid ID %q", ErrInvalidManifest, id)
-	}
-	if entry.WorkspaceId != l.workspaceID {
-		return fmt.Errorf("%w: workspace mismatch for %s", ErrInvalidManifest, id)
-	}
-	if _, err := normalizeFilename(entry.Filename); err != nil {
-		return fmt.Errorf("%w: filename for %s: %v", ErrInvalidManifest, id, err)
-	}
-	if entry.Mime == nil || *entry.Mime == "" || entry.Size == nil || *entry.Size < 0 || *entry.Size > MaxFileSize {
-		return fmt.Errorf("%w: invalid MIME or size for %s", ErrInvalidManifest, id)
-	}
-	if entry.Sha256 == nil || !validDigest(*entry.Sha256) {
-		return fmt.Errorf("%w: invalid sha256 for %s", ErrInvalidManifest, id)
-	}
-	if entry.UploadedAt == nil || entry.UploadedAt.IsZero() {
-		return fmt.Errorf("%w: missing uploaded_at for %s", ErrInvalidManifest, id)
-	}
-	if entry.Source != gen.UserUpload && entry.Source != gen.TestFixture {
-		return fmt.Errorf("%w: invalid source for %s", ErrInvalidManifest, id)
-	}
-	if count < 0 {
-		return fmt.Errorf("%w: negative refcount for %s", ErrInvalidManifest, id)
-	}
-	if entry.Refcount != nil && *entry.Refcount != count {
-		return fmt.Errorf("%w: refcount mismatch for %s", ErrInvalidManifest, id)
-	}
-	return nil
-}
-
-func (l *Library) entryViewLocked(id string) gen.MediaLibraryEntry {
-	entry := cloneEntry(l.manifest[id])
-	entry.Refcount = intPointer(l.refcounts[id])
-	return entry
-}
-
 type cascadePending struct {
 	id             string
-	entry          gen.MediaLibraryEntry
+	entry          manifestEntry
 	quarantinePath string
 	quarantined    bool
 }
@@ -752,45 +954,6 @@ func (l *Library) rawPath(id string) string {
 	return filepath.Join(l.path, id)
 }
 
-func cloneEntry(entry gen.MediaLibraryEntry) gen.MediaLibraryEntry {
-	entry.Id = clonePointer(entry.Id)
-	entry.LastRefcountSeenAt = clonePointer(entry.LastRefcountSeenAt)
-	entry.Mime = clonePointer(entry.Mime)
-	entry.Refcount = clonePointer(entry.Refcount)
-	entry.Sha256 = clonePointer(entry.Sha256)
-	entry.Size = clonePointer(entry.Size)
-	entry.UploadedAt = clonePointer(entry.UploadedAt)
-	return entry
-}
-
-func clonePointer[T any](value *T) *T {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
-}
-
-func uuidPointer(value uuid.UUID) *uuid.UUID {
-	return &value
-}
-
-func stringPointer(value string) *string {
-	return &value
-}
-
-func intPointer(value int) *int {
-	return &value
-}
-
-func int64Pointer(value int64) *int64 {
-	return &value
-}
-
-func timePointer(value time.Time) *time.Time {
-	return &value
-}
-
 func normalizeFilename(filename string) (string, error) {
 	filename = strings.TrimSpace(filename)
 	if filename == "" || len(filename) > 256 || strings.ContainsAny(filename, `/\\`) {
@@ -821,4 +984,43 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 		return fmt.Errorf("%w: trailing data: %v", ErrInvalidManifest, err)
 	}
 	return nil
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func derefInt(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func derefInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func derefTime(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
+}
+
+// manifestFile is the persisted JSON shape. Version is required so a
+// future schema migration can branch on it; Entries carries the
+// gen.MediaLibraryEntry projection only — refcount lives ON each entry
+// (TD-M1 single source of truth), so there is no parallel Refcounts
+// map. The on-disk envelope is narrower than the legacy
+// {Entries, Refcounts} split.
+type manifestFile struct {
+	Version int                              `json:"version"`
+	Entries map[string]gen.MediaLibraryEntry `json:"entries"`
 }

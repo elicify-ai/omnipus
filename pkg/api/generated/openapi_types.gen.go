@@ -5558,13 +5558,13 @@ type MediaLibraryEntry struct {
 	// Id UUID media identifier within the workspace library.
 	Id *openapi_types.UUID `json:"id,omitempty"`
 
-	// LastRefcountSeenAt Optional RFC3339 UTC timestamp of the latest refcount observation.
+	// LastRefcountSeenAt RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
 	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
 
 	// Mime MIME type sniffed from the stored bytes.
 	Mime *string `json:"mime,omitempty"`
 
-	// Refcount Optional server-maintained count of persisted message or session references.
+	// Refcount Server-maintained count of persisted message or session references. Required on every entry (FR-007a / Wave 1 TD-M2).
 	Refcount *int `json:"refcount,omitempty"`
 
 	// Sha256 Lowercase hexadecimal SHA-256 digest verified on every read.
@@ -5579,8 +5579,8 @@ type MediaLibraryEntry struct {
 	// UploadedAt RFC3339 UTC upload timestamp.
 	UploadedAt *time.Time `json:"uploaded_at,omitempty"`
 
-	// WorkspaceId Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>.
-	WorkspaceId string `json:"workspace_id"`
+	// WorkspaceId Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>. Server-assigned from the caller workspace context (FR-007a / Wave 1 TD-M2).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). test_fixture is reserved for in-process fixture uploads used by tests; never emitted by the live upload path.

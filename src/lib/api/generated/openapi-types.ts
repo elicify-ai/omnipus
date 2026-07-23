@@ -3048,10 +3048,10 @@ export interface components {
              */
             readonly id: string;
             /**
-             * @description Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>.
+             * @description Workspace identifier that owns this library entry. Existing Omnipus workspaces use ULIDs; the cross-workspace guard (FR-028a) compares this value to the workspace segment in media://workspace/<workspace_id>/<id>. Server-assigned from the caller workspace context (FR-007a / Wave 1 TD-M2).
              * @example 01KY6SHW51CV7FMMHP5Y9SWB7P
              */
-            workspace_id: string;
+            readonly workspace_id: string;
             /**
              * @description Original user-visible filename. Server-side trim+reject for control characters and path separators; the 256-char cap mirrors POSIX filename limits.
              * @example diagram.png
@@ -3085,11 +3085,11 @@ export interface components {
              * @enum {string}
              */
             source: "user_upload" | "tool_output" | "test_fixture";
-            /** @description Optional server-maintained count of persisted message or session references. */
+            /** @description Server-maintained count of persisted message or session references. Required on every entry (FR-007a / Wave 1 TD-M2). */
             readonly refcount?: number;
             /**
              * Format: date-time
-             * @description Optional RFC3339 UTC timestamp of the latest refcount observation.
+             * @description RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
              */
             readonly last_refcount_seen_at?: string;
         };

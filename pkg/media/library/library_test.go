@@ -130,8 +130,12 @@ func TestWorkspaceLibrary_ExistingULIDWorkspace_Succeeds(t *testing.T) {
 	if !strings.HasPrefix(ref, "media://workspace/"+workspaceID+"/") {
 		t.Fatalf("Upload() ref = %q", ref)
 	}
-	if entry.WorkspaceId != workspaceID {
-		t.Fatalf("WorkspaceId = %q, want %q", entry.WorkspaceId, workspaceID)
+	if entry.WorkspaceId == nil || *entry.WorkspaceId != workspaceID {
+		var got string
+		if entry.WorkspaceId != nil {
+			got = *entry.WorkspaceId
+		}
+		t.Fatalf("WorkspaceId = %q, want %q", got, workspaceID)
 	}
 }
 
@@ -148,8 +152,12 @@ func TestWorkspaceLibrary_Manifest_HasSHA256AndUploadedAt(t *testing.T) {
 	if entry.UploadedAt == nil || !entry.UploadedAt.Equal(now) {
 		t.Fatalf("UploadedAt = %v, want %v", entry.UploadedAt, now)
 	}
-	if entry.WorkspaceId != workspaceID {
-		t.Fatalf("WorkspaceId = %q, want %q", entry.WorkspaceId, workspaceID)
+	if entry.WorkspaceId == nil || *entry.WorkspaceId != workspaceID {
+		var got string
+		if entry.WorkspaceId != nil {
+			got = *entry.WorkspaceId
+		}
+		t.Fatalf("WorkspaceId = %q, want %q", got, workspaceID)
 	}
 	if entry.Source != gen.TestFixture {
 		t.Fatalf("Source = %q, want %q", entry.Source, gen.TestFixture)
@@ -172,9 +180,7 @@ func TestWorkspaceLibrary_Manifest_HasSHA256AndUploadedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(reopen) error = %v", err)
 	}
-	if err := reopened.Load(); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
+	// New() auto-loads from disk; the manifest is already in memory.
 	entries := reopened.List()
 	if len(entries) != 1 || entries[0].Sha256 == nil || *entries[0].Sha256 != *entry.Sha256 {
 		t.Fatalf("reopened entries = %#v", entries)
@@ -321,9 +327,7 @@ func TestWorkspaceLibrary_Refcount_DrivesGC(t *testing.T) {
 		t.Fatalf("referenced raw file removed: %v", err)
 	}
 
-	if err := lib.Store(); err != nil {
-		t.Fatalf("Store() error = %v", err)
-	}
+	// Every mutator method persists transactionally; no standalone Store() needed.
 	reopened, newErr := library.New(home, workspaceID, library.WithClock(func() time.Time { return now }))
 	if newErr != nil {
 		t.Fatalf("New(reopen) error = %v", newErr)
