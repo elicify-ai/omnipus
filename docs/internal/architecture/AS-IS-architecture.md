@@ -424,3 +424,64 @@ Any other order is a constraint violation and will trip `make verify-contracts` 
 - **ADR-013** — inbound validation strategy (opt-in flag, pre-compile boot guard, default-flip target, counter exposure).
 - **ADR-014** — `additionalProperties` policy (closed requests, per-case responses, future CI lint).
 - **ADR-015** — `decodeAndValidate` pipeline contract (body limits, schema-name string, error response shape, known typo risk and mitigations).
+
+---
+
+## 11. Unified goal / plan / subagent system
+
+> **Added 2026-07-23 (post-original-walkthrough).** The original §1–§10 sweep was scoped to the agent loop, memory, tools, channels. This section records the as-built **unified goal / plan / subagent system** ratified by [ADR-053](ADR-053-unified-goal-plan-subagent.md) (Accepted), built per the [delivery brief](../design/unified-goal-plan-subagent-DELIVERY-GOAL.md) across Phases 0–2 and gated green. Design intent lives in the [v2.2 target design](../design/unified-goal-plan-subagent-target-design-v2.2.html) (marked Implemented); this section is the code-grounded reality and wins on any disagreement.
+
+### 11.1 The thesis — one goal core, three bindings
+
+A goal is `prompt + goal definition + acceptance criteria` (criteria in three kinds: machine / behavior / prose). **One core owns the goal shape, the claim-or-idle trigger, the question→pause, the evidence ladder, feedback steering, typed messaging, the cancel cascade, and the count/token bounds.** The core is bound three times — chat goal (agent-compiled from user intent, blue goal pill), standalone task (Board/List/Graph), plan Definition-of-Done (plan tile → Graph) — differing only in (a) the deterministic DAG dispatch engine (plan-only) and (b) the UI/data-model binding. Anti-parallel-systems discipline (delivery brief DoD-11): a second goal store, messaging envelope, claim-marker parser, or budget path is a blocking review finding.
+
+### 11.2 The shared spine — S1–S6 (six built-once seams)
+
+| # | Seam | Built once as | Code |
+|---|---|---|---|
+| **S1** | Unified goal / criteria record | one schema, authored two ways (chat = agent-compiled; task = explicit) | `pkg/agent/goal_compile.go:265` (`compileGoalIntent` + compile-time feasibility gate, FR-111/D9); `pkg/agent/goal_loop.go:42` (`/goal` command → compile/echo/confirm/amend) |
+| **S2** | Durable session record + 8-state lifecycle | one persisted per-entity JSONL record; enum `queued / running / needs_input / paused / completed / failed / cancelled / timed_out` | `pkg/session` (`LifecycleRecord`, `MessageInboxStore`); plan phase `awaiting_owner_correction` at `pkg/plan/plan.go:190` |
+| **S3** | SessionMessage envelope family | one inline `oneOf` + discriminator envelope (ADR-034 precedent) over `pkg/bus`'s 4th channel | `pkg/agent/session_messaging_wire.go:61,125,228` (bus consumer, per-agent wiring, content-egress filter) |
+| **S4** | Owner ↔ Judge ↔ messaging ↔ plan-engine interlock | the wiring contract: Judge feedback = a `steer`; member telemetry = owner inbox; waiting-on-owner = `question(wait=true)` | `pkg/agent/plan_engine.go:2209` (`AppendCorrection`, the S4 correction handler); `pkg/plan/plan.go:325` (`OwnerSessionID` durable linkage) |
+| **S5** | Budget triple | attempts + JudgeRounds + **one app-level OVERALL token budget** (D12) | `pkg/agent/budget.go:59` (`TokenBudget`, single shared pool, one lock); brake `FailedReasonBudgetExhausted` at `:52` |
+| **S6** | Claim / marker family | `[goal:evidence]` + `GOAL_STATUS: met / waiting_on_user` | `pkg/agent/goal_triggers.go:102` (`goalTriggerState`: `bareClaimStreak`, `waitingOnUser`, `idleSettling`) |
+
+### 11.3 Claim-or-idle trigger discipline (replaces after-every-turn)
+
+The shipped chat-goal trigger that re-adjudicated after *every* worker turn (superseded in ADR-052/049 — see both) is replaced by **claim-or-idle**: the Judge fires only on (a) an explicit completion claim (`[goal:evidence]` + `GOAL_STATUS: met`) or (b) event-driven idle settlement (claimless, quiet-window debounced, per goal-id). A `GOAL_STATUS: waiting_on_user` turn **pauses with no verdict and no round burned** (the pill goes amber). The first bare-claim bounce is free (claiming stays cheaper than idling — incentive gradient G-2/G-4). State lives in `pkg/agent/goal_triggers.go:102` (`goalTriggerState`); the idle-settlement vs no-signal-penalty precedence is resolved at the S4 interlock.
+
+### 11.4 The evidence ladder Judge (reused from ADR-052, fail-closed)
+
+The Judge is a real verifier agent in its own session, with a three-rung AND-combined ladder: deterministic machine-check (rung 1) and behavior-scan (rung 2) execute first, prose judgment (rung 3) only if judgment criteria remain. Single reusable entrypoint: `pkg/agent/judge.go:256` (`AgentLoop.JudgeCriteria`), rung ordering + AND-combine at `:300`. It is **fail-closed** (NFR-2): a machine check that could not run returns "unable to verify" and is re-run, never scored as absent evidence (G-3); an unknown criterion kind is a fail-closed unmet (`:294`) that DOES consume the attempt. A blocked check is honestly reported, never hidden.
+
+### 11.5 Session-control plane — typed messaging, no shared transcript
+
+Child sessions are **isolated-but-linked**: own durable `SessionID`, a typed `SessionMessage` channel as the only bridge, a curated context snapshot at spawn, **no shared transcript** (FR-6a dropped). The bus gained a 4th channel (`bus.SessionMessageChan`); `pkg/agent/session_messaging_wire.go:61` (`SetSessionMessagingStores`) wires the inbox + lifecycle stores, `:125` (`wireSessionMessagingForAgent`) wires per-agent, and `:228` (`filterSessionMessage`) applies the content-egress filter to every free-text/path field of every bus-delivered message. Ad-hoc `delegate` inboxes are keyed to the durable chat/plan id (survives a parent Stop/Play, D16); message ceiling is per-child (D15).
+
+### 11.6 Git evidence layer (go-git, spike-gated GO)
+
+Real per-attempt, write-set-scoped diffs back the Judge via an embedded **go-git** repository at `<workspace>/work/.git` (no cgo; the Phase-0 footprint spike returned GO at +3.04 MiB stripped). `pkg/gitevidence` owns: `Repo.Commit` at `pkg/gitevidence/commit.go:89` (boundary + write-set-scoped commit), `Repo.CheckIntegrity` at `pkg/gitevidence/integrity.go:46` (detects HEAD divergence from the last-known hash), `OpenIsolatedCheckout` at `pkg/gitevidence/isolation.go:141` (the D10 isolation ladder: system-git worktree → go-git clone → subdir), diff evidence (`pkg/gitevidence/diff.go`), and a media size-guard (`pkg/gitevidence/sizeguard.go`). Plan-lint **write-set disjointness** rejects overlapping parallel members **at approve** (not silently): `pkg/plan/lint.go:123` (`Lint`), violation kind `write_set_overlap` at `:49`.
+
+### 11.7 Boot recovery — boot sweep + intent-log replay
+
+A `kill -9` mid-plan no longer wedges: `pkg/agent/plan_engine.go:70` (`PlanEngine.runBootSweep`, FR-118/G-13/INV-9) reconciles every persisted non-terminal session that has no live turn under a bounded budget. Transactional multi-file corrections (append N members + edges + revision entry + plan-record patch across several files) get an all-or-nothing guarantee from the **write-ahead intent-log**, not from per-file temp+rename: `pkg/plan/intent_log.go:469` (`IntentLog.CommitCorrection`) sequences the self-contained intent through AppendIntent → MarkCommitted (fsync, the linearization point) → Apply → MarkDone; `ReplayAtBoot` classifies every intent as discard (uncommitted) / replay-forward (committed-not-done, idempotent) / already-done.
+
+### 11.8 Correction + Play — append-only, SUPERSEDE, targeted retry; resume from last commit
+
+Owner correction (`pkg/agent/plan_engine.go:2209`, `AppendCorrection`) supports three verbs — **append** (tail + revision entry), **supersede** (mark a done member's outcome ignored-by-Judge; the record stays immutable), **targeted retry** (retry a transient/frozen member without a full Stop/Play, D4) — each recording a revision entry, committed transactionally via the intent-log (INV-6/N-8). After commit, append/supersede auto-reset all live-round failed members (excludes frozen/done, G-10); the durable unmet signature is cleared (INV-7); the DoD stays immutable (G-11). **Play = a new `resumed_from` generation** (`pkg/agent/plan_engine.go:2499`, D13/G-12): a cancelled/failed member resumes from its **last git commit** (JudgeRounds reset to 0); a no-commit member falls back to a fresh attempt. Plan members have **no individual start/cancel/resume** (D7) — the plan owns lifecycle.
+
+### 11.9 Token budget — one app-level OVERALL pool (D12)
+
+SEC-26's app-level USD cap is converted to **one app-level OVERALL token budget** covering ALL workloads including core agents (D12 removes the `IsPrivilegedAgent` exemption). `pkg/agent/budget.go:59` (`TokenBudget`): every debit is a single read-modify-write under one lock (FR-173); usage is debited POST-turn from provider-reported counts, so `Consumed` may exceed `Cap` by the sum of in-flight turn costs. The ceiling is **restart-gated** (FR-177, `SetCap` at `:89` — called once at boot from config; a live ceiling change would straddle two budgets, the N-15 hazard); the live runaway-spend lever is the existing Stop/cancel cascade (per-goal-id or global), not a live token cut. Brake = `failed(budget_exhausted)` at `:52`, applied at the next turn/adjudication boundary (never mid-turn, FR-174).
+
+### 11.10 The 9-action delegate set + message_parent
+
+`delegate` (`pkg/tools/delegate.go`) was expanded from `run | status` to a **9-action set**: `run, status, inbox, inbox_ack, steer, respond, cancel, follow_up, peek` (enum at `:598`). A subagent can now ask its parent a question, report a checkpoint, hand back structured results, and be steered mid-run — delegation is no longer fire-and-collect-only. The child-side counterpart is **`message_parent`** (`pkg/tools/message_parent.go:5`, ADR-053 §5.1) — the first-class tool a child uses to post to its parent's durable inbox (the parent routes `correlation_id`; only a direct session/plan owner asks the human, conversationally in chat — D2). 3P (external-CLI) workers are honest fire-and-collect: `respond` = corrective re-dispatch (a new session), `needs_input`/`question` never advertised to 3P (D5). Delegation depth is configurable with a shipped backstop of 3 (D6).
+
+### 11.11 Sandbox guard — `.git` denied by operation (D17)
+
+Because a go-git repo is a byte-identical `.git` the real `git` CLI could `--amend`, D17 denies `.git` **by operation, not by path**: `pkg/sandbox/gitguard.go` allows `log / blame / show / diff` and denies `commit / amend / rebase / rm` (plus a kernel/Landlock + bash-policy `.git/` block so the bypass through `bash`/exec is denied, not just the tool surface). This is the security-lead Phase-1 dependency that makes the in-scope git layer safe.
+
+### 11.12 As-built deferrals (accepted-with-issue, tracked)
+
+Four deferrals were accepted with tracked issues rather than blocking delivery (zero live callers today; each is safe until its trigger-to-fix): the AppendCorrection **owner-authority gate** (sec-MAJOR-2), **per-member work-tree checkout** for Play-from-commit (the D13 baseline is persisted; the per-member git checkout/restore defers to the D10 worktree-isolation rung), **SetCap one-shot enforcement** (sec-MINOR-2), and the intent-log **tamper-evidence/HMAC + dir 0700 + fsync** hardening (sec-MINOR-3). See the issues linked from the delivery brief.
