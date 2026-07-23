@@ -309,6 +309,15 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 // clearGoal clears the session's goal fields (FR-070's shared body for
 // `/goal clear` + aliases, the bound-reached brake, and the task/plan card
 // Clear button's future REST equivalent). Returns the user-facing reply.
+//
+// Terminal pill state (ADR-053 R§8.10 8-value enum — NO "cleared" literal):
+//   - note == "condition met" → state "done" (terminal success)
+//   - user clear / stop / cancel → state "failed" with the note as reason
+//     (user-initiated stop is not success; SPA may hide empty-condition pills)
+//   - round/budget/idle brakes → state "failed"
+// Emitting the pre-ADR-053 "cleared" value is FORBIDDEN: it is not in the
+// GoalStatusFrame schema enum, so the SPA zod edge drops the frame and the
+// pill freezes on its last valid state (the t0 e2e failure mode).
 func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, note string) string {
 	meta, err := store.GetMeta(sessionID)
 	// FR-114 (N-12): /goal clear cancels the in-flight verifier AND any in-flight
@@ -316,6 +325,20 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 	// GoalCondition isn't set yet). hadGoal is true when there is an active goal
 	// OR a pending compilation to discard.
 	hadGoal := err == nil && meta != nil && (meta.GoalCondition != "" || meta.GoalPendingJSON != "" || meta.GoalCriteriaJSON != "")
+
+	// Capture condition + rounds BEFORE clearing so the terminal pill frame
+	// still carries the goal text the user was watching.
+	condition := ""
+	rounds, maxRounds := 0, 0
+	if meta != nil {
+		condition = meta.GoalCondition
+		rounds = meta.GoalRoundsUsed
+		maxRounds = meta.GoalMaxRounds
+	}
+	pillState := goalPillFailed
+	if note == "condition met" {
+		pillState = goalPillDone
+	}
 
 	empty := ""
 	zero := 0
@@ -344,7 +367,7 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 	// against), the waiting_on_user pause clears, and the bounce streak / idle
 	// re-arm marker / routing entry all drop.
 	al.clearGoalTriggerState(sessionID)
-	al.emitGoalStatusFrame(sessionID, "", 0, 0, "", "cleared")
+	al.emitGoalStatusFrame(sessionID, condition, rounds, maxRounds, note, pillState)
 	return "Goal cleared (" + note + ")."
 }
 

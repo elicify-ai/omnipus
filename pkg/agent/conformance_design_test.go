@@ -508,14 +508,13 @@ func goalPillStates(c *eventCollector, sid string) []string {
 //  4. A claim ([goal:evidence] + GOAL_STATUS: met) invokes the Judge EXACTLY
 //     once (G-1), pill=judging is emitted BEFORE dispatch, and a met verdict
 //     clears the goal (done).
-//  5. The pill walk is active → waiting_on_user → judging → cleared (the
-//     durable done condition; the display "done" overlay is SPA-side).
+//  5. The pill walk is active → waiting_on_user → judging → done (terminal
+//     success per ADR-053 R§8.10 8-value enum — no "cleared" literal).
 //  6. /goal clear cancels an in-flight verifier session registered for this
 //     goal (FR-037/N-12): the registry entry is removed.
 //
-// e2e residue: the real-LLM worker turn (vs the scripted turnResult here) and
-// the SPA's reconstruction of the display "done" pill from the cleared state
-// are the real-LLM/UI gate (Conformance_t0_E2E); this proves the control plane
+// e2e residue: the real-LLM worker turn (vs the scripted turnResult here) is
+// the real-LLM/UI gate (Conformance_t0_E2E); this proves the control plane
 // walks the drawn path faithfully.
 //
 // Traces to: ADR-053 §9.1, design diagram t0 (chat goal)
@@ -590,13 +589,13 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 		t.Fatalf("(4) a met verdict must clear the goal (done), still: %q", after4.GoalCondition)
 	}
 
-	// (5) The pill walk is active → waiting_on_user → judging → cleared (done).
-	//     Wait for the terminal "cleared" frame (the met verdict's clearGoal
+	// (5) The pill walk is active → waiting_on_user → judging → done.
+	//     Wait for the terminal "done" frame (the met verdict's clearGoal
 	//     emits it synchronously, but the event-collector goroutine drains the
 	//     bus asynchronously — wait for the frame rather than a frame COUNT).
 	waitFor(t, 2*time.Second, func() bool {
 		for _, s := range goalPillStates(coll, sid) {
-			if s == "cleared" {
+			if s == goalPillDone {
 				return true
 			}
 		}
@@ -611,9 +610,9 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 			walk = append(walk, p)
 		}
 	}
-	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, "cleared"}
+	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
 	if !equalStringSlices(walk, wantWalk) {
-		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→cleared/done)", walk, wantWalk)
+		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
 	}
 
 	// (6) /goal clear cancels an in-flight verifier session registered for this
