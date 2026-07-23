@@ -6913,16 +6913,38 @@ turnLoop:
 			//   3. handles both PDF and image media (PDF via
 			//      downgradePDFMediaToText; image via stripRejectedImageMedia).
 			if TryMediaDowngrade(ts, callMessages, pe) {
+				// FR-017a (Slice E / Wave 1b): the helper's verdict decides
+				// the recorded turn classifier code. The classifier-primary
+				// path always reports CodeMediaUnsupported; the
+				// outcome-based fallback may report a different code (the
+				// original classifier was inconclusive). Read the helper's
+				// verdict so the warn-log and any later emit site carry the
+				// SAME classifier code the helper computed — no string
+				// duplication, no drift between the gate decision and the
+				// logged verdict.
+				helperCode := classifyByProviderError(pe, "")
 				logger.WarnCF("agent",
 					"provider rejected media input — retrying with downgraded media block",
 					map[string]any{
 						"agent_id": ts.agent.ID,
 						"model":    llmModel,
 						"error":    err.Error(),
-						"code":     string(CodeMediaUnsupported),
+						"code":     string(helperCode),
 					})
 				response, err = callLLM(callMessages, providerToolDefs)
 				if err == nil {
+					// FR-017a success edge (Slice E / Wave 1b): when the
+					// outcome-based fallback fired (helperCode !=
+					// CodeMediaUnsupported) AND the retry succeeded, the
+					// recorded turn classifier verdict MUST be relabeled
+					// to CodeMediaUnsupported — the classifier now LABELS
+					// the outcome (per the ADR §4 "classify the outcome"
+					// contract), not just the trigger. The classifier-
+					// primary path's helperCode is already CodeMediaUnsupported
+					// so no relabel is needed for that branch.
+					if helperCode != CodeMediaUnsupported {
+						ts.setOutcomeRelabel(CodeMediaUnsupported)
+					}
 					break
 				}
 			}

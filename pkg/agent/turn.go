@@ -258,6 +258,18 @@ type turnState struct {
 	// call may consume at most one downgrade per media class.
 	imageRetryDone atomic.Bool
 
+	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
+	// outcome-based strip-retry fallback fires AND the subsequent LLM
+	// call succeeds, this field is stamped with CodeMediaUnsupported so
+	// any later classifier-driven emission for this turn (warn logs,
+	// audit, transcript) carries the outcome-labelled verdict rather
+	// than the original (inconclusive) classifier verdict. Empty when
+	// no outcome-based retry succeeded this turn — the classifier's own
+	// verdict governs in that case. Written by the loop call site
+	// (loop.go) only; read by emit sites that consult the recorded
+	// turn classifier verdict.
+	outcomeRelabel LLMErrorCode
+
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
@@ -290,6 +302,28 @@ func (ts *turnState) auditUser() string {
 		return ""
 	}
 	return ts.userID
+}
+
+// setOutcomeRelabel stamps the FR-017a outcome-labeller verdict for this
+// turn. Called by the loop call site after a successful outcome-based
+// strip-retry (the classifier's inconclusive-4xx fallback fired and
+// the subsequent LLM call returned a real response). Nil-safe.
+func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
+	if ts == nil {
+		return
+	}
+	ts.outcomeRelabel = code
+}
+
+// outcomeRelabelCode returns the FR-017a outcome-labeller verdict for
+// this turn, or "" if no relabel is in effect. Consult this at emit
+// sites to decide between the raw classifier verdict and the
+// outcome-labelled one.
+func (ts *turnState) outcomeRelabelCode() LLMErrorCode {
+	if ts == nil {
+		return ""
+	}
+	return ts.outcomeRelabel
 }
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {

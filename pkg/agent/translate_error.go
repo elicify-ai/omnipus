@@ -53,6 +53,21 @@ const (
 	// not HTTP 413 — that maps to provider_rejected).
 	CodeContextTooLong LLMErrorCode = "context_too_long"
 
+	// CodeToolArgs: tool-call argument format error (FR-018 / ADR-051
+	// Rev 4). Pinned body substring: "invalid tool arguments". Excluded
+	// from the outcome-based strip-retry fallback so a malformed
+	// tool-call is not mis-labelled as media_unsupported. Status
+	// codes that already map to a specific code (401/403/413) still
+	// win over the body substring — the body substring is a SECONDARY
+	// detector, the status-code path is the PRIMARY gate.
+	CodeToolArgs LLMErrorCode = "tool_args"
+
+	// CodeSchema: JSON-schema validation error (FR-018 / ADR-051 Rev 4).
+	// Pinned body substring: "schema validation". Excluded from the
+	// outcome-based strip-retry fallback for the same reason as
+	// CodeToolArgs. Status-code backstop applies identically.
+	CodeSchema LLMErrorCode = "schema"
+
 	// CodeUnknown: unclassified — fallback bucket.
 	CodeUnknown LLMErrorCode = "unknown"
 )
@@ -89,6 +104,8 @@ var userMessages = map[LLMErrorCode]string{
 	CodeNetwork:          "Couldn't reach the AI service. Please retry.",
 	CodeContentPolicy:    "The AI service declined this request.",
 	CodeContextTooLong:   "The conversation is too long for the model; trim and retry.",
+	CodeToolArgs:         "The AI service rejected a tool argument; fix the call and try again.",
+	CodeSchema:           "The AI service rejected the request shape; review the schema and try again.",
 	CodeUnknown:          "The AI service encountered an error.",
 }
 
@@ -259,6 +276,47 @@ func isRateLimitMessage(body string) bool {
 	return false
 }
 
+// toolArgsSubstrings are the body substrings that identify a tool-call
+// argument format error. Pinned by ADR-051 Rev 4 (FR-018). Match is
+// case-insensitive. Excluded from the outcome-based strip-retry
+// fallback so a malformed tool-call is never mis-labelled as
+// media_unsupported.
+var toolArgsSubstrings = []string{
+	"invalid tool arguments",
+}
+
+// isToolArgsMessage reports whether body (case-insensitive) carries
+// any pinned tool-args substring.
+func isToolArgsMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, s := range toolArgsSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// schemaSubstrings are the body substrings that identify a JSON-schema
+// validation error. Pinned by ADR-051 Rev 4 (FR-018). Match is
+// case-insensitive. Excluded from the outcome-based strip-retry
+// fallback for the same reason as CodeToolArgs.
+var schemaSubstrings = []string{
+	"schema validation",
+}
+
+// isSchemaMessage reports whether body (case-insensitive) carries
+// any pinned schema substring.
+func isSchemaMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, s := range schemaSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyByHTTPStatus decides the LLMErrorCode for a non-nil pe with a
 // real HTTP status code.
 //
@@ -334,6 +392,12 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isContextOverflowMessage(body) {
 			return CodeContextTooLong
 		}
+		if isToolArgsMessage(body) {
+			return CodeToolArgs
+		}
+		if isSchemaMessage(body) {
+			return CodeSchema
+		}
 		return CodeProviderRejected
 	}
 
@@ -365,6 +429,12 @@ func classifyByMessage(body string) LLMErrorCode {
 	}
 	if isContextOverflowMessage(body) {
 		return CodeContextTooLong
+	}
+	if isToolArgsMessage(body) {
+		return CodeToolArgs
+	}
+	if isSchemaMessage(body) {
+		return CodeSchema
 	}
 	if isRateLimitMessage(body) {
 		return CodeRateLimited
