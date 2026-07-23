@@ -2240,12 +2240,29 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, req C
 	pe.touchActivity(planID)
 
 	// Auto-reset + honest-exit check (G-10).
-	tasks, _ := pe.taskStore.List(task.Filter{PlanID: planID})
+	tasks, lerr := pe.taskStore.List(task.Filter{PlanID: planID})
+	if lerr != nil {
+		// B1 (review BLOCKER): do NOT mask a store-read error as "plan cannot
+		// progress" — planCannotProgress(nil) returns true vacuously, which would
+		// failPlanLocked a HEALTHY plan with a misleading
+		// judge_rounds_exhausted reason. The correction is durably committed
+		// above; surface the read error and skip the post-correction honest-exit
+		// assessment this cycle (the next processPlan tick re-evaluates against
+		// the authoritative store).
+		logger.ErrorCF("plan_engine", "AppendCorrection: post-correction task list failed; correction committed, skipping honest-exit assessment",
+			map[string]any{"plan_id": planID, "error": lerr.Error()})
+		return &CorrectionResult{RevisionID: revID, Generation: gen, RevisionEntry: rev}, nil
+	}
 	if req.Verb != CorrectionTargetedRetry {
 		// append/supersede: auto-reset ALL live-round failed members
 		// (excludes frozen/done members).
 		pe.autoResetLiveRoundFailedMembers(planID, tasks)
-		tasks, _ = pe.taskStore.List(task.Filter{PlanID: planID})
+		tasks, lerr = pe.taskStore.List(task.Filter{PlanID: planID})
+		if lerr != nil {
+			logger.ErrorCF("plan_engine", "AppendCorrection: post-auto-reset task list failed; correction committed, skipping honest-exit assessment",
+				map[string]any{"plan_id": planID, "error": lerr.Error()})
+			return &CorrectionResult{RevisionID: revID, Generation: gen, RevisionEntry: rev}, nil
+		}
 	}
 	// Honest exit: if after the correction + auto-reset the plan still cannot
 	// make progress, fail it honestly (no livelock, G-10).
