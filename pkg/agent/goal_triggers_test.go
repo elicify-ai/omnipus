@@ -11,6 +11,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -506,5 +508,101 @@ func TestPerGoalId_TwoSessionsIndependent_FR107(t *testing.T) {
 	}
 	if al.goalIsIdleSettling(sidB) {
 		t.Fatal("goal B must not be marked idle-settling by goal A's adjudication (per-goal-id)")
+	}
+}
+
+// TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3 proves the
+// silent-M3 fix: when the GoalRoundsUsed round-advance persist fails, the
+// adjudication must NOT silently continue with an un-persisted counter. The
+// prior code WARN-logged and proceeded — emitting an advanced round frame and
+// delivering the steer — so the goal re-dispatched while the durable counter
+// stayed stale, and the attempt>=maxRounds gate could never fire (unbounded
+// rounds). The fix aborts the round-advance: no steer is delivered, no advance
+// is emitted, and the durable counter stays unchanged (gate stays honest); the
+// failure is surfaced via ERROR + a system transcript note.
+//
+// The store is rigged by making the session dir read-only AFTER arming:
+// writeMetaLocked's atomic temp+rename needs dir write, so SetMeta fails while
+// GetMeta reads (the meta file already exists with read perms).
+func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	setGoalRoundsArmed(t, store, sid, "goal A", 0, time.Now().Add(-1*time.Hour))
+
+	judgeInst.Provider = unmetJudgeProvider("not yet")
+
+	// Rig the store so SetMeta's round-advance write fails: make the session
+	// dir read-only AFTER setup. Reads (GetMeta) still work (meta file exists;
+	// dir keeps r-x). Restore perms in cleanup so t.TempDir teardown succeeds.
+	sessionDir := filepath.Join(store.BaseDir(), sid)
+	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
+	if err := os.Chmod(sessionDir, 0o500); err != nil {
+		t.Fatalf("chmod session dir read-only: %v", err)
+	}
+
+	meta, err := store.GetMeta(sid)
+	if err != nil || meta == nil {
+		t.Fatalf("GetMeta after chmod: %v", err)
+	}
+	// Sanity: confirm SetMeta now actually fails (otherwise the test cannot
+	// prove the persist-failure path).
+	if perr := store.SetMeta(sid, session.MetaPatch{GoalLatestReason: strPtrForTest("probe")}); perr == nil {
+		t.Fatalf("setup invariant: SetMeta unexpectedly succeeded on the read-only store; cannot prove the M3 path")
+	}
+
+	steerDelivered := false
+	met := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, meta, "",
+		func(string) { steerDelivered = true })
+
+	if met {
+		t.Fatal("return = true (met); want false on an unmet round-advance persist failure")
+	}
+	if steerDelivered {
+		t.Fatal("deliverSteer was called after a persist failure; the fix must abort BEFORE delivering the steer (silent-M3)")
+	}
+
+	// The durable round counter must NOT have advanced (the round was not
+	// counted). Re-read via a FRESH store at the same base dir so the assertion
+	// reflects durable truth (disk), not the original store's in-memory cache.
+	fresh, ferr := session.NewUnifiedStore(store.BaseDir())
+	if ferr != nil {
+		t.Fatalf("fresh store: %v", ferr)
+	}
+	after, _ := fresh.GetMeta(sid)
+	got := -1
+	if after != nil {
+		got = after.GoalRoundsUsed
+	}
+	if got != 0 {
+		t.Fatalf("durable GoalRoundsUsed = %d, want 0 (round-advance must not persist on failure; gate stays honest)", got)
+	}
+
+	// Control: with the dir writable again, the SAME adjudication advances the
+	// counter to 1 and delivers the steer (proves the rig — not the unmet judge
+	// — was the only blocker, and that the happy path still works after the fix).
+	if err := os.Chmod(sessionDir, 0o700); err != nil {
+		t.Fatalf("chmod restore: %v", err)
+	}
+	// Reload meta so the control call sees the same starting state the rig did.
+	controlMeta, _ := store.GetMeta(sid)
+	if controlMeta == nil {
+		t.Fatal("control: could not reload meta")
+	}
+	steer2 := false
+	al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, controlMeta, "",
+		func(string) { steer2 = true })
+	if !steer2 {
+		t.Fatal("control: with a writable store the unmet adjudication must deliver the steer (round advanced normally)")
+	}
+	after2, _ := store.GetMeta(sid)
+	got2 := -1
+	if after2 != nil {
+		got2 = after2.GoalRoundsUsed
+	}
+	if got2 != 1 {
+		t.Fatalf("control: durable GoalRoundsUsed = %d, want 1 after a successful round-advance", got2)
 	}
 }

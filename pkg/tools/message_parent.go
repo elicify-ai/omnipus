@@ -108,6 +108,14 @@ type MessageParentTool struct {
 	waker     MessageParentWaker
 	egress    ContentEgressFilter
 
+	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
+	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
+	// tool path. The async consumer honors the same switch per event; without
+	// this guard a disabled plane still accepted direct inbox.Append calls
+	// (arch-M2 review). Nil = fail open (unwired, e.g. unit tests), matching
+	// the consumer's nil-config posture.
+	sessionMessagingEnabled func() bool
+
 	needsInputTTL time.Duration
 	now           func() time.Time
 }
@@ -132,6 +140,26 @@ func (t *MessageParentTool) SetWaker(w MessageParentWaker) { t.waker = w }
 
 // SetContentEgressFilter installs the content-egress policy filter (N-10).
 func (t *MessageParentTool) SetContentEgressFilter(f ContentEgressFilter) { t.egress = f }
+
+// SetSessionMessagingEnabled installs the live FR-196 kill-switch reader for
+// the sync tool path (arch-M2 review): when the returned bool is false,
+// Execute fails closed with a clear "plane disabled" error instead of
+// bypassing the kill switch the async consumer already honors on the bus path.
+// Wired live (re-reads config per call) by wireSessionMessagingForAgent.
+func (t *MessageParentTool) SetSessionMessagingEnabled(fn func() bool) {
+	t.sessionMessagingEnabled = fn
+}
+
+// sessionMessagingPlaneEnabled reports whether the session-messaging plane is
+// live for this tool's sync path. A nil closure (unwired — e.g. a bare unit
+// test that did not call SetSessionMessagingEnabled) fails OPEN, matching the
+// async consumer's nil-config posture (session_messaging_wire.go dispatch).
+func (t *MessageParentTool) sessionMessagingPlaneEnabled() bool {
+	if t.sessionMessagingEnabled == nil {
+		return true
+	}
+	return t.sessionMessagingEnabled()
+}
 
 // SetNeedsInputTTL overrides the default 24h needs_input park TTL
 // (session_messaging.needs_input_ttl, FR-195/FR-126).
@@ -312,6 +340,13 @@ func stringSliceArg(args map[string]any, key string) ([]string, error) {
 }
 
 func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// arch-M2 (Phase-2 review): FR-196 kill switch on the SYNC tool path. The
+	// async consumer honors session_messaging.enabled per event; the direct
+	// inbox.Append below used to bypass it. Check first, before any store
+	// touch, so a disabled plane rejects the call with a clear error.
+	if !t.sessionMessagingPlaneEnabled() {
+		return ErrorResult("message_parent: the session-messaging plane is disabled (session_messaging.enabled = false)")
+	}
 	if t.inbox == nil || t.lifecycle == nil {
 		return ErrorResult("message_parent: tool not fully configured (missing inbox/lifecycle store)")
 	}

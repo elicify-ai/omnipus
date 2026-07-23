@@ -902,3 +902,78 @@ func TestPlanEngine_FailPlan_NoOpOnAlreadyTerminalPlan(t *testing.T) {
 		t.Fatalf("state = %q, want unchanged done", got.State)
 	}
 }
+
+// TestPlanEngine_BudgetExhausted_FailsPlan_M1 proves the silent-M1 fix: the
+// app-level OVERALL token budget is debited by ALL workloads (member turns, the
+// Judge) but only the GOAL loop surfaced failed(budget_exhausted). The plan
+// engine now mirrors the goal loop's boundary gate at processPlan's dispatch
+// chokepoint: when the pool is exhausted, the plan transitions to
+// failed(budget_exhausted) with a handover instead of draining the pool without
+// ever hitting the terminal. Verified at the single chokepoint so it covers BOTH
+// member dispatch and plan-level judge rounds.
+func TestPlanEngine_BudgetExhausted_FailsPlan_M1(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner")
+	mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusNext,
+	})
+
+	// Wire an AgentLoop whose token budget is already exhausted. TokenBudget()
+	// nil-guards its receiver and returns al.tokenBudget directly (no lock), so a
+	// minimal struct literal is safe; the harness leaves agentLoop nil by
+	// default (the brake is a no-op there), this test opts into the exhausted case.
+	tb := NewTokenBudget(100, nil) // cap 100, no persister
+	if _, exh := tb.Debit(100); !exh {
+		t.Fatalf("setup: expected budget exhausted after debiting the cap, exh=%v", exh)
+	}
+	h.pe.agentLoop = &AgentLoop{tokenBudget: tb}
+
+	h.pe.processPlan(context.Background(), "p1")
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != plan.StateFailed {
+		t.Fatalf("state = %q, want failed (budget brake must terminal the plan at the dispatch boundary)", got.State)
+	}
+	if got.FailedReason != plan.FailedReasonBudgetExhausted {
+		t.Fatalf("failed_reason = %q, want budget_exhausted", got.FailedReason)
+	}
+
+	// The ready member task must NOT have been dispatched (the brake returns
+	// before dispatchReadyMembers): it stays StatusNext.
+	tasks, _ := h.tasks.List(task.Filter{PlanID: "p1"})
+	if len(tasks) != 1 || tasks[0].Status != task.StatusNext {
+		got := "<none>"
+		if len(tasks) == 1 {
+			got = string(tasks[0].Status)
+		}
+		t.Fatalf("member task status = %q, want %q (brake must fire before dispatch)", got, task.StatusNext)
+	}
+
+	// failPlanLocked wakes the owner with sourceKind plan_<reason>.
+	events := h.notif.eventList()
+	found := false
+	for _, e := range events {
+		if e.SourceKind == "plan_budget_exhausted" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a plan_budget_exhausted wake event, got %+v", events)
+	}
+
+	// Negative control: with an UNBOUNDED budget (cap 0) the brake is a no-op
+	// and the same plan would dispatch normally — proving the brake is specific
+	// to exhaustion, not a blanket block. (Re-proved with a fresh plan/engine.)
+	h2 := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h2.plans, "p2", "owner")
+	mustCreateTask(t, h2.tasks, &task.Task{Title: "member2", WorkspaceID: "ws", PlanID: "p2", Status: task.StatusNext})
+	h2.pe.agentLoop = &AgentLoop{tokenBudget: NewTokenBudget(0, nil)} // unbounded
+	h2.pe.processPlan(context.Background(), "p2")
+	got2, _ := h2.plans.Get("p2")
+	if got2.State == plan.StateFailed {
+		t.Fatalf("unbounded budget must NOT fail the plan, got failed (%s)", got2.FailedReason)
+	}
+}

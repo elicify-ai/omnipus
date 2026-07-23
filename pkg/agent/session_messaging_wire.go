@@ -153,6 +153,10 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// Both are session-scoped (transcriptSessionID match) and cascade
 			// to descendants — the exact semantics delegate.cancel requires.
 			dt.SetCancelHooks(al.InterruptSession, al.InterruptSessionHard)
+			// FR-196 kill switch on the SYNC session-messaging-plane actions
+			// (arch-M2): the live closure re-reads config per call, mirroring
+			// the async consumer's per-event read.
+			dt.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
 		}
 	}
 
@@ -169,6 +173,9 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	mp := tools.NewMessageParentTool(inbox, lifecycle)
 	mp.SetContentEgressFilter(egress)
 	mp.SetNeedsInputTTL(needInputTTL)
+	// FR-196 kill switch on the SYNC tool path (arch-M2): the live closure
+	// re-reads config per call, mirroring the async consumer's per-event read.
+	mp.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
 	if al.asyncNotifier != nil {
 		mp.SetWaker(al.asyncNotifier)
 	}
@@ -196,6 +203,22 @@ func (al *AgentLoop) buildContentEgressFilter() tools.ContentEgressFilter {
 	}
 }
 
+// sessionMessagingEnabledLive returns a live-read closure for the FR-196 kill
+// switch (session_messaging.enabled), injected into the SYNC tool surface
+// (message_parent + the delegate session-messaging-plane actions) so they
+// honor it without a restart — the missing half of FR-196 (arch-M2 review),
+// mirroring the async consumer's per-event read in dispatchSessionMessageEvent.
+// Nil config → enabled (fail open, matching the consumer's nil-cfg posture).
+func (al *AgentLoop) sessionMessagingEnabledLive() func() bool {
+	return func() bool {
+		cfg := al.GetConfig()
+		if cfg == nil {
+			return true
+		}
+		return cfg.SessionMessaging.EffectiveEnabled()
+	}
+}
+
 // sessionMessagingNeedsInputTTL reads the live needs_input TTL from the
 // session_messaging config (FR-126/G-6). Returns the default when unset.
 func (al *AgentLoop) sessionMessagingNeedsInputTTL() time.Duration {
@@ -211,16 +234,23 @@ func (al *AgentLoop) sessionMessagingNeedsInputTTL() time.Duration {
 // sessionMessageWakeableConsumerKinds is the closed set of child->parent kinds
 // that trigger a bounded typed wake AFTER a successful bus-delivered Append.
 // Mirrors message_parent.go's messageParentWakeableKinds (question/blocker/
-// handback — the subset a child may emit; error is engine-only). Kept local so
-// this file does not depend on pkg/tools's private set.
+// handback — the subset a child may emit directly) PLUS error, which the
+// ENGINE may emit on a delegated child's behalf (async_notifier.go lists error
+// among the wakeable kinds): a child-reported error must wake the parent just
+// like a blocker, not silently queue behind the parent's next natural turn.
+// Kept local so this file does not depend on pkg/tools's private set.
 var sessionMessageWakeableConsumerKinds = map[string]bool{ //nolint:gochecknoglobals
 	"question": true,
 	"blocker":  true,
 	"handback": true,
+	"error":    true,
 }
 
 // sessionMessageChildToParentKinds is the closed set of child->parent
-// reporting kinds the consumer routes to the durable inbox.
+// reporting kinds the consumer routes to the durable inbox. error is included
+// (silent-M2 review): the engine can emit a kind:error SessionMessage for a
+// delegated child, and without an entry here it fell to the unknown-kind
+// default (DEBUG log + dropped) instead of reaching the durable inbox.
 var sessionMessageChildToParentKinds = map[string]bool{ //nolint:gochecknoglobals
 	"progress":         true,
 	"checkpoint":       true,
@@ -229,6 +259,7 @@ var sessionMessageChildToParentKinds = map[string]bool{ //nolint:gochecknoglobal
 	"question":         true,
 	"handback":         true,
 	"decision_request": true,
+	"error":            true,
 }
 
 // StartSessionMessageConsumer launches the kind-router goroutine that drains

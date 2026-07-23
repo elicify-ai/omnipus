@@ -267,12 +267,18 @@ type PlanEngine struct {
 	// covers both a fresh admission and a restart/Play-resume), so a
 	// material correction or an owner-initiated resume always gets a fresh
 	// round regardless of whether the member outcomes end up identical.
-	// In-memory only (no wire/persisted-state change) and guarded by mu,
-	// lazily initialized by its own accessors exactly like verifierRegistry
-	// above — a bare struct-literal test engine never nil-map-panics. A
-	// process restart naturally drops this map, which is safe: the very
-	// next tick simply re-judges once more, identical in cost to the
-	// existing PhaseJudging crash-resume path a few lines below.
+	// This map is the RUNTIME gate (consulted on every processPlan pass) and
+	// is guarded by mu, lazily initialized by its own accessors exactly like
+	// verifierRegistry above — a bare struct-literal test engine never
+	// nil-map-panics. It is NOT the whole story: C1 durability shadows it on
+	// the plan record itself — pkg/plan/plan.go's Plan.LastUnmetTerminalSignature
+	// — which applyJudgeRoundOutcomeLocked persists (mirroring the in-memory
+	// entry) whenever a round ends UNMET, and bootReconcile re-seeds THIS map
+	// from at boot for every plan still awaiting owner correction. So a process
+	// restart does NOT drop the gate's authority: the durable field survives,
+	// the in-memory map is rehydrated from it, and the unchanged-state skip
+	// keeps holding across the restart (the very next tick does not need to
+	// re-burn a round to relearn what the prior process already concluded).
 	lastUnmetTerminalSignature map[string]string
 
 	// supersededMembers tracks done members whose outcomes have been marked
@@ -781,6 +787,27 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 	}
 	if p.PausedReason != "" {
 		return // FR-065: a paused plan neither dispatches nor judges
+	}
+
+	// silent-M1 (Phase-2 review): ADR-053 D12/R§8.3c/FR-174 graceful wind-down
+	// for the plan/task scope. The ONE app-level OVERALL token pool is debited
+	// by ALL workloads (member turns via dispatchReadyMembers, the plan-level
+	// Judge via beginPlanJudgeRound) but only the GOAL loop surfaced
+	// failed(budget_exhausted); without this brake the plan engine + its
+	// members would drain the pool without ever hitting the terminal. Mirror
+	// the goal loop's boundary gate (goal_loop.go) exactly: we are at the
+	// dispatch/adjudication boundary (NOT mid-turn — the current turn already
+	// finished), so this is a graceful wind-down, not a hard-fail. Checked here
+	// at the single dispatch chokepoint so it covers BOTH member dispatch AND
+	// plan-level judge rounds. No new debit — just the brake at the boundary;
+	// TokenBudget() nil-guards a nil agentLoop (the struct-literal test harness
+	// leaves agentLoop nil), so existing tests are unaffected.
+	if tb := pe.agentLoop.TokenBudget(); tb != nil && tb.Exhausted() {
+		handover := fmt.Sprintf(
+			"Plan %q stopped: the overall token budget is exhausted (consumed %d tokens).",
+			p.Title, tb.Consumed())
+		pe.failPlanLocked(p.ID, plan.FailedReasonBudgetExhausted, handover)
+		return
 	}
 
 	switch p.EffectivePlanPhase() {

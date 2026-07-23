@@ -131,6 +131,65 @@ func TestSessionMessagingConsumer_ChildToParent_QuestionReachesInboxAndWakes(t *
 	}
 }
 
+// TestSessionMessagingConsumer_Error_ReachesInboxAndWakes_M2 proves the
+// silent-M2 fix: a kind:error SessionMessage (engine-emitted on a delegated
+// child's behalf) used to fall to the unknown-kind default (DEBUG log + drop)
+// because the consumer's child->parent and wakeable kind maps omitted it. With
+// the fix, error reaches the durable inbox AND fires a bounded typed wake —
+// the same routing a blocker gets.
+func TestSessionMessagingConsumer_Error_ReachesInboxAndWakes_M2(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	enableSessionMessaging(al)
+
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "owner-err", State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID: "parent-agent", OriginChannel: "testchan", OriginChatID: "chat1",
+		ParentDurableKey: "owner-err",
+	})
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "child-err", State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID: "child-agent", OriginChannel: "testchan", OriginChatID: "chat1",
+		ParentDurableKey: "owner-err",
+	})
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	var em generated.SessionMessage
+	if err := em.FromSessionMessageError(generated.SessionMessageError{
+		MessageId: "e-1", SessionId: "child-err", CreatedAt: time.Now(),
+		Text: "child hit a fatal error", Fatal: true,
+	}); err != nil {
+		t.Fatalf("FromSessionMessageError: %v", err)
+	}
+	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+		TargetSessionID: "owner-err", Message: em,
+	}); err != nil {
+		t.Fatalf("PublishSessionMessage: %v", err)
+	}
+
+	// Assert the error reached the durable inbox (previously dropped — silent-M2).
+	waitFor(t, 2*time.Second, func() bool {
+		msgs, _, _, err := inbox.Drain("owner-err", "child-err", "", 10)
+		return err == nil && len(msgs) == 1
+	})
+	msgs, _, _, _ := inbox.Drain("owner-err", "child-err", "", 10)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 inbox message (error) after consumer drain, got %d", len(msgs))
+	}
+
+	// Assert the bounded typed wake fired (error is wakeable, async_notifier.go).
+	select {
+	case <-msgBus.InboundChan():
+		// wake fired — the error reached the inbox AND woke the parent.
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the error kind to fire a bounded typed wake (inbound bus message)")
+	}
+}
+
 // TestSessionMessagingConsumer_Handback_ReachesInbox proves the handback kind
 // (the terminal/pause boundary — the rung-0 evidence gate) also flows through
 // the consumer to the durable inbox.
@@ -260,6 +319,10 @@ func TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled(t *testing.T) {
 // bus-consumer path above.
 func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testing.T) {
 	al, _ := newAsyncNotifierTestLoop(t)
+	// The sync message_parent path now honors the FR-196 kill switch (arch-M2):
+	// enable the plane so the direct Execute reaches the inbox (previously this
+	// was masked because the sync path bypassed the switch).
+	enableSessionMessaging(al)
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{

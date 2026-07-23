@@ -342,6 +342,15 @@ type DelegateTool struct {
 	// FR-195). Defaults to defaultCancelGrace.
 	cancelGrace time.Duration
 
+	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
+	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
+	// session-messaging-plane actions (inbox/inbox_ack/steer/respond/cancel/
+	// follow_up/peek). The async consumer honors the same switch per event;
+	// without this guard those actions bypassed it (calling
+	// EnqueueSteeringMessage / inbox directly). Nil = fail open (unwired, e.g.
+	// unit tests), matching the consumer's nil-config posture. (arch-M2 review.)
+	sessionMessagingEnabled func() bool
+
 	snapshotMaxBytes int
 	snapshotMaxRefs  int
 
@@ -398,6 +407,40 @@ func (t *DelegateTool) SetMessageInbox(inbox DelegateInboxStore) {
 // mechanism (generalizes pkg/agent/steering.go's existing queue).
 func (t *DelegateTool) SetSteeringSink(sink DelegateSteeringSink) {
 	t.steering = sink
+}
+
+// SetSessionMessagingEnabled installs the live FR-196 kill-switch reader for
+// the SYNC session-messaging-plane actions (arch-M2 review): when the returned
+// bool is false, inbox/inbox_ack/steer/respond/cancel/follow_up/peek fail
+// closed with a clear "plane disabled" error instead of bypassing the kill
+// switch the async consumer already honors. Wired live (re-reads config per
+// call) by wireSessionMessagingForAgent. run/status are delegation-spawn/query
+// actions and are intentionally NOT gated.
+func (t *DelegateTool) SetSessionMessagingEnabled(fn func() bool) {
+	t.sessionMessagingEnabled = fn
+}
+
+// sessionMessagingPlaneEnabled reports whether the session-messaging plane is
+// live for the SYNC action surface. A nil closure (unwired — e.g. a bare unit
+// test that did not call SetSessionMessagingEnabled) fails OPEN, matching the
+// async consumer's nil-config posture (session_messaging_wire.go dispatch).
+func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
+	if t.sessionMessagingEnabled == nil {
+		return true
+	}
+	return t.sessionMessagingEnabled()
+}
+
+// isSessionMessagingAction reports whether a delegate action touches the
+// session-messaging plane (the FR-196 kill-switch surface). run/status spawn /
+// query delegation and are intentionally NOT gated. Kept as a helper so the
+// guard and its action set have one source of truth.
+func isSessionMessagingAction(action string) bool {
+	switch action {
+	case "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek":
+		return true
+	}
+	return false
 }
 
 // SetCancelHooks installs the soft (cooperative) and hard (RequestCancel
@@ -664,6 +707,14 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 	}
 	if action == "" {
 		action = "run"
+	}
+
+	// arch-M2 (Phase-2 review): FR-196 kill switch on the SYNC tool path. The
+	// async consumer honors session_messaging.enabled per event; these seven
+	// session-messaging-plane actions used to bypass it. run/status are
+	// delegation spawn/query and are NOT gated.
+	if isSessionMessagingAction(action) && !t.sessionMessagingPlaneEnabled() {
+		return ErrorResult("delegate." + action + ": the session-messaging plane is disabled (session_messaging.enabled = false)")
 	}
 
 	switch action {
