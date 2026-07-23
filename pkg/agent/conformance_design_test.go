@@ -25,6 +25,9 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +35,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -440,5 +444,956 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	}
 	if len(hb.OpenQuestions) != 1 {
 		t.Errorf("(3) handback open_questions[] not delivered, got %d: %v", len(hb.OpenQuestions), hb.OpenQuestions)
+	}
+}
+
+// metJudgeProviderForCompiled returns a fake Judge LLM provider that reports
+// every criterion in the REAL compiled goal ladder MET — echoing each
+// criterion's own ID so the engine's per-criterion AND (finalizeVerdict)
+// resolves to an overall MET verdict and the goal clears. Used by the t0
+// conformance scenario to drive a faithful met verdict against the compiled
+// Phase-2 criteria ladder (not the legacy "goal-condition" back-compat path
+// the unit tests exercise by clearing GoalCriteriaJSON).
+func metJudgeProviderForCompiled(t *testing.T, compiled *CompiledGoal, reason string) *fakeJudgeProvider {
+	t.Helper()
+	var entries []string
+	if compiled != nil {
+		for _, c := range compiled.Criteria {
+			entries = append(entries, fmt.Sprintf(`{"id":%q,"met":true,"reason":%q}`, c.ID, reason))
+		}
+	}
+	body := `{"met":true,"criteria":[` + strings.Join(entries, ",") + `]}`
+	return &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: body}, nil
+	}}
+}
+
+// goalPillStates drains the event collector and returns the ordered list of
+// goal_status frame states (GoalStatusChangedPayload.State) observed for sid —
+// the durable pill walk the t0 diagram draws ("active → judging → done").
+func goalPillStates(c *eventCollector, sid string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, e := range c.events {
+		if e.Kind != EventKindGoalStatusChanged {
+			continue
+		}
+		p, ok := e.Payload.(GoalStatusChangedPayload)
+		if !ok || p.SessionID != sid {
+			continue
+		}
+		out = append(out, p.State)
+	}
+	return out
+}
+
+// TestConformance_t0_ChatGoal_Design proves the t0 "chat goal" diagram EXECUTES
+// as drawn, not just that its edges pass in isolation. The scoped tests in
+// goal_triggers_test.go (G-1..G-5) prove each EDGE (claim→Judge, idle, bounce,
+// pause); this t0 scenario walks the FULL drawn sequence as one observed path:
+// set /goal → SMART compile (GoalCriteriaJSON ladder populated) → conversational
+// confirm in chat (goal_status active pill) → a NON-claim question turn PAUSES
+// without a verdict/round (waiting_on_user) → user reply resumes → claim with
+// evidence → Judge verdict (judging pill) → met → done (goal cleared); and /goal
+// clear cancels an in-flight verifier session.
+//
+// Drawn path asserted node-by-node:
+//  1. /goal set compiles a SMART criteria ladder (GoalCriteriaJSON non-empty)
+//     and the /goal command IS the chat confirmation — a goal_status frame
+//     with state=active is emitted (FR-113).
+//  2. A worker turn ending GOAL_STATUS: waiting_on_user PAUSES — no verdict,
+//     no round consumed (G-5), pill=waiting_on_user.
+//  3. A genuine user reply clears the pause and re-arms (G-5 resume).
+//  4. A claim ([goal:evidence] + GOAL_STATUS: met) invokes the Judge EXACTLY
+//     once (G-1), pill=judging is emitted BEFORE dispatch, and a met verdict
+//     clears the goal (done).
+//  5. The pill walk is active → waiting_on_user → judging → cleared (the
+//     durable done condition; the display "done" overlay is SPA-side).
+//  6. /goal clear cancels an in-flight verifier session registered for this
+//     goal (FR-037/N-12): the registry entry is removed.
+//
+// e2e residue: the real-LLM worker turn (vs the scripted turnResult here) and
+// the SPA's reconstruction of the display "done" pill from the cleared state
+// are the real-LLM/UI gate (Conformance_t0_E2E); this proves the control plane
+// walks the drawn path faithfully.
+//
+// Traces to: ADR-053 §9.1, design diagram t0 (chat goal)
+func TestConformance_t0_ChatGoal_Design(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	pe := NewPlanEngine(al, plan.New(t.TempDir()), nil, nil)
+	al.SetPlanEngine(pe)
+	t.Cleanup(pe.Stop)
+
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	coll, collDone := newEventCollector(t, al)
+	defer collDone()
+
+	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty) and
+	// emits the conversational confirm-in-chat frame (goal_status active).
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal land the contract-first layer", UserInitiated: true},
+		agentInst, &opts)
+	meta, _ := store.GetMeta(sid)
+	if meta.GoalCondition == "" {
+		t.Fatal("(1) /goal set must persist the goal condition")
+	}
+	if meta.GoalCriteriaJSON == "" {
+		t.Fatal("(1) /goal set must run the SMART compile (GoalCriteriaJSON non-empty) — t0 SMART-compile node")
+	}
+	compiled := loadCompiledGoal(meta.GoalCriteriaJSON)
+	if compiled == nil || len(compiled.Criteria) == 0 {
+		t.Fatalf("(1) SMART compile must produce a criteria ladder, got GoalCriteriaJSON=%q", meta.GoalCriteriaJSON)
+	}
+	// The Judge is swapped AFTER compile so its verdict echoes the REAL
+	// compiled criterion IDs (not the legacy "goal-condition" back-compat).
+	judgeInst.Provider = metJudgeProviderForCompiled(t, compiled, "contract-first layer landed")
+
+	// (2) A non-claim question turn PAUSES — no verdict, no round, pill=waiting.
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
+		finalContent: "Which schema version should I target?\nGOAL_STATUS: waiting_on_user",
+	})
+	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
+		t.Fatal("(2) a waiting_on_user turn must NOT invoke the Judge (G-5: no verdict)")
+	}
+	after2, _ := store.GetMeta(sid)
+	if after2.GoalRoundsUsed != 0 {
+		t.Fatalf("(2) a waiting_on_user turn consumed a round (%d), want 0 (G-5)", after2.GoalRoundsUsed)
+	}
+	if !al.goalIsWaitingOnUser(sid) {
+		t.Fatal("(2) goal must be paused in waiting_on_user after the question turn (G-5)")
+	}
+
+	// (3) A genuine user reply clears the pause and re-arms (G-5 resume).
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
+		finalContent: "Target openapi v1 — go ahead.",
+	})
+	if al.goalIsWaitingOnUser(sid) {
+		t.Fatal("(3) user reply must clear the waiting_on_user pause (G-5 resume)")
+	}
+
+	// (4) A claim WITH evidence invokes the Judge EXACTLY once and clears the goal.
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
+		finalContent: "[goal:evidence] generated types + lint green\nGOAL_STATUS: met",
+	})
+	if got := judgeInst.Provider.(*fakeJudgeProvider).callCount(); got != 1 {
+		t.Fatalf("(4) the claim must invoke the Judge exactly once (G-1), got %d", got)
+	}
+	after4, _ := store.GetMeta(sid)
+	if after4.GoalCondition != "" {
+		t.Fatalf("(4) a met verdict must clear the goal (done), still: %q", after4.GoalCondition)
+	}
+
+	// (5) The pill walk is active → waiting_on_user → judging → cleared (done).
+	//     Wait for the terminal "cleared" frame (the met verdict's clearGoal
+	//     emits it synchronously, but the event-collector goroutine drains the
+	//     bus asynchronously — wait for the frame rather than a frame COUNT).
+	waitFor(t, 2*time.Second, func() bool {
+		for _, s := range goalPillStates(coll, sid) {
+			if s == "cleared" {
+				return true
+			}
+		}
+		return false
+	})
+	pills := goalPillStates(coll, sid)
+	// Drop any trailing re-arm active frames; keep the first occurrence of each
+	// drawn node in order.
+	var walk []string
+	for _, p := range pills {
+		if len(walk) == 0 || walk[len(walk)-1] != p {
+			walk = append(walk, p)
+		}
+	}
+	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, "cleared"}
+	if !equalStringSlices(walk, wantWalk) {
+		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→cleared/done)", walk, wantWalk)
+	}
+
+	// (6) /goal clear cancels an in-flight verifier session registered for this
+	// goal (FR-037/N-12). Set a fresh goal, register a verifier session, clear.
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal a second goal", UserInitiated: true}, agentInst, &opts)
+	verifierUnit := verifierUnitForGoal(sid)
+	pe.VerifierRegistry().Register(verifierUnit, "verifier-t0-inflight")
+	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); !ok {
+		t.Fatal("(6) setup: verifier entry must register before clear")
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal clear", UserInitiated: true}, agentInst, &opts)
+	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); ok {
+		t.Fatal("(6) /goal clear must cancel + unregister the in-flight verifier session (FR-037)")
+	}
+	after6, _ := store.GetMeta(sid)
+	if after6.GoalCondition != "" {
+		t.Fatalf("(6) /goal clear must clear the goal, still: %q", after6.GoalCondition)
+	}
+}
+
+// equalStringSlices reports whether two string slices are element-wise equal.
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// lintMember builds a plan member for the g4 lint conformance scenario. It
+// mirrors pkg/plan/lint_test.go's `member` helper (package plan) but lives here
+// in package agent so the g4 scenario can call plan.Lint without a cross-
+// package test helper. Each member carries its own acceptance criterion so a
+// failure is unambiguously attributable to Lint, never an empty-criteria gap.
+func lintMember(id string, blockedBy, writeSet []string) task.Task {
+	return task.Task{
+		ID:        id,
+		Title:     "member " + id,
+		BlockedBy: blockedBy,
+		WriteSet:  writeSet,
+		Criteria:  conformanceCriterion(id + "-c1"),
+	}
+}
+
+// TestConformance_t1_StandaloneTask_Design proves the t1 "standalone task"
+// diagram EXECUTES as drawn. The scoped evidence_gate_test.go tests prove each
+// EDGE (bare claim rejected, consecutive→attempt, evidence→verifier, Stop);
+// this t1 scenario walks the FULL drawn sequence as one observed path: ▶ Run
+// (claim next→in_progress) → worker claim → evidence-gate (1st bare claim →
+// free steer, no attempt; 2nd → consumes an attempt) → claim with evidence →
+// Judge met → done; then ■ Stop cancels the in-flight turn+verifier sessions.
+//
+// Drawn path asserted node-by-node:
+//  1. ▶ Run: a StatusNext task is claimed into in_progress (the dispatch).
+//  2. 1st bare claim (TASK_STATUS: success, no [goal:evidence]) → rejected
+//     pre-Judge with a teaching steer, AttemptCount stays 0 (G-4 free bounce).
+//  3. re-claim → 2nd bare claim → consumes a real attempt (AttemptCount 1).
+//  4. claim WITH evidence → verifier dispatched → met verdict → StatusDone.
+//  5. ■ Stop on a second in_progress task cancels its worker + verifier
+//     sessions (RequestCancelForSession) and marks the task failed/cancelled.
+//
+// e2e residue: the real-LLM worker turn (vs the scripted finishTaskRun resp)
+// is the real-LLM gate (Conformance_t1_E2E); this proves the evidence-gate +
+// Stop control plane walks the drawn path faithfully.
+//
+// Traces to: ADR-053 §9.1, design diagram t1 (standalone task)
+func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	taskStore := GetTaskStore(al)
+	sessStore := al.GetAgentStore("native-agent")
+	if sessStore == nil {
+		t.Fatal("native-agent session store not available")
+	}
+	taskMeta, err := sessStore.NewSession(session.SessionTypeTask, "system", "native-agent")
+	if err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+	taskSessionID := taskMeta.ID
+
+	tk := &task.Task{
+		ID: "t1-standalone", AgentID: "native-agent", WorkspaceID: "test-ws",
+		Title: "t1 standalone task", Status: task.StatusNext,
+		Criteria: []task.AcceptanceCriterion{proseCriterion("c1", "must do X")},
+	}
+	if err := taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	// A met-verdict judge that echoes the criterion id (the verifier reaches it
+	// only on a claim WITH evidence — node 4).
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+
+	// (1) ▶ Run: claim the next task into in_progress (the dispatch).
+	if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
+		t.Fatalf("(1) Run/claim: %v", err)
+	}
+	current, _ := taskStore.Get(tk.ID)
+	if current.Status != task.StatusInProgress {
+		t.Fatalf("(1) after Run: status = %q, want in_progress", current.Status)
+	}
+
+	// (2) 1st bare claim → evidence-gate rejects pre-Judge, free steer, attempt 0.
+	bare := "done.\nTASK_STATUS: success\n"
+	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, ""); redis == "" {
+		t.Fatal("(2) 1st bare claim must be re-prompted (free steer), got empty redispatch")
+	}
+	after2, _ := taskStore.Get(tk.ID)
+	if after2.AttemptCount != 0 {
+		t.Fatalf("(2) 1st bare claim consumed an attempt (%d), want 0 (G-4 free bounce)", after2.AttemptCount)
+	}
+	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
+		t.Fatal("(2) 1st bare claim must NOT reach the Judge (evidence-gate rejects pre-Judge)")
+	}
+
+	// (3) re-claim → 2nd bare claim → consumes a real attempt (AttemptCount 1).
+	if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
+		t.Fatalf("(3) re-claim: %v", err)
+	}
+	current, _ = taskStore.Get(tk.ID)
+	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, ""); redis == "" {
+		t.Fatal("(3) 2nd bare claim must be re-prompted too")
+	}
+	after3, _ := taskStore.Get(tk.ID)
+	if after3.AttemptCount != 1 {
+		t.Fatalf("(3) 2nd bare claim: attempt_count = %d, want 1 (G-4: 2nd costs an attempt)", after3.AttemptCount)
+	}
+	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
+		t.Fatal("(3) 2nd bare claim must still NOT reach the Judge (no evidence to judge)")
+	}
+
+	// (4) claim WITH evidence → verifier dispatched → met → done.
+	if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
+		t.Fatalf("(4) re-claim: %v", err)
+	}
+	current, _ = taskStore.Get(tk.ID)
+	withEvidence := "verified output matches c1.\n[goal:evidence] compared to acceptance criterion c1, matches\nTASK_STATUS: success\n"
+	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, withEvidence, nil, ""); redis != "" {
+		t.Fatalf("(4) a met claim must NOT re-dispatch, got redispatch=%q", redis)
+	}
+	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 1 {
+		t.Fatalf("(4) a claim WITH evidence must reach the Judge exactly once, got %d", judgeInst.Provider.(*fakeJudgeProvider).callCount())
+	}
+	after4, _ := taskStore.Get(tk.ID)
+	if after4.Status != task.StatusDone {
+		t.Fatalf("(4) a met verdict must transition the task to done, got %q", after4.Status)
+	}
+
+	// (5) ■ Stop cancels the in-flight turn + verifier sessions on a second
+	// in_progress task (the Stop node of the t1 diagram). A fake canceller
+	// records the RequestCancelForSession calls; the verifier registry entry
+	// for the task is registered so Stop's fan-out reaches it.
+	h := newTestPlanEngine(t)
+	canceller := &fakeSessionCanceller{}
+	h.pe.canceller = canceller
+	stopTk := mustCreateTask(t, h.tasks, &task.Task{
+		ID: "t1-stop", Title: "t1 stop target", WorkspaceID: "ws",
+		Status: task.StatusInProgress, SessionID: "sess-worker-t1",
+	})
+	h.pe.VerifierRegistry().Register(verifierUnitForTask(stopTk.ID), "verifier-t1")
+	stopped, err := h.pe.StopTask(context.Background(), stopTk.ID, "tester", "web")
+	if err != nil {
+		t.Fatalf("(5) StopTask: %v", err)
+	}
+	if stopped.Status != task.StatusFailed || !isCancelledMember(stopped) {
+		t.Fatalf("(5) Stop must fail+cancel the task, got status=%q result=%q", stopped.Status, stopped.Result)
+	}
+	if !canceller.contains("sess-worker-t1") || !canceller.contains("verifier-t1") {
+		t.Fatalf("(5) Stop must cancel the worker AND verifier sessions, calls=%v", canceller.callList())
+	}
+}
+
+// TestConformance_t2_PlanLifecycle_Design proves the t2 "plan lifecycle"
+// diagram EXECUTES as drawn. The scoped plan_engine_test.go (judge
+// met/unmet/rounds) + plan_engine_correction_test.go (Play, no-per-member)
+// prove each EDGE; this t2 scenario walks the FULL drawn sequence as one
+// observed path: Execute (approved→running) → gated approve (lint) → members
+// dispatch per DAG → all-terminal → plan Judge → unmet → awaiting-owner-
+// correction gate HOLDS (no round burned on unchanged state — the F2 proof)
+// → owner appends → re-judge → done; plus Play resumes a cancelled member
+// from last git commit (D13) and there is NO per-member start/cancel/resume
+// (D7).
+//
+// Drawn path asserted node-by-node:
+//  1. Execute: an approved plan auto-ticks to running (the Execute node).
+//  2. gated approve: the plan's member topology passes plan-lint (approve).
+//  3. members dispatch per DAG: the root member dispatches; a blocked
+//     dependent is held until its dependency is done, then dispatches.
+//  4. all-terminal → plan Judge → unmet → parks at awaiting_owner_correction
+//     (one round consumed).
+//  5. F2: idle ticks over the UNCHANGED all-terminal state burn NO further
+//     round (the gate holds — no re-judge of unchanged state).
+//  6. owner appends a correction (new terminal member) → signature changes →
+//     re-judge → met → done.
+//  7. D13: Play on a stopped plan mints a new generation and resumes a
+//     cancelled member from its last boundary commit.
+//  8. D7: no per-member start/cancel/resume exists (whole-plan Stop/Play only).
+//
+// e2e residue: the real per-member worker turns + the real git commit the
+// Judge reads are the real-LLM/git gate; this proves the plan-engine control
+// plane walks the drawn path faithfully.
+//
+// Traces to: ADR-053 §9.1, design diagram t2 (plan lifecycle)
+func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
+	h := newCorrectionHarness(t)
+	ctx := context.Background()
+
+	// (1) Execute: an approved plan auto-ticks to running.
+	pp := &plan.Plan{
+		ID: "plan-t2", Title: "plan-t2", WorkspaceID: "ws", OwnerAgentID: "owner",
+		State: plan.StateApproved, DoD: []task.AcceptanceCriterion{planProseCriterion("DoD is met")},
+	}
+	mustCreatePlan(t, h.plans, pp)
+	// (2) gated approve: a DAG topology (root → blocked dependent) passes lint.
+	root := &task.Task{ID: "t2-root", Title: "root", WorkspaceID: "ws", PlanID: "plan-t2",
+		Status: task.StatusNext, WriteSet: []string{"src/root.go"}, Criteria: conformanceCriterion("t2-root-c1")}
+	dep := &task.Task{ID: "t2-dep", Title: "dep", WorkspaceID: "ws", PlanID: "plan-t2",
+		Status: task.StatusBlocked, BlockedBy: []string{"t2-root"}, WriteSet: []string{"src/dep.go"},
+		Criteria: conformanceCriterion("t2-dep-c1")}
+	for _, m := range []*task.Task{root, dep} {
+		mustCreateTask(t, h.tasks, m)
+	}
+	members := []task.Task{*root, *dep}
+	if lerr := plan.Lint(pp, members); lerr != nil {
+		t.Fatalf("(2) gated approve: plan-lint must pass the DAG topology, got: %v", lerr)
+	}
+
+	h.pe.Tick(ctx)
+	got, _ := h.plans.Get("plan-t2")
+	if got.State != plan.StateRunning {
+		t.Fatalf("(1) Execute: state = %q, want running", got.State)
+	}
+
+	// (3) members dispatch per DAG: root dispatches; dependent is HELD.
+	h.pe.processPlan(ctx, "plan-t2")
+	calls := h.disp.callList()
+	if !containsTaskID(calls, "t2-root") {
+		t.Fatalf("(3) root must dispatch first, calls=%v", calls)
+	}
+	if containsTaskID(calls, "t2-dep") {
+		t.Fatalf("(3) dependent must NOT dispatch before root is done (DAG gate), calls=%v", calls)
+	}
+	// root done → dependent dispatches.
+	markMemberDone(t, h.tasks, "t2-root")
+	h.pe.processPlan(ctx, "plan-t2")
+	if !containsTaskID(h.disp.callList(), "t2-dep") {
+		t.Fatal("(3) dependent must dispatch once root is done (DAG ordering)")
+	}
+	// all-terminal: dependent done → the plan is ready to judge.
+	markMemberDone(t, h.tasks, "t2-dep")
+
+	// (4) plan Judge → unmet → awaiting_owner_correction (one round).
+	h.judge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
+			Met: false, PerCriterion: []task.CriterionVerdict{
+				{CriterionID: in.Criteria[0].ID, Met: false, Reason: "not yet"},
+			},
+		}}
+	}
+	h.pe.processPlan(ctx, "plan-t2")
+	h.pe.judgeWG.Wait()
+	parked, _ := h.plans.Get("plan-t2")
+	if parked.State != plan.StateRunning || parked.JudgeRounds != 1 {
+		t.Fatalf("(4) after unmet: state=%q rounds=%d, want running/1", parked.State, parked.JudgeRounds)
+	}
+	if parked.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
+		t.Fatalf("(4) plan_phase = %q, want awaiting_owner_correction", parked.EffectivePlanPhase())
+	}
+
+	// (5) F2: idle ticks over the UNCHANGED all-terminal state burn NO round.
+	const idleTicks = 3
+	for i := 0; i < idleTicks; i++ {
+		h.pe.processPlan(ctx, "plan-t2")
+		h.pe.judgeWG.Wait()
+	}
+	after5, _ := h.plans.Get("plan-t2")
+	if after5.JudgeRounds != 1 {
+		t.Fatalf("(5) F2: %d unchanged idle ticks burned rounds to %d, want 1 (no re-judge of unchanged state)",
+			idleTicks, after5.JudgeRounds)
+	}
+	if h.judge.callCount() != 1 {
+		t.Fatalf("(5) F2: judge called %d times after unchanged idle ticks, want 1", h.judge.callCount())
+	}
+
+	// (6) owner appends a correction (a NEW member with work to do) → it
+	//     dispatches, completes → the all-terminal signature changes → re-judge
+	//     → met → done. (AppendCorrection's honest-exit check requires the
+	//     correction to make progress; a StatusNext tail member does.)
+	h.judge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{Met: true, PerCriterion: []task.CriterionVerdict{
+			{CriterionID: in.Criteria[0].ID, Met: true, Reason: "now met"},
+		}}}
+	}
+	corrRes, err := h.pe.AppendCorrection(ctx, "plan-t2", CorrectionRequest{
+		Verb: CorrectionAppend, FalsifiedAssumption: "assumed the first attempt was enough",
+		TailMembers: []task.Task{{ID: "t2-tail", Title: "tail", WorkspaceID: "ws", Status: task.StatusNext,
+			WriteSet: []string{"src/tail.go"}, Criteria: conformanceCriterion("t2-tail-c1")}},
+		Reason: "owner correction to address the unmet DoD",
+	})
+	if err != nil {
+		t.Fatalf("(6) AppendCorrection: %v", err)
+	}
+	if corrRes.HonestExit {
+		t.Fatal("(6) the correction must make progress (a new ready member), not honest-exit")
+	}
+	// AppendCorrection dispatched the ready tail member (next→in_progress);
+	// complete it so the DAG is all-terminal again with a CHANGED signature.
+	markMemberDone(t, h.tasks, "t2-tail")
+	h.pe.processPlan(ctx, "plan-t2")
+	h.pe.judgeWG.Wait()
+	done, _ := h.plans.Get("plan-t2")
+	if done.State != plan.StateDone {
+		t.Fatalf("(6) after owner correction + re-judge: state=%q failed_reason=%q, want done",
+			done.State, done.FailedReason)
+	}
+	if h.judge.callCount() != 2 {
+		t.Fatalf("(6) re-judge after correction: judge calls = %d, want 2 (gate reopened on changed state)", h.judge.callCount())
+	}
+
+	// (7) D13: Play on a stopped plan mints a new generation and resumes a
+	// cancelled member from its last boundary commit (resolved via the
+	// commit resolver). Stop the t2 plan first (it's done — Stop needs failed,
+	// so drive a fresh failed plan for the Play node).
+	playPlan := &plan.Plan{
+		ID: "plan-t2-play", Title: "plan-t2-play", WorkspaceID: "ws", OwnerAgentID: "owner",
+		State: plan.StateFailed, FailedReason: plan.FailedReasonStoppedByUser, JudgeRounds: 2,
+		DoD: []task.AcceptanceCriterion{planProseCriterion("DoD is met")},
+	}
+	mustCreatePlan(t, h.plans, playPlan)
+	mustCreateTask(t, h.tasks, &task.Task{
+		ID: "t2-play-failed", Title: "failed-with-commit", PlanID: "plan-t2-play", WorkspaceID: "ws",
+		Status: task.StatusFailed,
+	})
+	h.pe.SetCommitResolver(fakeCommitResolver{hashes: map[string]string{"t2-play-failed": "feedface"}})
+	played, err := h.pe.PlayPlan(ctx, "plan-t2-play")
+	if err != nil {
+		t.Fatalf("(7) PlayPlan: %v", err)
+	}
+	if played.NewGeneration != 1 {
+		t.Errorf("(7) D13: Play must mint a new generation, got %d", played.NewGeneration)
+	}
+	resumed, _ := h.tasks.Get("t2-play-failed")
+	if resumed.Status != task.StatusNext {
+		t.Errorf("(7) D13: cancelled member must be reset to next by Play, got %q", resumed.Status)
+	}
+	if resumed.ResumeFromCommit != "feedface" {
+		t.Errorf("(7) D13: member must resume from its last boundary commit, got %q want \"feedface\"", resumed.ResumeFromCommit)
+	}
+	played0, _ := h.plans.Get("plan-t2-play")
+	if played0.JudgeRounds != 0 {
+		t.Errorf("(7) D13: Play must zero JudgeRounds, got %d", played0.JudgeRounds)
+	}
+
+	// (8) D7: no per-member start/cancel/resume exists — only whole-plan
+	// Stop/Play (and StopTask for standalone tasks, not member lifecycle). The
+	// compile-time guarantee is asserted in TestNoPerMemberControls; here we
+	// re-affirm the whole-plan Stop is the ONLY plan-level control by driving it.
+	if _, err := h.pe.StopPlan(ctx, "plan-t2-play", "tester", "test"); err != nil {
+		t.Fatalf("(8) D7: whole-plan StopPlan: %v", err)
+	}
+	stoppedPlan, _ := h.plans.Get("plan-t2-play")
+	if stoppedPlan.State != plan.StateFailed {
+		t.Errorf("(8) D7: StopPlan must fail the whole plan, got %q", stoppedPlan.State)
+	}
+}
+
+// TestConformance_t3_PlanningReplanning_Design proves the t3 "planning &
+// re-planning" diagram EXECUTES as drawn. The scoped plan_engine_correction_test.go
+// tests prove each EDGE (supersede, targeted-retry, transactional append); this
+// t3 scenario walks the FULL drawn sequence as one observed path: intent →
+// owner plans (members) → execute → unmet-all-done (awaiting correction) →
+// owner re-plans → supersede a done member (D4) AND targeted-retry a frozen-
+// transient failed member (D4) → transactional append (kill mid-append →
+// pre-append DAG) → done.
+//
+// Each correction verb requires the plan to be durably at awaiting_owner_
+// correction, and AppendCorrection itself resets the phase to dispatching (so
+// the engine re-dispatches/re-judges). The two D4 verbs are therefore driven
+// on two freshly-seeded awaiting plans (supersede on plan-t3-sup, targeted-
+// retry on plan-t3-retry) — the same edge-faithful pattern the scoped
+// correction tests use — then the transactional-append and re-judge→done nodes
+// close the drawn path.
+//
+// Drawn path asserted node-by-node:
+//  1. owner plans: a running plan is driven to awaiting_owner_correction
+//     (unmet-all-done).
+//  2. owner re-plans via SUPERSEDE: the done member is marked ignored-by-Judge
+//     (immutable record), and the auto-reset resets the other failed member.
+//  3. TARGETED-RETRY: a frozen-transient failed member is reset ALONE, WITHOUT
+//     auto-resetting other failed members and WITHOUT touching the done member.
+//  4. transactional append: an uncommitted intent is discarded on boot replay
+//     (pre-append DAG); a committed-but-not-done intent is replayed forward
+//     (post-append DAG) — kill mid-append leaves the pre-append DAG intact.
+//  5. the re-planned DAG re-judges to done once the corrected members land.
+//
+// e2e residue: the real owner-LLM planning turn (vs the scripted
+// AppendCorrection calls) is the real-LLM gate; this proves the correction
+// control plane walks the drawn path faithfully.
+//
+// Traces to: ADR-053 §9.1, design diagram t3 (planning & re-planning)
+func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
+	h := newCorrectionHarness(t)
+	ctx := context.Background()
+
+	// (1) owner plans: a running plan driven to awaiting_owner_correction
+	//     (unmet-all-done). Two awaiting plans are seeded — one for the
+	//     SUPERSEDE verb, one for the TARGETED-RETRY verb — because each
+	//     AppendCorrection resets the phase to dispatching.
+	mustSeedAwaitingCorrection(t, h, "plan-t3-sup",
+		doneMember("t3-done"), failedMember("t3-other-failed"))
+	mustSeedAwaitingCorrection(t, h, "plan-t3-retry",
+		doneMember("t3-done-r"), failedMember("t3-frozen"))
+	for _, pid := range []string{"plan-t3-sup", "plan-t3-retry"} {
+		p, _ := h.plans.Get(pid)
+		if p.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
+			t.Fatalf("(1) plan %q must be at awaiting_owner_correction (unmet-all-done), got %q",
+				pid, p.EffectivePlanPhase())
+		}
+	}
+
+	// (2) owner re-plans via SUPERSEDE: the done member is ignored-by-Judge
+	//     (record stays immutable/done), and the auto-reset resets the other
+	//     failed member t3-other-failed (supersede triggers auto-reset).
+	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-sup", CorrectionRequest{
+		Verb: CorrectionSupersede, SupersededMemberID: "t3-done",
+		FalsifiedAssumption: "assumed the done member's outcome was correct",
+		Reason:              "supersede the done member — its result is wrong",
+	}); err != nil {
+		t.Fatalf("(2) AppendCorrection supersede: %v", err)
+	}
+	superRecord, _ := h.tasks.Get("t3-done")
+	if superRecord.Status != task.StatusDone {
+		t.Errorf("(2) D4 supersede: the done member's record must stay immutable (done), got %q", superRecord.Status)
+	}
+	if !h.pe.isMemberSuperseded("plan-t3-sup", "t3-done") {
+		t.Error("(2) D4 supersede: the done member must be tracked as ignored-by-Judge")
+	}
+	autoReset, _ := h.tasks.Get("t3-other-failed")
+	if autoReset.Status == task.StatusFailed {
+		t.Errorf("(2) supersede's auto-reset must reset the other failed member, still failed")
+	}
+
+	// (3) TARGETED-RETRY (on the second awaiting plan): reset the frozen-
+	//     transient failed member ALONE — the done member stays frozen/done and
+	//     targeted-retry does NOT auto-reset other failed members (D4).
+	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-retry", CorrectionRequest{
+		Verb: CorrectionTargetedRetry, RetriedMemberID: "t3-frozen",
+		FalsifiedAssumption: "assumed the transient failure was permanent",
+		Reason:              "targeted-retry the frozen-transient member",
+	}); err != nil {
+		t.Fatalf("(3) AppendCorrection targeted_retry: %v", err)
+	}
+	retried, _ := h.tasks.Get("t3-frozen")
+	if retried.Status == task.StatusFailed {
+		t.Errorf("(3) D4 targeted-retry: the frozen-transient member must be reset, still failed")
+	}
+	// the done member on the retry plan is STILL frozen/done (D4).
+	stillDone, _ := h.tasks.Get("t3-done-r")
+	if stillDone.Status != task.StatusDone {
+		t.Errorf("(3) D4 targeted-retry: the done member must stay frozen (done), got %q", stillDone.Status)
+	}
+
+	// (4) transactional append: kill mid-append → pre-append DAG. An
+	//     uncommitted intent is discarded on boot replay (its tail member does
+	//     NOT exist); a committed-but-not-done intent is replayed forward (its
+	//     tail member DOES exist). This is the t3 "transactional append" node.
+	dir := t.TempDir()
+	il := plan.NewIntentLog(filepath.Join(dir, "plan_intents"))
+	// uncommitted intent (crash before MarkCommitted) — must be DISCARDED.
+	recUncommitted := plan.IntentRecord{
+		IntentID: "rev-t3-uncommitted", PlanID: "plan-t3",
+		Members: []task.Task{{ID: "t3-uncommitted", Title: "u", WorkspaceID: "ws", PlanID: "plan-t3"}},
+		Revision: plan.RevisionEntry{RevisionID: "rev-t3-uncommitted", PlanID: "plan-t3",
+			Verb: plan.RevisionAppend, Generation: 0},
+	}
+	if err := il.AppendIntent(recUncommitted); err != nil {
+		t.Fatalf("(4) AppendIntent uncommitted: %v", err)
+	}
+	// committed-but-not-done (crash after MarkCommitted, before MarkDone) — replayed FORWARD.
+	recCommitted := plan.IntentRecord{
+		IntentID: "rev-t3-committed", PlanID: "plan-t3",
+		Members: []task.Task{{ID: "t3-committed", Title: "c", WorkspaceID: "ws", PlanID: "plan-t3"}},
+		Revision: plan.RevisionEntry{RevisionID: "rev-t3-committed", PlanID: "plan-t3",
+			Verb: plan.RevisionAppend, Generation: 0},
+	}
+	if err := il.AppendIntent(recCommitted); err != nil {
+		t.Fatalf("(4) AppendIntent committed: %v", err)
+	}
+	if err := il.MarkCommitted("plan-t3", "rev-t3-committed"); err != nil {
+		t.Fatalf("(4) MarkCommitted: %v", err)
+	}
+	// boot replay (the kill-mid-append recovery).
+	ts := task.New(filepath.Join(dir, "tasks"))
+	var applied []string
+	res, err := il.ReplayAtBoot("plan-t3", func(rec plan.IntentRecord) error {
+		for _, m := range rec.Members {
+			applied = append(applied, m.ID)
+			_ = ts.Create(&m)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("(4) ReplayAtBoot: %v", err)
+	}
+	if res.Discarded != 1 || res.Replayed != 1 {
+		t.Fatalf("(4) transactional append: Discarded=%d Replayed=%d, want 1/1 (kill mid-append → pre-append DAG)",
+			res.Discarded, res.Replayed)
+	}
+	if len(applied) != 1 || applied[0] != "t3-committed" {
+		t.Fatalf("(4) only the committed intent's member must be applied (pre-append DAG), applied=%v", applied)
+	}
+	if _, err := ts.Get("t3-uncommitted"); err == nil {
+		t.Error("(4) the uncommitted (killed-mid-append) member must NOT exist — pre-append DAG")
+	}
+	if _, err := ts.Get("t3-committed"); err != nil {
+		t.Error("(4) the committed-but-not-done member must exist — post-append DAG (replayed forward)")
+	}
+
+	// (5) the re-planned DAG re-judges to done once the corrected members land.
+	//     On plan-t3-retry, the targeted-retry reset t3-frozen (failed→next→
+	//     in_progress via the dispatcher); mark it done so the all-terminal
+	//     signature CHANGES (frozen was failed, now done), then a met Judge
+	//     resolves the plan to done.
+	markMemberDone(t, h.tasks, "t3-frozen")
+	h.judge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{Met: true, PerCriterion: []task.CriterionVerdict{
+			{CriterionID: in.Criteria[0].ID, Met: true, Reason: "re-planned and met"},
+		}}}
+	}
+	h.pe.processPlan(ctx, "plan-t3-retry")
+	h.pe.judgeWG.Wait()
+	final, _ := h.plans.Get("plan-t3-retry")
+	if final.State != plan.StateDone {
+		t.Fatalf("(5) after re-plan + met re-judge: state=%q, want done", final.State)
+	}
+}
+
+// TestConformance_g4_ParallelStreamsLint_Design proves the g4 "parallel streams
+// (lint)" diagram EXECUTES as drawn. The scoped pkg/plan/lint_test.go tests
+// prove each EDGE (disjoint pass, overlap reject, prefix-aware, exploratory
+// exempt, join-less reject); this g4 scenario walks the FULL drawn sequence as
+// one observed path through the lint seam: disjoint write-sets → lint passes
+// (the approve gate opens); overlapping → lint REJECTS at approve
+// (ErrValidation); exploratory members are exempt (own git worktree, D10 — no
+// write_set, never flagged); join-less convergence is rejected; and a real
+// merge-time conflict surfaces as a plan-correction event
+// (NewMergeConflictEvent → CorrectionKindMergeConflict).
+//
+// Drawn path asserted node-by-node:
+//  1. disjoint parallel write-sets → lint passes (approve gate opens).
+//  2. overlapping write-sets → lint rejects at approve (LintOverlap,
+//     ErrValidation) — the approve is blocked.
+//  3. exploratory members (empty write_set) are exempt — they declare no
+//     footprint (D10: own worktree, conflict is a runtime merge concern).
+//  4. a convergence of ≥2 parallel predecessors with no authored join member
+//     → lint rejects (LintJoinless).
+//  5. a real runtime merge conflict surfaces as a plan-correction event
+//     (NewMergeConflictEvent → CorrectionKindMergeConflict) — never silent.
+//
+// e2e residue: the real go-git merge that produces the conflict (vs the
+// typed NewMergeConflictEvent emission point) is the real-git gate; this
+// proves the lint + correction-event control plane walks the drawn path.
+//
+// Traces to: ADR-053 §9.1, design diagram g4 (parallel streams / lint)
+func TestConformance_g4_ParallelStreamsLint_Design(t *testing.T) {
+	// (1) disjoint parallel write-sets → lint passes (approve gate opens).
+	p := &plan.Plan{ID: "plan-g4"}
+	disjoint := []task.Task{
+		lintMember("stream-a", nil, []string{"pkg/alpha.go"}),
+		lintMember("stream-b", nil, []string{"pkg/beta.go"}),
+	}
+	if lerr := plan.Lint(p, disjoint); lerr != nil {
+		t.Fatalf("(1) disjoint parallel streams must pass lint (approve opens), got: %v", lerr)
+	}
+
+	// (2) overlapping write-sets → lint REJECTS at approve (ErrValidation).
+	overlap := []task.Task{
+		lintMember("stream-a", nil, []string{"pkg/shared.go"}),
+		lintMember("stream-b", nil, []string{"pkg/shared.go"}),
+	}
+	lerr := plan.Lint(p, overlap)
+	if lerr == nil {
+		t.Fatal("(2) overlapping write-sets must be rejected at approve (g4)")
+	}
+	if !errors.Is(lerr, plan.ErrValidation) {
+		t.Fatalf("(2) lint rejection must wrap ErrValidation, got: %v", lerr)
+	}
+	if lerr.Violations[0].Kind != plan.LintOverlap {
+		t.Fatalf("(2) violation kind = %q, want LintOverlap", lerr.Violations[0].Kind)
+	}
+	// The violation's Kind is the correction-event discriminator (write_set_overlap
+	// → CorrectionKindWriteSetOverlap, logged via logCorrectionEvent — "surfaced,
+	// never silent"). Assert the public payload fields the CorrectionEvent would
+	// carry: both offending member IDs + the overlapping path.
+	v := lerr.Violations[0]
+	if len(v.MemberIDs) != 2 || v.MemberIDs[0] != "stream-a" || v.MemberIDs[1] != "stream-b" {
+		t.Fatalf("(2) overlap violation must name both offending members, got %v", v.MemberIDs)
+	}
+	if len(v.Paths) == 0 || v.Paths[0] != "pkg/shared.go" {
+		t.Fatalf("(2) overlap violation must name the conflicting path, got %v", v.Paths)
+	}
+
+	// (3) exploratory members (empty write_set) are exempt (D10: own worktree).
+	exploratory := []task.Task{
+		lintMember("explore-a", nil, nil),
+		lintMember("explore-b", nil, nil),
+	}
+	if lerr := plan.Lint(p, exploratory); lerr != nil {
+		t.Fatalf("(3) exploratory members (no write_set) must be exempt from the overlap check (D10), got: %v", lerr)
+	}
+
+	// (4) join-less convergence → rejected (an authored join member is required).
+	joinless := []task.Task{
+		lintMember("p1", nil, []string{"shards/1.csv"}),
+		lintMember("p2", nil, []string{"shards/2.csv"}),
+		lintMember("merge", []string{"p1", "p2"}, nil), // converges p1+p2, IsJoin=false.
+	}
+	lerrJoin := plan.Lint(p, joinless)
+	if lerrJoin == nil {
+		t.Fatal("(4) a join-less convergence must be rejected (authored join member required)")
+	}
+	foundJoinless := false
+	for _, v := range lerrJoin.Violations {
+		if v.Kind == plan.LintJoinless {
+			foundJoinless = true
+		}
+	}
+	if !foundJoinless {
+		t.Fatalf("(4) expected a LintJoinless violation, got: %+v", lerrJoin.Violations)
+	}
+
+	// (5) a real runtime merge conflict surfaces as a plan-correction event
+	//     (NewMergeConflictEvent → CorrectionKindMergeConflict) — never silent.
+	mergeEv := plan.NewMergeConflictEvent(p.ID, []string{"explore-a", "explore-b"},
+		[]string{"pkg/conflict.go"}, "same-file collision at the join")
+	if mergeEv.Kind != plan.CorrectionKindMergeConflict {
+		t.Fatalf("(5) NewMergeConflictEvent kind = %q, want merge_conflict (plan-correction event)", mergeEv.Kind)
+	}
+	if mergeEv.PlanID != p.ID || len(mergeEv.MemberIDs) != 2 {
+		t.Errorf("(5) merge-correction event must name the plan + colliding members, got %+v", mergeEv)
+	}
+}
+
+// TestConformance_bootsweep_Design proves the §5 "boot sweep" diagram EXECUTES
+// as drawn. The scoped boot_sweep_test.go tests prove each EDGE (non-terminal→
+// failed, needs_input reconstructability, awaiting-correction exemption, N-15
+// re-baseline); this bootsweep scenario walks the FULL drawn sequence as one
+// observed path: kill -9 mid-plan (persisted non-terminal sessions) → every
+// non-terminal session with no live turn → failed(interrupted) within budget,
+// carrying last checkpoint + undelivered messages → session.failed hook fires
+// → plan re-judges/re-dispatches (the awaiting-correction owner is PRESERVED,
+// not swept → no wedge, CRIT-1) → an in-flight goal predating the upgrade is
+// re-baselined (N-15), not swept.
+//
+// Drawn path asserted node-by-node:
+//  1. kill -9 mid-plan: a running session (with checkpoint + undelivered
+//     messages), a queued session, a terminal (completed) session, a paused
+//     awaiting-correction owner, and a stale-version goal are persisted.
+//  2. boot sweep → the running + queued non-terminal sessions become
+//     failed(interrupted) within budget, carrying checkpoint + undelivered;
+//     the terminal session is untouched.
+//  3. session.failed hook fires for each swept session (→ plan re-judges/
+//     re-dispatches downstream).
+//  4. CRIT-1 no-wedge: the paused awaiting-correction owner is PRESERVED
+//     (exemption b) — not swept, so the plan can recover (no wedge).
+//  5. N-15: the in-flight goal predating the upgrade is re-baselined (preserved
+//     as running), NOT swept — one sweep, two triggers.
+//
+// e2e residue: the actual kill -9 + process restart (vs the in-process sweep
+// over persisted records) is the real-process gate; this proves the boot-sweep
+// control plane walks the drawn path faithfully.
+//
+// Traces to: ADR-053 §9.1, design diagram §5 (boot sweep)
+func TestConformance_bootsweep_Design(t *testing.T) {
+	h := newBootSweepHarness(t)
+
+	// (1) kill -9 mid-plan: persist the cross-section of stranded sessions.
+	//     A running session with a checkpoint + undelivered messages.
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "bs-running", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		OwnerScopeKind:        session.OwnerScopeHuman,
+		LastCheckpointRef:     "ckpt-bs",
+		UndeliveredMessageIDs: []string{"bs-msg-1", "bs-msg-2"},
+		CreatedAt:             time.Now().Add(-1 * time.Hour),
+	})
+	// A queued session — also non-terminal, also swept.
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "bs-queued", Generation: 1, State: session.LifecycleQueued,
+		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		OwnerScopeKind: session.OwnerScopeHuman,
+	})
+	// A terminal session — MUST be left alone.
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "bs-done", Generation: 1, State: session.LifecycleCompleted,
+		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		OwnerScopeKind: session.OwnerScopeHuman,
+	})
+	// CRIT-1: a paused awaiting-correction owner (exemption b) — preserved.
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "plan-bs", Title: "plan-bs", WorkspaceID: "ws", OwnerAgentID: "owner",
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		LastUnmetTerminalSignature: "sig-bs",
+	})
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
+		WorkspaceID: "ws", AgentID: "owner", LaunchProfile: session.LaunchProfileSpecialist,
+		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
+	})
+	// N-15: an in-flight goal predating the upgrade (stale semantics version).
+	h.pe.currentSemanticsVersionOverride = 3
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "bs-stale-goal", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-bs",
+	})
+	h.pe.SetGoalSemanticsVersioner(func(sid string) int {
+		if sid == "bs-stale-goal" {
+			return 1 // predates the current build (3)
+		}
+		return 3
+	})
+
+	// (2)+(3) boot sweep → non-terminal sessions swept to failed(interrupted)
+	// within budget, checkpoint + undelivered carried; session.failed hook fires.
+	var failedHooked []string
+	h.pe.SetSessionFailedHook(func(sid, reason string) {
+		if reason != failedReasonInterrupted {
+			t.Errorf("(3) hook reason = %q, want %q", reason, failedReasonInterrupted)
+		}
+		failedHooked = append(failedHooked, sid)
+	})
+	res := h.pe.runBootSweep(context.Background())
+
+	if len(res.SweptToFailed) != 2 {
+		t.Fatalf("(2) SweptToFailed = %v, want exactly 2 (running+queued; terminal excluded)", res.SweptToFailed)
+	}
+	if len(failedHooked) != 2 {
+		t.Fatalf("(3) session.failed hook fired %d times, want 2 (→ plan re-judges/re-dispatches)", len(failedHooked))
+	}
+	swept, _ := h.ls.Load("bs-running")
+	if swept.State != session.LifecycleFailed || swept.FailedReason != failedReasonInterrupted {
+		t.Fatalf("(2) bs-running state=%q reason=%q, want failed/interrupted", swept.State, swept.FailedReason)
+	}
+	if swept.LastCheckpointRef != "ckpt-bs" || len(swept.UndeliveredMessageIDs) != 2 {
+		t.Errorf("(2) swept record must carry checkpoint + undelivered, got ckpt=%q undelivered=%v",
+			swept.LastCheckpointRef, swept.UndeliveredMessageIDs)
+	}
+	// the terminal session is untouched.
+	done, _ := h.ls.Load("bs-done")
+	if done.State != session.LifecycleCompleted {
+		t.Errorf("(2) terminal session changed state: %q (must be untouched)", done.State)
+	}
+
+	// (4) CRIT-1 no-wedge: the awaiting-correction owner is PRESERVED, not swept.
+	if len(res.PreservedAwaitingCorrection) != 1 || res.PreservedAwaitingCorrection[0] != "bs-owner" {
+		t.Fatalf("(4) CRIT-1: PreservedAwaitingCorrection = %v, want [bs-owner] (no wedge)", res.PreservedAwaitingCorrection)
+	}
+	owner, _ := h.ls.Load("bs-owner")
+	if owner.State != session.LifecyclePaused {
+		t.Errorf("(4) CRIT-1: owner swept to %q (must stay paused — exemption b, no wedge)", owner.State)
+	}
+
+	// (5) N-15: the stale-version goal is re-baselined (preserved as running),
+	//     NOT swept — one sweep, two triggers.
+	if len(res.RebaselinedGoals) != 1 || res.RebaselinedGoals[0] != "bs-stale-goal" {
+		t.Fatalf("(5) N-15: RebaselinedGoals = %v, want [bs-stale-goal] (in-flight goal re-baselined, not swept)",
+			res.RebaselinedGoals)
+	}
+	staleGoal, _ := h.ls.Load("bs-stale-goal")
+	if staleGoal.State != session.LifecycleRunning {
+		t.Errorf("(5) N-15: re-baselined goal state = %q, want running (preserved, not swept)", staleGoal.State)
 	}
 }
