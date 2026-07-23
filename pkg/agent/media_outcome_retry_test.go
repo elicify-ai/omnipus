@@ -564,3 +564,263 @@ func recordedVerdictForTurn(ts *turnState, callMessages []providers.Message, pe 
 // ensure the strings import is used even if a future edit removes the
 // body-shape asserts; the package builds either way.
 var _ = strings.Contains
+
+// TestClassifier_CodeUnknown_ForGeminiUnsupportedMIME is the
+// canonical BDD row 1013 case (Wave 1 r1 TD-M7 lock): a 400 with
+// body "Unsupported MIME type: image/svg+xml" — the verbatim Gemini
+// phrasing — MUST classify as CodeUnknown, NOT CodeProviderRejected.
+//
+// Per FR-017 the outcome-based fallback gate fires only on
+// CodeUnknown; the prior implementation returned CodeProviderRejected
+// for every residual 4xx, making CodeUnknown unreachable for the
+// status-bearing tail and forcing the gate to accept the broader
+// "inconclusive" reading. Both halves of the fix are required: the
+// classifier must surface CodeUnknown, and the gate must accept ONLY
+// CodeUnknown. This test locks the classifier half.
+func TestClassifier_CodeUnknown_ForGeminiUnsupportedMIME(t *testing.T) {
+	pe := &ProviderError{
+		Status: 400,
+		Body:   "Unsupported MIME type: image/svg+xml",
+	}
+
+	code := classifyByProviderError(pe, "")
+	assert.Equal(t, CodeUnknown, code,
+		"Gemini 400 'Unsupported MIME type: image/svg+xml' must classify as CodeUnknown, "+
+			"NOT CodeProviderRejected — FR-017 outcome-fallback gate fires only on CodeUnknown (Wave 1 TD-M7)")
+
+	llm := TranslateLLMError(pe, "")
+	assert.Equal(t, CodeUnknown, llm.Code,
+		"TranslateLLMError must surface CodeUnknown for the Gemini SVG BDD row")
+	assert.False(t, llm.Retryable,
+		"CodeUnknown is not retryable at the wire level (the fallback is the retry)")
+}
+
+// TestClassifier_CodeUnknown_ForUnrecognizedBody400 locks the
+// residual 4xx case: a 400 whose body does not match any pinned
+// media/policy/context/tool-args/schema phrase MUST classify as
+// CodeUnknown. The prior implementation returned CodeProviderRejected
+// for every body that was not a pinned phrase, hiding the
+// outcome-fallback trigger from the gate.
+func TestClassifier_CodeUnknown_ForUnrecognizedBody400(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"novel body", "some totally unknown error"},
+		{"whitespace body", "   "},
+		{"empty body", ""},
+		{"off-context image mention", "invalid request: image of a horse is not allowed here"},
+		{"numeric status suffix", "BAD_REQUEST_400"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pe := &ProviderError{Status: 400, Body: tc.body}
+			code := classifyByProviderError(pe, "")
+			assert.Equal(t, CodeUnknown, code,
+				"400 + body %q must classify as CodeUnknown (residual 4xx, the fallback trigger)", tc.body)
+		})
+	}
+}
+
+// TestClassifier_StillReturnsProviderRejected_ForKnownRejections
+// locks the inverse invariant: every code that the classifier
+// currently maps to a SPECIFIC verdict from a 4xx must keep
+// returning that specific verdict — the CodeUnknown broadening for
+// residual 4xx must NOT regress the recognised-shape paths.
+//
+// Together with TestClassifier_CodeUnknown_ForUnrecognizedBody400
+// this pair defines the classifier vs. gate contract: residual 4xx
+// → CodeUnknown (gate accepts), every other 4xx → its specific code
+// (gate rejects).
+func TestClassifier_StillReturnsProviderRejected_ForKnownRejections(t *testing.T) {
+	cases := []struct {
+		name string
+		pe   *ProviderError
+		want LLMErrorCode
+	}{
+		{
+			name: "401 auth → provider_rejected",
+			pe:   &ProviderError{Status: 401, Body: ""},
+			want: CodeProviderRejected,
+		},
+		{
+			name: "403 permission → provider_rejected",
+			pe:   &ProviderError{Status: 403, Body: ""},
+			want: CodeProviderRejected,
+		},
+		{
+			name: "413 + request too large → provider_rejected (NOT context_too_long per ADR-051 Rev 3)",
+			pe:   &ProviderError{Status: 413, Body: "request too large"},
+			want: CodeProviderRejected,
+		},
+		{
+			name: "400 + invalid tool arguments → tool_args (FR-018)",
+			pe:   &ProviderError{Status: 400, Body: "invalid tool arguments: missing field 'name'"},
+			want: CodeToolArgs,
+		},
+		{
+			name: "400 + schema validation → schema (FR-018)",
+			pe:   &ProviderError{Status: 400, Body: "schema validation failed for request body"},
+			want: CodeSchema,
+		},
+		{
+			name: "400 + context length exceeded → context_too_long",
+			pe:   &ProviderError{Status: 400, Body: "context length exceeded"},
+			want: CodeContextTooLong,
+		},
+		{
+			name: "400 + content policy → content_policy",
+			pe:   &ProviderError{Status: 400, Body: "content policy violation"},
+			want: CodeContentPolicy,
+		},
+		{
+			name: "400 + xAI media body → media_unsupported (classifier-primary)",
+			pe:   &ProviderError{Status: 400, Body: xAIMediaBody},
+			want: CodeMediaUnsupported,
+		},
+		{
+			name: "400 + image capability absence → media_unsupported",
+			pe:   &ProviderError{Status: 400, Body: "this model does not support image input"},
+			want: CodeMediaUnsupported,
+		},
+		{
+			name: "429 → rate_limited",
+			pe:   &ProviderError{Status: 429, Body: ""},
+			want: CodeRateLimited,
+		},
+		{
+			name: "500 → network",
+			pe:   &ProviderError{Status: 500, Body: ""},
+			want: CodeNetwork,
+		},
+		{
+			name: "408 → network",
+			pe:   &ProviderError{Status: 408, Body: ""},
+			want: CodeNetwork,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code := classifyByProviderError(tc.pe, "")
+			assert.Equal(t, tc.want, code,
+				"known-shape 4xx must keep its specific classification (no regression to CodeUnknown)")
+		})
+	}
+}
+
+// TestOutcomeFallback_AcceptsCodeUnknown_Only is the strict-reading
+// gate test (Wave 1 r1 TD-M7): outcomeFallbackEligible must return
+// true ONLY for CodeUnknown. Every other LLMErrorCode — including
+// CodeProviderRejected — must be rejected.
+//
+// The prior implementation accepted both CodeUnknown AND
+// CodeProviderRejected to compensate for the classifier's habit of
+// returning CodeProviderRejected for every residual 4xx. The TD-M7
+// fix narrows the gate to CodeUnknown only and aligns the classifier
+// with it (the matching classifier-side tests are in
+// TestClassifier_CodeUnknown_ForGeminiUnsupportedMIME and
+// TestClassifier_CodeUnknown_ForUnrecognizedBody400). This test
+// pins the gate half independently of the classifier, so a future
+// regression that re-expands the gate (e.g. re-introducing
+// CodeProviderRejected) is caught even if the classifier contract
+// holds.
+func TestOutcomeFallback_AcceptsCodeUnknown_Only(t *testing.T) {
+	// Construct a pe that satisfies the OTHER preconditions (status
+	// 4xx, not in {401,403,413}, body not matching any exclusion
+	// substring) so the gate's verdict is driven solely by the
+	// code argument. The body "go" is intentionally short and
+	// carries no pinned phrase.
+	pe := &ProviderError{Status: 400, Body: "go"}
+
+	// Sanity: with the safe body, the preconditions hold — the gate
+	// must return true for CodeUnknown and false for everything else.
+	cases := []struct {
+		name string
+		code LLMErrorCode
+		want bool
+	}{
+		{"CodeUnknown → true (only accepted code)", CodeUnknown, true},
+		{"CodeProviderRejected → false (gate narrowed TD-M7)", CodeProviderRejected, false},
+		{"CodeMediaUnsupported → false (classifier-primary path, not the gate)", CodeMediaUnsupported, false},
+		{"CodeRateLimited → false", CodeRateLimited, false},
+		{"CodeNetwork → false", CodeNetwork, false},
+		{"CodeContentPolicy → false", CodeContentPolicy, false},
+		{"CodeContextTooLong → false", CodeContextTooLong, false},
+		{"CodeToolArgs → false (FR-018 exclusion)", CodeToolArgs, false},
+		{"CodeSchema → false (FR-018 exclusion)", CodeSchema, false},
+		{"empty code → false (no empty-code wildcard)", LLMErrorCode(""), false},
+		{"unknown future code → false", LLMErrorCode("future_code"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := outcomeFallbackEligible(pe, tc.code)
+			assert.Equal(t, tc.want, got,
+				"outcomeFallbackEligible(pe, %q) — gate must accept ONLY CodeUnknown", tc.code)
+		})
+	}
+
+	// nil pe → false regardless of code (defensive).
+	assert.False(t, outcomeFallbackEligible(nil, CodeUnknown),
+		"nil pe must never let the gate fire")
+}
+
+// TestEndToEnd_GeminiUnsupportedMIME_TriggersFallback is the
+// end-to-end BDD row 1013 lock (Wave 1 r1 TD-M7): the
+// Gemini 400 'Unsupported MIME type: image/svg+xml' body, with
+// image media present in callMessages, MUST trigger the
+// outcome-based strip-retry through TryMediaDowngrade.
+//
+// The test exercises the full chain:
+//
+//  1. classifyByProviderError returns CodeUnknown (residual 4xx,
+//     body doesn't match any pinned phrase).
+//  2. outcomeFallbackEligible returns true (CodeUnknown + 4xx +
+//     status not in {401,403,413} + body not in exclusion set).
+//  3. callMessagesCarryMedia returns true (image present).
+//  4. TryMediaDowngrade fires the strip-retry, sets the image-class
+//     guard, and returns a result with Trigger=TriggerOutcomeFallback
+//     (TD-M8 typed result).
+//
+// A regression that broke any of those four steps would kill the
+// spec's BDD row 1013 and leave the Gemini SVG case stuck on a
+// user-facing "provider rejected" message.
+func TestEndToEnd_GeminiUnsupportedMIME_TriggersFallback(t *testing.T) {
+	ts := &turnState{agentID: "slice-e-gemini", turnID: "slice-e-gemini-svg"}
+	callMessages := []providers.Message{imageMessage("gemini-svg")}
+
+	// The verbatim Gemini body from the spec's BDD row 1013.
+	pe := &ProviderError{
+		Status: 400,
+		Body:   "Unsupported MIME type: image/svg+xml",
+	}
+
+	// Sanity: step 1 — classifier returns CodeUnknown.
+	code := classifyByProviderError(pe, "")
+	assert.Equal(t, CodeUnknown, code,
+		"sanity: Gemini 400 SVG body must classify as CodeUnknown — "+
+			"if this fails, the classifier-side fix has regressed")
+
+	// Sanity: step 2 — gate accepts.
+	assert.True(t, outcomeFallbackEligible(pe, code),
+		"sanity: outcomeFallbackEligible must accept CodeUnknown + 400 + non-pinned body")
+
+	// Step 3+4: end-to-end — TryMediaDowngrade fires the strip-retry.
+	result := TryMediaDowngrade(ts, callMessages, pe)
+	assert.True(t, result.Applied,
+		"end-to-end: Gemini 400 SVG body + image media MUST trigger the outcome-based strip-retry (BDD row 1013)")
+	assert.Equal(t, TriggerOutcomeFallback, result.Trigger,
+		"the trigger must be classified as OutcomeFallback, not ClassifierPrimary "+
+			"— the classifier code was CodeUnknown, not CodeMediaUnsupported")
+
+	// Per-class guard must be set exactly once.
+	assert.True(t, ts.imageRetryDone.Load(),
+		"image-class guard must be set after the strip-retry")
+	assert.False(t, ts.mediaRetryDone.Load(),
+		"PDF-class guard must NOT be set when only an image was stripped")
+
+	// The image block must be removed from callMessages so the
+	// retry carries no image — this is the operational effect of
+	// the fallback.
+	assert.Empty(t, callMessages[0].Media,
+		"image media block must be stripped from callMessages so the retry carries no image")
+}
