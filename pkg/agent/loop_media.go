@@ -98,7 +98,7 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			localPath, meta, err := store.ResolveWithMeta(ref)
+			localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 			if err != nil {
 				name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
 				logger.WarnCF("agent", "Failed to resolve media ref — attachment unavailable", map[string]any{
@@ -413,7 +413,7 @@ func buildArtifactTags(store media.MediaStore, refs []string) []string {
 
 	tags := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		localPath, meta, err := store.ResolveWithMeta(ref)
+		localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 		if err != nil {
 			logger.WarnCF("agent", "buildArtifactTags: resolve failed",
 				map[string]any{"ref": ref, "error": err.Error()})
