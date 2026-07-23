@@ -441,3 +441,20 @@ func TestParseIntentMarkers_Excision(t *testing.T) {
 		t.Errorf("prose remainder must not contain raw markers: %q", prose)
 	}
 }
+
+func TestCompileGoalIntent_CheckTrueSteering(t *testing.T) {
+	res := compileGoalIntent("[check: true exit:0] please continue", nil, "user")
+	if res.Rejection != nil {
+		t.Fatalf("unexpected rejection: %+v", res.Rejection)
+	}
+	if res.Goal == nil || len(res.Goal.Criteria) != 1 {
+		t.Fatalf("want exactly 1 criterion, got %+v", res.Goal)
+	}
+	c := res.Goal.Criteria[0]
+	if c.Kind != task.KindCheck {
+		t.Fatalf("kind = %q, want check", c.Kind)
+	}
+	if c.Check == nil || c.Check.Command != "true" || c.Check.ExpectedExitCode != 0 {
+		t.Fatalf("check = %+v, want command=true exit=0", c.Check)
+	}
+}
