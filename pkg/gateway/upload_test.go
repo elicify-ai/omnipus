@@ -416,3 +416,169 @@ func TestHandleServeUpload_MissingPathParts(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
+// --- Workspace media library upload tests (ADR-051 Rev 4, FR-001) ---
+
+// TestUpload_Endpoint_TargetsWorkspaceLibrary is spec TDD test #32 (ADR-051
+// Rev 4, FR-001): POST /api/v1/upload with a workspace_id writes the file to
+// the workspace's persistent media library (workspaces/<ws>/media/) via
+// library.Upload — NOT the legacy session-scoped uploads dir. The response
+// carries a media://workspace/<ws>/<id> ref.
+//
+// BDD:
+//
+//	Given a workspace_id is sent with an upload,
+//	When POST /api/v1/upload is called,
+//	Then the file is stored under workspaces/<ws>/media/,
+//	And the response ref is media://workspace/<ws>/<id>,
+//	And no file is written to the legacy uploads dir.
+func TestUpload_Endpoint_TargetsWorkspaceLibrary(t *testing.T) {
+	api := newUploadTestAPI(t)
+	workspaceID := "ws-media-upload"
+
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	require.NoError(t, w.WriteField("workspace_id", workspaceID))
+	fw, err := w.CreateFormFile("file", "screenshot.png")
+	require.NoError(t, err)
+	_, _ = io.WriteString(fw, "PNGDATA")
+	require.NoError(t, w.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+
+	// FR-001: the ref must be a workspace media ref, not a legacy media://<uuid>.
+	require.NotNil(t, resp.Files[0].Ref, "must carry a media://workspace/ ref")
+	ref := *resp.Files[0].Ref
+	assert.True(t, strings.HasPrefix(ref, "media://workspace/"+workspaceID+"/"),
+		"ref must be workspace-scoped, got %q", ref)
+
+	// The file must be in workspaces/<ws>/media/ — verify via the library.
+	lib := api.agentLoop.GetWorkspaceLibrary(workspaceID)
+	require.NotNil(t, lib, "workspace library must be resolvable")
+	entries := lib.List()
+	require.Len(t, entries, 1, "manifest must have exactly one entry")
+	assert.Equal(t, "screenshot.png", entries[0].Filename)
+
+	// The raw bytes must be readable through the library (sha256-verified).
+	_, mediaID, ok := media.ParseWorkspaceRef(ref)
+	require.True(t, ok, "ref must parse into workspace + media ID")
+	data, _, readErr := lib.Read(mediaID)
+	require.NoError(t, readErr, "library must read back the uploaded bytes")
+	assert.Equal(t, "PNGDATA", string(data))
+
+	// The legacy session-scoped uploads dir must NOT have been created.
+	legacyDir := filepath.Join(api.homePath, "uploads")
+	_, statErr := os.Stat(legacyDir)
+	assert.True(t, os.IsNotExist(statErr),
+		"legacy uploads dir must not exist; workspace path should have been used")
+}
+
+// TestUpload_Endpoint_WorkspaceIDFromQueryParam verifies workspace_id can be
+// supplied via the query string (matching the session_id pattern), not only as
+// a form field.
+func TestUpload_Endpoint_WorkspaceIDFromQueryParam(t *testing.T) {
+	api := newUploadTestAPI(t)
+	workspaceID := "ws-query-upload"
+
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	fw, err := w.CreateFormFile("file", "doc.txt")
+	require.NoError(t, err)
+	_, _ = io.WriteString(fw, "hello workspace")
+	require.NoError(t, w.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload?workspace_id="+workspaceID, body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+	require.NotNil(t, resp.Files[0].Ref)
+	assert.True(t, strings.HasPrefix(*resp.Files[0].Ref, "media://workspace/"+workspaceID+"/"),
+		"query-param workspace_id must route to the library, got %q", *resp.Files[0].Ref)
+}
+
+// TestUpload_Endpoint_WorkspaceMultiFile verifies multiple files in one
+// workspace-scoped request all land in the library.
+func TestUpload_Endpoint_WorkspaceMultiFile(t *testing.T) {
+	api := newUploadTestAPI(t)
+	workspaceID := "ws-multi"
+
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	require.NoError(t, w.WriteField("workspace_id", workspaceID))
+	for i := 1; i <= 3; i++ {
+		fw, err := w.CreateFormFile("file", fmt.Sprintf("file%d.txt", i))
+		require.NoError(t, err)
+		_, _ = fmt.Fprintf(fw, "content %d", i)
+	}
+	require.NoError(t, w.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 3)
+	for _, f := range resp.Files {
+		require.NotNil(t, f.Ref)
+		assert.True(t, strings.HasPrefix(*f.Ref, "media://workspace/"+workspaceID+"/"),
+			"every file must carry a workspace ref, got %q", *f.Ref)
+	}
+	lib := api.agentLoop.GetWorkspaceLibrary(workspaceID)
+	require.NotNil(t, lib)
+	assert.Len(t, lib.List(), 3, "library manifest must hold all 3 entries")
+}
+
+// TestUpload_Endpoint_NoWorkspaceIDStillLegacy verifies that without a
+// workspace_id the handler falls back to the legacy session-scoped path
+// (backward compat). This guards against regressions where workspace routing
+// accidentally fires for plain session uploads.
+func TestUpload_Endpoint_NoWorkspaceIDStillLegacy(t *testing.T) {
+	api := newUploadTestAPI(t)
+	sessionID := "legacy-session"
+
+	body, ct := buildMultipart(t, sessionID, map[string]string{"note.txt": "legacy content"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", ct)
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+
+	// Legacy path: file on disk under uploads/<session_id>/.
+	diskPath := filepath.Join(api.homePath, "uploads", sessionID, "note.txt")
+	data, err := os.ReadFile(diskPath)
+	require.NoError(t, err, "file should be in the legacy uploads dir")
+	assert.Equal(t, "legacy content", string(data))
+
+	// The ref (if present) must NOT be a workspace ref — legacy path does not
+	// use the workspace library.
+	if resp.Files[0].Ref != nil {
+		assert.False(t, strings.HasPrefix(*resp.Files[0].Ref, "media://workspace/"),
+			"legacy upload must not produce a workspace ref, got %q", *resp.Files[0].Ref)
+	}
+}

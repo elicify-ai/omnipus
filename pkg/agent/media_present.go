@@ -169,6 +169,15 @@ func (al *AgentLoop) getTurnRefcounter(workspaceID, transcriptSessionID string) 
 	return &sessionRefcounter{lib: lib, seen: state.seen}
 }
 
+// GetWorkspaceLibrary is the exported gateway-facing seam for routing user
+// uploads (FR-001) to the workspace media library (ADR-051 Rev 4). It returns
+// a cached *library.Library for the workspace, constructing it on first
+// access. Returns nil if the library cannot be constructed — callers degrade
+// gracefully to the legacy session-scoped upload path.
+func (al *AgentLoop) GetWorkspaceLibrary(workspaceID string) *library.Library {
+	return al.getWorkspaceLibrary(workspaceID)
+}
+
 // getWorkspaceLibrary returns a cached *library.Library for the workspace,
 // constructing it on first access. Returns nil if the library cannot be
 // constructed (missing home path, invalid workspace ID) — callers degrade

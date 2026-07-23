@@ -51,6 +51,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/mcp"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
@@ -8716,6 +8717,12 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.
 // Max file size per part: 100 MB. Data is streamed directly to disk; the full
 // file is never buffered in memory.
+//
+// ADR-051 Rev 4 (FR-001): when the request carries a workspace_id (query param
+// or form field before the file parts), files are routed to the workspace's
+// persistent media library (workspaces/<ws>/media/) via library.Upload instead
+// of the legacy session-scoped uploads dir. When no workspace_id is present,
+// the legacy path is used unchanged (backward compat).
 func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -8725,6 +8732,9 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// session_id may come from either a query parameter or a form field that
 	// appears before any file parts. We prefer the query param for simplicity.
 	sessionID := r.URL.Query().Get("session_id")
+	// workspace_id (ADR-051 Rev 4 FR-001) follows the same pattern: query
+	// param first, form field as fallback before the file parts.
+	workspaceID := r.URL.Query().Get("workspace_id")
 
 	// Parse the multipart stream without buffering file content in memory.
 	reader, err := r.MultipartReader()
@@ -8735,6 +8745,12 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var resp gen.UploadFilesResponse
+
+	// workspaceLib is resolved lazily on the first file part when workspace_id
+	// is set. A nil workspaceLib means workspace routing is unavailable, so the
+	// handler falls back to the legacy session-scoped path (graceful
+	// degradation — the file still uploads, just not to the library).
+	var workspaceLib *library.Library
 
 	for {
 		part, err := reader.NextPart()
@@ -8750,7 +8766,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		formName := part.FormName()
 		fileName := part.FileName()
 
-		// Non-file field — check for session_id override (only if not already set).
+		// Non-file field — check for session_id / workspace_id overrides.
 		if fileName == "" {
 			if formName == "session_id" && sessionID == "" {
 				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
@@ -8761,6 +8777,15 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				sessionID = strings.TrimSpace(string(buf))
+			} else if formName == "workspace_id" && workspaceID == "" {
+				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
+				part.Close()
+				if readErr != nil {
+					slog.Warn("rest: upload: read workspace_id field", "error", readErr)
+					jsonErr(w, http.StatusBadRequest, "could not read workspace_id field")
+					return
+				}
+				workspaceID = strings.TrimSpace(string(buf))
 			} else {
 				// Discard unrecognized non-file fields.
 				if _, discardErr := io.Copy(io.Discard, part); discardErr != nil {
@@ -8770,6 +8795,91 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+
+		// --- Workspace media library path (ADR-051 Rev 4, FR-001) ---
+		//
+		// When a workspace_id is present and the workspace library can be
+		// resolved, stream the file directly into the workspace's persistent
+		// media library (workspaces/<ws>/media/) via library.Upload instead
+		// of the legacy session-scoped uploads dir. The library handles
+		// filename normalization, MIME sniffing, sha256, the per-file size
+		// limit (100 MB), and an atomic write+manifest commit — so this path
+		// does not need to replicate any of that.
+		if workspaceID != "" {
+			if err := validateEntityID(workspaceID); err != nil {
+				part.Close()
+				jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+				return
+			}
+			if workspaceLib == nil && a.agentLoop != nil {
+				workspaceLib = a.agentLoop.GetWorkspaceLibrary(workspaceID)
+			}
+			if workspaceLib != nil {
+				ref, projection, uploadErr := workspaceLib.Upload(fileName, gen.UserUpload, part)
+				part.Close()
+				if uploadErr != nil {
+					slog.Error("rest: upload: workspace library store failed",
+						"workspace_id", workspaceID, "filename", fileName, "error", uploadErr)
+					// Remove previously uploaded workspace files in this batch.
+					a.cleanupWorkspaceUploads(&resp, workspaceLib)
+					switch {
+					case errors.Is(uploadErr, library.ErrFileTooLarge):
+						jsonErr(w, http.StatusRequestEntityTooLarge,
+							fmt.Sprintf("file %q exceeds 100 MB limit", fileName))
+					case errors.Is(uploadErr, library.ErrInvalidFilename):
+						jsonErr(w, http.StatusBadRequest,
+							fmt.Sprintf("invalid filename: %q", fileName))
+					default:
+						jsonErr(w, http.StatusInternalServerError,
+							fmt.Sprintf("workspace media store failed: %v", uploadErr))
+					}
+					return
+				}
+
+				var size int64
+				if projection.Size != nil {
+					size = *projection.Size
+				}
+				mimeStr := ""
+				if projection.Mime != nil {
+					mimeStr = *projection.Mime
+				}
+				// Relative path for the response — informational; the SPA
+				// serves workspace media via the media://workspace/ ref, not
+				// the /api/v1/uploads/{session_id}/{filename} URL.
+				_, mediaID, _ := media.ParseWorkspaceRef(ref)
+				relativePath := filepath.Join("workspaces", workspaceID, "media", mediaID)
+
+				var refPtr *string
+				if ref != "" {
+					refCopy := ref
+					refPtr = &refCopy
+				}
+				resp.Files = append(resp.Files, gen.UploadedFile{
+					ContentType: mimeStr,
+					Name:        projection.Filename,
+					Path:        relativePath,
+					Ref:         refPtr,
+					Size:        size,
+				})
+
+				slog.Info(
+					"rest: upload: file stored in workspace library",
+					"workspace_id", workspaceID,
+					"filename", projection.Filename,
+					"size", size,
+					"content_type", mimeStr,
+					"media_ref", ref,
+				)
+				continue
+			}
+			// workspace_id set but library unavailable → fall through to the
+			// legacy session-scoped path (graceful degradation).
+			slog.Warn("rest: upload: workspace library unavailable, falling back to session-scoped path",
+				"workspace_id", workspaceID)
+		}
+
+		// --- Legacy session-scoped path ---
 
 		// Validate session_id before the first file write.
 		if sessionID == "" {
@@ -8932,6 +9042,29 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonCreated(w, resp)
+}
+
+// cleanupWorkspaceUploads removes previously uploaded workspace library files
+// from this batch when a later file in the same request fails. The failing
+// file's own cleanup is handled transactionally by library.Upload; this only
+// removes files that already succeeded. Best-effort — errors are logged.
+func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *library.Library) {
+	if lib == nil {
+		return
+	}
+	for _, prev := range resp.Files {
+		if prev.Ref == nil || !strings.HasPrefix(*prev.Ref, "media://workspace/") {
+			continue
+		}
+		_, mediaID, ok := media.ParseWorkspaceRef(*prev.Ref)
+		if !ok {
+			continue
+		}
+		if _, err := lib.Delete(mediaID); err != nil {
+			slog.Warn("rest: upload: cleanup workspace file failed",
+				"media_id", mediaID, "error", err)
+		}
+	}
 }
 
 // HandleServeUpload serves uploaded files for display in chat.
