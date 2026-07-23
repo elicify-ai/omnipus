@@ -694,3 +694,45 @@ func TestDelegate_SyncGenuineError_StillUsesGenericShortcut(t *testing.T) {
 		t.Errorf("a genuine dispatch failure must still use the generic shortcut message, got: %s", result.ForLLM)
 	}
 }
+
+// TestDelegateTool_KillSwitchGatesSessionMessagingActionsOnly_ArchM2 proves the
+// arch-M2 fix: session_messaging.enabled (FR-196) is honored on the SYNC path
+// for the seven session-messaging-plane actions (inbox/inbox_ack/steer/respond/
+// cancel/follow_up/peek), while run/status (and the default action == run) are
+// delegation spawn/query and are NOT gated. The guard fires in execute() before
+// the switch dispatches to the handler, so no store wiring is needed to observe
+// the rejection.
+func TestDelegateTool_KillSwitchGatesSessionMessagingActionsOnly_ArchM2(t *testing.T) {
+	tool := NewDelegateTool("test-model", 0, 0)
+	tool.SetSessionMessagingEnabled(func() bool { return false })
+
+	sessionMessagingActions := []string{"inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek"}
+	for _, action := range sessionMessagingActions {
+		res := tool.Execute(context.Background(), map[string]any{"action": action})
+		if res == nil || !strings.Contains(res.ForLLM, "session-messaging plane is disabled") {
+			t.Fatalf("action %q: expected disabled-plane error, got: %+v", action, res)
+		}
+	}
+
+	// run/status/default must NOT be gated — they may fail for other reasons
+	// (missing spawner/task), but never with the kill-switch message.
+	for _, args := range []map[string]any{
+		{"action": "run"},
+		{"action": "status"},
+		{}, // omitted action defaults to "run"
+	} {
+		res := tool.Execute(context.Background(), args)
+		if res != nil && strings.Contains(res.ForLLM, "session-messaging plane is disabled") {
+			t.Fatalf("run/status must NOT be gated by the kill switch (args=%v): %s", args, res.ForLLM)
+		}
+	}
+
+	// Positive: when enabled, a session-messaging action proceeds past the guard
+	// (it then fails for its OWN reason — here, missing lifecycle store — NOT the
+	// kill switch). This proves the guard is the kill switch, not a blanket block.
+	tool.SetSessionMessagingEnabled(func() bool { return true })
+	res := tool.Execute(context.Background(), map[string]any{"action": "peek"})
+	if res != nil && strings.Contains(res.ForLLM, "session-messaging plane is disabled") {
+		t.Fatalf("enabled plane must not trip the kill-switch guard, got: %s", res.ForLLM)
+	}
+}

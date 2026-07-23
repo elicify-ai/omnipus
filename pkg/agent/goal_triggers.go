@@ -384,8 +384,31 @@ func (al *AgentLoop) runGoalAdjudication(
 		GoalRoundsUsed:   &newRound,
 		GoalLatestReason: &reasonText,
 	}); perr != nil {
-		logger.WarnCF("agent", "goal trigger: failed to persist round advance",
-			map[string]any{"session_id": sessionID, "error": perr.Error()})
+		// silent-M3 (Phase-2 review): do NOT silently continue on an
+		// un-persisted round counter. The exhaustion gate (attempt >=
+		// maxRounds) re-reads GoalRoundsUsed from the store on the next
+		// adjudication; writeMetaLocked leaves the persisted counter (and its
+		// cache) unchanged on a write failure, so the store stays at the OLD
+		// value while this in-memory branch treated the round as consumed. If
+		// execution proceeded, the gate would never fire and the goal could
+		// re-loop on the same attempt number indefinitely (each re-fire
+		// burning tokens via the steer re-dispatch). Abort THIS adjudication's
+		// round-advance: the verifier turn already ran, but the round is NOT
+		// counted, no advance is emitted, and no steer is delivered (so the
+		// goal is not re-dispatched on a counter the store can't durably
+		// advance). The failure is surfaced loudly (ERROR + system transcript)
+		// so an operator sees the storage fault rather than a quietly-stale
+		// counter; the unbounded-spend backstop is the app-level token budget
+		// brake. This is the "don't consume the round" minimal option from the
+		// review direction.
+		logger.ErrorCF("agent", "goal trigger: round-advance persist failed; aborting adjudication to keep round gate honest",
+			map[string]any{"session_id": sessionID, "attempt": attempt, "max_rounds": maxRounds, "error": perr.Error()})
+		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, fmt.Sprintf(
+			"Goal %q: could not persist the adjudication round counter (%v). The round was not counted and no follow-up was dispatched — investigate storage and retry the goal.",
+			meta.GoalCondition, perr))
+		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, maxRounds,
+			"round-advance persist failed (goal paused)", goalPillActive)
+		return false
 	}
 	al.emitGoalStatusFrame(sessionID, meta.GoalCondition, newRound, maxRounds, reasonText, goalPillActive)
 	if deliverSteer != nil {

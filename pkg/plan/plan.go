@@ -218,11 +218,17 @@ func (p *Plan) EffectivePlanPhase() PlanPhase {
 // only when State == StateFailed; empty for every other state.
 type FailedReason string
 
-// The three canonical failed reasons.
+// The canonical failed reasons.
 const (
 	FailedReasonJudgeRoundsExhausted FailedReason = "judge_rounds_exhausted"
 	FailedReasonStoppedByUser        FailedReason = "stopped_by_user"
 	FailedReasonIdleExpired          FailedReason = "idle_expired"
+	// FailedReasonBudgetExhausted is the ADR-053 D12/R§8.3c/FR-174 graceful
+	// wind-down terminal for a plan/task scope that crosses the app-level
+	// OVERALL token budget at a dispatch/adjudication boundary (the same brake
+	// the goal loop surfaces). The contract enum
+	// (contracts/components/schemas/Plan.yaml failed_reason) already lists it.
+	FailedReasonBudgetExhausted FailedReason = "budget_exhausted"
 )
 
 // validFailedReasons is the set of allowed non-empty FailedReason values.
@@ -230,6 +236,7 @@ var validFailedReasons = map[FailedReason]bool{ //nolint:gochecknoglobals
 	FailedReasonJudgeRoundsExhausted: true,
 	FailedReasonStoppedByUser:        true,
 	FailedReasonIdleExpired:          true,
+	FailedReasonBudgetExhausted:      true,
 }
 
 // IsValidFailedReason reports whether r is a known, explicit failed reason.

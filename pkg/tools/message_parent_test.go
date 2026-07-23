@@ -387,3 +387,34 @@ func TestMessageParentTool_EgressFilter_AppliedToPathFields(t *testing.T) {
 		}
 	})
 }
+
+// TestMessageParentTool_KillSwitchDisabled_FailsClosed_ArchM2 proves the
+// arch-M2 fix: session_messaging.enabled (FR-196) is honored on the SYNC tool
+// path, not just by the async consumer. When the injected closure returns
+// false, Execute fails closed with a clear "plane disabled" error before
+// touching the inbox. Also proves the positive path (enabled → proceeds) and
+// that an unset closure fails OPEN (backward-compatible with bare unit tests).
+func TestMessageParentTool_KillSwitchDisabled_FailsClosed_ArchM2(t *testing.T) {
+	tool, _, _, _ := newMessageParentTestSetup(t)
+
+	// Disabled plane → every kind is rejected at the guard, before the inbox.
+	tool.SetSessionMessagingEnabled(func() bool { return false })
+	res := tool.Execute(withChildContext("child-1"), map[string]any{"kind": "progress", "text": "x"})
+	if res == nil || !strings.Contains(res.ForLLM, "session-messaging plane is disabled") {
+		t.Fatalf("expected disabled-plane error, got: %+v", res)
+	}
+
+	// Enabled plane → the call proceeds (progress appends; no "disabled" error).
+	tool.SetSessionMessagingEnabled(func() bool { return true })
+	ok := tool.Execute(withChildContext("child-1"), map[string]any{"kind": "progress", "text": "all good"})
+	if ok == nil || strings.Contains(ok.ForLLM, "disabled") {
+		t.Fatalf("expected the call to proceed when enabled, got: %+v", ok)
+	}
+
+	// Unset closure → fail OPEN (matches the async consumer's nil-config posture).
+	tool2, _, _, _ := newMessageParentTestSetup(t)
+	openRes := tool2.Execute(withChildContext("child-1"), map[string]any{"kind": "progress", "text": "y"})
+	if openRes == nil || strings.Contains(openRes.ForLLM, "disabled") {
+		t.Fatalf("unset closure must fail open, got: %+v", openRes)
+	}
+}
