@@ -136,14 +136,14 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "unknown";
   message: string;
   retryable: boolean;
 }

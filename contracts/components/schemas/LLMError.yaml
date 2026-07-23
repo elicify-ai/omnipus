@@ -16,6 +16,8 @@ properties:
       - network
       - content_policy
       - context_too_long
+      - tool_args
+      - schema
       - unknown
   message:
     type: string

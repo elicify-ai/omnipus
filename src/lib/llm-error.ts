@@ -56,6 +56,10 @@ export const codeToDisplay: Record<LLMErrorCode, string> = {
     'The model provider refused the request under its content policy.',
   context_too_long:
     "That conversation is too long for this model's context window. Start a fresh session or trim older turns.",
+  tool_args:
+    'The model rejected a tool argument. Fix the call and retry.',
+  schema:
+    'The model rejected the request shape. Review the schema and retry.',
   unknown:
     'Something went wrong talking to the model. Please try again.',
 }
