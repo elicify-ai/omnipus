@@ -20,9 +20,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestHandleRateLimits_* covers the PUT rate-limits semantics.
-// GET semantics (disabled/enabled/wave4 MethodNotAllowed) remain in
-// rest_security_wave4_test.go.
+// TestHandleRateLimits_* covers the PUT rate-limits semantics for the
+// surviving SEC-26 sliding-window fields.
+//
+// ADR-053 D12 retired the SEC-26 daily USD cost cap (`daily_cost_cap_usd`)
+// from this endpoint. The endpoint now handles ONLY per-agent sliding-window
+// limits (LLM/hr, tool/min); the app-level spend brake is the token budget
+// (PUT /api/v1/settings/token-budget). Retired-field rejection is tested in
+// TestHandleRateLimits_RejectsRetiredUSDField in rest_security_wave4_test.go.
 
 func putRateLimits(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -34,12 +39,12 @@ func putRateLimits(t *testing.T, api *restAPI, body string) *httptest.ResponseRe
 	return w
 }
 
-// TestHandleRateLimits_PersistsAllThreeFields verifies that all three fields are
-// written to disk and readable via GET after a successful PUT.
-func TestHandleRateLimits_PersistsAllThreeFields(t *testing.T) {
+// TestHandleRateLimits_PersistsBothFields verifies that both surviving fields
+// are written to disk and readable via GET after a successful PUT.
+func TestHandleRateLimits_PersistsBothFields(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	body := `{"daily_cost_cap_usd":25.5,"max_agent_llm_calls_per_hour":100,"max_agent_tool_calls_per_minute":30}`
+	body := `{"max_agent_llm_calls_per_hour":100,"max_agent_tool_calls_per_minute":30}`
 	w := putRateLimits(t, api, body)
 	require.Equal(t, http.StatusOK, w.Code, "PUT must succeed: %s", w.Body)
 
@@ -50,9 +55,12 @@ func TestHandleRateLimits_PersistsAllThreeFields(t *testing.T) {
 
 	applied, ok := resp["applied"].(map[string]any)
 	require.True(t, ok, "applied must be an object")
-	assert.Equal(t, float64(25.5), applied["daily_cost_cap_usd"])
 	assert.Equal(t, float64(100), applied["max_agent_llm_calls_per_hour"])
 	assert.Equal(t, float64(30), applied["max_agent_tool_calls_per_minute"])
+	// ADR-053 D12: USD cap retired; must NOT be in applied.
+	_, hasUSD := applied["daily_cost_cap_usd"]
+	assert.False(t, hasUSD,
+		"daily_cost_cap_usd must NOT appear in applied after D12 retirement")
 
 	// Read back via GET to confirm persistence.
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/security/rate-limits", nil)
@@ -62,11 +70,12 @@ func TestHandleRateLimits_PersistsAllThreeFields(t *testing.T) {
 
 	var getResp map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
-	assert.Equal(t, float64(25.5), getResp["daily_cost_cap"])
+	assert.Equal(t, float64(100), getResp["max_agent_llm_calls_per_hour"])
+	assert.Equal(t, float64(30), getResp["max_agent_tool_calls_per_minute"])
 }
 
 // TestHandleRateLimits_PartialUpdate verifies that a PUT with only one field
-// leaves the other pre-seeded fields unchanged.
+// leaves the other pre-seeded field unchanged.
 func TestHandleRateLimits_PartialUpdate(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -75,8 +84,8 @@ func TestHandleRateLimits_PartialUpdate(t *testing.T) {
 	w1 := putRateLimits(t, api, preseed)
 	require.Equal(t, http.StatusOK, w1.Code, "preseed PUT must succeed: %s", w1.Body)
 
-	// Partial update: only change daily cost cap.
-	w2 := putRateLimits(t, api, `{"daily_cost_cap_usd":10}`)
+	// Partial update: only change tool cap.
+	w2 := putRateLimits(t, api, `{"max_agent_tool_calls_per_minute":75}`)
 	require.Equal(t, http.StatusOK, w2.Code, "partial PUT must succeed: %s", w2.Body)
 
 	// Confirm LLM cap is preserved.
@@ -87,7 +96,7 @@ func TestHandleRateLimits_PartialUpdate(t *testing.T) {
 
 	var getResp map[string]any
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
-	assert.Equal(t, float64(10), getResp["daily_cost_cap"], "daily_cost_cap must be updated")
+	assert.Equal(t, float64(75), getResp["max_agent_tool_calls_per_minute"], "tool cap must be updated")
 	assert.Equal(t, float64(50), getResp["max_agent_llm_calls_per_hour"], "llm_calls cap must be preserved")
 }
 
@@ -119,8 +128,8 @@ func TestHandleRateLimits_EmptyBodyNoOp(t *testing.T) {
 // rejected with 400.
 func TestHandleRateLimits_NegativeRejected(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	w := putRateLimits(t, api, `{"daily_cost_cap_usd":-5}`)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "negative cost cap must return 400: %s", w.Body)
+	w := putRateLimits(t, api, `{"max_agent_llm_calls_per_hour":-5}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "negative llm cap must return 400: %s", w.Body)
 }
 
 // TestHandleRateLimits_StringInIntFieldRejected verifies that a JSON string
@@ -139,13 +148,12 @@ func TestHandleRateLimits_FloatInIntFieldRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, "10.5 in int field must return 400: %s", w.Body)
 }
 
-// TestHandleRateLimits_NullRejected verifies that JSON null in a numeric field
-// is rejected with 400. JSON does not support NaN/Inf literals; null is the
-// closest representable invalid numeric value in JSON.
+// TestHandleRateLimits_NullRejected verifies that JSON null in an integer field
+// is rejected with 400.
 func TestHandleRateLimits_NullRejected(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	w := putRateLimits(t, api, `{"daily_cost_cap_usd":null}`)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "null in float field must return 400: %s", w.Body)
+	w := putRateLimits(t, api, `{"max_agent_tool_calls_per_minute":null}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "null in int field must return 400: %s", w.Body)
 }
 
 // TestHandleRateLimits_MaxInt64Accepted verifies that math.MaxInt64 is accepted.
@@ -168,7 +176,7 @@ func TestHandleRateLimits_OverflowRejected(t *testing.T) {
 // requires_restart: false (rate limits are hot-reloaded via the 2s config poll).
 func TestHandleRateLimits_HotReload(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	w := putRateLimits(t, api, `{"daily_cost_cap_usd":5}`)
+	w := putRateLimits(t, api, `{"max_agent_llm_calls_per_hour":5}`)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var resp map[string]any
@@ -193,13 +201,10 @@ func TestHandleRateLimits_MethodNotAllowed(t *testing.T) {
 // Pattern mirrors TestHandleSandboxAuditLog_EmitsAuditEntry in
 // rest_audit_log_test.go. The audit logger is wired by newTestRestAPIWithAuditLog
 // (Sandbox.AuditLog=true). The JSONL is written to tmpDir/system/.
-//
-// Traces to: temporal-puzzling-melody.md Wave 1C — FR-020 rate-limits audit
-// emission coverage gap identified by test-analyzer review.
 func TestHandleRateLimits_EmitsAuditEntry(t *testing.T) {
 	api, tmpDir := newTestRestAPIWithAuditLog(t)
 
-	body := strings.NewReader(`{"daily_cost_cap_usd":25.5}`)
+	body := strings.NewReader(`{"max_agent_llm_calls_per_hour":25}`)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/rate-limits", body)
 	r.Header.Set("Content-Type", "application/json")
 	r = r.WithContext(adminCtx())
@@ -240,8 +245,12 @@ func TestHandleRateLimits_EmitsAuditEntry(t *testing.T) {
 			// Verify the new_value reflects the change — catches a no-op audit emit.
 			newVal, _ := record["new_value"].(map[string]any)
 			assert.NotNil(t, newVal, "new_value must be an object")
-			assert.Equal(t, float64(25.5), newVal["daily_cost_cap_usd"],
-				"new_value.daily_cost_cap_usd must match the PUT body")
+			assert.Equal(t, float64(25), newVal["max_agent_llm_calls_per_hour"],
+				"new_value.max_agent_llm_calls_per_hour must match the PUT body")
+			// ADR-053 D12: USD cap retired; must NOT appear in the audit record.
+			_, hasUSD := newVal["daily_cost_cap_usd"]
+			assert.False(t, hasUSD,
+				"audit new_value must not carry the retired daily_cost_cap_usd field")
 			found = true
 		}
 		require.NoError(t, scanner.Err())

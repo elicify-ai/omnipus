@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -13,14 +14,22 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
-// Wave 4 — SEC-26 rate limiting and cost tracking wiring tests.
+// Wave 4 — SEC-26 rate-limiting wiring tests + ADR-053 D12 token-budget
+// regression tests.
 //
 // These tests prove that:
 //   - The RateLimiterRegistry is always initialized in NewAgentLoop.
-//   - SetDailyCostCap is applied from config.
-//   - CostTracker restores persisted daily cost from disk.
-//   - IsSystemAgent returns true only for the system agent.
+//   - IsPrivilegedAgent identifies privileged (core-only) agent types
+//     (ADR-049 D3 narrowing; the SEC-26 USD cap it used to gate is now
+//     retired per ADR-053 D12 — the IsPrivilegedAgent exemption remains
+//     in force ONLY for the surviving per-agent LLM/hr + tool/min
+//     sliding-window rate limits).
 //   - estimateLLMCallCost returns non-negative values for various models.
+//   - **TokenBudget is the sole app-level spend brake** (D12 / FR-171..178):
+//     the USD cap path (CheckGlobalCostCap / RecordSpend / SetDailyCostCap /
+//     GetDailyCost) is gone from the security package; core agents debit
+//     the same pool as non-core, and Exhausted() is the boundary gate
+//     (FR-174 / R§8.3c). Regression tests pin both invariants.
 
 func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 	t.Helper()
@@ -36,7 +45,8 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			RateLimits: config.OmnipusRateLimitsConfig{
-				DailyCostCapUSD:            5.00,
+				// ADR-053 D12 retired DailyCostCapUSD — only the per-agent
+				// sliding-window limits remain.
 				MaxAgentLLMCallsPerHour:    100,
 				MaxAgentToolCallsPerMinute: 20,
 			},
@@ -46,7 +56,9 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 }
 
 // TestRateLimiter_InitializedFromConfig verifies that NewAgentLoop constructs
-// a non-nil RateLimiterRegistry and applies the configured daily cost cap.
+// a non-nil RateLimiterRegistry and exposes it via RateLimiter(). After
+// ADR-053 D12 the registry no longer enforces a USD cost cap — it hosts the
+// per-agent sliding-window rate limits (LLM/hr, tool/min) only.
 func TestRateLimiter_InitializedFromConfig(t *testing.T) {
 	cfg, msgBus := makeRateLimitCfg(t)
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
@@ -56,56 +68,13 @@ func TestRateLimiter_InitializedFromConfig(t *testing.T) {
 	if registry == nil {
 		t.Fatal("RateLimiter() must not be nil after NewAgentLoop")
 	}
-
-	// Fresh registry starts at zero cost.
-	if got := registry.GetDailyCost(); got != 0.0 {
-		t.Errorf("GetDailyCost() = %.4f, want 0.0 on fresh registry", got)
-	}
-
-	// Spend just under the $5.00 cap — must be allowed.
-	result := registry.CheckGlobalCostCap(4.99, "some-agent")
-	if !result.Allowed {
-		t.Fatalf("spend below cap should be allowed, got denied: %s", result.PolicyRule)
-	}
-	// Accumulated is now 4.99; spending $0.02 more pushes over the $5.00 cap.
-	result = registry.CheckGlobalCostCap(0.02, "some-agent")
-	if result.Allowed {
-		t.Fatal("spend over cap should be denied, got allowed")
-	}
 }
 
-// TestRateLimiter_ZeroCapMeansNoCap verifies that DailyCostCapUSD=0 (default)
-// means no cap is applied, regardless of how much is spent.
-func TestRateLimiter_ZeroCapMeansNoCap(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
-			},
-		},
-		// Sandbox.RateLimits left at zero — no limits.
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	defer al.Close()
-
-	registry := al.RateLimiter()
-	if registry == nil {
-		t.Fatal("RateLimiter() must not be nil after NewAgentLoop")
-	}
-
-	// Without a cap, any spend must be allowed.
-	result := registry.CheckGlobalCostCap(999999.0, "some-agent")
-	if !result.Allowed {
-		t.Errorf("spend with no cap configured should always be allowed, got denied: %s", result.PolicyRule)
-	}
-}
-
-// TestIsPrivilegedAgent verifies that IsPrivilegedAgent identifies privileged agent types.
-// Privileges flow from agent type (FR-045), not from a hardcoded agent ID.
+// TestIsPrivilegedAgent verifies that IsPrivilegedAgent identifies privileged
+// agent types. Privileges flow from agent type (FR-045), not from a hardcoded
+// agent ID. After ADR-053 D12 this predicate gates ONLY the surviving SEC-26
+// sliding-window rate limits (LLM/hr, tool/min) — the daily USD cost cap it
+// used to gate is retired.
 func TestIsPrivilegedAgent(t *testing.T) {
 	cases := []struct {
 		agentType string
@@ -114,7 +83,7 @@ func TestIsPrivilegedAgent(t *testing.T) {
 		{"core", true},
 		// ADR-049 D3 / CRIT-002: System Agents (the Judge) are NO LONGER
 		// privileged — IsPrivilegedAgent is core-only, so type:system is
-		// rate-limited + cost-capped like any non-core agent (SEC-26).
+		// rate-limited like any non-core agent (SEC-26 sliding-window).
 		{"system", false},
 		{"custom", false},
 		{"", false},
@@ -126,35 +95,6 @@ func TestIsPrivilegedAgent(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("IsPrivilegedAgent(%q) = %v, want %v", tc.agentType, got, tc.want)
 		}
-	}
-}
-
-// TestCostTracker_RoundTrip verifies that CostTracker persists daily cost
-// through SaveFromRegistry and restores it via LoadIntoRegistry.
-func TestCostTracker_RoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	costPath := dir + "/cost.json"
-
-	// Build a registry with a known accumulated cost.
-	reg1 := security.NewRateLimiterRegistry()
-	reg1.SetDailyCostCap(10.0)
-	reg1.LoadDailyCost(2.71, nowUTCDate())
-
-	// Persist it.
-	tracker := security.NewCostTracker(costPath)
-	if err := tracker.SaveFromRegistry(reg1); err != nil {
-		t.Fatalf("SaveFromRegistry failed: %v", err)
-	}
-
-	// Load into a fresh registry.
-	reg2 := security.NewRateLimiterRegistry()
-	reg2.SetDailyCostCap(10.0)
-	tracker2 := security.NewCostTracker(costPath)
-	tracker2.LoadIntoRegistry(reg2)
-
-	restored := reg2.GetDailyCost()
-	if restored != 2.71 {
-		t.Errorf("restored daily cost = %.4f, want 2.71", restored)
 	}
 }
 
@@ -194,63 +134,112 @@ func TestEstimateLLMCallCost_NilUsage(t *testing.T) {
 	}
 }
 
-// TestRateLimiter_RecordSpend_AccumulatesEvenWhenOverCap verifies the Wave 4
-// post-review fix: RecordSpend must unconditionally accumulate cost, even
-// when it pushes the total past the cap. The previous implementation used
-// CheckGlobalCostCap as the recorder, which only incremented on allow — so a
-// $0.50 call with $4.99/$5.00 cap was allowed (pre-check passed) but the
-// post-call record was denied and the accumulator stayed at $4.99 forever,
-// letting every subsequent call sneak past the cap.
-func TestRateLimiter_RecordSpend_AccumulatesEvenWhenOverCap(t *testing.T) {
-	reg := security.NewRateLimiterRegistry()
-	reg.SetDailyCostCap(5.0)
-	reg.LoadDailyCost(4.99, security.TodayUTCDate())
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-053 D12 / R§8.3 — TokenBudget regression tests (issue #540)
+//
+// These pin the sole-brake invariant: the USD cap is retired; TokenBudget
+// is the only app-level spend brake; core agents (ADR-049 D3 narrowing)
+// debit the same pool as non-core; Exhausted is the boundary gate.
+// ─────────────────────────────────────────────────────────────────────────────
 
-	// Record a $0.50 call — this would have been dropped by CheckGlobalCostCap
-	// because 4.99 + 0.50 > 5.00.
-	reg.RecordSpend(0.50, "alice")
+// TestTokenBudget_SoleBrake_NonCore verifies that the token budget debits
+// for a non-core agent (the only brake per D12). Pre-D12 a parallel USD
+// cap would have tripped at $5; with the cap retired, the token budget
+// alone governs.
+func TestTokenBudget_SoleBrake_NonCore(t *testing.T) {
+	tb := NewTokenBudget(1000, nil) // 1000-token cap, no persister (in-memory)
 
-	if got := reg.GetDailyCost(); got != 5.49 {
-		t.Errorf("after RecordSpend($0.50) on $4.99 accumulator, got $%.2f, want $5.49", got)
+	// A non-core agent's LLM call debits the pool.
+	consumed, exhausted := tb.Debit(400)
+	if consumed != 400 {
+		t.Errorf("after first debit, Consumed = %d, want 400", consumed)
+	}
+	if exhausted {
+		t.Error("Exhausted() must be false after 400/1000 debits")
 	}
 
-	// The next CheckGlobalCostCap call (simulating the NEXT turn's pre-check)
-	// must now deny because the recorded total exceeds the cap.
-	result := reg.CheckGlobalCostCap(0.01, "alice")
-	if result.Allowed {
-		t.Errorf("next CheckGlobalCostCap should deny after accumulator exceeds cap, got allowed")
+	// A second call crosses the cap — the brake engages.
+	consumed, exhausted = tb.Debit(700)
+	if consumed != 1100 {
+		t.Errorf("after second debit, Consumed = %d, want 1100 (overshoot allowed per R§8.3d)", consumed)
 	}
-}
-
-// TestRateLimiter_RecordSpend_PrivilegedAgentExempt verifies that privileged agent
-// types (core/system) spend is not counted in the daily accumulator (FR-045).
-func TestRateLimiter_RecordSpend_PrivilegedAgentExempt(t *testing.T) {
-	reg := security.NewRateLimiterRegistry()
-	reg.SetDailyCostCap(5.0)
-
-	reg.RecordSpend(100.0, "core")
-
-	if got := reg.GetDailyCost(); got != 0 {
-		t.Errorf("privileged agent spend should not be recorded, got $%.2f, want $0.00", got)
+	if !exhausted {
+		t.Error("Exhausted() must be true once Consumed >= Cap")
+	}
+	if !tb.Exhausted() {
+		t.Error("Exhausted() must report true at the boundary (FR-174 / R§8.3c)")
 	}
 }
 
-// TestRateLimiter_RecordSpend_ZeroAndNegativeIgnored verifies that zero and
-// negative costs are no-ops (defensive — negative cost would decrement).
-func TestRateLimiter_RecordSpend_ZeroAndNegativeIgnored(t *testing.T) {
-	reg := security.NewRateLimiterRegistry()
-	reg.LoadDailyCost(1.0, security.TodayUTCDate())
+// TestTokenBudget_SoleBrake_Core is the critical regression for ADR-053 D12:
+// a "core" agent's spend also debits the same pool. Before D12 the SEC-26
+// USD cap exempted core agents via IsPrivilegedAgent; that exemption is
+// RETIRED for the brake. (IsPrivilegedAgent still gates the per-agent
+// sliding-window LLM/hr + tool/min limits, which is verified by
+// TestIsPrivilegedAgent above.)
+func TestTokenBudget_SoleBrake_Core(t *testing.T) {
+	tb := NewTokenBudget(500, nil)
 
-	reg.RecordSpend(0, "alice")
-	reg.RecordSpend(-5.0, "alice")
-
-	if got := reg.GetDailyCost(); got != 1.0 {
-		t.Errorf("zero/negative spend should be no-op, got $%.2f, want $1.00", got)
+	// A "core" agent turn debits the same pool — no exemption. This is the
+	// security-posture shift called out in ADR-053 §179: "core-agent turns
+	// now debit — a deliberate, operator-locked change of cost posture that
+	// removes the privileged exemption."
+	consumed, _ := tb.Debit(500)
+	if consumed != 500 {
+		t.Errorf("core-agent debit: Consumed = %d, want 500", consumed)
+	}
+	if !tb.Exhausted() {
+		t.Error("Exhausted() must be true after a single core debit hits the cap — " +
+			"no privileged-agent exemption on the brake (FR-172)")
 	}
 }
 
-// nowUTCDate returns today's date in "YYYY-MM-DD" UTC format.
-// Used to seed test state with the current day so LoadIntoRegistry accepts it.
-func nowUTCDate() string {
-	return security.TodayUTCDate()
+// TestTokenBudget_USDCapPathRemoved is the structural regression that
+// fails closed if the SEC-26 USD cap sneaks back in. The retired cap
+// methods must NOT exist on security.RateLimiterRegistry; this guards
+// against a re-introduction that would re-create the dual-brake
+// anti-pattern (#540 / S5 anti-drift).
+//
+// Implemented as a runtime reflect guard: if any of the banned methods are
+// re-added to RateLimiterRegistry, this test fails — surfacing the
+// dual-brake regression at the next test run rather than silently
+// re-creating the SEC-26 path alongside TokenBudget.
+func TestTokenBudget_USDCapPathRemoved(t *testing.T) {
+	// Sanity: the registry still constructs and exposes GetOrCreate for the
+	// surviving sliding-window rate limits.
+	reg := security.NewRateLimiterRegistry()
+	if reg == nil {
+		t.Fatal("RateLimiterRegistry must still construct (sliding-window limits remain)")
+	}
+	window := reg.GetOrCreate(
+		"agent:test:llm_call",
+		10,
+		0,
+		security.ScopeAgent,
+		"test",
+		"llm_call",
+	)
+	if window == nil {
+		t.Fatal("sliding-window GetOrCreate must still work after D12")
+	}
+
+	// The USD cap methods are intentionally absent — see pkg/security/ratelimit.go
+	// header doc-comment. If anyone re-introduces them, this reflection guard
+	// fails AND a new ADR must justify the second brake (S5 anti-drift).
+	regType := reflect.TypeOf((*security.RateLimiterRegistry)(nil))
+	banned := []string{
+		"CheckGlobalCostCap", // the pre-turn gate
+		"RecordSpend",        // the post-call recorder
+		"SetDailyCostCap",    // the boot wiring
+		"GetDailyCost",       // the GET /rate-limits + observability read
+		"LoadDailyCost",      // the restore-from-disk path
+	}
+	for _, name := range banned {
+		if _, ok := regType.MethodByName(name); ok {
+			t.Errorf("security.RateLimiterRegistry must not have method %q — "+
+				"ADR-053 D12 retired the SEC-26 USD cap (TokenBudget is the sole "+
+				"app-level spend brake). Re-introducing it re-creates the "+
+				"dual-brake anti-pattern (S5 anti-drift, #540).", name)
+		}
+	}
 }

@@ -4518,7 +4518,7 @@ export interface components {
         };
         /**
          * RateLimitConfig
-         * @description Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits.
+         * @description Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The app-level spend brake (token budget) is set separately via /api/v1/settings/token-budget; the SEC-26 USD cap was retired per ADR-053 D12.
          */
         RateLimitConfig: {
             /**
@@ -4526,24 +4526,6 @@ export interface components {
              * @example true
              */
             enabled?: boolean;
-            /**
-             * Format: double
-             * @description Current cumulative LLM spending for today (UTC). Only present in GET responses.
-             * @example 0.42
-             */
-            daily_cost_usd?: number;
-            /**
-             * Format: double
-             * @description Maximum allowed daily LLM cost in USD. 0 = unlimited. Only present in GET responses (mapped from daily_cost_cap_usd).
-             * @example 5
-             */
-            daily_cost_cap?: number;
-            /**
-             * Format: double
-             * @description Maximum allowed daily LLM cost in USD. 0 = unlimited. Used in PUT request body.
-             * @example 5
-             */
-            daily_cost_cap_usd?: number;
             /**
              * Format: int64
              * @description Maximum LLM API calls per agent per hour. 0 = unlimited.
@@ -6104,23 +6086,11 @@ export interface components {
         };
         /**
          * RateLimitsResponse
-         * @description Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
+         * @description Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired; the app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
          */
         RateLimitsResponse: {
             /** @example true */
             enabled: boolean;
-            /**
-             * Format: double
-             * @description Live daily LLM cost accumulated so far today.
-             * @example 0.42
-             */
-            daily_cost_usd: number;
-            /**
-             * Format: double
-             * @description Configured daily cost cap in USD. 0 means unlimited.
-             * @example 5
-             */
-            daily_cost_cap: number;
             /**
              * Format: int64
              * @description Maximum LLM calls per hour across all agents. 0 means unlimited.
@@ -6136,14 +6106,10 @@ export interface components {
         };
         /**
          * RateLimitsUpdateRequest
-         * @description Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+         * @description Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the two sliding-window cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+         *     Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
          */
         RateLimitsUpdateRequest: {
-            /**
-             * Format: double
-             * @description Daily cost cap in USD. 0 = unlimited.
-             */
-            daily_cost_cap_usd?: number;
             /**
              * Format: int64
              * @description Maximum LLM calls per hour. 0 = unlimited.
@@ -6157,7 +6123,7 @@ export interface components {
         };
         /**
          * RateLimitsUpdateResponse
-         * @description Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration.
+         * @description Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration. Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the applied block returns only the surviving sliding-window fields.
          */
         RateLimitsUpdateResponse: {
             /**
@@ -6172,12 +6138,6 @@ export interface components {
             requires_restart: boolean;
             /** @description The effective configuration after the update. Present only when hot-reload succeeded. */
             applied?: {
-                /**
-                 * Format: double
-                 * @description Applied daily cost cap in USD.
-                 * @example 5
-                 */
-                daily_cost_cap_usd?: number;
                 /**
                  * Format: int64
                  * @description Applied LLM calls per hour limit.

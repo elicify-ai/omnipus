@@ -45,12 +45,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import {
   fetchConfig,
   updateConfig,
-  fetchGatewayStatus,
   fetchCredentials,
   addCredential,
   deleteCredential,
@@ -180,11 +178,6 @@ export function SecuritySection() {
     queryFn: fetchConfig,
   })
 
-  const { data: gatewayStatus, isError: gatewayStatusError } = useQuery({
-    queryKey: ['gateway-status'],
-    queryFn: fetchGatewayStatus,
-  })
-
   const { data: credentials = [], isError: credentialsError } = useQuery({
     queryKey: ['credentials'],
     queryFn: fetchCredentials,
@@ -198,7 +191,9 @@ export function SecuritySection() {
   // The local state is the draft; after save the query is invalidated so config refetches.
   const [policyMode, setPolicyMode] = useState<'allow' | 'deny'>('deny')
   const [execApproval, setExecApproval] = useState<'auto' | 'ask' | 'deny'>('ask')
-  const [dailyCostCap, setDailyCostCap] = useState('')
+  // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
+  // The app-level spend brake is the token budget (set via TokenBudgetSection
+  // on the Usage screen), not a money cap.
   const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
   const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
   const [execTimeoutSecs, setExecTimeoutSecs] = useState('')
@@ -221,7 +216,6 @@ export function SecuritySection() {
     if (isDirtyRef.current) return
     setPolicyMode(config.security.policy_mode)
     setExecApproval(config.security.exec_approval)
-    setDailyCostCap(config.security.daily_cost_cap?.toString() ?? '')
     setAgentLlmCallsPerHour(config.security.rate_limits.max_agent_llm_calls_per_hour?.toString() ?? '')
     setAgentToolCallsPerMin(config.security.rate_limits.max_agent_tool_calls_per_minute?.toString() ?? '')
     setExecTimeoutSecs(config.security.exec_timeout_seconds?.toString() ?? '')
@@ -232,13 +226,12 @@ export function SecuritySection() {
   const securityFormData = useMemo(() => ({
     policy_mode: policyMode,
     exec_approval: execApproval,
-    daily_cost_cap: dailyCostCap,
     exec_timeout_seconds: execTimeoutSecs,
     max_background_seconds: maxBackgroundSecs,
     enable_deny_patterns: enableDenyPatterns,
     agent_llm_calls_per_hour: agentLlmCallsPerHour,
     agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [policyMode, execApproval, dailyCostCap, execTimeoutSecs, maxBackgroundSecs, enableDenyPatterns, agentLlmCallsPerHour, agentToolCallsPerMin])
+  }), [policyMode, execApproval, execTimeoutSecs, maxBackgroundSecs, enableDenyPatterns, agentLlmCallsPerHour, agentToolCallsPerMin])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     securityFormData,
@@ -247,7 +240,6 @@ export function SecuritySection() {
         security: {
           policy_mode: policyMode,
           exec_approval: execApproval,
-          daily_cost_cap: dailyCostCap ? parseFloat(dailyCostCap) : undefined,
           exec_timeout_seconds: execTimeoutSecs ? parseInt(execTimeoutSecs, 10) : undefined,
           max_background_seconds: maxBackgroundSecs ? parseInt(maxBackgroundSecs, 10) : undefined,
           enable_deny_patterns: enableDenyPatterns,
@@ -321,9 +313,9 @@ export function SecuritySection() {
     return <p className="text-sm text-red-400">Failed to load security settings. Please try again.</p>
   }
 
-  const todaySpend = gatewayStatus?.daily_cost ?? 0
-  const capValue = parseFloat(dailyCostCap) || 10
-  const spendPercent = Math.min((todaySpend / capValue) * 100, 100)
+  // ADR-053 D12 retired the "Daily spending limit" UI block. The app-level
+  // spend brake is the token budget, configured in TokenBudgetSection on
+  // the Usage screen — money caps are no longer a thing in Omnipus.
 
   // US-B2: badge derives from persisted config.security.policy_mode (not local state).
   // After save, the query is invalidated so persistedPolicyMode updates.
@@ -407,42 +399,7 @@ export function SecuritySection() {
           </div>
         </div>
 
-        {/* 3. Daily cost cap — shows spend progress */}
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
-          <div className="flex items-center justify-between">
-            <label htmlFor="daily-cost-cap" className="text-sm text-[var(--color-secondary)]">Daily spending limit</label>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-[var(--color-muted)]">$</span>
-              <Input
-                id="daily-cost-cap"
-                type="number"
-                min="0"
-                step="0.5"
-                value={dailyCostCap}
-                onChange={(e) => { markDirty(); setDailyCostCap(e.target.value) }}
-                className="w-24 h-7 text-xs font-mono"
-                placeholder="10.00"
-              />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <div className="flex justify-between text-[10px] text-[var(--color-muted)]">
-              <span>
-                {gatewayStatusError
-                  ? "Today's spend: unavailable"
-                  : `Today's spend: $${todaySpend.toFixed(2)}`}
-              </span>
-              <span>Cap: ${capValue.toFixed(2)}</span>
-            </div>
-            <Progress
-              value={spendPercent}
-              className="h-1.5"
-              aria-label={`Daily spend $${todaySpend.toFixed(2)} of $${capValue.toFixed(2)} cap`}
-            />
-          </div>
-        </div>
-
-        {/* 4. Skill Trust (US-E4 / #340) — plain language, top-level */}
+        {/* 3. Skill Trust (US-E4 / #340) — plain language, top-level */}
         <SkillTrustSection />
       </section>
 

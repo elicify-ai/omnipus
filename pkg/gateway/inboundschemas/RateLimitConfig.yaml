@@ -2,6 +2,10 @@ title: RateLimitConfig
 description: >
   Rate limit configuration returned by GET /api/v1/security/rate-limits and
   accepted by PUT /api/v1/security/rate-limits.
+  Per-agent sliding-window rate limits only (LLM/hr, tool/min). The
+  app-level spend brake (token budget) is set separately via
+  /api/v1/settings/token-budget; the SEC-26 USD cap was retired per
+  ADR-053 D12.
 type: object
 properties:
   enabled:
@@ -10,30 +14,6 @@ properties:
       True when any rate limit cap is configured. Derived from whether any
       limit field is non-zero. Only present in GET responses.
     example: true
-  daily_cost_usd:
-    type: number
-    format: double
-    minimum: 0
-    description: >
-      Current cumulative LLM spending for today (UTC). Only present in
-      GET responses.
-    example: 0.42
-  daily_cost_cap:
-    type: number
-    format: double
-    minimum: 0
-    description: >
-      Maximum allowed daily LLM cost in USD. 0 = unlimited.
-      Only present in GET responses (mapped from daily_cost_cap_usd).
-    example: 5.0
-  daily_cost_cap_usd:
-    type: number
-    format: double
-    minimum: 0
-    description: >
-      Maximum allowed daily LLM cost in USD. 0 = unlimited.
-      Used in PUT request body.
-    example: 5.0
   max_agent_llm_calls_per_hour:
     type: integer
     format: int64

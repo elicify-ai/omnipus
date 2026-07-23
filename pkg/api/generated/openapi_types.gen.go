@@ -9655,17 +9655,8 @@ type ProviderValidation struct {
 	Outcome ProviderValidationOutcome `json:"outcome"`
 }
 
-// RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits.
+// RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The app-level spend brake (token budget) is set separately via /api/v1/settings/token-budget; the SEC-26 USD cap was retired per ADR-053 D12.
 type RateLimitConfig struct {
-	// DailyCostCap Maximum allowed daily LLM cost in USD. 0 = unlimited. Only present in GET responses (mapped from daily_cost_cap_usd).
-	DailyCostCap *float64 `json:"daily_cost_cap,omitempty"`
-
-	// DailyCostCapUsd Maximum allowed daily LLM cost in USD. 0 = unlimited. Used in PUT request body.
-	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
-
-	// DailyCostUsd Current cumulative LLM spending for today (UTC). Only present in GET responses.
-	DailyCostUsd *float64 `json:"daily_cost_usd,omitempty"`
-
 	// Enabled True when any rate limit cap is configured. Derived from whether any limit field is non-zero. Only present in GET responses.
 	Enabled *bool `json:"enabled,omitempty"`
 
@@ -9676,14 +9667,9 @@ type RateLimitConfig struct {
 	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 }
 
-// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
+// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired; the app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
 type RateLimitsResponse struct {
-	// DailyCostCap Configured daily cost cap in USD. 0 means unlimited.
-	DailyCostCap float64 `json:"daily_cost_cap"`
-
-	// DailyCostUsd Live daily LLM cost accumulated so far today.
-	DailyCostUsd float64 `json:"daily_cost_usd"`
-	Enabled      bool    `json:"enabled"`
+	Enabled bool `json:"enabled"`
 
 	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour across all agents. 0 means unlimited.
 	MaxAgentLlmCallsPerHour int64 `json:"max_agent_llm_calls_per_hour"`
@@ -9692,11 +9678,9 @@ type RateLimitsResponse struct {
 	MaxAgentToolCallsPerMinute int64 `json:"max_agent_tool_calls_per_minute"`
 }
 
-// RateLimitsUpdateRequest Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+// RateLimitsUpdateRequest Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the two sliding-window cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+// Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
 type RateLimitsUpdateRequest struct {
-	// DailyCostCapUsd Daily cost cap in USD. 0 = unlimited.
-	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
-
 	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour. 0 = unlimited.
 	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
 
@@ -9704,13 +9688,10 @@ type RateLimitsUpdateRequest struct {
 	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 }
 
-// RateLimitsUpdateResponse Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration.
+// RateLimitsUpdateResponse Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration. Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the applied block returns only the surviving sliding-window fields.
 type RateLimitsUpdateResponse struct {
 	// Applied The effective configuration after the update. Present only when hot-reload succeeded.
 	Applied *struct {
-		// DailyCostCapUsd Applied daily cost cap in USD.
-		DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
-
 		// MaxAgentLlmCallsPerHour Applied LLM calls per hour limit.
 		MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
 

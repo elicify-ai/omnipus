@@ -311,14 +311,16 @@ type AgentLoop struct {
 	// env preamble with the new values.
 	contextBuilderRegistry *ContextBuilderRegistry
 
-	// Per-agent rate limiting and global daily cost cap (SEC-26).
-	// rateLimiter manages sliding-window counters; costTracker persists the
-	// daily cost accumulator across restarts. Both are always non-nil after
-	// NewAgentLoop — the registry exists even when no limits are configured
-	// so it can record costs for observability. The per-call sites check
+	// Per-agent sliding-window rate limiting (SEC-26). rateLimiter manages
+	// the LLM/hr and tool/min counters per agent; always non-nil after
+	// NewAgentLoop so the per-call sites can check for nil and read
+	// counters without guarding. The per-call sites check
 	// cfg.Sandbox.RateLimits.* > 0 to decide whether to enforce.
+	//
+	// ADR-053 D12 retired the SEC-26 global daily USD cost cap that this
+	// registry used to enforce. The token budget (tokenBudget below) is the
+	// sole app-level spend brake.
 	rateLimiter *security.RateLimiterRegistry
-	costTracker *security.CostTracker
 
 	// tokenBudget is the ADR-053 Phase-2 / D12 app-level OVERALL token budget
 	// (R§8.3): ONE atomic pool debited by ALL workloads (owner/member/verifier/
@@ -870,24 +872,24 @@ func NewAgentLoop(
 	// Initialize cancel abuse detector (shared across all four cancel entry points).
 	al.cancelAbuse = newCancelAbuseDetector()
 
-	// SEC-26: Initialize rate limiter registry and persistent cost tracker.
-	// The registry always exists so per-agent windows can be created even when
-	// no cap is configured; SetDailyCostCap(0) disables cost-cap enforcement.
+	// SEC-26: Initialize rate limiter registry. The registry always exists
+	// so per-agent windows can be created even when no limit is configured.
+	//
+	// ADR-053 D12 retired the SEC-26 global daily USD cost cap that this
+	// registry used to enforce via SetDailyCostCap / CheckGlobalCostCap /
+	// RecordSpend; the sole app-level spend brake is now al.tokenBudget
+	// below. Sliding-window rate limits (LLM/hr, tool/min) remain.
 	al.rateLimiter = security.NewRateLimiterRegistry()
-	al.rateLimiter.SetDailyCostCap(cfg.Sandbox.RateLimits.DailyCostCapUSD)
-	costPath := filepath.Join(homePath, "system", "cost.json")
-	al.costTracker = security.NewCostTracker(costPath)
-	al.costTracker.LoadIntoRegistry(al.rateLimiter)
 
-	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget. The ceiling
-	// is restart-gated (FR-177) — read ONCE at boot from PlanningConfig and never
-	// live-reloaded; the live spend lever is Stop/cancel. The persister reconciles
-	// the consumed counter across restarts. cap 0 = unbounded (FR-175).
+	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget — the
+	// sole app-level spend brake. The ceiling is restart-gated (FR-177) —
+	// read ONCE at boot from PlanningConfig and never live-reloaded; the
+	// live spend lever is Stop/cancel. The persister reconciles the
+	// consumed counter across restarts. cap 0 = unbounded (FR-175).
 	tbPath := filepath.Join(homePath, "system", "token_budget.json")
 	al.tokenBudget = NewTokenBudget(cfg.Planning.EffectiveTokenBudget(), NewTokenBudgetPersister(tbPath))
 	logger.InfoCF("agent", "Rate limiter initialized",
 		map[string]any{
-			"daily_cost_cap_usd":              cfg.Sandbox.RateLimits.DailyCostCapUSD,
 			"max_agent_llm_calls_per_hour":    cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
 			"max_agent_tool_calls_per_minute": cfg.Sandbox.RateLimits.MaxAgentToolCallsPerMinute,
 		})
@@ -3345,23 +3347,9 @@ func (al *AgentLoop) Close() {
 		return true
 	})
 
-	// SEC-26: Persist the accumulated daily cost so the next startup can
-	// restore it via LoadIntoRegistry, preventing double-counting on restarts.
-	// A save failure here means the cap will under-count after the next
-	// restart — worth an Error-level log plus the daily total so operators
-	// can reconcile manually.
-	if al.costTracker != nil && al.rateLimiter != nil {
-		if err := al.costTracker.SaveFromRegistry(al.rateLimiter); err != nil {
-			logger.ErrorCF(
-				"agent",
-				"SEC-26: failed to persist daily cost on shutdown — cap may under-count after restart",
-				map[string]any{
-					"error":          err.Error(),
-					"daily_cost_usd": al.rateLimiter.GetDailyCost(),
-				},
-			)
-		}
-	}
+	// (ADR-053 D12 retired the SEC-26 USD cost cap that previously lived
+	// here; costTracker.SaveFromRegistry is gone — the sole app-level spend
+	// brake is TokenBudget, whose own persister reconciled at boot.)
 
 	// FR-048: On graceful shutdown, write turn_canceled_restart synthetic entries
 	// to any sessions that have active turns paused awaiting approval. This makes
@@ -6713,6 +6701,11 @@ turnLoop:
 
 		// SEC-26: Per-agent LLM call rate limit check. Runs once per turn
 		// iteration, before the actual LLM call. The system agent is exempt.
+		//
+		// (ADR-053 D12 retired the SEC-26 global daily USD cost cap that
+		// lived below this block — the sole app-level spend brake is
+		// TokenBudget.Exhausted(), consulted at the next turn/adjudication
+		// boundary per FR-174.)
 		if al.rateLimiter != nil && cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour > 0 &&
 			!security.IsPrivilegedAgent(ts.agent.AgentType) {
 			window := al.rateLimiter.GetOrCreate(
@@ -6740,32 +6733,6 @@ turnLoop:
 				turnStatus = TurnEndStatusError
 				return turnResult{}, fmt.Errorf("rate limit: %s (retry after %.0fs)",
 					result.PolicyRule, result.RetryAfterSeconds)
-			}
-		}
-
-		// SEC-26: Global daily cost cap pre-check. Deny if the accumulated cost
-		// for today already meets or exceeds the cap. The system agent is exempt.
-		if al.rateLimiter != nil && cfg.Sandbox.RateLimits.DailyCostCapUSD > 0 &&
-			!security.IsPrivilegedAgent(ts.agent.AgentType) {
-			if currentCost := al.rateLimiter.GetDailyCost(); currentCost >= cfg.Sandbox.RateLimits.DailyCostCapUSD {
-				capRule := fmt.Sprintf("global daily cost cap exceeded ($%.2f)", cfg.Sandbox.RateLimits.DailyCostCapUSD)
-				al.recordRateLimitDenial(
-					ts,
-					"daily_cost_cap_usd",
-					RateLimitPayload{
-						Scope:      string(security.ScopeGlobal),
-						Resource:   "daily_cost_usd",
-						PolicyRule: capRule,
-						AgentID:    ts.agent.ID,
-						ChatID:     ts.chatID,
-					},
-					map[string]any{
-						"daily_cost_usd": currentCost,
-						"daily_cost_cap": cfg.Sandbox.RateLimits.DailyCostCapUSD,
-					},
-				)
-				turnStatus = TurnEndStatusError
-				return turnResult{}, fmt.Errorf("rate limit: %s", capRule)
 			}
 		}
 
@@ -7750,23 +7717,19 @@ turnLoop:
 		}
 		logger.DebugCF("agent", "LLM response", llmResponseFields)
 
-		// SEC-26: Record the cost of this completed LLM call in the daily
-		// accumulator. We MUST use RecordSpend (not CheckGlobalCostCap) here:
-		// the call already happened, so the spend must be recorded even if it
-		// pushes the total past the cap — the next turn's pre-check will deny
-		// further calls. CheckGlobalCostCap silently skipped the increment on
-		// denials, which caused the accumulator to stick below the cap and let
-		// every subsequent call sneak through.
-		if al.rateLimiter != nil && response != nil && response.Usage != nil {
+		// ADR-053 Phase-2 / D12 (R§8.3d/FR-171/FR-172/FR-173): debit the ONE
+		// app-level OVERALL token pool from provider-reported usage. Agent-agnostic
+		// by design (no agentType arg) — the IsPrivilegedAgent exemption is removed
+		// so core-agent turns debit the same pool. Atomic RMW under one lock; the
+		// graceful-wind-down gate (Exhausted) is consulted at the next turn/
+		// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
+		// even when unbounded (cap 0) so Usage accounting stays correct.
+		//
+		// ADR-053 D12 retired the SEC-26 USD cost cap that previously lived here
+		// (RecordSpend + costTracker.SaveFromRegistry). TokenBudget is the sole
+		// app-level spend brake.
+		if response != nil && response.Usage != nil {
 			callCost := estimateLLMCallCost(llmModel, response.Usage)
-			al.rateLimiter.RecordSpend(callCost, ts.agent.AgentType)
-			// ADR-053 Phase-2 / D12 (R§8.3d/FR-171/FR-172/FR-173): debit the ONE
-			// app-level OVERALL token pool from provider-reported usage. Agent-agnostic
-			// by design (no agentType arg) — the IsPrivilegedAgent exemption is removed
-			// so core-agent turns debit the same pool. Atomic RMW under one lock; the
-			// graceful-wind-down gate (Exhausted) is consulted at the next turn/
-			// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
-			// even when unbounded (cap 0) so Usage accounting stays correct.
 			if al.tokenBudget != nil && response.Usage.TotalTokens > 0 {
 				al.tokenBudget.Debit(int64(response.Usage.TotalTokens))
 			}
@@ -7775,18 +7738,6 @@ turnLoop:
 			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)
 			// Accumulate cache token split for transcript entry (Wave 1 token tracking).
 			ts.AddTurnCacheStats(response.Usage.CacheReadTokens, response.Usage.CacheWriteTokens)
-			if al.costTracker != nil {
-				if saveErr := al.costTracker.SaveFromRegistry(al.rateLimiter); saveErr != nil {
-					logger.ErrorCF("agent", "SEC-26: failed to persist daily cost after LLM call — cap may under-count on restart",
-						map[string]any{
-							"error":          saveErr.Error(),
-							"agent_id":       ts.agent.ID,
-							"call_cost_usd":  callCost,
-							"daily_cost_usd": al.rateLimiter.GetDailyCost(),
-							"model":          llmModel,
-						})
-				}
-			}
 		}
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {
