@@ -264,7 +264,30 @@ async function createPlanMember(
       `createPlanMember (${member.label}): POST /tasks failed ${res.status}: ${res.raw}`,
     )
   }
-  return res.body.id
+  const taskId = res.body.id
+
+  // Triage the member from `inbox` → `next` so the plan engine's
+  // dispatchReadyMembers (which only dispatches `next`-status members) picks
+  // it up. POST /tasks always lands in `inbox` (Detail #8 landing rule,
+  // rest_tasks.go:844); promoteReadyMembers only advances `blocked`
+  // dependents of `done` tasks — nothing auto-promotes `inbox`→`next`. The
+  // Go integration conformance (#541) creates members directly with
+  // StatusNext; the e2e path must triage via PATCH. For a member with
+  // unsatisfied blocked_by, the store's recomputeBlockedStateLocked
+  // (task/store.go:1237) auto-flips `next`→`blocked` on this PATCH; when its
+  // deps later complete, AdvanceBlockedDependents flips it back to `next`.
+  const triage = await apiFetch<{ status: string }>(
+    page,
+    'PATCH',
+    `/api/v1/tasks/${taskId}`,
+    { status: 'next' },
+  )
+  if (!triage.ok) {
+    throw new Error(
+      `createPlanMember (${member.label}): PATCH /tasks/{id} triage to next failed ${triage.status}: ${triage.raw}`,
+    )
+  }
+  return taskId
 }
 
 /**
