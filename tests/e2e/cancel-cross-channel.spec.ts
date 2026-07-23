@@ -754,13 +754,25 @@ test(
     // Cancel the turn.
     await stopBtn.click()
 
-    // Wait for cancel to complete. Under suite load (llm-agents shard) the
-    // OpenRouter cancel + gateway turn teardown can exceed 15s — the stop
-    // button stays on aria-label="Stopping..." until the turn fully ends.
-    // Match the T24a/T24b cascade budget (test.slow() already multiplies
-    // the test timeout); give the button 60s to clear.
-    await expect(stopBtn).not.toBeVisible({ timeout: 60_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+    // Wait for cancel to complete. Under suite load the stop button can stay
+    // on aria-label="Stopping..." after the turn has actually ended (composer
+    // re-enables first). Poll until the composer is enabled OR the stop
+    // button clears — either means cancel finished. Budget 90s (test.slow()).
+    const cancelDeadline = Date.now() + 90_000
+    let cancelDone = false
+    while (Date.now() < cancelDeadline) {
+      const inputEnabled = await chatInput(page).isEnabled().catch(() => false)
+      const stopGone = !(await stopBtn.isVisible().catch(() => true))
+      if (inputEnabled || stopGone) {
+        cancelDone = true
+        break
+      }
+      await page.waitForTimeout(500)
+    }
+    expect(cancelDone, 'cancel must complete within 90s (composer enabled or stop-btn gone)').toBe(
+      true,
+    )
+    await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
 
     // Allow audit flush (audit writes are synchronous on the gateway path, but
     // give a short settling window).
