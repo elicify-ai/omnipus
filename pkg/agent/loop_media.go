@@ -847,9 +847,9 @@ func sanitizeExtension(ext string) string {
 // copy streams via io.Copy to bound memory (files up to maxUploadFileSize / 100
 // MB never sit wholly in RAM). The destination is written 0600 and the work dir
 // is created (0700) if absent.
-func copyToWorkDir(srcPath, workDir, safeName string) (string, error) {
+func copyToWorkDir(srcPath, workDir, safeName string) (dest string, err error) {
 	cleanDir := filepath.Clean(workDir)
-	dest := filepath.Clean(filepath.Join(cleanDir, safeName))
+	dest = filepath.Clean(filepath.Join(cleanDir, safeName))
 	if !isWithinWorkDir(dest, cleanDir) {
 		return "", fmt.Errorf("offload copy escapes work dir: %q", safeName)
 	}
@@ -865,11 +865,19 @@ func copyToWorkDir(srcPath, workDir, safeName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+	// Named-return + deferred Close so a failed flush on a writable handle is
+	// never silently dropped (github-code-quality: writable file handle closed
+	// without error handling). On copy failure, prefer the copy error but still
+	// surface a close error if copy succeeded and only close failed.
+	defer func() {
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+	if _, err = io.Copy(out, in); err != nil {
 		return "", err
 	}
-	return dest, out.Close()
+	return dest, nil
 }
 
 // isWithinWorkDir reports whether path resolves strictly inside dir (not equal
