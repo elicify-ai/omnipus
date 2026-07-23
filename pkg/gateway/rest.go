@@ -9017,7 +9017,7 @@ func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	localPath, meta, err := store.ResolveWithMeta("media://" + refID)
+	localPath, meta, err := store.ResolveWithMetaOpts("media://"+refID, media.ResolveOpts{})
 	if err != nil {
 		slog.Warn("rest: media ref not found", "ref", refID, "error", err.Error())
 		jsonErr(w, http.StatusNotFound, "media not found")

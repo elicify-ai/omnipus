@@ -58,6 +58,18 @@ type MediaStore interface {
 	// ResolveWithMeta returns the local file path and metadata for a given ref.
 	ResolveWithMeta(ref string) (localPath string, meta MediaMeta, err error)
 
+	// ResolveWithOpts is the workspace-aware resolver (FR-028/FR-028a).
+	// Legacy "media://<uuid>" refs resolve via the global registry
+	// regardless of opts (a nil CallerWorkspace bypasses the membership
+	// check — FR-029 sunset v0.1.2). "media://workspace/<ws>/<id>" refs
+	// require a non-nil CallerWorkspace matching the ref's workspace and
+	// are routed to the owning workspace library (FR-028a Spoofing guard).
+	ResolveWithOpts(ref string, opts ResolveOpts) (localPath string, err error)
+
+	// ResolveWithMetaOpts is the metadata-returning counterpart of
+	// ResolveWithOpts. See ResolveWithOpts for the FR-028/FR-028a rules.
+	ResolveWithMetaOpts(ref string, opts ResolveOpts) (localPath string, meta MediaMeta, err error)
+
 	// ReleaseAll deletes all files registered under the given scope
 	// and removes the mapping entries. File-not-exist errors are ignored.
 	ReleaseAll(scope string) error
@@ -103,6 +115,13 @@ type FileMediaStore struct {
 	startOnce  sync.Once
 	stopOnce   sync.Once
 	nowFunc    func() time.Time // for testing
+
+	// libraryProvider optionally resolves "media://workspace/<ws>/<id>" refs
+	// via the owning workspace's media library (FR-028). It is nil on a
+	// fresh store (legacy-only posture) and wired by the gateway once the
+	// workspace-library cache is available. libProvMu guards the field.
+	libProvMu       sync.RWMutex
+	libraryProvider WorkspaceLibraryProvider
 
 	// saveMu guards the debounced-save state. saveTimer coalesces multiple
 	// Store/ReleaseAll calls into one disk write per saveDebounce window;
@@ -201,20 +220,86 @@ func (s *FileMediaStore) RefByPath(localPath string) (string, bool) {
 	return best, best != ""
 }
 
-// Resolve returns the local path for the given ref.
-func (s *FileMediaStore) Resolve(ref string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	entry, ok := s.refs[ref]
-	if !ok {
-		return "", fmt.Errorf("media store: unknown ref: %s", ref)
-	}
-	return entry.path, nil
+// SetWorkspaceLibraryProvider wires the workspace-library resolver used to
+// resolve "media://workspace/<ws>/<id>" refs (FR-028). It is idempotent and
+// safe to call once at gateway boot; passing nil restores the legacy-only
+// posture (workspace refs return "unknown ref" after the guard). The guard
+// itself (FR-028a) fires regardless of whether a provider is wired.
+func (s *FileMediaStore) SetWorkspaceLibraryProvider(p WorkspaceLibraryProvider) {
+	s.libProvMu.Lock()
+	s.libraryProvider = p
+	s.libProvMu.Unlock()
 }
 
-// ResolveWithMeta returns the local path and metadata for the given ref.
+// Resolve returns the local path for the given ref. It is the legacy
+// call-site entry point and delegates to ResolveWithOpts with a zero
+// (nil-context) ResolveOpts: legacy media://<uuid> refs resolve unchanged,
+// and workspace refs still hit the FR-028a guard (they cannot resolve
+// without caller context, which is the correct posture for a legacy
+// caller that has no workspace to claim).
+func (s *FileMediaStore) Resolve(ref string) (string, error) {
+	return s.ResolveWithOpts(ref, ResolveOpts{})
+}
+
+// ResolveWithMeta returns the local path and metadata for the given ref. It
+// is the legacy call-site entry point; see Resolve for the delegation rule.
 func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) {
+	return s.ResolveWithMetaOpts(ref, ResolveOpts{})
+}
+
+// ResolveWithOpts is the workspace-aware resolver (FR-028/FR-028a). It
+// discriminates on the ref prefix: "media://workspace/<ws>/<id>" routes to
+// the owning workspace library after the membership guard, every other
+// "media://<uuid>" ref resolves via the legacy global registry. A nil
+// CallerWorkspace bypasses the guard for legacy refs (FR-029) and is
+// rejected for workspace refs (FR-028a).
+func (s *FileMediaStore) ResolveWithOpts(ref string, opts ResolveOpts) (string, error) {
+	path, _, err := s.ResolveWithMetaOpts(ref, opts)
+	return path, err
+}
+
+// ResolveWithMetaOpts implements the two-tier resolution (FR-028) and the
+// cross-workspace Spoofing guard (FR-028a). See ResolveWithOpts.
+func (s *FileMediaStore) ResolveWithMetaOpts(ref string, opts ResolveOpts) (string, MediaMeta, error) {
+	if IsWorkspaceRef(ref) {
+		return s.resolveWorkspaceRef(ref, opts)
+	}
+	return s.resolveLegacyWithMeta(ref)
+}
+
+// resolveWorkspaceRef enforces the FR-028a guard and, when a library
+// provider is wired, delegates to the owning workspace's library. Without a
+// provider the ref is unresolvable from the global registry (workspace refs
+// are never registered there), so it surfaces as the standard unknown-ref
+// error — after the guard has already authorized the caller.
+func (s *FileMediaStore) resolveWorkspaceRef(ref string, opts ResolveOpts) (string, MediaMeta, error) {
+	workspaceID, _, ok := ParseWorkspaceRef(ref)
+	if !ok {
+		return "", MediaMeta{}, fmt.Errorf("%w: %q", ErrInvalidWorkspaceRef, ref)
+	}
+	if err := ValidateCallerWorkspace(workspaceID, opts); err != nil {
+		return "", MediaMeta{}, err
+	}
+	s.libProvMu.RLock()
+	provider := s.libraryProvider
+	s.libProvMu.RUnlock()
+	if provider == nil {
+		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
+	}
+	resolver, err := provider(workspaceID)
+	if err != nil {
+		return "", MediaMeta{}, fmt.Errorf("media store: workspace library %q unavailable: %w", workspaceID, err)
+	}
+	if resolver == nil {
+		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
+	}
+	return resolver.ResolvePathWithCaller(ref, opts.CallerWorkspace)
+}
+
+// resolveLegacyWithMeta is the pre-Rev4 global-registry lookup. It performs
+// no membership check (legacy refs carry no workspace), preserving the
+// exact behavior every legacy call-site relies on (FR-029).
+func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

@@ -712,7 +712,7 @@ func (c *WeixinChannel) resolveOutboundPart(
 		if store == nil {
 			return "", "", "", cleanup, fmt.Errorf("no media store available")
 		}
-		localPath, meta, err := store.ResolveWithMeta(part.Ref)
+		localPath, meta, err := store.ResolveWithMetaOpts(part.Ref, media.ResolveOpts{})
 		if err != nil {
 			return "", "", "", cleanup, err
 		}

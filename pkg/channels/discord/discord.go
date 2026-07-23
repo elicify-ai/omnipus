@@ -184,7 +184,7 @@ func (c *DiscordChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMes
 	var caption string
 
 	for _, part := range msg.Parts {
-		localPath, err := store.Resolve(part.Ref)
+		localPath, err := store.ResolveWithOpts(part.Ref, media.ResolveOpts{})
 		if err != nil {
 			logger.ErrorCF("discord", "Failed to resolve media ref", map[string]any{
 				"ref":   part.Ref,

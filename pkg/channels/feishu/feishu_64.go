@@ -379,7 +379,7 @@ func (c *FeishuChannel) sendMediaPart(
 	part bus.MediaPart,
 	store media.MediaStore,
 ) error {
-	localPath, err := store.Resolve(part.Ref)
+	localPath, err := store.ResolveWithOpts(part.Ref, media.ResolveOpts{})
 	if err != nil {
 		logger.ErrorCF("feishu", "Failed to resolve media ref", map[string]any{
 			"ref":   part.Ref,

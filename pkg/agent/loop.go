@@ -4841,7 +4841,7 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 	// Transcribe each audio media ref in order.
 	var transcriptions []string
 	for _, ref := range msg.Media {
-		path, meta, err := store.ResolveWithMeta(ref)
+		path, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			continue
@@ -8134,13 +8134,13 @@ turnLoop:
 				parts := make([]bus.MediaPart, 0, len(toolResult.Media))
 				for _, ref := range toolResult.Media {
 					part := bus.MediaPart{Ref: ref}
-					if turnMediaStore != nil {
-						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
-							part.Filename = meta.Filename
-							part.ContentType = meta.ContentType
-							part.Type = inferMediaType(meta.Filename, meta.ContentType)
-						}
+				if turnMediaStore != nil {
+					if _, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{}); err == nil {
+						part.Filename = meta.Filename
+						part.ContentType = meta.ContentType
+						part.Type = inferMediaType(meta.Filename, meta.ContentType)
 					}
+				}
 					parts = append(parts, part)
 				}
 				outboundMedia := bus.OutboundMediaMessage{
@@ -8246,7 +8246,7 @@ turnLoop:
 			// gets the placeholder text and cannot reason about the picture.
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
 				for _, ref := range toolResult.Media {
-					localPath, meta, err := turnMediaStore.ResolveWithMeta(ref)
+					localPath, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 					if err != nil || !strings.HasPrefix(meta.ContentType, "image/") {
 						continue
 					}
@@ -8318,7 +8318,7 @@ turnLoop:
 				for _, ref := range toolResult.Media {
 					d := map[string]any{"ref": ref}
 					if turnMediaStore != nil {
-						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
+						if _, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{}); err == nil {
 							if meta.Filename != "" {
 								d["filename"] = meta.Filename
 							}

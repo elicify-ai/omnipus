@@ -494,7 +494,7 @@ func (c *WeComChannel) resolveOutboundPart(
 			return "", "", "", cleanup, fmt.Errorf("no media store available")
 		}
 
-		localPath, meta, err := store.ResolveWithMeta(ref)
+		localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
 		if err != nil {
 			return "", "", "", cleanup, err
 		}

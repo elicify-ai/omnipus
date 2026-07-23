@@ -414,7 +414,7 @@ func (c *QQChannel) buildMediaUpload(part bus.MediaPart) (*qqMediaUpload, error)
 		return nil, fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
 	}
 
-	resolved, meta, err := store.ResolveWithMeta(part.Ref)
+	resolved, meta, err := store.ResolveWithMetaOpts(part.Ref, media.ResolveOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("qq resolve media ref %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
 	}

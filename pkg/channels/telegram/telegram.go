@@ -456,7 +456,7 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 
 	sentCount := 0
 	for _, part := range msg.Parts {
-		localPath, err := store.Resolve(part.Ref)
+		localPath, err := store.ResolveWithOpts(part.Ref, media.ResolveOpts{})
 		if err != nil {
 			logger.ErrorCF("telegram", "Failed to resolve media ref", map[string]any{
 				"ref":   part.Ref,

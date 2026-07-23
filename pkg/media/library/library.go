@@ -61,6 +61,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 // safeWorkspaceDir mirrors pkg/workspace.SafeWorkspaceDir's containment
@@ -496,26 +497,72 @@ func (l *Library) ResolveWithWorkspace(
 	ref string,
 	callerWorkspaceID *string,
 ) ([]byte, gen.MediaLibraryEntry, error) {
+	mediaID, err := l.authorizeWorkspaceRef(ref, callerWorkspaceID)
+	if err != nil {
+		return nil, gen.MediaLibraryEntry{}, err
+	}
+	return l.Read(mediaID)
+}
+
+// ResolvePathWithCaller is the path-level workspace resolver consumed by
+// pkg/media's two-tier resolver (FR-028/FR-028a). It enforces the same
+// caller-workspace membership guard as ResolveWithWorkspace, then returns
+// the entry's on-disk raw path plus transport metadata — without reading
+// or sha256-verifying the bytes.
+//
+// The bytes-returning Read/ResolveWithWorkspace path is the integrity gate
+// (FR-002 sha256-on-read) for decode-bound consumption; ResolvePathWithCaller
+// serves the transport consumers (channels delivering outbound attachments,
+// session replay, tool-result tagging) that only need a path. This split
+// avoids a redundant full-file read for transport-only callers while keeping
+// the membership guard (FR-028a Spoofing) load-bearing on every entry point.
+func (l *Library) ResolvePathWithCaller(
+	ref string,
+	callerWorkspaceID *string,
+) (string, media.MediaMeta, error) {
+	mediaID, err := l.authorizeWorkspaceRef(ref, callerWorkspaceID)
+	if err != nil {
+		return "", media.MediaMeta{}, err
+	}
+	l.mu.RLock()
+	entry, exists := l.manifest[mediaID]
+	l.mu.RUnlock()
+	if !exists {
+		return "", media.MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, mediaID)
+	}
+	return l.rawPath(mediaID), media.MediaMeta{
+		Filename:    entry.filename,
+		ContentType: entry.mime,
+		Source:      string(entry.source),
+	}, nil
+}
+
+// authorizeWorkspaceRef is the shared FR-028a membership guard for both the
+// bytes-returning (ResolveWithWorkspace) and path-returning
+// (ResolvePathWithCaller) workspace resolvers. It rejects a nil/empty caller
+// context, a structurally malformed ref, and any caller whose workspace does
+// not own the ref. On success it returns the media ID parsed from the ref.
+func (l *Library) authorizeWorkspaceRef(ref string, callerWorkspaceID *string) (string, error) {
 	if callerWorkspaceID == nil || *callerWorkspaceID == "" {
-		return nil, gen.MediaLibraryEntry{}, ErrWorkspaceContextRequired
+		return "", ErrWorkspaceContextRequired
 	}
 	const prefix = "media://workspace/"
 	if !strings.HasPrefix(ref, prefix) {
-		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidRef, ref)
+		return "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
 	}
 	parts := strings.Split(strings.TrimPrefix(ref, prefix), "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidRef, ref)
+		return "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
 	}
 	if parts[0] != l.workspaceID || *callerWorkspaceID != parts[0] {
-		return nil, gen.MediaLibraryEntry{}, fmt.Errorf(
+		return "", fmt.Errorf(
 			"%w: caller=%q ref_workspace=%q",
 			ErrWorkspaceMismatch,
 			*callerWorkspaceID,
 			parts[0],
 		)
 	}
-	return l.Read(parts[1])
+	return parts[1], nil
 }
 
 func (l *Library) IncrementRefcount(id string) (int, error) {

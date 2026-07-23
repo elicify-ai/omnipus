@@ -674,7 +674,7 @@ func buildMediaFrame(
 		// send_file). Replaying both produces a duplicate image in the
 		// SPA. Skip refs whose path was already emitted in this replay.
 		if mediaStore != nil && seenPaths != nil {
-			if path, err := mediaStore.Resolve(refStr); err == nil && path != "" {
+			if path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{}); err == nil && path != "" {
 				if _, dup := seenPaths[path]; dup {
 					continue
 				}
