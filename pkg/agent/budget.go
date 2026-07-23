@@ -59,6 +59,7 @@ const FailedReasonBudgetExhausted = "budget_exhausted"
 type TokenBudget struct {
 	mu        sync.Mutex
 	capTok    int64 // 0 == unbounded sentinel (FR-175); restart-gated
+	capFrozen bool  // sec-MINOR-2/#538: true after the first SetCap call — guards FR-177 one-shot semantics
 	consumed  int64 // reconciled at boot from the persisted counter
 	persister *TokenBudgetPersister
 }
@@ -97,17 +98,33 @@ func NewTokenBudget(capTok int64, persister *TokenBudgetPersister) *TokenBudget 
 }
 
 // SetCap sets the restart-gated ceiling. Per FR-177 this is intended to be
-// called ONCE at boot from config; a later call is a reconfiguration that
-// deliberately does NOT carry live (the documented N-15 hazard). The consumed
-// counter is preserved across a cap change. Negative is clamped to 0
-// (unbounded).
+// called ONCE at boot from config; a later call would be a reconfiguration
+// that straddles two budgets (the documented N-15 hazard) and is NOT
+// supported. sec-MINOR-2/#538: this is now enforced, not just documented — a
+// second call is rejected as a no-op (the first call's value survives) and
+// logs a WARN, rather than silently reconfiguring the live ceiling. This
+// mirrors the codebase's established "should never happen in practice but is
+// worth a WARN if it does" convention for a live/runtime invariant guard
+// (e.g. pkg/agent/cancel.go's descendants-list consistency check) rather than
+// a hard panic — SetCap runs inside the long-lived gateway process, so a
+// misuse should be loud but must not crash a running instance. The consumed
+// counter is preserved across a (rejected) cap-change attempt. Negative is
+// clamped to 0 (unbounded).
 func (b *TokenBudget) SetCap(capTok int64) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.capFrozen {
+		slog.Warn("token_budget: SetCap called a second time — rejected as a no-op; "+
+			"the ceiling is restart-gated (FR-177) and may only be set once per process "+
+			"(a live change would straddle two budgets, the N-15 hazard)",
+			"attempted_cap", capTok, "current_cap", b.capTok)
+		return
+	}
 	if capTok < 0 {
 		capTok = 0
 	}
 	b.capTok = capTok
-	b.mu.Unlock()
+	b.capFrozen = true
 }
 
 // Cap returns the configured ceiling (0 = unbounded).
