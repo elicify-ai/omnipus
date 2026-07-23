@@ -15,6 +15,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,11 +239,15 @@ func TestSessionMessagingConsumer_Steer_LandsInChildSteeringQueue(t *testing.T) 
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())
 	// Seed the child's lifecycle record so the consumer can resolve agentID.
+	// sec-MAJOR-3: the record carries a ParentDurableKey — the consumer's
+	// defense-in-depth gate now requires the target to be a genuine delegated
+	// child (non-empty parent link) before it will inject a steer.
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID:      "child-sess-2",
-		State:          session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession,
-		AgentID:        "child-agent-2",
+		SessionID:        "child-sess-2",
+		State:            session.LifecycleRunning,
+		OwnerScopeKind:   session.OwnerScopeParentSession,
+		AgentID:          "child-agent-2",
+		ParentDurableKey: "parent-of-child-2",
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -361,5 +366,139 @@ func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testin
 	msgs, _, _, _ := inbox.Drain("owner-direct-1", "child-direct-1", "", 10)
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message from direct Execute, got %d", len(msgs))
+	}
+}
+
+// TestSessionMessagingConsumer_Steer_RejectsNonChild (sec-MAJOR-3) proves the
+// sink-side parent↔child re-derivation: the consumer does NOT trust the
+// envelope's TargetSessionID. A steer addressed to (a) a session with no
+// lifecycle record and (b) a session whose record has no ParentDurableKey is
+// rejected at the sink — nothing lands in any steering queue. This is the
+// defense-in-depth mirror of the delegate tool's producer-side
+// verifyCallerOwnsSession gate (tested in delegate_adr053_test.go); if a future
+// second producer of a steer/respond bus event forgets that gate, the consumer
+// still refuses to inject into a non-child.
+func TestSessionMessagingConsumer_Steer_RejectsNonChild(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	enableSessionMessaging(al)
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	// "no-parent-child" has a lifecycle record but NO ParentDurableKey — it is
+	// not a delegated child, so a steer/respond has no business being injected.
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID:      "no-parent-child",
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID:        "orphan-agent",
+		// ParentDurableKey intentionally empty.
+	})
+	// "ghost-child" has NO lifecycle record at all.
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	buildSteer := func(target, text string) {
+		t.Helper()
+		var steer generated.SessionMessage
+		if err := steer.FromSessionMessageSteer(generated.SessionMessageSteer{
+			MessageId: "steer-" + target, SessionId: target, CreatedAt: time.Now(),
+			Text: text,
+		}); err != nil {
+			t.Fatalf("FromSessionMessageSteer: %v", err)
+		}
+		if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+			TargetSessionID: target,
+			Message:         steer,
+		}); err != nil {
+			t.Fatalf("PublishSessionMessage: %v", err)
+		}
+	}
+
+	buildSteer("ghost-child", "hijack attempt 1")
+	buildSteer("no-parent-child", "hijack attempt 2")
+
+	// Give the consumer a moment to drain + (try to) dispatch both events.
+	time.Sleep(400 * time.Millisecond)
+
+	// Neither target may have received a steering message — the sink rejected
+	// both (no record / no parent), so no scope was ever registered.
+	for _, scope := range []string{
+		"ghost-child",
+		"agent:orphan-agent:no-parent-child",
+		"no-parent-child",
+	} {
+		if al.pendingSteeringCountForScope(scope) != 0 {
+			t.Errorf("sec-MAJOR-3 leak: scope %q has %d queued steering messages (consumer must reject a steer to a non-child)",
+				scope, al.pendingSteeringCountForScope(scope))
+		}
+	}
+}
+
+// TestSessionMessagingConsumer_Egress_RedactsSecretAtSink (sec-MINOR-1) proves
+// the sink-side N-10 content-egress filter: a child→parent message whose free
+// text carries a registered secret is REDACTED before it lands in the durable
+// inbox, regardless of which producer emitted the bus event. The message_parent
+// producer is the primary filter; this sink-side pass is the defense-in-depth
+// that catches a future second producer that forgets to filter.
+func TestSessionMessagingConsumer_Egress_RedactsSecretAtSink(t *testing.T) {
+	al, msgBus := newAsyncNotifierTestLoop(t)
+	enableSessionMessaging(al)
+
+	// Register a sensitive value with the live config so the
+	// SensitiveDataReplacer redacts it to "[FILTERED]" (>3 chars qualifies),
+	// and ENABLE filtering (the test config's Tools.FilterSensitiveData defaults
+	// to false — IsFilterSensitiveDataEnabled() is the gate FilterSensitiveData
+	// checks before touching the text).
+	const secret = "sk-test-secret-key-abcde-12345"
+	cfg := al.GetConfig()
+	cfg.Tools.FilterSensitiveData = true
+	cfg.RegisterSensitiveValues([]string{secret})
+
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	ls := session.NewLifecycleStore(t.TempDir())
+	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
+		SessionID: "owner-egress", State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		AgentID: "parent-agent", OriginChannel: "tc", OriginChatID: "c1",
+		ParentDurableKey: "owner-egress",
+	})
+	al.SetSessionMessagingStores(inbox, ls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	al.StartSessionMessageConsumer(ctx)
+
+	// Publish a child→parent progress message whose Text carries the secret.
+	var prog generated.SessionMessage
+	if err := prog.FromSessionMessageProgress(generated.SessionMessageProgress{
+		MessageId: "p-sec", SessionId: "child-egress", CreatedAt: time.Now(),
+		Text: "done, used key " + secret + " to auth",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageProgress: %v", err)
+	}
+	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+		TargetSessionID: "owner-egress",
+		Message:         prog,
+	}); err != nil {
+		t.Fatalf("PublishSessionMessage: %v", err)
+	}
+
+	// Assert the redacted message reached the durable inbox.
+	waitFor(t, 2*time.Second, func() bool {
+		msgs, _, _, err := inbox.Drain("owner-egress", "child-egress", "", 10)
+		return err == nil && len(msgs) == 1
+	})
+	msgs, _, _, _ := inbox.Drain("owner-egress", "child-egress", "", 10)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 inbox message after consumer drain, got %d", len(msgs))
+	}
+	got, err := msgs[0].AsSessionMessageProgress()
+	if err != nil {
+		t.Fatalf("AsSessionMessageProgress: %v", err)
+	}
+	if strings.Contains(got.Text, secret) {
+		t.Errorf("sec-MINOR-1 leak: inbox text still contains the raw secret: %q", got.Text)
+	}
+	if !strings.Contains(got.Text, "[FILTERED]") {
+		t.Errorf("sec-MINOR-1: expected the secret to be redacted to [FILTERED], got text: %q", got.Text)
 	}
 }

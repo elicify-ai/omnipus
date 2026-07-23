@@ -35,6 +35,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -201,6 +202,48 @@ func (al *AgentLoop) buildContentEgressFilter() tools.ContentEgressFilter {
 		}
 		return cfg.FilterSensitiveData(text)
 	}
+}
+
+// filterSessionMessage applies the content-egress filter to every string field
+// of a bus-delivered SessionMessage by marshaling to JSON, running the filter
+// over the serialized form, and unmarshaling the redacted result back. It is
+// the sink-side N-10 defense-in-depth (sec-MINOR-1): the message_parent
+// producer already filters each field at construction (message_parent.go's
+// filterText), but a future second producer could forget — the sink re-applies
+// regardless of producer.
+//
+// Marshal-filter-unmarshal is used (rather than per-variant field-walking) so
+// the redaction covers EVERY free-text/path field across all SessionMessage
+// variants without duplicating the producer's per-field construction logic.
+// config.FilterSensitiveData is a strings.Replacer doing substring
+// replacement; a credential value appears as a substring of the JSON
+// serialization exactly as it would in the live field, so the redaction is
+// faithful for the credential values the filter is seeded with (API keys,
+// tokens, passwords — none of which contain JSON-structural characters).
+//
+// Fail-safe: on any error (marshal/unmarshal) the ORIGINAL message is
+// delivered unchanged — defense-in-depth never becomes an availability risk
+// (the producer's own filter is the primary), and a nil filter is a
+// pass-through.
+func filterSessionMessage(msg generated.SessionMessage, f tools.ContentEgressFilter) generated.SessionMessage {
+	if f == nil {
+		return msg
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return msg
+	}
+	filtered := f(string(raw))
+	if filtered == string(raw) {
+		return msg // nothing redacted; avoid an unmarshal round-trip
+	}
+	var out generated.SessionMessage
+	if err := json.Unmarshal([]byte(filtered), &out); err != nil {
+		// The filter produced invalid JSON — should not happen for substring
+		// replacement of secret values, but fail-safe to the original.
+		return msg
+	}
+	return out
 }
 
 // sessionMessagingEnabledLive returns a live-read closure for the FR-196 kill
@@ -372,23 +415,54 @@ func (al *AgentLoop) dispatchSessionMessageEvent(ctx context.Context, evt bus.Se
 // deliverParentToChild routes a steer/respond event to the child's steering
 // queue via DeliverSessionMessage (steering.go). The child's session_id is
 // evt.TargetSessionID; the child's agentID is resolved from its lifecycle
-// record (a delegated child always has one). When the record is missing
-// (child already swept/reaped) the steer is logged and dropped — best-effort,
-// never a hard failure (the parent's delegate.steer call already returned
-// success to the parent; the bus path is the decoupled delivery).
+// record (a delegated child always has one).
+//
+// sec-MAJOR-3 (defense-in-depth): the consumer RE-DERIVES the parent↔child
+// relationship from the durable lifecycle record instead of trusting the
+// envelope's TargetSessionID. The target MUST resolve to a record that IS a
+// delegated child (non-empty ParentDurableKey) before any injection happens.
+// This is the sink-side mirror of the delegate tool's producer-side
+// verifyCallerOwnsSession gate (pkg/tools/delegate.go) — the delegate tool
+// already verifies caller == rec.ParentDurableKey before it calls the steering
+// sink DIRECTLY (it does not ride this bus path today), but a future second
+// producer of a steer/respond bus event that forgets that gate is still
+// stopped here: the consumer refuses to inject a steer/respond into a session
+// that has no recorded parent. (The SessionMessageEvent envelope carries no
+// publisher identity today, so a full publisher==parent equality check is not
+// possible at the sink; asserting the target is a genuine delegated child is
+// the load-bearing re-derivation available — it converts a forged/guessed
+// TargetSessionID from an injection into a rejected dispatch.)
+//
+// When the record is missing (child already swept/reaped) OR has no recorded
+// parent, the steer is rejected (returned as a dispatch error, logged at WARN
+// by the per-event handler) — never a silent injection. The parent's
+// delegate.steer call already returned success to the parent; the bus path is
+// the decoupled delivery, so a WARN here is not user-visible breakage.
 func (al *AgentLoop) deliverParentToChild(ctx context.Context, evt bus.SessionMessageEvent) error {
-	childSessionID := evt.TargetSessionID
-	childAgentID := ""
-	// Try to resolve the child's agentID from its durable lifecycle record.
-	if ls := al.GetSessionLifecycleStore(); ls != nil && childSessionID != "" {
-		if rec, err := ls.Load(childSessionID); err == nil && rec != nil {
-			childAgentID = rec.AgentID
-		}
+	childSessionID := strings.TrimSpace(evt.TargetSessionID)
+	if childSessionID == "" {
+		return errors.New("session message consumer: parent->child event rejected: no target child session (TargetSessionID unset)")
 	}
+	ls := al.GetSessionLifecycleStore()
+	if ls == nil {
+		// FAIL-CLOSED: without the lifecycle store the consumer cannot
+		// re-derive the parent↔child relationship — never trust the envelope.
+		return errors.New("session message consumer: parent->child event rejected: lifecycle store not configured (cannot verify parent↔child)")
+	}
+	rec, lerr := ls.Load(childSessionID)
+	if lerr != nil || rec == nil {
+		// The target is not a known delegated child. Could be a reaped child
+		// (benign) OR a forged/guessed TargetSessionID (attack). Fail-closed.
+		return fmt.Errorf("session message consumer: parent->child event rejected: target %q is not a known delegated child: %w", childSessionID, lerr)
+	}
+	if strings.TrimSpace(rec.ParentDurableKey) == "" {
+		// The target has no recorded parent — it is not a delegated child, so
+		// a steer/respond has no business being injected into it.
+		return fmt.Errorf("session message consumer: parent->child event rejected: target %q has no recorded parent (not a delegated child)", childSessionID)
+	}
+	childAgentID := rec.AgentID
 	// The steering scope key runTurn registers the active turn under is
 	// "agent:<agentID>:<sessionID>" (see steering.go enqueueSteeringFromMessage).
-	// When we could not resolve an agentID, fall back to a scope the child's
-	// own dequeueScopeWithFallback may still match under (best-effort).
 	scope := childSessionID
 	if childAgentID != "" {
 		scope = "agent:" + childAgentID + ":" + childSessionID
@@ -417,7 +491,18 @@ func (al *AgentLoop) deliverChildToParent(ctx context.Context, evt bus.SessionMe
 		// than a silent drop.
 		return errors.New("session message consumer: child->parent event has no target owner key (TargetSessionID unset)")
 	}
-	if _, err := inbox.Append(ownerKey, evt.Message); err != nil {
+	// sec-MINOR-1 (sink-side N-10 egress, defense-in-depth): re-apply the
+	// SAME content-egress filter the message_parent producer applies at
+	// construction (config.FilterSensitiveData via buildContentEgressFilter),
+	// so a child cannot exfiltrate through the durable inbox what it could not
+	// send directly — regardless of which producer emitted this bus event. The
+	// producer is the primary filter; this sink-side pass catches a future
+	// second producer that forgets. See filterSessionMessage for the
+	// marshal-filter-unmarshal discipline (covers every free-text field across
+	// all SessionMessage variants without duplicating the producer's per-field
+	// construction logic).
+	filtered := filterSessionMessage(evt.Message, al.buildContentEgressFilter())
+	if _, err := inbox.Append(ownerKey, filtered); err != nil {
 		// Never-silent-drop (FR-125): the consumer logs the rejection. The
 		// producer (a bus publisher) does not see this as a tool error the way
 		// message_parent does — the bus path is decoupled delivery, so the
