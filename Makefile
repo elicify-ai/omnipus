@@ -383,6 +383,30 @@ verify-contracts: gen-contracts lint-wire-types
 	npx tsc -b --noEmit
 	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/ pkg/gateway/inboundschemas/
 
+## verify-asyncapi-drift: Run the AsyncAPI Go generator and fail if the output differs from the committed file
+# Standalone drift gate for pkg/api/generated/asyncapi_types.gen.go. The
+# generator's matchingNamedInlineGoType / sameSchemaShape mechanism (added
+# alongside the inline-mirror hand-fix retirement) can silently fall back to
+# an anonymous inline-struct emit if a future schema author's inline mirror
+# drifts from its sibling named schema. A drift here means the previously
+# hand-adjusted `*ErrorPayload` / `*ReplayErrorPayload` pointers revert to
+# anonymous structs and the Zod/JSON contract breaks.
+#
+# CI hook: also reached via `make verify-contracts` (which runs gen-contracts
+# first, then a git diff --exit-code over the whole pkg/api/generated/ tree).
+# This target exists as a focused, runnable-by-itself check for local dev
+# and as documentation of the drift surface. Exit 0 = committed file is
+# generator-idempotent; non-zero = regenerate and commit the diff.
+verify-asyncapi-drift:
+	@if [ ! -f contracts/asyncapi.yaml ]; then \
+		echo "contracts/asyncapi.yaml not found; cannot verify AsyncAPI drift"; \
+		exit 1; \
+	fi
+	CGO_ENABLED=0 $(GO) run ./scripts/gen-asyncapi-go/ \
+		contracts/asyncapi.yaml \
+		pkg/api/generated/asyncapi_types.gen.go
+	git diff --exit-code -- pkg/api/generated/asyncapi_types.gen.go
+
 ## help: Show this help message
 help:
 	@echo "omnipus Makefile"

@@ -260,20 +260,11 @@ type DoneStats struct {
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
 	// Human-readable error description.
-	Message string `json:"message"`
-	// Payload is *ErrorPayload (pointer, not an inline value struct) so that
-	// `json:"payload,omitempty"` actually omits the field when nil. ADR-051 B2:
-	// the AsyncAPI spec keeps the payload inline (the Zod codegen evaluates
-	// schemas eagerly and a $ref forward-reference trips a TDZ error in
-	// generated schemas.ts), so the Go codegen would emit a value struct here
-	// — which encoding/json never omits, serialising `{}` and violating the
-	// LLMError schema (empty code/message fails enum+minLength) and the SPA
-	// Zod validator. Hand-adjusted to *ErrorPayload; the named type already
-	// exists below and matches the inline shape exactly. If `make
-	// gen-contracts` regenerates this file, re-apply this pointer change.
-	Payload   *ErrorPayload `json:"payload,omitempty"`
-	SessionId *string       `json:"session_id,omitempty"`
-	Type      string        `json:"type"`
+	Message string        `json:"message"`
+	Payload *ErrorPayload `json:"payload,omitempty"`
+	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
 }
 
 // ErrorPayload — Structured payload for a live error frame.
@@ -376,11 +367,10 @@ type ReplayErrorFrame struct {
 	// Error category. The SPA renders a different component per kind: "rate_limit" → rate-limit-denial banner with retry-after countdown, "error" → generic error component. Add new kinds here as new error categories are introduced (the enum keeps the wire contract tight).
 	Kind string `json:"kind"`
 	// Human-readable error description (the same text previously written to TranscriptEntry.Content). Kept verbatim for backward compat with the existing replay_message rendering path.
-	Message string `json:"message"`
-	// Payload is *ReplayErrorPayload (pointer) so omitempty works — see the
-	// matching comment on ErrorFrame.Payload for the full ADR-051 B2 rationale.
-	Payload   *ReplayErrorPayload `json:"payload,omitempty"`
-	SessionId string              `json:"session_id"`
+	Message string              `json:"message"`
+	Payload *ReplayErrorPayload `json:"payload,omitempty"`
+	// Session being replayed.
+	SessionId string `json:"session_id"`
 	// ISO-8601 timestamp of the original error event.
 	Timestamp string `json:"timestamp"`
 	Type      string `json:"type"`
