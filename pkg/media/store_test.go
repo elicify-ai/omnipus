@@ -802,8 +802,8 @@ func TestStore_RegistryPersistsAcrossBoot(t *testing.T) {
 	// A NEW store in a fresh process would call LoadRegistry at boot
 	// (gateway.go boot sequence). NewFileMediaStore does not auto-load.
 	store2 := NewFileMediaStore()
-	if err := store2.LoadRegistry(); err != nil {
-		t.Fatalf("LoadRegistry: %v", err)
+	if loadErr := store2.LoadRegistry(); loadErr != nil {
+		t.Fatalf("LoadRegistry: %v", loadErr)
 	}
 
 	// Both refs must resolve to their original on-disk paths after reload.
