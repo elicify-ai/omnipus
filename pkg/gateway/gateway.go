@@ -1912,9 +1912,9 @@ func setupAndStartServices(
 			if cached, ok := libCache.Load(workspaceID); ok {
 				return cached.(*library.Library), nil
 			}
-			lib, err := library.New(homePath, workspaceID)
-			if err != nil {
-				return nil, err
+			lib, libErr := library.New(homePath, workspaceID)
+			if libErr != nil {
+				return nil, libErr
 			}
 			libCache.Store(workspaceID, lib)
 			return lib, nil
@@ -2214,7 +2214,8 @@ func setupAndStartServices(
 				case <-ticker.C:
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					if refreshErr := capCatalog.Refresh(ctx); refreshErr != nil {
-						slog.Warn("gateway: capability catalog refresh failed; last-known-good retained", "error", refreshErr)
+						slog.Warn("gateway: capability catalog refresh failed; last-known-good retained",
+							"error", refreshErr)
 					}
 					cancel()
 				}

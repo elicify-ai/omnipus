@@ -137,14 +137,16 @@ func (a *restAPI) handleWorkspaceMediaAttach(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if _, incErr := lib.IncrementRefcount(mediaID); incErr != nil {
-		slog.Error("rest: workspace media: attach increment", "workspace_id", workspaceID, "media_id", mediaID, "error", incErr)
+		slog.Error("rest: workspace media: attach increment",
+			"workspace_id", workspaceID, "media_id", mediaID, "error", incErr)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	// Re-read to return the updated entry.
 	entry, getErr := lib.Get(mediaID)
 	if getErr != nil {
-		slog.Error("rest: workspace media: attach re-read", "workspace_id", workspaceID, "media_id", mediaID, "error", getErr)
+		slog.Error("rest: workspace media: attach re-read",
+			"workspace_id", workspaceID, "media_id", mediaID, "error", getErr)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
