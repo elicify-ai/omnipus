@@ -107,6 +107,10 @@ components:
       $ref: ./components/schemas/ToolCall.yaml
     Attachment:
       $ref: ./components/schemas/Attachment.yaml
+    MediaLibraryEntry:
+      $ref: ./components/schemas/MediaLibraryEntry.yaml
+    MediaAttachmentRequest:
+      $ref: ./components/schemas/MediaAttachmentRequest.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
@@ -5434,6 +5438,99 @@ paths:
           description: Deleted
         '400':
           $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/media:
+    get:
+      operationId: listWorkspaceMedia
+      summary: List workspace media-library entries
+      tags:
+      - Workspace Media
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: Workspace media-library entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MediaLibraryEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/media/attachments:
+    post:
+      operationId: createWorkspaceMediaAttachment
+      summary: Create a chat attachment from a workspace library entry
+      tags:
+      - Workspace Media
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaAttachmentRequest'
+      responses:
+        '204':
+          description: The library entry was accepted as a chat attachment.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /workspaces/{id}/media/{media_id}:
+    get:
+      operationId: getWorkspaceMedia
+      summary: Get a workspace media-library entry
+      tags:
+      - Workspace Media
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: media_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Media-library entry ID.
+      responses:
+        '200':
+          description: Workspace media-library entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaLibraryEntry'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':

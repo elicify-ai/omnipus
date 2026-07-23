@@ -2382,6 +2382,22 @@ export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
   })
   .partial()
   .passthrough();
+export const MediaLibraryEntry = z.object({
+  id: z.string().min(1),
+  filename: z.string().min(1),
+  mime: z.string().min(1),
+  size: z.number().int().gte(0),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  uploaded_at: z.string().datetime({ offset: true }),
+  source: z.string().min(1),
+  refcount: z.number().int().gte(0).optional(),
+  last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
+});
+export const MediaAttachmentRequest = z.object({
+  media_id: z.string().min(1),
+  content_injection_override: z.string().max(16384).optional(),
+  position: z.number().int().gte(0).optional(),
+});
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -7151,6 +7167,99 @@ Returns HTTP 201 on success.
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/media",
+    alias: "listWorkspaceMedia",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(MediaLibraryEntry),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/media/:media_id",
+    alias: "getWorkspaceMedia",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "media_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MediaLibraryEntry,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/media/attachments",
+    alias: "createWorkspaceMediaAttachment",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MediaAttachmentRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],

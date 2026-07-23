@@ -5523,6 +5523,48 @@ type McpToolsListResponse_Item struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
+// MediaAttachmentRequest Request to attach an existing workspace media-library entry to a chat message without uploading the file again.
+type MediaAttachmentRequest struct {
+	// ContentInjectionOverride Optional text to inject for this attachment instead of the automatic presentation-layer content. Omit to use the default presentation path.
+	ContentInjectionOverride *string `json:"content_injection_override,omitempty"`
+
+	// MediaId ID of the MediaLibraryEntry to attach.
+	MediaId string `json:"media_id"`
+
+	// Position Optional zero-based position among the message attachments.
+	Position *int32 `json:"position,omitempty"`
+}
+
+// MediaLibraryEntry Metadata for one persistent file in a workspace media library. Raw bytes are stored separately and verified against sha256 before presentation.
+type MediaLibraryEntry struct {
+	// Filename Original user-visible filename.
+	Filename string `json:"filename"`
+
+	// Id UUID media identifier within the workspace library.
+	Id string `json:"id"`
+
+	// LastRefcountSeenAt Optional RFC3339 UTC timestamp of the latest refcount observation.
+	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
+
+	// Mime MIME type sniffed from the stored bytes.
+	Mime string `json:"mime"`
+
+	// Refcount Optional server-maintained count of persisted message or session references.
+	Refcount *int `json:"refcount,omitempty"`
+
+	// Sha256 Lowercase hexadecimal SHA-256 digest verified on every read.
+	Sha256 string `json:"sha256"`
+
+	// Size Raw file size in bytes.
+	Size int64 `json:"size"`
+
+	// Source Origin that added the file to the workspace library.
+	Source string `json:"source"`
+
+	// UploadedAt RFC3339 UTC upload timestamp.
+	UploadedAt time.Time `json:"uploaded_at"`
+}
+
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
 	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
@@ -8673,6 +8715,9 @@ type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 
 // PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
 type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
+
+// CreateWorkspaceMediaAttachmentJSONRequestBody defines body for CreateWorkspaceMediaAttachment for application/json ContentType.
+type CreateWorkspaceMediaAttachmentJSONRequestBody = MediaAttachmentRequest
 
 // CreateWorkspaceMilestoneJSONRequestBody defines body for CreateWorkspaceMilestone for application/json ContentType.
 type CreateWorkspaceMilestoneJSONRequestBody = MilestoneCreateRequest

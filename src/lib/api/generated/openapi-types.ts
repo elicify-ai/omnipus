@@ -2312,6 +2312,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{id}/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List workspace media-library entries */
+        get: operations["listWorkspaceMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/media/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a chat attachment from a workspace library entry */
+        post: operations["createWorkspaceMediaAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/media/{media_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a workspace media-library entry */
+        get: operations["getWorkspaceMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -2984,6 +3035,74 @@ export interface components {
              * @example text/plain
              */
             mime_type: string;
+        };
+        /**
+         * MediaLibraryEntry
+         * @description Metadata for one persistent file in a workspace media library. Raw bytes are stored separately and verified against sha256 before presentation.
+         */
+        MediaLibraryEntry: {
+            /**
+             * @description UUID media identifier within the workspace library.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            id: string;
+            /**
+             * @description Original user-visible filename.
+             * @example diagram.png
+             */
+            filename: string;
+            /**
+             * @description MIME type sniffed from the stored bytes.
+             * @example image/png
+             */
+            mime: string;
+            /**
+             * Format: int64
+             * @description Raw file size in bytes.
+             * @example 204800
+             */
+            size: number;
+            /**
+             * @description Lowercase hexadecimal SHA-256 digest verified on every read.
+             * @example 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+             */
+            sha256: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC upload timestamp.
+             * @example 2026-07-22T14:22:00Z
+             */
+            uploaded_at: string;
+            /**
+             * @description Origin that added the file to the workspace library.
+             * @example upload:webchat
+             */
+            source: string;
+            /** @description Optional server-maintained count of persisted message or session references. */
+            readonly refcount?: number;
+            /**
+             * Format: date-time
+             * @description Optional RFC3339 UTC timestamp of the latest refcount observation.
+             */
+            readonly last_refcount_seen_at?: string;
+        };
+        /**
+         * MediaAttachmentRequest
+         * @description Request to attach an existing workspace media-library entry to a chat message without uploading the file again.
+         */
+        MediaAttachmentRequest: {
+            /**
+             * @description ID of the MediaLibraryEntry to attach.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            media_id: string;
+            /** @description Optional text to inject for this attachment instead of the automatic presentation-layer content. Omit to use the default presentation path. */
+            content_injection_override?: string;
+            /**
+             * Format: int32
+             * @description Optional zero-based position among the message attachments.
+             */
+            position?: number;
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
@@ -12812,6 +12931,86 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    listWorkspaceMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace media-library entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    createWorkspaceMediaAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MediaAttachmentRequest"];
+            };
+        };
+        responses: {
+            /** @description The library entry was accepted as a chat attachment. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    getWorkspaceMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+                /** @description Media-library entry ID. */
+                media_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace media-library entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -13179,6 +13378,8 @@ export type SessionRenameRequest = components["schemas"]["SessionRenameRequest"]
 export type Message = components["schemas"]["Message"];
 export type ToolCall = components["schemas"]["ToolCall"];
 export type Attachment = components["schemas"]["Attachment"];
+export type MediaLibraryEntry = components["schemas"]["MediaLibraryEntry"];
+export type MediaAttachmentRequest = components["schemas"]["MediaAttachmentRequest"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
