@@ -272,10 +272,21 @@ func TestTransactionalAppend_KillMidAppend_PreAppendDAG(t *testing.T) {
 
 // TestPlay_ResumeFromCommit_NewGeneration (G-12/D13): Play mints a new
 // owner-session generation, preserves done members, resets failed/cancelled
-// members, and zeroes JudgeRounds.
+// members, zeroes JudgeRounds, AND persists the resolved resume commit on each
+// resumed member (the resume baseline the worker turn / Judge consume) — not
+// just the generation counter.
 func TestPlay_ResumeFromCommit_NewGeneration(t *testing.T) {
 	h := newCorrectionHarness(t)
 	ctx := context.Background()
+
+	// Wire a fake commitResolver: m-failed has a boundary commit (resumes
+	// from it), m-nocommit does not (fresh attempt). This asserts the engine
+	// actually consults the resolver and persists the hash — the corr-MAJOR-4
+	// fix — rather than logging "fresh attempt" for everyone.
+	h.pe.SetCommitResolver(fakeCommitResolver{
+		hashes: map[string]string{"m-failed": "deadbeef"},
+		errs:   map[string]error{},
+	})
 
 	// Create a FAILED plan (the only state PlayPlan accepts).
 	stopped := plan.FailedReasonStoppedByUser
@@ -288,13 +299,18 @@ func TestPlay_ResumeFromCommit_NewGeneration(t *testing.T) {
 	}
 	mustCreatePlan(t, h.plans, p)
 
-	// Members: one done (preserved), one failed (reset to next).
+	// Members: one done (preserved), one failed-with-commit (resumes from it),
+	// one failed-without-commit (fresh attempt).
 	mustCreateTask(t, h.tasks, &task.Task{
 		ID: "m-done", Title: "m-done", PlanID: "p-play", WorkspaceID: "ws",
 		Status: task.StatusDone,
 	})
 	mustCreateTask(t, h.tasks, &task.Task{
 		ID: "m-failed", Title: "m-failed", PlanID: "p-play", WorkspaceID: "ws",
+		Status: task.StatusFailed,
+	})
+	mustCreateTask(t, h.tasks, &task.Task{
+		ID: "m-nocommit", Title: "m-nocommit", PlanID: "p-play", WorkspaceID: "ws",
 		Status: task.StatusFailed,
 	})
 
@@ -330,6 +346,39 @@ func TestPlay_ResumeFromCommit_NewGeneration(t *testing.T) {
 	if f.Status != task.StatusNext {
 		t.Errorf("failed member is %s; want next (reset by Play)", f.Status)
 	}
+
+	// --- D13/G-12: the commit is actually USED (corr-MAJOR-4) ---
+	// The failed member with a boundary commit resumes from it: the resolved
+	// hash is persisted on the task as the resume baseline.
+	if f.ResumeFromCommit != "deadbeef" {
+		t.Errorf("m-failed resume_from_commit = %q, want \"deadbeef\" (last boundary commit)", f.ResumeFromCommit)
+	}
+	// The failed member with NO commit takes the fresh-attempt fallback:
+	// ResumeFromCommit is explicitly cleared (not a stale prior value).
+	nc, _ := h.tasks.Get("m-nocommit")
+	if nc.Status != task.StatusNext {
+		t.Errorf("m-nocommit is %s; want next (reset by Play)", nc.Status)
+	}
+	if nc.ResumeFromCommit != "" {
+		t.Errorf("m-nocommit resume_from_commit = %q, want \"\" (fresh attempt — no commit)", nc.ResumeFromCommit)
+	}
+}
+
+// fakeCommitResolver is a test double for the commitResolver interface. It
+// returns the configured hash (or error) per taskID, so engine-level tests can
+// assert the Play path consults the resolver and persists the result without
+// standing up a real gitevidence repo (the real resolver + repo mechanics are
+// covered in pkg/gitevidence and plan_engine_commit_resolver_test.go).
+type fakeCommitResolver struct {
+	hashes map[string]string
+	errs   map[string]error
+}
+
+func (f fakeCommitResolver) LastMemberCommit(planID, taskID string) (string, error) {
+	if err, ok := f.errs[taskID]; ok {
+		return "", err
+	}
+	return f.hashes[taskID], nil
 }
 
 // TestNoPerMemberControls (D7): plan members have no per-member

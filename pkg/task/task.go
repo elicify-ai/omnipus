@@ -288,6 +288,17 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// loop wakes the owner (ADR-049 D7/R4/C18). nil inherits the global
 	// PlanningConfig.TaskMaxAttempts default.
 	MaxAttempts *int `json:"max_attempts,omitempty"`
+	// ResumeFromCommit is the gitevidence boundary-commit hash a Play-resumed
+	// plan member should continue from (ADR-053 D13/G-12, FR-144). Set by the
+	// plan engine's recordMemberResumePoint when Play re-dispatches a
+	// failed/cancelled member: the last boundary commit for this member, or ""
+	// for a fresh attempt (no commit / nested-repo degrade / no resolver
+	// wired). The worker turn and the plan Judge read it as the resume
+	// baseline — the next attempt's diff is measured from this hash, so prior
+	// committed progress counts as the starting point rather than attempt 0.
+	// Server-set only (the runtime engine writes it during Play); never
+	// accepted from the REST/PATCH wire surface.
+	ResumeFromCommit string `json:"resume_from_commit,omitempty"`
 	// Trigger is the task's time trigger (nil = manual).
 	Trigger *Trigger `json:"trigger,omitempty"`
 	// Due is an optional RFC 3339 UTC deadline (separate from Trigger).
