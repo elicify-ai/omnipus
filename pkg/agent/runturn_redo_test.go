@@ -46,8 +46,8 @@ func TestRunTurn_MediaRetry_FiresOncePerTurn(t *testing.T) {
 	}
 
 	// First classifier match — retry fires.
-	first := TryMediaDowngrade(ts, callMessages, pe)
-	assert.True(t, first,
+	firstResult := TryMediaDowngrade(ts, callMessages, pe)
+	assert.True(t, firstResult.Applied,
 		"first classifier match in the turn must fire the downgrade-retry")
 	// The test data has only image media (no PDF), so the image-class guard
 	// (imageRetryDone) is the one that fires — NOT the general mediaRetryDone.
@@ -57,13 +57,13 @@ func TestRunTurn_MediaRetry_FiresOncePerTurn(t *testing.T) {
 		"per-turn PDF guard must NOT be set when no PDF was downgraded")
 
 	// Second classifier match in the same turn — guard blocks.
-	second := TryMediaDowngrade(ts, callMessages, pe)
-	assert.False(t, second,
+	secondResult := TryMediaDowngrade(ts, callMessages, pe)
+	assert.False(t, secondResult.Applied,
 		"second classifier match in the same turn must NOT fire the downgrade-retry — the per-turn guard has been set")
 
 	// Third classifier match in the same turn — guard still blocks.
-	third := TryMediaDowngrade(ts, callMessages, pe)
-	assert.False(t, third,
+	thirdResult := TryMediaDowngrade(ts, callMessages, pe)
+	assert.False(t, thirdResult.Applied,
 		"third classifier match in the same turn must NOT fire the downgrade-retry")
 }
 
@@ -72,8 +72,8 @@ func TestRunTurn_MediaRetry_FiresOncePerTurn(t *testing.T) {
 func TestTryMediaDowngrade_NilTurnStateIsSafe(t *testing.T) {
 	pe := &ProviderError{Status: 400, Body: "media not supported"}
 	assert.NotPanics(t, func() {
-		ok := TryMediaDowngrade(nil, nil, pe)
-		assert.False(t, ok)
+		result := TryMediaDowngrade(nil, nil, pe)
+		assert.False(t, result.Applied)
 	})
 }
 
@@ -118,8 +118,8 @@ func TestTryMediaDowngrade_NonMediaCodeDoesNotRetry(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ok := TryMediaDowngrade(ts, callMessages, tc.pe)
-			assert.False(t, ok,
+			result := TryMediaDowngrade(ts, callMessages, tc.pe)
+			assert.False(t, result.Applied,
 				"non-media classifier code must NOT fire the media downgrade-retry (pe=%+v)", tc.pe)
 			assert.False(t, ts.mediaRetryDone.Load(),
 				"per-turn guard must remain unset when no downgrade fired")
@@ -150,8 +150,8 @@ func TestTryMediaDowngrade_AlreadyBlockedByGuard(t *testing.T) {
 		{Role: "user", Media: []string{"data:image/png;base64,iVBORw0KGgo="}},
 	}
 
-	ok := TryMediaDowngrade(ts, callMessages, pe)
-	assert.False(t, ok,
+	result := TryMediaDowngrade(ts, callMessages, pe)
+	assert.False(t, result.Applied,
 		"the per-turn image-class guard must short-circuit even a perfect classifier match")
 }
 

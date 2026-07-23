@@ -202,7 +202,8 @@ func TestStep4_OutcomeRelabel_OnSuccessfulRetry(t *testing.T) {
 
 	// Outcome-based fallback fires: CodeUnknown AND status∈4xx AND
 	// media present AND status ∉ exclusion set.
-	fired := TryMediaDowngrade(ts, callMessages, pe)
+	result := TryMediaDowngrade(ts, callMessages, pe)
+	fired := result.Applied
 	assert.True(t, fired,
 		"outcome-based fallback must fire when classifier is inconclusive "+
 			"AND status is 4xx AND media is present AND status is not in the exclusion set (FR-017)")
@@ -243,7 +244,8 @@ func TestStep4_RetryFailsWithDifferentError_NotForceRelabeled(t *testing.T) {
 		Status: 400,
 		Body:   "totally novel provider error xyz: media rejected",
 	}
-	fired := TryMediaDowngrade(ts, callMessages, initial)
+	result := TryMediaDowngrade(ts, callMessages, initial)
+	fired := result.Applied
 	assert.True(t, fired, "outcome-based fallback must fire on the initial 4xx + CodeUnknown")
 
 	// Simulate the retry having failed with a DIFFERENT error: a 429
@@ -260,8 +262,8 @@ func TestStep4_RetryFailsWithDifferentError_NotForceRelabeled(t *testing.T) {
 	// Sanity: the per-turn guards stay as set — the helper must NOT
 	// be called a second time even if a third LLM call in the same
 	// turn returns another CodeUnknown. FR-019 invariant.
-	again := TryMediaDowngrade(ts, callMessages, initial)
-	assert.False(t, again,
+	againResult := TryMediaDowngrade(ts, callMessages, initial)
+	assert.False(t, againResult.Applied,
 		"per-turn guard must short-circuit a second outcome-based fallback in the same turn (FR-019)")
 }
 
@@ -277,7 +279,8 @@ func TestStep4_PerClassGuardsPreserved(t *testing.T) {
 		callMessages := []providers.Message{pdfMessage("pdf-only")}
 
 		pe := &ProviderError{Status: 400, Body: "totally novel provider error xyz"}
-		fired := TryMediaDowngrade(ts, callMessages, pe)
+		result := TryMediaDowngrade(ts, callMessages, pe)
+		fired := result.Applied
 		assert.True(t, fired, "outcome-based fallback must fire for PDF-only media")
 		assert.True(t, ts.mediaRetryDone.Load(),
 			"PDF-class guard must be set after a PDF downgrade")
@@ -290,7 +293,8 @@ func TestStep4_PerClassGuardsPreserved(t *testing.T) {
 		callMessages := []providers.Message{imageMessage("image-only")}
 
 		pe := &ProviderError{Status: 400, Body: "totally novel provider error xyz"}
-		fired := TryMediaDowngrade(ts, callMessages, pe)
+		result := TryMediaDowngrade(ts, callMessages, pe)
+		fired := result.Applied
 		assert.True(t, fired, "outcome-based fallback must fire for image-only media")
 		assert.True(t, ts.imageRetryDone.Load(),
 			"image-class guard must be set after an image downgrade")
@@ -314,8 +318,8 @@ func TestStep4_PerClassGuardsPreserved(t *testing.T) {
 		}
 		pe := &ProviderError{Status: 400, Body: "totally novel provider error xyz"}
 
-		first := TryMediaDowngrade(ts, callMessages, pe)
-		assert.True(t, first, "first outcome-based fallback must fire on mixed media")
+		firstResult := TryMediaDowngrade(ts, callMessages, pe)
+		assert.True(t, firstResult.Applied, "first outcome-based fallback must fire on mixed media")
 		assert.True(t, ts.mediaRetryDone.Load(),
 			"PDF-class guard set after PDF downgrade")
 		assert.False(t, ts.imageRetryDone.Load(),
@@ -324,8 +328,8 @@ func TestStep4_PerClassGuardsPreserved(t *testing.T) {
 		// A second classifier hit in the same turn must STILL fire on
 		// the image class — the image guard is independent of the PDF
 		// guard (FR-019 per-class independence).
-		second := TryMediaDowngrade(ts, callMessages, pe)
-		assert.True(t, second,
+		secondResult := TryMediaDowngrade(ts, callMessages, pe)
+		assert.True(t, secondResult.Applied,
 			"second outcome-based fallback must fire on the image class even after the PDF guard is set (FR-019 per-class independence)")
 		assert.True(t, ts.imageRetryDone.Load(),
 			"image-class guard must be set after the image downgrade")
@@ -365,7 +369,8 @@ func TestStep4_ExclusionSet_SuppressesFallback(t *testing.T) {
 			ts := &turnState{agentID: "slice-e-agent", turnID: "slice-e-excl-" + tc.name}
 			callMessages := []providers.Message{imageMessage("excluded")}
 
-			fired := TryMediaDowngrade(ts, callMessages, tc.pe)
+			result := TryMediaDowngrade(ts, callMessages, tc.pe)
+			fired := result.Applied
 			assert.False(t, fired,
 				"outcome-based fallback must NOT fire when classifier returns a specific code "+
 					"(exclusion set closed by FR-018) — pe=%+v", tc.pe)
@@ -387,7 +392,8 @@ func TestStep4_NoMedia_OutcomeFallbackSkipped(t *testing.T) {
 	callMessages := []providers.Message{{Role: "user", Content: "hello"}}
 
 	pe := &ProviderError{Status: 400, Body: "totally novel provider error xyz"}
-	fired := TryMediaDowngrade(ts, callMessages, pe)
+	result := TryMediaDowngrade(ts, callMessages, pe)
+	fired := result.Applied
 	assert.False(t, fired,
 		"outcome-based fallback must NOT fire when callMessages carries no media (FR-017 media-present precondition)")
 	assert.False(t, ts.imageRetryDone.Load(),
@@ -403,8 +409,8 @@ func TestStep4_NoMedia_OutcomeFallbackSkipped(t *testing.T) {
 func TestStep4_NilTurnStateIsSafe(t *testing.T) {
 	pe := &ProviderError{Status: 400, Body: "totally novel provider error xyz"}
 	assert.NotPanics(t, func() {
-		ok := TryMediaDowngrade(nil, nil, pe)
-		assert.False(t, ok, "outcome-based fallback must NOT fire when ts is nil")
+		result := TryMediaDowngrade(nil, nil, pe)
+		assert.False(t, result.Applied, "outcome-based fallback must NOT fire when ts is nil")
 	})
 }
 
@@ -424,7 +430,8 @@ func TestStep4_ClassifierPrimaryPathUnchanged(t *testing.T) {
 			Body: "Downloaded response does not contain a valid JPG, PNG, WebP, or ICO image. " +
 				"PDF input not supported.",
 		}
-		fired := TryMediaDowngrade(ts, callMessages, pe)
+		result := TryMediaDowngrade(ts, callMessages, pe)
+		fired := result.Applied
 		assert.True(t, fired,
 			"classifier-primary path: PDF-rejection body must still trigger the downgrade-retry")
 		assert.True(t, ts.mediaRetryDone.Load(),
@@ -439,7 +446,8 @@ func TestStep4_ClassifierPrimaryPathUnchanged(t *testing.T) {
 			Status: 400,
 			Body:   "Downloaded response does not contain a valid JPG, PNG, WebP, or ICO image.",
 		}
-		fired := TryMediaDowngrade(ts, callMessages, pe)
+		result := TryMediaDowngrade(ts, callMessages, pe)
+		fired := result.Applied
 		assert.True(t, fired,
 			"classifier-primary path: image-rejection body must still trigger the downgrade-retry")
 		assert.True(t, ts.imageRetryDone.Load(),
@@ -478,7 +486,8 @@ func TestStep4_ClassifierSubstringFalsePositive_OutcomeFires(t *testing.T) {
 	// (Gemini 'Unsupported MIME type: image/svg+xml') — the provider's
 	// body phrasing is unrecognised to the classifier but the rejection
 	// IS a media failure, so the fallback must self-heal.
-	fired := TryMediaDowngrade(ts, callMessages, pe)
+	result := TryMediaDowngrade(ts, callMessages, pe)
+	fired := result.Applied
 	assert.True(t, fired,
 		"outcome-based fallback MUST fire for residual 4xx + media + non-excluded status (FR-017 BDD row 1013)")
 
@@ -509,7 +518,8 @@ func TestStep4_RelabelOnSuccess_ViaLoopCallSite(t *testing.T) {
 	// fallback fires.
 	pe := &ProviderError{Status: 400, Body: "totally novel provider error xyz"}
 
-	fired := TryMediaDowngrade(ts, callMessages, pe)
+	result := TryMediaDowngrade(ts, callMessages, pe)
+	fired := result.Applied
 	assert.True(t, fired, "outcome-based fallback must fire on inconclusive 4xx + media")
 
 	// The loop call site records the classifier verdict on success.
