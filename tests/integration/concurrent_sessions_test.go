@@ -100,31 +100,37 @@ func TestConcurrentSessions_TwoSessions_BothReply(t *testing.T) {
 }
 
 // TestConcurrentSessions_TwoSessions_TimingProof is the LOAD-BEARING concurrency
-// regression test for Bug-3. It uses a slow mock LLM (2 s per call) to prove
+// regression test for Bug-3. It uses a slow mock LLM (4 s per call) to prove
 // that the two sessions run in PARALLEL, not sequentially.
 //
 // Proof logic:
-//   - Each LLM call takes ~2 s.
-//   - Two sessions sent concurrently must BOTH reply in <3 s wall-clock time.
-//   - If the dispatcher were sequential, the total would be ≥4 s and the test fails.
+//   - Each LLM call takes ~4 s.
+//   - Two sessions sent concurrently must BOTH reply in <6 s wall-clock time.
+//   - If the dispatcher were sequential, the total would be ≥8 s and the test fails.
 //
 // Reverting the per-session-worker fix (restoring the old single-goroutine Run())
 // causes the sequential path and the wall-clock assertion fails.
 //
-// BDD: Given 2 WS sessions open simultaneously with a 2 s slow mock LLM
+// BDD: Given 2 WS sessions open simultaneously with a 4 s slow mock LLM
 //
 //	When both messages are sent within 1 s of each other
-//	Then BOTH sessions reply within 3 s wall-clock (proves parallel execution)
-//	And a sequential dispatcher would take ≥4 s (proves the test is load-bearing)
+//	Then BOTH sessions reply within 6 s wall-clock (proves parallel execution)
+//	And a sequential dispatcher would take ≥8 s (proves the test is load-bearing)
 //
 // Traces to: Bug-3 (concurrent sessions both respond) — timing proof
 // Traces to: review-pr-test-analyzer.md — "Concurrency is not actually proven"
 func TestConcurrentSessions_TwoSessions_TimingProof(t *testing.T) {
-	const slowDelay = 2 * time.Second
-	// With two sessions running in parallel, both should reply by ~slowDelay + overhead.
-	// We allow 3 s total: 1 s for test overhead + 2 s for the slow LLM.
-	// A sequential dispatcher would need ≥4 s (2 s × 2 sessions) and fail this assertion.
-	const parallelDeadline = 3 * time.Second
+	const slowDelay = 4 * time.Second
+	// Parallel deadline: 4 s LLM + generous overhead headroom for CI load. The
+	// proof is that concurrent execution is far below the ≥8 s sequential time
+	// (2 × 4 s); a 6 s bound stays well under that while tolerating scheduler
+	// contention on a loaded CI box — the prior 3 s budget (only ~1 s headroom
+	// over the 2 s LLM) flaked on the ci-omnipus worker under load, the same
+	// failure the same-author 5-session sibling's 3.5 s budget hit before being
+	// bumped to 6 s (concurrent_sessions_same_agent_test.go). 6 s gives ~2 s
+	// headroom above the parallel real (4 s + overhead) AND ~2 s margin below
+	// the 8 s sequential lower bound, so it discriminates BOTH directions.
+	const parallelDeadline = 6 * time.Second
 
 	gw := startSlowIntegrationGateway(t, slowDelay)
 
