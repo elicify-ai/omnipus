@@ -88,19 +88,14 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 	}
 
 	// Path 2: outcome-based fallback. Gated on the spec's preconditions
-	// (FR-017). The exclusion substrings are re-checked here against
-	// pe.Body so a 4xx whose body carries "schema validation" /
-	// "invalid tool arguments" / "context length exceeded" / "content
-	// policy" still suppresses the fallback even though the
-	// classifyByHTTPStatus path returns CodeProviderRejected for those
-	// shapes (the 4xx-body rule's pinned-substring lookups run before
-	// the substring fallback, but only against the pinned media /
-	// context / policy sets — not against the FR-018 tool-args / schema
-	// shapes, which classifyByProviderError resolves via their dedicated
-	// codes only when classifyByHTTPStatus reaches its 4xx branch in
-	// order. The double-check below closes any pre-FR-018 regression
-	// where a 4xx with a tool-args body fell through to CodeProviderRejected
-	// and would have triggered a wrong-code strip-retry.)
+	// (FR-017). Wave 1 TD-M7 narrows the gate to CodeUnknown only;
+	// CodeProviderRejected no longer qualifies. The exclusion substrings
+	// are re-checked here against pe.Body so a 4xx whose body carries
+	// "schema validation" / "invalid tool arguments" / "context length
+	// exceeded" / "content policy" still suppresses the fallback even
+	// when the classifier returns CodeUnknown for the residual 4xx —
+	// the substring check is independent of the classifier verdict and
+	// serves as a second line of defense.
 	if !outcomeFallbackEligible(pe, code) {
 		return false
 	}
@@ -142,28 +137,32 @@ func (ts *turnState) applyMediaDowngrade(callMessages []providers.Message) bool 
 }
 
 // outcomeFallbackEligible reports whether pe + code match the
-// outcome-based fallback gate from FR-017. The gate:
+// outcome-based fallback gate from FR-017 (Wave 1 TD-M7 strict
+// reading). The gate:
 //
 //   - pe is non-nil and pe.Status is in 4xx range (status is 4xx),
 //   - pe.Status is NOT in {401, 403, 413} (handled deterministically
 //     by classifyByHTTPStatus; auth/permission/413 are not media
 //     failures and the loop must not strip-retry them),
-//   - code is CodeUnknown OR (code is CodeProviderRejected AND pe.Status
-//     is in 4xx range and not 401/403/413) — both represent the
-//     "classifier was inconclusive" state. The CodeProviderRejected
-//     branch covers residual 4xx-with-non-pinned-body cases like the
-//     Gemini 400 "Unsupported MIME type: image/svg+xml" BDD row (the
-//     body doesn't match any pinned substring, so the existing
-//     classifier returns CodeProviderRejected, but the fallback still
-//     fires per the spec — the spec's parenthetical "CodeUnknown" is
-//     the practical verdict, not a strict symbol match),
+//   - code is exactly CodeUnknown — the spec is explicit: "ONLY for
+//     CodeUnknown" (FR-017). Every other wire code carries a specific
+//     classification; firing the fallback for them would mis-label
+//     residual non-media failures as media_unsupported,
 //   - pe.Body does not match any of the exclusion substrings
 //     (context-overflow / content-policy / bad-tool-args / schema) —
-//     these are the FR-018 + FR-017 specific codes that MUST suppress
-//     the fallback. The double-check defends against a regression
-//     where classifyByHTTPStatus returns CodeProviderRejected for a
-//     4xx whose body happens to match one of these phrases but the
-//     classifier substring path ran in an order that missed it.
+//     these are FR-018 specific codes that MUST suppress the fallback.
+//     The double-check defends against a regression where
+//     classifyByHTTPStatus returns a different code for a 4xx whose
+//     body happens to match one of these phrases but the substring
+//     path ran in an order that missed it.
+//
+// The classifier was changed in Wave 1 (TD-M7) to return CodeUnknown
+// for residual 4xx-with-non-pinned-body cases (the Gemini 400
+// "Unsupported MIME type: image/svg+xml" BDD row is the canonical
+// example). The over-broad CodeProviderRejected branch the previous
+// version accepted is removed — CodeProviderRejected is a conclusive
+// provider rejection (auth, 413, generic 4xx-with-non-pinned-body)
+// and the outcome fallback must not fire on it.
 func outcomeFallbackEligible(pe *ProviderError, code LLMErrorCode) bool {
 	if pe == nil {
 		return false
@@ -174,12 +173,7 @@ func outcomeFallbackEligible(pe *ProviderError, code LLMErrorCode) bool {
 	if pe.Status == 401 || pe.Status == 403 || pe.Status == 413 {
 		return false
 	}
-	switch code {
-	case CodeUnknown:
-		// ok
-	case CodeProviderRejected:
-		// ok — residual 4xx with no pinned body match (see doc above)
-	default:
+	if code != CodeUnknown {
 		return false
 	}
 	body := pe.Body

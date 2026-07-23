@@ -188,16 +188,17 @@ func TestStep4_OutcomeRelabel_OnSuccessfulRetry(t *testing.T) {
 	ts := &turnState{agentID: "slice-e-agent", turnID: "slice-e-turn-1"}
 	callMessages := []providers.Message{imageMessage("relabel-success")}
 
-	// Classifier returns CodeProviderRejected (residual 4xx with no
-	// pinned phrase) — the practical "inconclusive" verdict the
-	// outcome-based fallback gate accepts per FR-017 + spec BDD
-	// row 1013.
+	// Classifier returns CodeUnknown (residual 4xx with no pinned
+	// phrase) — Wave 1 TD-M7 strict reading: FR-017 fires the outcome
+	// fallback ONLY for CodeUnknown. The body has no media / policy /
+	// context / tool-args / schema substring match, so classifyByHTTPStatus
+	// returns CodeUnknown.
 	pe := &ProviderError{
 		Status: 400,
 		Body:   "totally novel provider error xyz: media rejected",
 	}
-	assert.Equal(t, CodeProviderRejected, classifyByProviderError(pe, ""),
-		"sanity: 400 + novel body classifies as CodeProviderRejected (residual 4xx, inconclusive for fallback purposes)")
+	assert.Equal(t, CodeUnknown, classifyByProviderError(pe, ""),
+		"sanity: 400 + novel body classifies as CodeUnknown (residual 4xx, the outcome-fallback trigger)")
 
 	// Outcome-based fallback fires: CodeUnknown AND status∈4xx AND
 	// media present AND status ∉ exclusion set.
@@ -467,8 +468,8 @@ func TestStep4_ClassifierSubstringFalsePositive_OutcomeFires(t *testing.T) {
 		Status: 400,
 		Body:   "invalid request: image of a horse is not allowed here",
 	}
-	assert.Equal(t, CodeProviderRejected, classifyByProviderError(pe, ""),
-		"sanity: off-context 'image' mention classifies as CodeProviderRejected "+
+	assert.Equal(t, CodeUnknown, classifyByProviderError(pe, ""),
+		"sanity: off-context 'image' mention classifies as CodeUnknown "+
 			"(the residual 4xx-with-no-pinned-body case the outcome-based fallback targets)")
 
 	// Outcome-based fallback fires here: residual 4xx (400) + no pinned

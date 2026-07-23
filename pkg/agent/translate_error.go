@@ -364,19 +364,29 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		return CodeProviderRejected
 	case status == 401, status == 403:
 		// Auth — surface as provider_rejected. Distinct from rate_limit;
-		// retryable=false (the operator must fix credentials).
+		// retryable=false (the operator must fix credentials). The
+		// outcome-based fallback gate excludes these statuses explicitly,
+		// so surfacing as ProviderRejected here does not load the fallback
+		// path; it preserves the user-facing copy ("provider rejected the
+		// request") for credential-related failures.
 		return CodeProviderRejected
 	case status >= 400 && status <= 499:
-		// Generic 4xx + body absent → provider_rejected (NOT media).
+		// Generic 4xx + body absent → CodeUnknown (NOT CodeProviderRejected).
+		// The spec's outcome-based fallback gate fires only on CodeUnknown
+		// (FR-017 strict reading). A 4xx with no body cannot be a specific
+		// rejection — every body-shape detector below needs text to match
+		// against. Surfacing CodeUnknown here gives the fallback a chance
+		// to fire for residual shape-unknown 4xx responses like the
+		// Gemini 400 "Unsupported MIME type: image/svg+xml" BDD row.
 		body = strings.TrimSpace(body)
 		if body == "" {
-			return CodeProviderRejected
+			return CodeUnknown
 		}
 		// 4xx with body: check media / capability / policy substrings
-		// BEFORE falling through to provider_rejected. This is the
-		// documented exception to "status wins over body" — the xAI
-		// incident is 400 with a body that identifies it as media-class,
-		// and we must map it to CodeMediaUnsupported, not CodeProviderRejected.
+		// BEFORE falling through. This is the documented exception to
+		// "status wins over body" — the xAI incident is 400 with a body
+		// that identifies it as media-class, and we must map it to
+		// CodeMediaUnsupported, not CodeProviderRejected.
 		if isPDFRejectionMessage(body) {
 			return CodeMediaUnsupported
 		}
@@ -398,7 +408,12 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isSchemaMessage(body) {
 			return CodeSchema
 		}
-		return CodeProviderRejected
+		// Residual 4xx with non-pinned body — the classifier was
+		// inconclusive. Per FR-017, surface as CodeUnknown so the
+		// outcome-based fallback gate can fire (Gemini 400 "Unsupported
+		// MIME type: image/svg+xml" — body doesn't match any pinned
+		// substring, status is 4xx, status not in {401,403,413} → fallback).
+		return CodeUnknown
 	}
 
 	// Non-HTTP / status unknown → fall through to the substring path.

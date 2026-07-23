@@ -33,14 +33,18 @@ import (
 // TestTranslateLLMError_StatusWinsOverBody is the regression for the
 // "status vs body" precedence rule. A 4xx with NO body (or with a body
 // that doesn't match a pinned media / capability / policy shape) must
-// resolve to CodeProviderRejected. A 4xx WITH a pinned media shape must
-// resolve to CodeMediaUnsupported (the xAI/Grok incident case).
+// resolve to CodeUnknown (Wave 1 TD-M7 strict reading — the
+// outcome-fallback gate fires only on CodeUnknown per FR-017). A 4xx
+// WITH a pinned media shape must resolve to CodeMediaUnsupported (the
+// xAI/Grok incident case).
 //
 // Precedence rule (documented on classifyByHTTPStatus):
 //   - Status is consulted first.
 //   - Body shape wins only for media / capability / policy / context
 //     overflow substrings.
-//   - Generic 400 + absent body → CodeProviderRejected, NOT CodeMedia.
+//   - Generic 400 + absent body → CodeUnknown (NOT CodeMedia AND NOT
+//     CodeProviderRejected — the spec-mandated "inconclusive" verdict
+//     for the outcome-fallback gate).
 func TestTranslateLLMError_StatusWinsOverBody(t *testing.T) {
 	cases := []struct {
 		name string
@@ -48,14 +52,14 @@ func TestTranslateLLMError_StatusWinsOverBody(t *testing.T) {
 		want LLMErrorCode
 	}{
 		{
-			name: "400 absent body → provider_rejected",
+			name: "400 absent body → unknown (residual 4xx, the fallback trigger)",
 			pe:   &ProviderError{Status: 400, Body: ""},
-			want: CodeProviderRejected,
+			want: CodeUnknown,
 		},
 		{
-			name: "400 whitespace-only body → provider_rejected",
+			name: "400 whitespace-only body → unknown (residual 4xx, the fallback trigger)",
 			pe:   &ProviderError{Status: 400, Body: "   "},
-			want: CodeProviderRejected,
+			want: CodeUnknown,
 		},
 		{
 			name: "400 with media-class body → media_unsupported (status+body together)",
@@ -122,9 +126,12 @@ func TestTranslateLLMError_413WithRequestTooLarge(t *testing.T) {
 }
 
 // TestTranslateLLMError_Generic400_NoBody locks the "generic 400 + no body
-// → provider_rejected" rule. The pre-fix classifier over-loaded the
-// media-class path on any 400, masking genuine provider-rejected errors
-// (e.g. invalid api key, bad request format) as media-unsupported.
+// → CodeUnknown" rule (Wave 1 TD-M7 strict reading). A residual 4xx with
+// no body shape is the canonical inconclusive-classification case: the
+// outcome-based fallback gate fires only on CodeUnknown per FR-017, and
+// surfacing a no-body 400 as CodeProviderRejected would silently drop
+// the fallback for genuine residual rejections like the Gemini 400
+// "Unsupported MIME type: image/svg+xml" BDD row.
 func TestTranslateLLMError_Generic400_NoBody(t *testing.T) {
 	cases := []struct {
 		name string
@@ -137,8 +144,8 @@ func TestTranslateLLMError_Generic400_NoBody(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			llm := TranslateLLMError(&ProviderError{Status: 400, Body: tc.body}, "")
-			assert.Equal(t, CodeProviderRejected, llm.Code,
-				"generic 400 (no media/policy shape) must map to provider_rejected")
+			assert.Equal(t, CodeUnknown, llm.Code,
+				"generic 400 (no media/policy shape) must map to CodeUnknown so the outcome-fallback gate can fire")
 		})
 	}
 }
