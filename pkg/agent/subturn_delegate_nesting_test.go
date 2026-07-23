@@ -96,6 +96,17 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
+// testEventTimeout and testEventPoll are used for require.Eventually polling.
+// Defined HERE (not in sprint_h_subturn_test.go, which is //go:build !cgo) so
+// they are visible under BOTH build configurations — sprint_h_subturn_test.go
+// is excluded under CGO_ENABLED=1 (i.e. -race), and this file has no build
+// constraint, so without this definition the references below were undefined
+// under -race (pre-existing break unblocking the corr-MAJOR-3 -race gate).
+const (
+	testEventTimeout = 2 * time.Second
+	testEventPoll    = 10 * time.Millisecond
+)
+
 // newNestedDelegationAgentLoop builds an AgentLoop with two native agents,
 // "ray" and "planner", both policy-allowed to call "delegate", plus a
 // workspace whose delegation graph carries a single, fully-unrestricted

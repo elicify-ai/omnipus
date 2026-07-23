@@ -38,7 +38,6 @@ package agent
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -161,8 +160,7 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 		"SubTurnSpawn event must be emitted when spawnSubTurn succeeds")
 }
 
-// testEventTimeout and testEventPoll are used for require.Eventually polling.
-const (
-	testEventTimeout = 2 * time.Second
-	testEventPoll    = 10 * time.Millisecond
-)
+// testEventTimeout and testEventPoll are defined in subturn_delegate_nesting_test.go
+// (which has no //go:build constraint) so they stay visible under both cgo and
+// !cgo builds — this file is !cgo-only, so defining them here left the
+// non-gated consumer undefined under -race (CGO_ENABLED=1).

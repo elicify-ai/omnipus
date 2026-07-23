@@ -530,6 +530,22 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	case marker.Present && marker.Status == goalStatusMet && marker.HasEvidence:
 		// G-1: explicit completion claim WITH evidence → invoke the Judge
 		// EXACTLY once (INV-1, via the shared runGoalAdjudication body).
+		//
+		// corr-MAJOR-3 (claim-path F5 self-race, G-1): the IDLE path already
+		// guards a double-Judge via goalAdjudicationInFlight; the CLAIM path
+		// did NOT. A concurrent idle-tick + claim-turn would race TWO Judge
+		// LLM turns (G-1 "exactly once" violated), clobber GoalRoundsUsed, and
+		// race clearGoal/Unregister. If an idle adjudication is already
+		// in-flight for this goal, DROP this claim — the in-flight idle
+		// adjudication will resolve the goal (it reads the same persisted
+		// evidence, G-3). The verifier-registry's CAS Register is the second
+		// layer of defense (corr-MAJOR-3b), catching any residual race this
+		// check-then-act guard misses.
+		if al.goalAdjudicationInFlight(sessionID) {
+			logger.InfoCF("agent", "goal claim: adjudication already in-flight; dropping claim (idle path will resolve)",
+				map[string]any{"session_id": sessionID})
+			return
+		}
 		// Clear any bounce streak (the worker satisfied the evidence gate).
 		// ClaimText = the worker's whole turn output (placed LAST in the
 		// judge's input ordering per ClaimText semantics); the adjudication

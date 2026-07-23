@@ -14,11 +14,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -30,6 +33,17 @@ func withShortIdleWindow(t *testing.T, d time.Duration) {
 	prev := goalIdleQuietWindow
 	goalIdleQuietWindow = d
 	t.Cleanup(func() { goalIdleQuietWindow = prev })
+}
+
+// withShortGoalJudgeTimeout swaps goalJudgeRoundTimeout (default 10m) to a
+// small value for a test that drives the Judge-Unavailable backoff-retry path
+// (runVerifierAdjudication loops on judgeBackoffWait until ctx times out).
+// Restored on cleanup; not safe with t.Parallel (package-scoped var).
+func withShortGoalJudgeTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := goalJudgeRoundTimeout
+	goalJudgeRoundTimeout = d
+	t.Cleanup(func() { goalJudgeRoundTimeout = prev })
 }
 
 // countingProvider is a fake Judge LLM provider that returns a fixed canned
@@ -604,5 +618,230 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 	}
 	if got2 != 1 {
 		t.Fatalf("control: durable GoalRoundsUsed = %d, want 1 after a successful round-advance", got2)
+	}
+}
+
+// ===================== corr-MAJOR-2: idleSettling wedge ====================
+
+// TestIdleSettle_JudgeUnavailable_ClearsIdleSettling_Refires_corrMAJOR2
+// proves corr-MAJOR-2: when runGoalAdjudication hits the Judge-Unavailable
+// branch, it must CLEAR the idleSettling marker (set by maybeSettleGoalIdle
+// before dispatch) so the next quiet-window re-fires once the Judge recovers.
+// Without the fix the marker stays set and every subsequent tick early-returns
+// on goalIsIdleSettling → the goal is wedged in judge_unavailable forever.
+func TestIdleSettle_JudgeUnavailable_ClearsIdleSettling_Refires_corrMAJOR2(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	withShortIdleWindow(t, 2*time.Second)
+	// Short judge-round timeout so the Unavailable backoff-retry loop in
+	// runVerifierAdjudication (entered because the Judge has no provider) exits
+	// quickly instead of looping for the default 10m.
+	withShortGoalJudgeTimeout(t, 250*time.Millisecond)
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// Make the Judge UNAVAILABLE (no provider) → runGoalAdjudication takes the
+	// jr.Unavailable branch (runVerifierAdjudication sees Provider == nil).
+	judgeInst.Provider = nil
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	setGoalRoundsArmed(t, store, sid, "goal wedge", 0, time.Now().Add(-1*time.Hour))
+
+	// Fire 1: quiet window elapsed → adjudication fires → Judge unavailable.
+	al.goalQuietWindowSettle(time.Now())
+
+	// corr-MAJOR-2 (the wedge): idleSettling must be CLEARED after Unavailable,
+	// not left set. Without the fix this is true → every later tick early-returns.
+	if al.goalIsIdleSettling(sid) {
+		t.Fatal("corr-MAJOR-2: idleSettling must be cleared after Judge unavailable " +
+			"(was wedged — next quiet window could never re-fire)")
+	}
+
+	// Re-arm the quiet window (activity back in the past) and fire again: it must
+	// RE-ATTEMPT, not early-return on a stale marker. The re-fire's
+	// maybeSettleGoalIdle bumps GoalLastActivityAt to ~now before dispatching; if
+	// it had early-returned the activity clock would still equal the re-armed past.
+	setGoalRoundsArmed(t, store, sid, "goal wedge", 0, time.Now().Add(-1*time.Hour))
+	beforeAct, _ := store.GetMeta(sid)
+	al.goalQuietWindowSettle(time.Now())
+	afterAct, _ := store.GetMeta(sid)
+	if afterAct != nil && beforeAct != nil && afterAct.GoalLastActivityAt == beforeAct.GoalLastActivityAt {
+		t.Fatal("corr-MAJOR-2: second settle did not re-fire after Unavailable " +
+			"(idleSettling was wedged — activity clock not bumped on the second pass)")
+	}
+	// And the marker is cleared again after this second Unavailable.
+	if al.goalIsIdleSettling(sid) {
+		t.Fatal("corr-MAJOR-2: idleSettling must be cleared after the second Unavailable too")
+	}
+}
+
+// ===================== corr-MAJOR-1: idle-path budget brake ================
+
+// TestIdleSettle_BudgetExhausted_Brakes_corrMAJOR1 proves corr-MAJOR-1: the
+// IDLE adjudication path must consult TokenBudget().Exhausted() (the CLAIM
+// path already did). When exhausted, the idle settle must NOT fire the Judge
+// (no round burned past the cap); instead the goal brakes honestly — cleared
+// with failed_reason=budget_exhausted and a handover transcript, mirroring the
+// claim path's brake. No double-debit: the Judge never runs.
+func TestIdleSettle_BudgetExhausted_Brakes_corrMAJOR1(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	withShortIdleWindow(t, 2*time.Second)
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// Exhaust the overall token budget (cap 100, debited 100 → consumed >= cap).
+	al.tokenBudget = NewTokenBudget(100, nil)
+	al.tokenBudget.Debit(100)
+	if !al.TokenBudget().Exhausted() {
+		t.Fatal("setup invariant: budget must be exhausted")
+	}
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	setGoalRoundsArmed(t, store, sid, "goal brake", 0, time.Now().Add(-1*time.Hour))
+
+	cp := unmetJudgeProvider("x")
+	judgeInst.Provider = cp
+
+	al.goalQuietWindowSettle(time.Now())
+	if cp.callCount() != 0 {
+		t.Fatalf("corr-MAJOR-1: idle settle with exhausted budget invoked Judge %d times, want 0 (idle must brake on Exhausted)", cp.callCount())
+	}
+	after, _ := store.GetMeta(sid)
+	if after != nil && after.GoalCondition != "" {
+		t.Fatalf("corr-MAJOR-1: goal must be cleared (budget_exhausted) on the idle brake, still: %q", after.GoalCondition)
+	}
+	// idleSettling must NOT be set: the brake returns before the mark, so no
+	// wedge can follow a budget-exhausted settle.
+	if al.goalIsIdleSettling(sid) {
+		t.Fatal("corr-MAJOR-1: idleSettling must not be set when the budget brake fires")
+	}
+}
+
+// =============== corr-MAJOR-3: concurrent idle+claim → one Judge ============
+
+// TestConcurrentIdleAndClaim_OneJudge_corrMAJOR3 proves corr-MAJOR-3 (G-1
+// "exactly once"): a concurrent idle-tick + claim-turn must invoke the Judge
+// EXACTLY once. Three layers enforce this: (a) the claim path's new
+// goalAdjudicationInFlight guard (corr-MAJOR-3a), (b) the verifier-registry's
+// CAS Register (corr-MAJOR-3b), and (c) the idle path's existing
+// goalAdjudicationInFlight check. Run with -race so any unsynchronized map
+// access on the registry is caught.
+func TestConcurrentIdleAndClaim_OneJudge_corrMAJOR3(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	withShortIdleWindow(t, 2*time.Second)
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	// Install a PlanEngine so goalAdjudicationInFlight consults its registry
+	// (the production path), exercising the real CAS Register.
+	pe := NewPlanEngine(al, plan.New(t.TempDir()), nil, nil)
+	al.SetPlanEngine(pe)
+	t.Cleanup(pe.Stop)
+	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	setGoalRoundsArmed(t, store, sid, "goal race", 0, time.Now().Add(-1*time.Hour))
+
+	var judgeCalls int32
+	// chatFn counts invocations and sleeps briefly to WIDEN the race window —
+	// the loser (whichever path reaches runVerifierAdjudication second) is
+	// still in-flight when the winner's verifier session is registered, so its
+	// goalAdjudicationInFlight guard or the CAS Register must reject it.
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		atomic.AddInt32(&judgeCalls, 1)
+		time.Sleep(50 * time.Millisecond)
+		return &providers.LLMResponse{
+			Content: `{"met": false, "criteria": [{"id":"goal-condition","met":false,"reason":"nope"}]}`,
+		}, nil
+	}}
+
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		al.goalQuietWindowSettle(time.Now()) // idle path
+	}()
+	go func() {
+		defer wg.Done()
+		al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
+			finalContent: "[goal:evidence] done\nGOAL_STATUS: met", // claim path
+		})
+	}()
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&judgeCalls); got != 1 {
+		t.Fatalf("corr-MAJOR-3: concurrent idle+claim invoked the Judge %d times, want exactly 1 (G-1 exactly-once)", got)
+	}
+}
+
+// ============ bare-claim M3 sibling: persist-failure aborts ================
+
+// TestBareClaim_RoundAdvancePersistFailure_Aborts_M3Sibling proves the
+// bare-claim M3 sibling (gate honesty): handleBareGoalClaim's 2nd-bare-claim
+// round-advance persist must NOT silently WARN-and-continue (the same defect
+// Fix-1's silent-M3 fixed in runGoalAdjudication). On a SetMeta failure the
+// round is NOT counted (durable counter stays unchanged), no follow-up steer
+// is dispatched, and the failure is surfaced via ERROR + a system transcript.
+func TestBareClaim_RoundAdvancePersistFailure_Aborts_M3Sibling(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	emptyCriteria := ""
+	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
+		t.Fatal(err)
+	}
+	cp := metJudgeProvider("x") // bare claims never invoke the Judge
+	judgeInst.Provider = cp
+
+	// 1st bare claim: free teaching steer (streak 1 < threshold 2, no round).
+	r1 := &turnResult{finalContent: "GOAL_STATUS: met"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r1)
+	if cp.callCount() != 0 {
+		t.Fatalf("1st bare claim: Judge calls = %d, want 0", cp.callCount())
+	}
+
+	// Rig the store read-only AFTER the 1st claim so the 2nd's round-advance
+	// SetMeta fails. Reads (GetMeta) still work; the atomic temp+rename write
+	// needs dir write and fails.
+	sessionDir := filepath.Join(store.BaseDir(), sid)
+	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
+	if err := os.Chmod(sessionDir, 0o500); err != nil {
+		t.Fatalf("chmod session dir read-only: %v", err)
+	}
+	if perr := store.SetMeta(sid, session.MetaPatch{GoalLatestReason: strPtrForTest("probe")}); perr == nil {
+		t.Fatalf("setup invariant: SetMeta unexpectedly succeeded on the read-only store; cannot prove the M3 path")
+	}
+
+	// 2nd bare claim: persist fails → must abort (round NOT consumed, no follow-up).
+	r2 := &turnResult{finalContent: "GOAL_STATUS: met"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r2)
+	if cp.callCount() != 0 {
+		t.Fatalf("2nd bare claim persist-failure: Judge calls = %d, want 0 (bare claims never judge)", cp.callCount())
+	}
+	// The durable round counter must NOT have advanced (read via a FRESH store
+	// so the assertion reflects durable truth, not an in-memory cache).
+	fresh, ferr := session.NewUnifiedStore(store.BaseDir())
+	if ferr != nil {
+		t.Fatalf("fresh store: %v", ferr)
+	}
+	after, _ := fresh.GetMeta(sid)
+	got := -1
+	if after != nil {
+		got = after.GoalRoundsUsed
+	}
+	if got != 0 {
+		t.Fatalf("bare-claim M3: durable GoalRoundsUsed = %d, want 0 (round must not persist on failure; gate stays honest)", got)
+	}
+	// No follow-up steer: the abort returns BEFORE appending, so the worker is
+	// not re-prompted on a counter the store can't durably advance.
+	if len(r2.followUps) != 0 {
+		t.Fatalf("bare-claim M3: followUps = %d, want 0 (abort must not re-prompt on a failed persist)", len(r2.followUps))
 	}
 }

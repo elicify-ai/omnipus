@@ -81,8 +81,10 @@ type VerifierSessionPublisher interface {
 	// sessionID in flight. MUST be called BEFORE the verifier turn is
 	// dispatched (mirrors ADR-052's M1 synchronous-assignment rule for
 	// member sessions) so a Stop landing in the creation window cannot miss
-	// it.
-	Register(unitID, sessionID string)
+	// it. Returns ErrVerifierSessionHeld if a LIVE (non-empty) DIFFERENT
+	// session already holds unitID (CAS guard, corr-MAJOR-3/G-1) — the caller
+	// must back off rather than clobber it.
+	Register(unitID, sessionID string) error
 	// Unregister removes unitID's entry once its verifier turn has
 	// completed, errored, or been abandoned (ctx canceled mid-backoff).
 	Unregister(unitID string)
@@ -864,6 +866,24 @@ func (al *AgentLoop) runVerifierAdjudication(
 		}
 
 		if !registered {
+			// CAS pre-check (corr-MAJOR-3, G-1): if a LIVE verifier session
+			// already holds this unit, a concurrent adjudication is in flight
+			// (an idle-tick + claim-turn race). Back off as "unavailable" —
+			// BEFORE creating a verifier session, so we don't pre-create +
+			// abandon an on-disk session. The atomic Register CAS below is the
+			// real guard against the residual check-then-act gap this Lookup
+			// cannot close. The pre-check uses the richer VerifierSessionRegistry
+			// interface via a type assertion: the production seam (the concrete
+			// *verifierSessionRegistry) always satisfies it; a minimal spy that
+			// does not skips the pre-check and relies on the CAS alone (the
+			// spy's Register returns nil, so the CAS never rejects in tests).
+			if richer, ok := registry.(VerifierSessionRegistry); ok {
+				if existing, held := richer.Lookup(unitID); held && existing != "" {
+					reason = "concurrent adjudication in flight for unit"
+					unavailable = true
+					return nil, "", "", true, reason, nil
+				}
+			}
 			// Create the type-stamped verifier session now — right before it
 			// is first needed — and register ITS id (chatID), not sessionKey
 			// (BLOCKER fix, FR-037/G1/G8): sessionKey is only the
@@ -871,7 +891,20 @@ func (al *AgentLoop) runVerifierAdjudication(
 			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
 			// RequestCancelForSession actually matches turns on.
 			chatID = al.newVerifierSessionChatID(sessionKey, unitID)
-			registry.Register(unitID, chatID)
+			if regErr := registry.Register(unitID, chatID); regErr != nil {
+				// CAS guard (corr-MAJOR-3, G-1): lost the race between the
+				// Lookup pre-check above and this atomic Register — another
+				// adjudication registered a live session in the gap. Back off
+				// as "unavailable" (no-round retry); the in-flight adjudication
+				// will resolve the goal. Do NOT set registered=true — this
+				// call did not create the winning entry, so the deferred
+				// Unregister must not evict the other adjudication's live
+				// session. The chatID just minted is an abandoned shell, same
+				// as any other pre-create failure path above.
+				reason = "concurrent adjudication in flight for unit"
+				unavailable = true
+				return nil, "", "", true, reason, nil
+			}
 			registered = true
 		}
 
