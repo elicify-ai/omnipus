@@ -11,7 +11,6 @@ package agent
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -549,13 +548,15 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 	judgeInst.Provider = unmetJudgeProvider("not yet")
 
 	// Rig the store so SetMeta's round-advance write fails: make the session
-	// dir read-only AFTER setup. Reads (GetMeta) still work (meta file exists;
-	// dir keeps r-x). Restore perms in cleanup so t.TempDir teardown succeeds.
+	// dir block new-file creation AFTER setup. Reads (GetMeta) still work
+	// (the meta file already exists with read perms; blockSessionDirWrites
+	// blocks only the atomic temp+rename's CreateTemp, not reads). restore is
+	// invoked inline at the control section below AND registered via t.Cleanup
+	// as a backstop (the helper is idempotent) — the immutable flag MUST clear
+	// before t.TempDir teardown can RemoveAll the dir.
 	sessionDir := filepath.Join(store.BaseDir(), sid)
-	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
-	if err := os.Chmod(sessionDir, 0o500); err != nil {
-		t.Fatalf("chmod session dir read-only: %v", err)
-	}
+	restore := blockSessionDirWrites(t, sessionDir)
+	t.Cleanup(restore)
 
 	meta, err := store.GetMeta(sid)
 	if err != nil || meta == nil {
@@ -597,9 +598,7 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 	// Control: with the dir writable again, the SAME adjudication advances the
 	// counter to 1 and delivers the steer (proves the rig — not the unmet judge
 	// — was the only blocker, and that the happy path still works after the fix).
-	if err := os.Chmod(sessionDir, 0o700); err != nil {
-		t.Fatalf("chmod restore: %v", err)
-	}
+	restore() // make the session dir writable again for the control (happy-path) call
 	// Reload meta so the control call sees the same starting state the rig did.
 	controlMeta, _ := store.GetMeta(sid)
 	if controlMeta == nil {
@@ -808,13 +807,13 @@ func TestBareClaim_RoundAdvancePersistFailure_Aborts_M3Sibling(t *testing.T) {
 	}
 
 	// Rig the store read-only AFTER the 1st claim so the 2nd's round-advance
-	// SetMeta fails. Reads (GetMeta) still work; the atomic temp+rename write
-	// needs dir write and fails.
+	// SetMeta fails. Reads (GetMeta) still work; blockSessionDirWrites blocks
+	// the atomic temp+rename (new-file creation) for both unprivileged (chmod
+	// 0o500) and root (FS_IMMUTABLE_FL) — the latter is what the ci-omnipus
+	// worker needs, where chmod alone is a no-op under CAP_DAC_OVERRIDE.
 	sessionDir := filepath.Join(store.BaseDir(), sid)
-	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
-	if err := os.Chmod(sessionDir, 0o500); err != nil {
-		t.Fatalf("chmod session dir read-only: %v", err)
-	}
+	restore := blockSessionDirWrites(t, sessionDir)
+	t.Cleanup(restore)
 	if perr := store.SetMeta(sid, session.MetaPatch{GoalLatestReason: strPtrForTest("probe")}); perr == nil {
 		t.Fatalf("setup invariant: SetMeta unexpectedly succeeded on the read-only store; cannot prove the M3 path")
 	}
