@@ -195,3 +195,170 @@ func TestGitEvidence_Isolation_RungStringIsStable(t *testing.T) {
 		}
 	}
 }
+
+// --- Restore-at-commit (D13 Play-from-commit, #537) -------------------------
+
+// seedTwoCommits builds an evidence repo with two boundary commits: c1
+// records a.txt="v1" + sub/b.txt="bee" (task m-1); c2 records a.txt="v2" +
+// c2only.txt (task m-2). Returns the repo dir and both hashes, so a
+// restore-at-c1 must reproduce v1 + b.txt and must NOT contain c2only.txt —
+// i.e. the tree matches the RECORDED commit, not HEAD.
+func seedTwoCommits(t *testing.T) (dir, c1Hash, c2Hash string) {
+	t.Helper()
+	r, dir := newTestRepo(t, WithClock(fixedClock()))
+	writeFile(t, dir, "a.txt", "v1")
+	writeFile(t, dir, "sub/b.txt", "bee")
+	res1, err := r.Commit(BoundaryTask, CommitMeta{TaskID: "m-1"}, []string{"a.txt", "sub/b.txt"})
+	if err != nil || res1.Skipped {
+		t.Fatalf("commit c1: res=%+v err=%v", res1, err)
+	}
+	writeFile(t, dir, "a.txt", "v2")
+	writeFile(t, dir, "c2only.txt", "only in c2")
+	res2, err := r.Commit(BoundaryTask, CommitMeta{TaskID: "m-2"}, []string{"a.txt", "c2only.txt"})
+	if err != nil || res2.Skipped {
+		t.Fatalf("commit c2: res=%+v err=%v", res2, err)
+	}
+	return dir, res1.Hash, res2.Hash
+}
+
+// assertTreeMatchesC1 verifies a restored tree matches the c1 commit exactly:
+// a.txt is v1 (not HEAD's v2), sub/b.txt is present, c2only.txt is absent.
+func assertTreeMatchesC1(t *testing.T, treeDir string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(treeDir, "a.txt"))
+	if err != nil {
+		t.Fatalf("read a.txt from restored tree: %v", err)
+	}
+	if string(data) != "v1" {
+		t.Errorf("restored a.txt = %q, want %q (the recorded commit, not HEAD's v2)", data, "v1")
+	}
+	data, err = os.ReadFile(filepath.Join(treeDir, "sub", "b.txt"))
+	if err != nil {
+		t.Fatalf("read sub/b.txt from restored tree: %v", err)
+	}
+	if string(data) != "bee" {
+		t.Errorf("restored sub/b.txt = %q, want %q", data, "bee")
+	}
+	if _, statErr := os.Stat(filepath.Join(treeDir, "c2only.txt")); !os.IsNotExist(statErr) {
+		t.Errorf("c2only.txt present in tree restored at c1 (statErr=%v) — tree does not match the recorded commit", statErr)
+	}
+}
+
+// TestGitEvidence_Isolation_RestoreAtCommit_TreeMatchesRecordedCommit is the
+// #537 regression test at the gitevidence layer: every ladder rung that this
+// runtime can deliver must produce a tree matching the recorded commit.
+func TestGitEvidence_Isolation_RestoreAtCommit_TreeMatchesRecordedCommit(t *testing.T) {
+	rungs := []struct {
+		name      string
+		startRung Rung
+		needsGit  bool
+	}{
+		{"full_ladder", RungSystemGitWorktree, false},
+		{"system_git_worktree", RungSystemGitWorktree, true},
+		{"go_git_clone", RungGoGitClone, true}, // local transport shells out to git-upload-pack
+		{"subdir", RungSubdir, false},
+	}
+	for _, tc := range rungs {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.needsGit && !systemGitAvailable() {
+				t.Skip("no system git binary on PATH in this environment")
+			}
+			if tc.name == "system_git_worktree" || tc.name == "go_git_clone" || tc.name == "subdir" {
+				// Pin the rung exactly: start the ladder AT this rung and
+				// require delivery at-or-below it only via degradation; the
+				// assertions below check the delivered rung explicitly.
+			}
+			dir, c1Hash, _ := seedTwoCommits(t)
+			target := filepath.Join(t.TempDir(), "restored")
+			ic, err := OpenIsolatedCheckoutAtCommitRung(dir, target, c1Hash, tc.startRung)
+			if err != nil {
+				t.Fatalf("OpenIsolatedCheckoutAtCommitRung(%v): %v", tc.startRung, err)
+			}
+			if tc.name != "full_ladder" && ic.Rung > tc.startRung {
+				t.Fatalf("Rung = %v, want <= %v (rungs above startRung are never attempted)", ic.Rung, tc.startRung)
+			}
+			defer func() {
+				if err := ic.Cleanup(); err != nil {
+					t.Errorf("Cleanup: %v", err)
+				}
+			}()
+			assertTreeMatchesC1(t, ic.Dir)
+			// The evidence repo itself is untouched (HEAD content survives).
+			data, err := os.ReadFile(filepath.Join(dir, "a.txt"))
+			if err != nil {
+				t.Fatalf("read a.txt from base repo: %v", err)
+			}
+			if string(data) != "v2" {
+				t.Errorf("base repo a.txt = %q, want %q — restore must not rewind the evidence repo", data, "v2")
+			}
+		})
+	}
+}
+
+func TestGitEvidence_Isolation_RestoreAtCommit_RejectsMalformedHash(t *testing.T) {
+	dir, _, _ := seedTwoCommits(t)
+	target := filepath.Join(t.TempDir(), "restored")
+	for _, bad := range []string{"", "deadbeef", "not-a-hash", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"} {
+		if _, err := OpenIsolatedCheckoutAtCommit(dir, target, bad); err == nil {
+			t.Errorf("OpenIsolatedCheckoutAtCommit(hash=%q) = nil error, want a validation error", bad)
+		}
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Errorf("target dir materialized despite hash rejection: statErr=%v", statErr)
+	}
+}
+
+func TestGitEvidence_Isolation_RestoreAtCommit_UnknownCommitFailsEveryRung(t *testing.T) {
+	dir, _, _ := seedTwoCommits(t)
+	target := filepath.Join(t.TempDir(), "restored")
+	// A well-formed 40-hex hash that does not exist in this repo: every rung
+	// opens fine but cannot restore, so the ladder must exhaust with an error
+	// and leave no half-restored tree behind.
+	missing := "0123456789abcdef0123456789abcdef01234567"
+	if _, err := OpenIsolatedCheckoutAtCommit(dir, target, missing); err == nil {
+		t.Fatalf("OpenIsolatedCheckoutAtCommit(unknown hash) = nil error, want ladder exhaustion")
+	}
+	if entries, err := os.ReadDir(target); err == nil && len(entries) > 0 {
+		t.Errorf("half-restored tree left behind at %s after ladder exhaustion: %d entries", target, len(entries))
+	}
+}
+
+func TestGitEvidence_Isolation_RestoreAtCommit_RefusesNonEmptyTarget(t *testing.T) {
+	dir, c1Hash, _ := seedTwoCommits(t)
+	target := filepath.Join(t.TempDir(), "restored")
+	writeFile(t, target, "stale.txt", "leftover from an interrupted materialization")
+	if _, err := OpenIsolatedCheckoutAtCommit(dir, target, c1Hash); err == nil {
+		t.Fatalf("OpenIsolatedCheckoutAtCommit into a non-empty target = nil error, want a refusal (a partial restore would not match the commit)")
+	}
+	// The stale content is untouched — the refusal is a no-op, not a wipe.
+	data, err := os.ReadFile(filepath.Join(target, "stale.txt"))
+	if err != nil || string(data) != "leftover from an interrupted materialization" {
+		t.Errorf("stale target content modified by the refused restore: data=%q err=%v", data, err)
+	}
+}
+
+func TestGitEvidence_Isolation_RemoveIsolatedCheckout(t *testing.T) {
+	dir, c1Hash, _ := seedTwoCommits(t)
+	target := filepath.Join(t.TempDir(), "restored")
+	ic, err := OpenIsolatedCheckoutAtCommitRung(dir, target, c1Hash, RungSubdir)
+	if err != nil {
+		t.Fatalf("OpenIsolatedCheckoutAtCommitRung: %v", err)
+	}
+	ic.Cleanup = func() error { return nil } // removal under test is RemoveIsolatedCheckout
+	assertTreeMatchesC1(t, target)
+
+	if err := RemoveIsolatedCheckout(dir, target); err != nil {
+		t.Fatalf("RemoveIsolatedCheckout: %v", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Errorf("resume tree still present after RemoveIsolatedCheckout: statErr=%v", statErr)
+	}
+	// Idempotent: removing an already-absent checkout is not an error.
+	if err := RemoveIsolatedCheckout(dir, target); err != nil {
+		t.Errorf("RemoveIsolatedCheckout on an absent tree = %v, want nil (idempotent replace semantics)", err)
+	}
+	// The evidence repo survives teardown.
+	if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr != nil {
+		t.Errorf("evidence repo .git removed by checkout teardown: %v", statErr)
+	}
+}

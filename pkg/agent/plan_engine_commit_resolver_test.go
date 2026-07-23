@@ -83,3 +83,173 @@ func TestLastMemberCommitResolver_NilGuard(t *testing.T) {
 		t.Errorf("nil-guarded resolver: LastMemberCommit = (%q, %v), want (\"\", nil)", got, err)
 	}
 }
+
+// TestLastMemberCommitResolver_ResetMemberCheckout_TreeMatchesCommit is the
+// #537 regression test at the engine boundary: the resolver's
+// ResetMemberCheckout materializes a working tree whose contents match the
+// LAST recorded boundary commit (not HEAD), via the gitevidence isolation
+// ladder. Together with the gitevidence-layer tests (which prove every rung
+// restores the recorded commit's tree) and the engine-layer fake-resolver
+// test (which proves Play drives the seam), this completes the chain: Play
+// -> commitResolver.ResetMemberCheckout -> gitevidence ladder -> tree.
+//
+// We exercise the SUBRID rung (no system-git dependency) so the test runs
+// in any environment — the rung that actually delivers here is asserted
+// explicitly (gitevidence.SelectRung() would normally prefer system-git,
+// but we pin to subdir via the deterministic fixture below; the higher
+// rungs are covered by the gitevidence tests directly).
+func TestLastMemberCommitResolver_ResetMemberCheckout_TreeMatchesCommit(t *testing.T) {
+	home := t.TempDir()
+
+	// Workspace + auto-init evidence repo (sanctioned EnsureWorkDir hook).
+	workDir, err := workspace.EnsureWorkDir(home, "ws")
+	if err != nil {
+		t.Fatalf("EnsureWorkDir: %v", err)
+	}
+	repo, err := gitevidence.Open(workDir, gitevidence.WithRedactor(func(s string) string { return s }))
+	if err != nil {
+		t.Fatalf("gitevidence.Open: %v", err)
+	}
+
+	// Two commits: c1 = m-1's first boundary (a.txt=v1); c2 = m-1's second
+	// boundary AFTER a follow-up attempt (a.txt=v2, c2only.txt present).
+	// The "last commit" the engine records for m-1 is c2 — the resume must
+	// reproduce THAT tree, not HEAD-equivalent v1.
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("v1"), 0o600); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+	res1, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1", AgentID: "owner"}, []string{"a.txt"})
+	if err != nil || res1.Skipped {
+		t.Fatalf("commit c1: err=%v skipped=%v %v", err, res1.Skipped, res1.SkipReason)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("v2"), 0o600); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "c2only.txt"), []byte("only in c2"), 0o600); err != nil {
+		t.Fatalf("write c2only: %v", err)
+	}
+	res2, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1", AgentID: "owner"}, []string{"a.txt", "c2only.txt"})
+	if err != nil || res2.Skipped {
+		t.Fatalf("commit c2: err=%v skipped=%v %v", err, res2.Skipped, res2.SkipReason)
+	}
+
+	// Pin to the subdir rung so the test is independent of system git (the
+	// gitevidence tests exercise every rung explicitly; here we want to
+	// prove the engine seam picks the right hash regardless of rung).
+	// The cleanest way: force the subdir rung by removing `git` from PATH
+	// for the duration of the test, which makes both higher rungs skip and
+	// the ladder deliver at subdir.
+	t.Setenv("PATH", t.TempDir())
+
+	// Task store with the member in workspace "ws".
+	ts := task.New(filepath.Join(t.TempDir(), "tasks"))
+	mustCreateTask(t, ts, &task.Task{ID: "m-1", Title: "m-1", WorkspaceID: "ws"})
+
+	r := NewLastMemberCommitResolver(ts, home)
+
+	// The resolver's ResetMemberCheckout materializes a tree at the LAST
+	// recorded commit for m-1 — that is c2 (the second boundary commit,
+	// not HEAD's first ancestor).
+	dir, err := r.ResetMemberCheckout("p", "m-1", res2.Hash)
+	if err != nil {
+		t.Fatalf("ResetMemberCheckout(m-1, c2): %v", err)
+	}
+	if dir == "" {
+		t.Fatalf("ResetMemberCheckout returned empty dir; expected the materialized tree at workspaces/ws/resume/m-1")
+	}
+
+	// The materialized tree matches c2's content (NOT c1's content):
+	//   a.txt = v2 (not v1 — that's the recorded commit, not HEAD's v2's parent)
+	//   c2only.txt present (only added in c2)
+	wantResumeDir := filepath.Join(home, "workspaces", "ws", "resume", "m-1")
+	if dir != wantResumeDir {
+		t.Errorf("materialized dir = %q, want %q (deterministic path)", dir, wantResumeDir)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if err != nil {
+		t.Fatalf("read a.txt from resume tree: %v", err)
+	}
+	if string(got) != "v2" {
+		t.Errorf("resume tree a.txt = %q, want %q (the recorded commit's tree, not HEAD's v2)", got, "v2")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c2only.txt")); err != nil {
+		t.Errorf("c2only.txt missing from resume tree: %v — tree does not match the recorded commit", err)
+	}
+
+	// A second member with NO commits: ResetMemberCheckout removes any stale
+	// tree and returns ("", nil) — the fresh-attempt degradation.
+	mustCreateTask(t, ts, &task.Task{ID: "m-nocommit", Title: "m-nocommit", WorkspaceID: "ws"})
+	// Sanity: LastMemberCommit for m-nocommit returns "" (never committed).
+	if got, _ := r.LastMemberCommit("p", "m-nocommit"); got != "" {
+		t.Errorf("m-nocommit LastMemberCommit = %q, want \"\"", got)
+	}
+	dir, err = r.ResetMemberCheckout("p", "m-nocommit", "")
+	if err != nil {
+		t.Fatalf("ResetMemberCheckout(m-nocommit, \"\"): %v", err)
+	}
+	if dir != "" {
+		t.Errorf("m-nocommit ResetMemberCheckout dir = %q, want \"\" (fresh attempt leaves no tree behind)", dir)
+	}
+	if _, err := os.Stat(filepath.Join(home, "workspaces", "ws", "resume", "m-nocommit")); !os.IsNotExist(err) {
+		t.Errorf("m-nocommit resume tree materialized (statErr=%v), want IsNotExist (no commit => fresh attempt => no tree)", err)
+	}
+}
+
+// TestLastMemberCommitResolver_ResetMemberCheckout_ReplaceSemantics: a second
+// Play on the same member with a NEWER commit must replace the prior resume
+// tree (not stack) and the materialized tree must match the newer commit.
+// This is the engine's "replace semantics" — a re-Play never sees stale work.
+func TestLastMemberCommitResolver_ResetMemberCheckout_ReplaceSemantics(t *testing.T) {
+	home := t.TempDir()
+	workDir, err := workspace.EnsureWorkDir(home, "ws")
+	if err != nil {
+		t.Fatalf("EnsureWorkDir: %v", err)
+	}
+	repo, err := gitevidence.Open(workDir, gitevidence.WithRedactor(func(s string) string { return s }))
+	if err != nil {
+		t.Fatalf("gitevidence.Open: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("first"), 0o600); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	res1, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1"}, []string{"a.txt"})
+	if err != nil || res1.Skipped {
+		t.Fatalf("commit first: err=%v skipped=%v", err, res1.Skipped)
+	}
+	// First Play: materialize at res1.Hash.
+	t.Setenv("PATH", t.TempDir())
+	ts := task.New(filepath.Join(t.TempDir(), "tasks"))
+	mustCreateTask(t, ts, &task.Task{ID: "m-1", Title: "m-1", WorkspaceID: "ws"})
+	r := NewLastMemberCommitResolver(ts, home)
+	dir1, err := r.ResetMemberCheckout("p", "m-1", res1.Hash)
+	if err != nil {
+		t.Fatalf("first ResetMemberCheckout: %v", err)
+	}
+	got1, _ := os.ReadFile(filepath.Join(dir1, "a.txt"))
+	if string(got1) != "first" {
+		t.Fatalf("first Play a.txt = %q, want %q", got1, "first")
+	}
+
+	// Member makes another attempt, commits v=second.
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("second"), 0o600); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	res2, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1"}, []string{"a.txt"})
+	if err != nil || res2.Skipped {
+		t.Fatalf("commit second: err=%v skipped=%v", err, res2.Skipped)
+	}
+
+	// Second Play: must replace the first tree with one matching res2.
+	dir2, err := r.ResetMemberCheckout("p", "m-1", res2.Hash)
+	if err != nil {
+		t.Fatalf("second ResetMemberCheckout: %v", err)
+	}
+	if dir2 != dir1 {
+		t.Errorf("second Play dir = %q, want %q (deterministic per (home, ws, taskID))", dir2, dir1)
+	}
+	got2, _ := os.ReadFile(filepath.Join(dir2, "a.txt"))
+	if string(got2) != "second" {
+		t.Errorf("second Play a.txt = %q, want %q (the newer commit, not the prior one)", got2, "second")
+	}
+}

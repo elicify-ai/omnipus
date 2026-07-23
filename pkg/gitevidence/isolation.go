@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
@@ -142,6 +145,25 @@ func OpenIsolatedCheckout(baseDir, targetDir string) (*IsolatedCheckout, error) 
 	return OpenIsolatedCheckoutAtRung(baseDir, targetDir, RungSystemGitWorktree)
 }
 
+// rungStep is one tier of the isolation ladder: the rung it materializes
+// and the function that opens a checkout at exactly that rung (no internal
+// degradation — degradation is the ladder loop's job, so a caller restoring
+// at a commit can require the tree to match the commit on EVERY rung).
+type rungStep struct {
+	rung Rung
+	open func(baseDir, targetDir string) (*IsolatedCheckout, error)
+}
+
+// isolationLadder is the single source of truth for rung order (highest
+// isolation first). Both OpenIsolatedCheckoutAtRung and
+// OpenIsolatedCheckoutAtCommitRung iterate it; never reorder casually — the
+// order IS the documented degradation contract (D10/FR-154).
+var isolationLadder = []rungStep{
+	{RungSystemGitWorktree, openSystemGitWorktree},
+	{RungGoGitClone, openGoGitClone},
+	{RungSubdir, openSubdir},
+}
+
 // OpenIsolatedCheckoutAtRung is OpenIsolatedCheckout but starts the ladder
 // at startRung instead of the top (e.g. a caller who already knows, from
 // the SizeGuard media-bloat concern, that a full clone of this particular
@@ -153,33 +175,20 @@ func OpenIsolatedCheckout(baseDir, targetDir string) (*IsolatedCheckout, error) 
 func OpenIsolatedCheckoutAtRung(baseDir, targetDir string, startRung Rung) (*IsolatedCheckout, error) {
 	var errs []error
 
-	if startRung <= RungSystemGitWorktree {
-		ic, err := openSystemGitWorktree(baseDir, targetDir)
+	for _, step := range isolationLadder {
+		if step.rung < startRung {
+			continue // rungs above startRung are never attempted
+		}
+		ic, err := step.open(baseDir, targetDir)
 		if err == nil {
 			return ic, nil
 		}
 		errs = append(errs, err)
-		logger.WarnCF("gitevidence", "isolation ladder: system-git worktree rung failed, degrading", map[string]any{
-			"base_dir": baseDir, "target_dir": targetDir, "error": err.Error(),
+		logger.WarnCF("gitevidence", "isolation ladder: rung failed, degrading", map[string]any{
+			"rung": step.rung.String(), "base_dir": baseDir, "target_dir": targetDir, "error": err.Error(),
 		})
 	}
-	if startRung <= RungGoGitClone {
-		ic, err := openGoGitClone(baseDir, targetDir)
-		if err == nil {
-			return ic, nil
-		}
-		errs = append(errs, err)
-		logger.WarnCF("gitevidence", "isolation ladder: go-git clone rung failed, degrading", map[string]any{
-			"base_dir": baseDir, "target_dir": targetDir, "error": err.Error(),
-		})
-	}
-
-	ic, err := openSubdir(baseDir, targetDir)
-	if err != nil {
-		errs = append(errs, err)
-		return nil, fmt.Errorf("gitevidence: isolation ladder exhausted, even the subdir rung failed: %w", errors.Join(errs...))
-	}
-	return ic, nil
+	return nil, fmt.Errorf("gitevidence: isolation ladder exhausted, even the subdir rung failed: %w", errors.Join(errs...))
 }
 
 func openSystemGitWorktree(baseDir, targetDir string) (*IsolatedCheckout, error) {
@@ -260,4 +269,225 @@ func openSubdir(baseDir, targetDir string) (*IsolatedCheckout, error) {
 			return nil
 		},
 	}, nil
+}
+
+// --- Restore-at-commit (D13 Play-from-commit) ------------------------------
+
+// OpenIsolatedCheckoutAtCommit materializes an isolated working tree whose
+// files match commit hash EXACTLY (not the repo's current HEAD), walking the
+// same isolation ladder as OpenIsolatedCheckout: a rung only counts as
+// delivered when its tree has been restored to the recorded commit — a rung
+// that opens but cannot restore (e.g. `git worktree add` succeeded but the
+// checkout of hash failed) is torn down and the ladder degrades, exactly as
+// for an open failure. This is the D13 Play-from-commit materialization
+// step (#537): the resumed plan member gets a tree at its last recorded
+// boundary commit instead of a fresh empty attempt.
+func OpenIsolatedCheckoutAtCommit(baseDir, targetDir, hash string) (*IsolatedCheckout, error) {
+	return OpenIsolatedCheckoutAtCommitRung(baseDir, targetDir, hash, RungSystemGitWorktree)
+}
+
+// OpenIsolatedCheckoutAtCommitRung is OpenIsolatedCheckoutAtCommit but starts
+// the ladder at startRung (mirrors OpenIsolatedCheckoutAtRung). Rungs above
+// startRung are never attempted.
+func OpenIsolatedCheckoutAtCommitRung(baseDir, targetDir, hash string, startRung Rung) (*IsolatedCheckout, error) {
+	if !isFullHexHash(hash) {
+		return nil, fmt.Errorf("gitevidence: restore-at-commit requires a full 40-char hex commit hash, got %q", hash)
+	}
+	// Fail closed on a pre-existing non-empty target: the subdir rung's
+	// restore writes the commit's files but does not sweep unrelated files
+	// already present, so a dirty target would silently produce a tree that
+	// does NOT match the recorded commit. Callers replacing a prior checkout
+	// must remove it first (RemoveIsolatedCheckout) — that is exactly the
+	// engine's replace semantics.
+	if entries, err := os.ReadDir(targetDir); err == nil && len(entries) > 0 {
+		return nil, fmt.Errorf("gitevidence: restore-at-commit target %s is not empty — remove the prior checkout first", targetDir)
+	}
+	var errs []error
+	for _, step := range isolationLadder {
+		if step.rung < startRung {
+			continue
+		}
+		ic, err := step.open(baseDir, targetDir)
+		if err != nil {
+			errs = append(errs, err)
+			logger.WarnCF("gitevidence", "isolation ladder (restore-at-commit): rung failed to open, degrading", map[string]any{
+				"rung": step.rung.String(), "base_dir": baseDir, "target_dir": targetDir, "commit": hash, "error": err.Error(),
+			})
+			continue
+		}
+		if err := restoreTreeAtCommit(ic, baseDir, hash); err != nil {
+			errs = append(errs, err)
+			logger.WarnCF("gitevidence", "isolation ladder (restore-at-commit): rung could not restore the recorded commit, degrading", map[string]any{
+				"rung": ic.Rung.String(), "base_dir": baseDir, "target_dir": targetDir, "commit": hash, "error": err.Error(),
+			})
+			if cerr := ic.Cleanup(); cerr != nil {
+				logger.WarnCF("gitevidence", "isolation ladder (restore-at-commit): cleanup of unrestored checkout failed", map[string]any{
+					"rung": ic.Rung.String(), "target_dir": targetDir, "error": cerr.Error(),
+				})
+			}
+			continue
+		}
+		return ic, nil
+	}
+	return nil, fmt.Errorf("gitevidence: isolation ladder exhausted restoring commit %s: %w", hash, errors.Join(errs...))
+}
+
+// isFullHexHash reports whether s is exactly 40 lowercase-or-uppercase hex
+// chars (a full SHA-1 commit id). go-git's plumbing.NewHash silently maps
+// malformed input toward the zero hash, so callers must validate up front —
+// checking out the zero hash would fail-closed anyway, but with a far less
+// legible error.
+func isFullHexHash(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// restoreTreeAtCommit makes ic's working tree match commit hash, using the
+// mechanism appropriate to the rung that produced ic. baseDir is the
+// evidence repo the hash was recorded in (needed by the subdir rung, whose
+// checkout carries no .git of its own).
+func restoreTreeAtCommit(ic *IsolatedCheckout, baseDir, hash string) error {
+	switch ic.Rung {
+	case RungSystemGitWorktree:
+		ctx, cancel := context.WithTimeout(context.Background(), isolationCmdTimeout)
+		defer cancel()
+		// #nosec G204 -- ic.Dir is an engine-controlled isolation-checkout
+		// path and hash is a validated 40-char hex commit id (see the
+		// openSystemGitWorktree exec comment for the exec-policy scope).
+		cmd := exec.CommandContext(ctx, "git", "-C", ic.Dir, "checkout", "--detach", hash)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("gitevidence: git checkout --detach %s in worktree %s: %w (%s)", hash, ic.Dir, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	case RungGoGitClone:
+		repo, err := git.PlainOpen(ic.Dir)
+		if err != nil {
+			return fmt.Errorf("gitevidence: open clone %s for restore: %w", ic.Dir, err)
+		}
+		return checkoutHash(repo, ic.Dir, hash)
+	case RungSubdir:
+		repo, err := git.PlainOpen(baseDir)
+		if err != nil {
+			return fmt.Errorf("gitevidence: open base repo %s for subdir restore: %w", baseDir, err)
+		}
+		return materializeCommitTree(repo, hash, ic.Dir)
+	default:
+		return fmt.Errorf("gitevidence: cannot restore commit %s on %s", hash, ic.Rung)
+	}
+}
+
+// checkoutHash switches an already-open repo's working tree to hash (used
+// for the go-git clone rung; the clone is fresh and clean, so no force is
+// needed — a dirty tree here would indicate engine misuse, and the error is
+// honestly surfaced rather than force-overwritten).
+func checkoutHash(repo *git.Repository, dir, hash string) error {
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("gitevidence: worktree for %s: %w", dir, err)
+	}
+	if err := wt.Checkout(&git.CheckoutOptions{Hash: plumbing.NewHash(hash)}); err != nil {
+		return fmt.Errorf("gitevidence: checkout commit %s in %s: %w", hash, dir, err)
+	}
+	return nil
+}
+
+// materializeCommitTree writes every file of commit hash's tree into
+// targetDir (the subdir rung, whose checkout has no .git and therefore no
+// native checkout operation). Regular files are restored content-and-rough-
+// mode (0600, or 0700 when git recorded the executable bit); symlinks are
+// recreated as symlinks, matching what `git checkout` would produce. Any
+// other entry kind (submodules/gitlinks) fails closed — a silently partial
+// restore would produce a tree that does NOT match the recorded commit,
+// which is exactly what this function exists to prevent.
+func materializeCommitTree(repo *git.Repository, hash, targetDir string) error {
+	commit, err := repo.CommitObject(plumbing.NewHash(hash))
+	if err != nil {
+		return fmt.Errorf("gitevidence: resolve commit %s: %w", hash, err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return fmt.Errorf("gitevidence: tree for commit %s: %w", hash, err)
+	}
+	return tree.Files().ForEach(func(f *object.File) error {
+		dest := filepath.Join(targetDir, filepath.FromSlash(f.Name))
+		switch f.Mode {
+		case filemode.Regular, filemode.Executable:
+			perm := os.FileMode(0o600)
+			if f.Mode == filemode.Executable {
+				perm = 0o700
+			}
+			content, err := f.Contents()
+			if err != nil {
+				return fmt.Errorf("gitevidence: read blob %s at %s: %w", f.Name, hash, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+				return fmt.Errorf("gitevidence: mkdir for %s: %w", dest, err)
+			}
+			if err := os.WriteFile(dest, []byte(content), perm); err != nil {
+				return fmt.Errorf("gitevidence: write %s: %w", dest, err)
+			}
+			return nil
+		case filemode.Symlink:
+			target, err := f.Contents()
+			if err != nil {
+				return fmt.Errorf("gitevidence: read symlink blob %s at %s: %w", f.Name, hash, err)
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+				return fmt.Errorf("gitevidence: mkdir for %s: %w", dest, err)
+			}
+			if err := os.Symlink(target, dest); err != nil {
+				return fmt.Errorf("gitevidence: recreate symlink %s -> %s: %w", dest, target, err)
+			}
+			return nil
+		default:
+			return fmt.Errorf("gitevidence: unsupported tree entry %s (mode %s) at commit %s — refusing a partial restore", f.Name, f.Mode, hash)
+		}
+	})
+}
+
+// RemoveIsolatedCheckout tears down a previously materialized isolated
+// checkout WITHOUT needing its IsolatedCheckout handle (the handle is
+// per-call; a later engine pass — e.g. the next Play replacing a member's
+// resume tree — only knows the path). It applies the correct removal per
+// mechanism: a system-git linked worktree is unregistered via
+// `git worktree remove --force` (plus a prune for any stale administrative
+// entry whose directory already vanished), and any remnant directory (a
+// go-git clone, a subdir checkout, or a partial dir left by an interrupted
+// materialization) is removed outright. Unknown/absent states are not
+// errors — this is idempotent replace semantics.
+func RemoveIsolatedCheckout(baseDir, targetDir string) error {
+	if systemGitAvailable() {
+		if _, statErr := os.Stat(filepath.Join(baseDir, ".git")); statErr == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), isolationCmdTimeout)
+			// #nosec G204 -- engine-controlled paths, same scope as the
+			// openSystemGitWorktree exec above.
+			rmCmd := exec.CommandContext(ctx, "git", "-C", baseDir, "worktree", "remove", "--force", targetDir)
+			if out, err := rmCmd.CombinedOutput(); err != nil {
+				// Not fatal: targetDir may not be a registered worktree
+				// (clone/subdir rung, or already half-removed). Log at
+				// debug and let the RemoveAll below finish the job.
+				logger.DebugCF("gitevidence", "worktree remove during isolated-checkout teardown (may be a non-worktree path)", map[string]any{
+					"base_dir": baseDir, "target_dir": targetDir, "error": err.Error(), "output": strings.TrimSpace(string(out)),
+				})
+			}
+			pruneCmd := exec.CommandContext(ctx, "git", "-C", baseDir, "worktree", "prune")
+			if out, err := pruneCmd.CombinedOutput(); err != nil {
+				logger.DebugCF("gitevidence", "worktree prune during isolated-checkout teardown", map[string]any{
+					"base_dir": baseDir, "error": err.Error(), "output": strings.TrimSpace(string(out)),
+				})
+			}
+			cancel()
+		}
+	}
+	if err := os.RemoveAll(targetDir); err != nil {
+		return fmt.Errorf("gitevidence: remove isolated checkout %s: %w", targetDir, err)
+	}
+	return nil
 }
