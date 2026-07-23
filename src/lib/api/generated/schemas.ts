@@ -2115,15 +2115,12 @@ export const PromptGuardUpdateResponse = z.object({
 export const RateLimitsResponse = z
   .object({
     enabled: z.boolean(),
-    daily_cost_usd: z.number().gte(0),
-    daily_cost_cap: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
   .passthrough();
 export const RateLimitsUpdateRequest = z
   .object({
-    daily_cost_cap_usd: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
@@ -2134,7 +2131,6 @@ export const RateLimitsUpdateResponse = z
     requires_restart: z.boolean(),
     applied: z
       .object({
-        daily_cost_cap_usd: z.number().gte(0),
         max_agent_llm_calls_per_hour: z.number().int().gte(0),
         max_agent_tool_calls_per_minute: z.number().int().gte(0),
       })
@@ -3100,9 +3096,6 @@ export const ToolPolicy = z.enum(["allow", "ask", "deny"]);
 export const RateLimitConfig = z
   .object({
     enabled: z.boolean(),
-    daily_cost_usd: z.number().gte(0),
-    daily_cost_cap: z.number().gte(0),
-    daily_cost_cap_usd: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })

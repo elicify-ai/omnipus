@@ -150,7 +150,7 @@ export function planSecondaryChipLabel(plan: {
 
 export type PlanPhaseChipTone = 'warning' | 'info'
 
-export interface PlanPhaseChip {
+export interface PlanPhaseChip { // not-wire-format: pure UI display type (chip label + tone); no json tags, never serialised across the wire
   label: string
   tone: PlanPhaseChipTone
 }

@@ -1548,7 +1548,9 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     // endpoint since Wave 3. This field is still populated on read for
     // backward compatibility but must NOT be sent on updateConfig calls.
     prompt_injection_level?: 'off' | 'low' | 'medium' | 'high'
-    daily_cost_cap?: number
+    // ADR-053 D12 retired the SEC-26 USD cap; the app-level spend brake is
+    // now the token budget (set via /api/v1/settings/token-budget). The
+    // daily_cost_cap field is gone from both the wire types and this Config.
     exec_timeout_seconds?: number
     max_background_seconds?: number
     enable_deny_patterns?: boolean
@@ -1604,7 +1606,7 @@ function describeCoercedValue(value: unknown): string {
 // non-DEV (production) builds now get a rate-limited logError() telemetry
 // record instead — mirroring _recordApiSchemaError's pattern above — so a
 // wrong-shaped value silently substituted for a security-relevant field
-// (e.g. security.daily_cost_cap, security.rate_limits.*) is never a fully
+// (e.g. security.rate_limits.*) is never a fully
 // silent event in a production build. Previously this counter+console.warn
 // pair was the ONLY signal, and the console.warn was DEV-only, so a
 // production coercion of a guardrail field produced no observable trace
@@ -1717,7 +1719,7 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // corrupted-but-truthy value would silently NaN out and strip the
       // guardrail on the next PUT rather than failing loudly. Runtime-checked
       // and dropped to undefined (== "not configured") instead.
-      daily_cost_cap: castOptionalNumber(security.daily_cost_cap, 'security.daily_cost_cap'),
+      // ADR-053 D12: daily_cost_cap is gone — token budget is the sole brake.
       exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds, 'security.exec_timeout_seconds'),
       max_background_seconds: castOptionalNumber(security.max_background_seconds, 'security.max_background_seconds'),
       enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
@@ -1783,7 +1785,9 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     if (data.security.policy_mode !== undefined) sec.policy_mode = data.security.policy_mode
     if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
     // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
-    if (data.security.daily_cost_cap !== undefined) sec.daily_cost_cap = data.security.daily_cost_cap
+    // daily_cost_cap intentionally omitted — ADR-053 D12 retired the SEC-26
+    // USD cap; the app-level spend brake is the token budget, set via
+    // PUT /api/v1/settings/token-budget.
     if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
     if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
     if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns

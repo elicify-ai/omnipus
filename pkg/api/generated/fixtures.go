@@ -1670,12 +1670,11 @@ func FixturePromptGuardUpdateResponse_Edge() PromptGuardUpdateResponse {
 
 // ── RateLimitsResponse ────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsResponse.yaml
+// ADR-053 D12 retired the SEC-26 USD cost cap (DailyCostCap / DailyCostUsd).
 
 func FixtureRateLimitsResponse_Populated() RateLimitsResponse {
 	return RateLimitsResponse{
 		Enabled:                    true,
-		DailyCostCap:               5.0,
-		DailyCostUsd:               1.23,
 		MaxAgentLlmCallsPerHour:    100,
 		MaxAgentToolCallsPerMinute: 60,
 	}
@@ -1688,8 +1687,6 @@ func FixtureRateLimitsResponse_ZeroValue() RateLimitsResponse {
 func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 	return RateLimitsResponse{
 		Enabled:                    false,
-		DailyCostCap:               0, // unlimited
-		DailyCostUsd:               0,
 		MaxAgentLlmCallsPerHour:    0, // unlimited
 		MaxAgentToolCallsPerMinute: 0, // unlimited
 	}
@@ -1697,13 +1694,12 @@ func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 
 // ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml
+// ADR-053 D12 retired the SEC-26 USD cost cap (DailyCostCapUsd).
 
 func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
-	costCap := float64(10.0)
 	llm := int64(200)
 	tool := int64(120)
 	return RateLimitsUpdateRequest{
-		DailyCostCapUsd:            &costCap,
 		MaxAgentLlmCallsPerHour:    &llm,
 		MaxAgentToolCallsPerMinute: &tool,
 	}
@@ -1714,26 +1710,24 @@ func FixtureRateLimitsUpdateRequest_ZeroValue() RateLimitsUpdateRequest {
 }
 
 func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
-	costCap := float64(0)
-	return RateLimitsUpdateRequest{DailyCostCapUsd: &costCap}
+	llm := int64(0)
+	return RateLimitsUpdateRequest{MaxAgentLlmCallsPerHour: &llm}
 }
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml
+// ADR-053 D12 retired the SEC-26 USD cost cap (DailyCostCapUsd in Applied).
 
 func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
-	costCap := float64(10.0)
 	llm := int64(200)
 	tool := int64(120)
 	return RateLimitsUpdateResponse{
 		Saved:           true,
 		RequiresRestart: false,
 		Applied: &struct {
-			DailyCostCapUsd            *float64 `json:"daily_cost_cap_usd,omitempty"`
-			MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
-			MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
+			MaxAgentLlmCallsPerHour    *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+			MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 		}{
-			DailyCostCapUsd:            &costCap,
 			MaxAgentLlmCallsPerHour:    &llm,
 			MaxAgentToolCallsPerMinute: &tool,
 		},

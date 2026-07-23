@@ -702,11 +702,16 @@ func (al *AgentLoop) evidenceStore() *task.EvidenceStore {
 // turn via al.processTaskDirect instead of a raw judgeInst.Provider.Chat
 // call).
 
-// checkJudgeSEC26 applies the SAME SEC-26 per-agent LLM rate limit + daily
-// cost cap gates the normal turn loop applies (loop.go's turnLoop, lines
-// ~6289/~6321), for the Judge's own out-of-turn call. Privileged agents
-// (core-only, ADR-049 D3) are exempt, but the Judge is type "system" — never
-// privileged — so this always applies in a real install.
+// checkJudgeSEC26 applies the SAME SEC-26 per-agent LLM rate limit gate the
+// normal turn loop applies (loop.go's turnLoop), for the Judge's own
+// out-of-turn call. Privileged agents (core-only, ADR-049 D3) are exempt, but
+// the Judge is type "system" — never privileged — so this always applies in a
+// real install.
+//
+// ADR-053 D12 retired the SEC-26 global daily USD cost cap that used to live
+// here — TokenBudget is the sole app-level spend brake, consulted at the
+// next turn/adjudication boundary from the normal Judge dispatch path. This
+// helper now handles ONLY the per-agent LLM/hr sliding-window check.
 func (al *AgentLoop) checkJudgeSEC26(agentType, agentID string) (allowed bool, retryAfter time.Duration, reason string) {
 	cfg := al.GetConfig()
 	if al.rateLimiter == nil || cfg == nil || security.IsPrivilegedAgent(agentType) {
@@ -724,13 +729,6 @@ func (al *AgentLoop) checkJudgeSEC26(agentType, agentID string) (allowed bool, r
 		if result := window.Allow(); !result.Allowed {
 			return false, time.Duration(result.RetryAfterSeconds * float64(time.Second)),
 				"sec26_rate_limited: " + result.PolicyRule
-		}
-	}
-	if cfg.Sandbox.RateLimits.DailyCostCapUSD > 0 {
-		if al.rateLimiter.GetDailyCost() >= cfg.Sandbox.RateLimits.DailyCostCapUSD {
-			return false, 0, fmt.Sprintf(
-				"sec26_cost_capped: daily cost cap $%.2f reached", cfg.Sandbox.RateLimits.DailyCostCapUSD,
-			)
 		}
 	}
 	return true, 0, ""

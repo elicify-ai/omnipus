@@ -118,7 +118,7 @@ func (a *restAPI) getTokenBudgetSettings(w http.ResponseWriter, _ *http.Request)
 func (a *restAPI) putTokenBudgetSettings(w http.ResponseWriter, r *http.Request) {
 	// Inline single-field decoder — no hand-written package-level wire struct
 	// (Constraint #8: the only cross-boundary type is gen.TokenBudgetStatus).
-	var body struct {
+	var body struct { // not-wire-format: inline single-field PUT request decoder; the sole cross-boundary response type is gen.TokenBudgetStatus
 		Budget *int `json:"budget,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
