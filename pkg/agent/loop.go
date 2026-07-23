@@ -4841,7 +4841,7 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 	// Transcribe each audio media ref in order.
 	var transcriptions []string
 	for _, ref := range msg.Media {
-		path, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+		path, meta, err := store.ResolveWithMeta(ref)
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			continue
@@ -6261,7 +6261,15 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
+	// Step-5 offload target: the workspace work/ dir already resolved (and
+	// MkdirAll'd) for this turn at resolveTurnWorkDirOrRefuse above. Passing it
+	// as an offloadSink lets attachments no provider can present (e.g. AVIF/HEIC
+	// with no decoder) be copied into work/ and surfaced as a filesystem path +
+	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
+	messages = resolveMediaRefsWithOffload(
+		messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+		&offloadSink{workDir: wsDir},
+	)
 
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
@@ -6292,7 +6300,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.media,
 				activeSkillNames(ts.agent, ts.opts),
 			)
-			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
+			messages = resolveMediaRefsWithOffload(
+				messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+				&offloadSink{workDir: wsDir},
+			)
 		}
 	}
 
@@ -6454,7 +6465,10 @@ turnLoop:
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, turnMediaStore, maxMediaSize, activeModel)
+			resolvedPending := resolveMediaRefsWithOffload(
+				pendingMessages, turnMediaStore, maxMediaSize, activeModel,
+				&offloadSink{workDir: wsDir},
+			)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])
@@ -8134,13 +8148,13 @@ turnLoop:
 				parts := make([]bus.MediaPart, 0, len(toolResult.Media))
 				for _, ref := range toolResult.Media {
 					part := bus.MediaPart{Ref: ref}
-				if turnMediaStore != nil {
-					if _, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{}); err == nil {
-						part.Filename = meta.Filename
-						part.ContentType = meta.ContentType
-						part.Type = inferMediaType(meta.Filename, meta.ContentType)
+					if turnMediaStore != nil {
+						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
+							part.Filename = meta.Filename
+							part.ContentType = meta.ContentType
+							part.Type = inferMediaType(meta.Filename, meta.ContentType)
+						}
 					}
-				}
 					parts = append(parts, part)
 				}
 				outboundMedia := bus.OutboundMediaMessage{
@@ -8246,7 +8260,7 @@ turnLoop:
 			// gets the placeholder text and cannot reason about the picture.
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
 				for _, ref := range toolResult.Media {
-					localPath, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+					localPath, meta, err := turnMediaStore.ResolveWithMeta(ref)
 					if err != nil || !strings.HasPrefix(meta.ContentType, "image/") {
 						continue
 					}
@@ -8318,7 +8332,7 @@ turnLoop:
 				for _, ref := range toolResult.Media {
 					d := map[string]any{"ref": ref}
 					if turnMediaStore != nil {
-						if _, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{}); err == nil {
+						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
 							if meta.Filename != "" {
 								d["filename"] = meta.Filename
 							}

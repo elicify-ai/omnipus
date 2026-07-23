@@ -8,7 +8,9 @@ package agent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
@@ -16,7 +18,9 @@ import (
 	_ "image/jpeg"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/h2non/filetype"
 	_ "golang.org/x/image/bmp"
@@ -45,12 +49,32 @@ import (
 // Refs that cannot be resolved produce a visible "[attachment unavailable: …]"
 // marker in Content.
 //
+// When a non-nil offload sink is supplied, attachments that no provider path
+// can present (e.g. AVIF/HEIC with no decoder) are offloaded at step 5: copied
+// into the workspace work/ dir under a safe-derived name and surfaced to the
+// model as a filesystem path + format-aware guidance line (FR-020/020a/021).
+// A nil sink disables offload — the chain degrades to the step-7 honest marker.
+//
 // Returns a new slice; original messages are not mutated.
 func resolveMediaRefs(
 	messages []providers.Message,
 	store media.MediaStore,
 	maxSize int,
 	model string,
+) []providers.Message {
+	return resolveMediaRefsWithOffload(messages, store, maxSize, model, nil)
+}
+
+// resolveMediaRefsWithOffload is the full presentation path: the legacy
+// resolveMediaRefs behaviour plus step-5 offload (FR-020/020a/021/022) when sink
+// is non-nil. The four-argument resolveMediaRefs is a thin wrapper that calls
+// this with a nil sink so existing call sites preserve their exact behaviour.
+func resolveMediaRefsWithOffload(
+	messages []providers.Message,
+	store media.MediaStore,
+	maxSize int,
+	model string,
+	sink *offloadSink,
 ) []providers.Message {
 	if store == nil {
 		return messages
@@ -74,12 +98,9 @@ func resolveMediaRefs(
 				continue
 			}
 
-			localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+			localPath, meta, err := store.ResolveWithMeta(ref)
 			if err != nil {
-				name := ref
-				if meta.Filename != "" {
-					name = meta.Filename
-				}
+				name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
 				logger.WarnCF("agent", "Failed to resolve media ref — attachment unavailable", map[string]any{
 					"ref":   ref,
 					"error": err.Error(),
@@ -90,10 +111,7 @@ func resolveMediaRefs(
 
 			info, err := os.Stat(localPath)
 			if err != nil {
-				name := meta.Filename
-				if name == "" {
-					name = ref
-				}
+				name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
 				logger.WarnCF("agent", "Failed to stat media file — attachment unavailable", map[string]any{
 					"path":  localPath,
 					"error": err.Error(),
@@ -111,17 +129,36 @@ func resolveMediaRefs(
 				} else if mime == "image/svg+xml" {
 					// Option B (ADR-051 RD1 extension): rasterization failed,
 					// but an SVG is XML text — inject the markup into Content
-					// so ANY model (including text-only ones) can reason about
-					// the image from its code. Never drop it silently.
-					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					contentInjections = append(contentInjections, inj)
-				} else {
-					name := meta.Filename
-					if name == "" {
-						name = localPath
+					// (step 6) so ANY model (including text-only ones) can
+					// reason about the image from its code. Never drop it
+					// silently. FR-022: when a step-5 offload sink is
+					// available, the guidance line + file path (step 5) prefix
+					// the markup — steps 5 and 6 compose, never either/or.
+					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
+						contentInjections = append(contentInjections, offInj+textInj)
+					} else {
+						contentInjections = append(contentInjections, textInj)
 					}
-					contentInjections = append(contentInjections,
-						"[attachment unavailable: "+name+" (too large or unreadable)]")
+				} else {
+					// Step-5 offload (FR-020/020a/021, H1-M2): the image could
+					// not be normalized — unsupported format (AVIF/HEIC/ICO),
+					// a decode bomb, oversize, or resize-ladder floor. Copy the
+					// file into the workspace work/ dir under a safe-derived
+					// name and inject the format-aware guidance + filesystem
+					// path. Non-image files are not text-extractable, so step 6
+					// does not fire (FR-022 negative case). With no sink
+					// (legacy/empty-workspace turn) this degrades to the step-7
+					// honest marker — previously these attachments all landed
+					// here with the misleading "too large or unreadable" reason
+					// regardless of cause (H1-M2).
+					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
+						contentInjections = append(contentInjections, offInj)
+					} else {
+						name := sanitizeInjectedName(fallbackName(meta.Filename, localPath))
+						contentInjections = append(contentInjections,
+							"[attachment unavailable: "+name+" (too large or unreadable)]")
+					}
 				}
 				continue
 			}
@@ -336,11 +373,15 @@ func encodePDFToDataURL(localPath string, info os.FileInfo, maxSize int) string 
 // buildDocumentInjection extracts text from a document file and returns a
 // formatted injection string for the message Content. If extraction fails
 // it returns an honest failure notice with file metadata but NO local path.
+// The filename is sanitized (FR-023a) before insertion so a user-controlled
+// name cannot carry control characters, newlines, or an over-long
+// prompt-injection payload into LLM-visible content.
 func buildDocumentInjection(localPath, mime, filename string, size int64) string {
 	if filename == "" {
 		parts := strings.Split(localPath, "/")
 		filename = parts[len(parts)-1]
 	}
+	filename = sanitizeInjectedName(filename)
 
 	text, ok, reason := docextract.Extract(localPath, mime, filename)
 	if !ok {
@@ -372,7 +413,7 @@ func buildArtifactTags(store media.MediaStore, refs []string) []string {
 
 	tags := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+		localPath, meta, err := store.ResolveWithMeta(ref)
 		if err != nil {
 			logger.WarnCF("agent", "buildArtifactTags: resolve failed",
 				map[string]any{"ref": ref, "error": err.Error()})
@@ -559,4 +600,276 @@ func buildPathTag(mime, localPath string) string {
 	default:
 		return "[file:" + localPath + "]"
 	}
+}
+
+// maxInjectedNameRunes caps a sanitized user-controlled filename before it is
+// inserted into LLM-visible content (FR-023a). 128 runes is generous for any
+// legitimate filename while bounding a prompt-injection payload's reach.
+const maxInjectedNameRunes = 128
+
+// sanitizeInjectedName strips control characters (including newlines, tabs,
+// NUL) and caps the length to maxInjectedNameRunes runes (FR-023a). It is the
+// content-injection counterpart to FR-020a's copy-name sanitization: every
+// human-readable name that originates from a user-controlled filename and
+// reaches LLM content (the step-7 "[attachment unavailable: <name>]" marker,
+// the step-5 guidance, and the document-injection wrapper) is routed through
+// it. A sanitized name can still be a prompt-injection string of printable
+// characters, but it can no longer smuggle line-breaks that break out of a
+// delimiter, control chars that confuse terminals/log parsers, or an
+// unbounded payload.
+func sanitizeInjectedName(name string) string {
+	if name == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(name))
+	count := 0
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			continue
+		}
+		if count >= maxInjectedNameRunes {
+			break
+		}
+		b.WriteRune(r)
+		count++
+	}
+	return b.String()
+}
+
+// fallbackName returns filename when non-empty, else alt. Centralizes the
+// "prefer the manifest filename, fall back to the ref/path" pattern used at
+// every content-injection marker site.
+func fallbackName(filename, alt string) string {
+	if filename != "" {
+		return filename
+	}
+	return alt
+}
+
+// offloadSink carries the validated workspace work/ directory (the
+// Landlock-allowed target produced by workspace.SafeWorkDir) into which step-5
+// offload copies files that no provider presentation path could handle. A nil
+// sink means no offload target is available (legacy/empty-workspace turn); the
+// presentation chain then degrades to the step-7 honest marker instead of
+// failing the turn.
+type offloadSink struct {
+	workDir string
+}
+
+// offload performs step-5 offload (ADR-051 Rev 4): it copies the file into the
+// workspace work/ dir under a safe-derived name (FR-020a) and returns the
+// content injection carrying the format-aware guidance line (FR-021) and the
+// filesystem path (FR-020 — never a media:// ref). A nil receiver yields
+// ("", false) so callers can write `if inj, ok := sink.offload(...); ok {…}`
+// uniformly across the sink-present and degraded paths.
+//
+// Returns ok=false (empty injection) when there is no sink or the copy fails;
+// the caller then produces the step-7 honest marker (edge case: "step-5 offload
+// cannot copy the file → step 7 honest marker with reason offload-failed").
+func (s *offloadSink) offload(localPath, mime, filename, model string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	safeName, err := deriveSafeOffloadName(localPath, filename)
+	if err != nil {
+		logger.WarnCF("agent", "step-5 offload: safe-name derivation failed", map[string]any{
+			"path":  localPath,
+			"error": err.Error(),
+		})
+		return "", false
+	}
+	dest, err := copyToWorkDir(localPath, s.workDir, safeName)
+	if err != nil {
+		logger.WarnCF("agent", "step-5 offload: copy into work/ failed", map[string]any{
+			"path":     localPath,
+			"work_dir": s.workDir,
+			"error":    err.Error(),
+		})
+		return "", false
+	}
+	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+}
+
+// sha256PrefixBytes is the number of sha256 digest bytes (16 hex chars) used
+// as the safe-derived offload copy-name prefix. 16 hex chars give 64 bits of
+// collision resistance — ample for filename disambiguation within a workspace
+// work/ dir, and short enough to stay readable in agent tool output.
+const sha256PrefixBytes = 8
+
+// offloadExtMaxLen bounds a preserved (sanitized) file extension on the offload
+// copy name. Long enough for ".docx"/".sheet"/double extensions, short enough
+// to rule out an extension-borne payload.
+const offloadExtMaxLen = 9
+
+// deriveSafeOffloadName builds a SAFE-DERIVED copy name for step-5 offload
+// (FR-020a): the sha256 hex prefix of the file's bytes, plus a sanitized
+// extension preserved only so the agent's read_file/docextract tools can still
+// recognize the type. The raw user filename is NEVER used as the copy name —
+// it is both a path-traversal and a prompt-injection vector. The returned name
+// contains no path separators and never starts with ".", so on its own it
+// cannot escape the work/ dir; copyToWorkDir re-checks containment as
+// defense-in-depth.
+func deriveSafeOffloadName(srcPath, originalFilename string) (string, error) {
+	h := sha256.New()
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	prefix := hex.EncodeToString(h.Sum(nil)[:sha256PrefixBytes])
+	return prefix + sanitizeExtension(filepath.Ext(originalFilename)), nil
+}
+
+// sanitizeExtension lower-cases a ".ext" suffix and keeps only [a-z0-9] after
+// the dot, capped to offloadExtMaxLen runes total. Returns "" for anything that
+// is not a usable extension (no dot, empty, or all-stripped), so it contributes
+// nothing to the copy name rather than a misleading fragment.
+func sanitizeExtension(ext string) string {
+	ext = strings.ToLower(ext)
+	if len(ext) < 2 || ext[0] != '.' {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteByte('.')
+	for _, r := range ext[1:] {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if len(out) < 2 {
+		return ""
+	}
+	if len(out) > offloadExtMaxLen {
+		out = out[:offloadExtMaxLen]
+	}
+	return out
+}
+
+// copyToWorkDir copies srcPath into workDir under safeName using
+// filepath.Clean(filepath.Join(...)) and a containment check that verifies the
+// joined result still falls under workDir before any write (FR-020a, mirroring
+// the safeID traversal-guard pattern in pkg/workspace/instructions.go). The
+// copy streams via io.Copy to bound memory (files up to maxUploadFileSize / 100
+// MB never sit wholly in RAM). The destination is written 0600 and the work dir
+// is created (0700) if absent.
+func copyToWorkDir(srcPath, workDir, safeName string) (string, error) {
+	cleanDir := filepath.Clean(workDir)
+	dest := filepath.Clean(filepath.Join(cleanDir, safeName))
+	if !isWithinWorkDir(dest, cleanDir) {
+		return "", fmt.Errorf("offload copy escapes work dir: %q", safeName)
+	}
+	if err := os.MkdirAll(cleanDir, 0o700); err != nil {
+		return "", err
+	}
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return "", err
+	}
+	return dest, out.Close()
+}
+
+// isWithinWorkDir reports whether path resolves strictly inside dir (not equal
+// to dir, not escaping via ".."). It is the FR-020a containment predicate.
+func isWithinWorkDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." {
+		return false
+	}
+	if rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// detectFileClass returns the FR-021 presentation noun class for a file:
+// "image", "document", or "file" (generic). The guidance line's noun derives
+// entirely from this, so a PDF reads "this document" while an AVIF reads "this
+// image" and a binary reads "this file".
+func detectFileClass(mime, filename string) string {
+	if strings.HasPrefix(mime, "image/") {
+		return "image"
+	}
+	if isDocumentMime(mime, filename) {
+		return "document"
+	}
+	return "file"
+}
+
+// isDocumentMime reports whether mime/filename indicate a document class
+// (text, PDF, Office). Used only to pick the FR-021 guidance noun; it has no
+// bearing on routing, which is decided before offload is reached.
+func isDocumentMime(mime, filename string) bool {
+	if strings.HasPrefix(mime, "text/") {
+		return true
+	}
+	switch mime {
+	case "application/pdf",
+		"application/msword",
+		"application/vnd.ms-excel",
+		"application/vnd.ms-powerpoint",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return true
+	}
+	fn := strings.ToLower(filename)
+	switch {
+	case strings.HasSuffix(fn, ".pdf"), strings.HasSuffix(fn, ".doc"),
+		strings.HasSuffix(fn, ".docx"), strings.HasSuffix(fn, ".xls"),
+		strings.HasSuffix(fn, ".xlsx"), strings.HasSuffix(fn, ".ppt"),
+		strings.HasSuffix(fn, ".pptx"), strings.HasSuffix(fn, ".txt"),
+		strings.HasSuffix(fn, ".csv"), strings.HasSuffix(fn, ".md"),
+		strings.HasSuffix(fn, ".json"), strings.HasSuffix(fn, ".html"),
+		strings.HasSuffix(fn, ".htm"):
+		return true
+	}
+	return false
+}
+
+// buildOffloadGuidance returns the FR-021 format-aware guidance line for a file
+// class and model: image → "...vision-capable model.", document →
+// "...document-capable model.", else → "...capable model.". The model name is
+// interpolated so the user/agent knows which model could not read the file.
+func buildOffloadGuidance(class, model string) string {
+	noun, capability := offloadNoun(class)
+	return fmt.Sprintf("Cannot read this %s with %s; switch to a %s model.", noun, model, capability)
+}
+
+// offloadNoun returns the (noun, capability-qualifier) pair for a class.
+func offloadNoun(class string) (noun, capability string) {
+	switch class {
+	case "image":
+		return "image", "vision-capable"
+	case "document":
+		return "document", "document-capable"
+	default:
+		return "file", "capable"
+	}
+}
+
+// buildOffloadInjection composes the step-5 content injection: the FR-021
+// guidance line and the FR-020 filesystem path to the work/ copy (never a
+// media:// ref). When step 6 also fires (FR-022), the caller concatenates the
+// text injection after this string so the guidance prefixes the extracted
+// text/markup.
+func buildOffloadInjection(workPath, class, model string) string {
+	return "\n\n[" + buildOffloadGuidance(class, model) + " File available at: " + workPath + "]"
 }
