@@ -5,7 +5,9 @@
 package plan
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -245,6 +247,62 @@ func TestIntentLog_CommitCorrection_NilApply(t *testing.T) {
 	got, _ := il.List("p-na")
 	if got[0].Status != IntentDone {
 		t.Errorf("status = %s, want done", got[0].Status)
+	}
+}
+
+// TestIntentLog_Hardening verifies the owner-only directory, authenticated
+// append chain, and durable status-update path. The intact chain proves both
+// commit and done markers were written as complete records; the forged rewrite
+// must fail verification.
+func TestIntentLog_Hardening(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plan_intents")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	il := NewIntentLog(dir, key)
+	rec := IntentRecord{IntentID: "i-hard", PlanID: "p-hard"}
+
+	if err := il.AppendIntent(rec); err != nil {
+		t.Fatalf("AppendIntent: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat intent directory: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("intent directory mode = %o, want 700", got)
+	}
+
+	if err := il.MarkCommitted(rec.PlanID, rec.IntentID); err != nil {
+		t.Fatalf("MarkCommitted: %v", err)
+	}
+	if err := il.MarkDone(rec.PlanID, rec.IntentID); err != nil {
+		t.Fatalf("MarkDone: %v", err)
+	}
+	chain, err := il.VerifyChain(t.Context(), rec.PlanID)
+	if err != nil {
+		t.Fatalf("VerifyChain intact: %v", err)
+	}
+	if !chain.Valid || chain.EntriesScanned != 3 {
+		t.Fatalf("intact chain = %+v, want valid 3-record chain", chain)
+	}
+
+	path := il.path(rec.PlanID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read intent log: %v", err)
+	}
+	forged := bytes.Replace(data, []byte(`"status":"done"`), []byte(`"status":"committed"`), 1)
+	if bytes.Equal(forged, data) {
+		t.Fatal("test fixture did not modify an intent line")
+	}
+	if err := os.WriteFile(path, forged, 0o600); err != nil {
+		t.Fatalf("forge intent log: %v", err)
+	}
+	chain, err = il.VerifyChain(t.Context(), rec.PlanID)
+	if err != nil {
+		t.Fatalf("VerifyChain forged: %v", err)
+	}
+	if chain.Valid {
+		t.Fatal("forged intent line was not detected")
 	}
 }
 

@@ -35,16 +35,17 @@ package plan
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -136,6 +137,14 @@ type IntentRecord struct {
 	// DoneAt is when the per-file apply completed (status -> done). Zero while
 	// not done.
 	DoneAt time.Time `json:"done_at,omitempty"`
+	// Hmac is the tamper-evidence chain HMAC (sec-MINOR-3/#539), reusing the
+	// exact v0.2 #155 audit-log mechanism (pkg/audit/hmac.go):
+	// hex(HMAC-SHA256(chainKey, prev_hmac || canonical_json_without_hmac)).
+	// prev_hmac is the previous LINE in this plan's file (audit.GenesisSeed()
+	// for the first line), not the previous line for the same intent_id — the
+	// chain covers the whole append-only file. Empty on any record written
+	// before this field existed (pre-chain legacy row); see embedChainHMAC.
+	Hmac string `json:"hmac,omitempty"`
 }
 
 // ReplayClassification groups the boot-replay disposition of an intent log's
@@ -157,14 +166,27 @@ type ReplayClassification struct {
 // state; the caller's Apply function does the per-file work and the log's
 // done-marker guards idempotent replay.
 type IntentLog struct {
-	dir  string
-	lock *StripedLock
+	dir      string
+	lock     *StripedLock
+	chainKey []byte // sec-MINOR-3/#539: HMAC-chain key, resolved once at construction
 }
 
 // NewIntentLog creates an IntentLog rooted at dir. By convention dir is
 // "<OMNIPUS_HOME>/plan_intents".
-func NewIntentLog(dir string) *IntentLog {
-	return &IntentLog{dir: dir, lock: &StripedLock{}}
+//
+// chainKey is the HMAC-chain tamper-evidence key (sec-MINOR-3/#539): pass a
+// subkey derived via credentials.Store.DeriveSubkey(IntentLogChainKeyInfo) in
+// production (mirrors how the gateway derives audit.AuditChainKeyInfo for
+// the audit logger — see pkg/gateway/gateway.go's boot wiring). A nil/empty
+// key falls back to a deterministic dev-only key with a sticky slog.Warn
+// (mirrors pkg/audit's resolveChainKey precedent), so tests and early-dev
+// boots without a credential store still run — loud, not silent.
+func NewIntentLog(dir string, chainKeys ...[]byte) *IntentLog {
+	var chainKey []byte
+	if len(chainKeys) > 0 {
+		chainKey = chainKeys[0]
+	}
+	return &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: resolveChainKey(chainKey)}
 }
 
 // Dir returns the log's root directory.
@@ -196,10 +218,21 @@ func (l *IntentLog) AppendIntent(rec IntentRecord) error {
 	mu := l.lockFor(rec.PlanID)
 	mu.Lock()
 	defer mu.Unlock()
-	if err := os.MkdirAll(l.dir, 0o755); err != nil {
+	// sec-MINOR-3/#539: 0700 (owner-only), matching the tamper-evidence
+	// posture of other authoritative Omnipus state (master.key 0600 under a
+	// 0700 home dir; credentials.Store's own MkdirAll calls) rather than the
+	// prior world-/group-readable 0755.
+	if err := os.MkdirAll(l.dir, 0o700); err != nil {
 		return fmt.Errorf("intent_log: mkdir: %w", err)
 	}
-	return fileutil.AppendJSONL(l.path(rec.PlanID), &rec)
+	existing, err := l.readAllLocked(rec.PlanID)
+	if err != nil {
+		return fmt.Errorf("intent_log: read existing for hmac chain: %w", err)
+	}
+	if err := embedChainHMAC(existing, &rec, l.chainKey); err != nil {
+		return fmt.Errorf("intent_log: chain embed: %w", err)
+	}
+	return appendJSONLSync(l.path(rec.PlanID), &rec)
 }
 
 // markLocked rewrites the log file for planID with the matching intent's
@@ -231,7 +264,36 @@ func (l *IntentLog) markLocked(planID, intentID string, status IntentStatus) err
 	case IntentDone:
 		latest.DoneAt = time.Now().UTC()
 	}
-	return fileutil.AppendJSONL(l.path(planID), latest)
+	if err := embedChainHMAC(records, latest, l.chainKey); err != nil {
+		return fmt.Errorf("intent_log: chain embed: %w", err)
+	}
+	return appendJSONLSync(l.path(planID), latest)
+}
+
+// appendJSONLSync appends one intent record and synchronizes the file before
+// returning. Commit and done markers use this helper so their durability is
+// the linearization point documented above.
+func appendJSONLSync(path string, record any) error {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("intent_log: marshal: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("intent_log: open for append: %w", err)
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("intent_log: append: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("intent_log: sync: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("intent_log: close: %w", err)
+	}
+	return nil
 }
 
 // ErrIntentNotFound is returned when an intent id does not exist.
@@ -375,6 +437,23 @@ type ApplyFunc func(rec IntentRecord) error
 // wants to apply the ReplayForward set itself.
 func (l *IntentLog) ReplayAtBoot(planID string, apply ApplyFunc) (ReplayResult, error) {
 	res := ReplayResult{PlanID: planID}
+
+	// sec-MINOR-3/#539: verify the HMAC chain before replaying. A broken
+	// chain is a loud ERROR alarm, not a boot-abort or a refused replay —
+	// mirrors the audit-log precedent (chain verification is an on-demand
+	// operator check via GET /settings/audit-log, pkg/gateway/rest_settings.go,
+	// never a boot gate) so a tampered or corrupted record degrades to the
+	// existing fail-safe discard/replay-forward classification (INV-6)
+	// rather than bricking recovery.
+	if chainRes, verr := l.VerifyChain(context.Background(), planID); verr != nil {
+		slog.Warn("intent_log: HMAC chain verification could not run",
+			"plan_id", planID, "error", verr)
+	} else if chainRes != nil && !chainRes.Valid {
+		slog.Error("intent_log: HMAC chain broken — a record may have been tampered with or corrupted",
+			"plan_id", planID, "broken_at", chainRes.BrokenAt, "reason", chainRes.Reason,
+			"file", chainRes.FailedFile)
+	}
+
 	class, err := l.Classify(planID)
 	if err != nil {
 		return res, err

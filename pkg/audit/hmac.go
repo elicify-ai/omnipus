@@ -279,6 +279,27 @@ func canonicalMarshal(v any) ([]byte, error) {
 	}
 }
 
+// ComputeChainHMAC computes the tamper-evidence chain HMAC for a JSONL
+// record, given the previous chain link's HMAC (or GenesisSeed() for the
+// first record in a file) and the record's canonical JSON bytes (see
+// CanonicalJSONForChain). Exported so other packages that need the same
+// v0.2 #155 HMAC-chain mechanism (e.g. pkg/plan's intent log, sec-MINOR-3/
+// #539) reuse this exact algorithm instead of inventing a parallel one —
+// this is a direct forward to computeEntryHMAC, the same function
+// embedHMAC and VerifyFile use for audit.jsonl itself, so callers of both
+// packages can never drift on the computation.
+func ComputeChainHMAC(prev, canonical, key []byte) []byte {
+	return computeEntryHMAC(prev, canonical, key)
+}
+
+// CanonicalJSONForChain returns the canonical JSON encoding (sorted map
+// keys at every level, `hmac` field removed) used as the HMAC input on both
+// the write and verify sides of a chain. Exported for reuse outside the
+// audit package (sec-MINOR-3/#539) — see ComputeChainHMAC's doc comment.
+func CanonicalJSONForChain(raw []byte) ([]byte, error) {
+	return canonicalJSONWithoutHMAC(raw)
+}
+
 // embedHMAC takes an already-marshaled entry (without `hmac` field), computes
 // its HMAC against prev, and returns a NEW byte slice containing the entry
 // with `hmac` field appended. The output is the line that gets written to
