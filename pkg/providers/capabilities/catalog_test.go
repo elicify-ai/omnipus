@@ -184,10 +184,12 @@ func TestNewCatalog_EmbeddedSeed(t *testing.T) {
 	require.NotNil(t, c)
 	models := c.Models()
 	assert.Len(t, models, 2)
-	_, ok := models["gpt-4o"]
-	assert.True(t, ok)
-	_, ok = models["deepseek-chat"]
-	assert.True(t, ok)
+	ids := map[string]bool{}
+	for _, m := range models {
+		ids[m.ID] = true
+	}
+	assert.True(t, ids["gpt-4o"])
+	assert.True(t, ids["deepseek-chat"])
 }
 
 // ── Test #9 ──────────────────────────────────────────────────────────────────
@@ -234,10 +236,12 @@ func TestNewCatalog_HydratesFromStore(t *testing.T) {
 	// The Store data has 1 model with a different default budget.
 	models := c.Models()
 	assert.Len(t, models, 1)
-	_, ok := models["from-store"]
-	assert.True(t, ok)
-	_, ok = models["gpt-4o"]
-	assert.False(t, ok, "embedded seed entry must not appear when Store hydrates first")
+	ids := map[string]bool{}
+	for _, m := range models {
+		ids[m.ID] = true
+	}
+	assert.True(t, ids["from-store"])
+	assert.False(t, ids["gpt-4o"], "embedded seed entry must not appear when Store hydrates first")
 	assert.Equal(t, "store-2026-07-22", c.Version())
 	assert.Equal(t, ResizeBudget{LongEdgePx: 4096, MaxBytes: 5242880}, c.DefaultResizeBudget())
 }
@@ -264,34 +268,34 @@ func TestCatalog_Resolve_KnownModel(t *testing.T) {
 	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
 	require.NoError(t, err)
 	m := c.Resolve("gpt-4o")
-	assert.Equal(t, "gpt-4o", m.ID)
-	assert.Equal(t, []string{"text", "image"}, m.InputModalities)
-	require.NotNil(t, m.ResizeBudget, "model-specific budget present")
-	assert.Equal(t, 8000, m.ResizeBudget.LongEdgePx)
-	assert.Equal(t, int64(20971520), m.ResizeBudget.MaxBytes)
+	assert.Equal(t, "gpt-4o", m.ID())
+	assert.Equal(t, []string{"text", "image"}, m.InputModalities())
+	budget := m.Budget()
+	assert.Equal(t, 8000, budget.LongEdgePx)
+	assert.Equal(t, int64(20971520), budget.MaxBytes)
 
 	// deepseek-chat has no inline budget → catalog default applied.
 	m = c.Resolve("deepseek-chat")
-	require.NotNil(t, m.ResizeBudget, "default budget must be applied for entries without one")
-	assert.Equal(t, 7680, m.ResizeBudget.LongEdgePx)
-	assert.Equal(t, int64(10485760), m.ResizeBudget.MaxBytes)
+	budget = m.Budget()
+	assert.Equal(t, 7680, budget.LongEdgePx, "default budget must be applied for entries without one")
+	assert.Equal(t, int64(10485760), budget.MaxBytes)
 }
 
 // ── Test #12 ─────────────────────────────────────────────────────────────────
 
 // TestCatalog_Resolve_UnknownModel_Optimistic (FR-026) asserts an unknown
 // model resolves to the optimistic default — text+image modalities, the
-// catalog default resize budget. The returned Model is a fresh value each
+// catalog default resize budget. The returned handle is a fresh value each
 // call; the ID is the requested modelID.
 func TestCatalog_Resolve_UnknownModel_Optimistic(t *testing.T) {
 	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
 	require.NoError(t, err)
 	m := c.Resolve("unknown-future-model-2099")
-	assert.Equal(t, "unknown-future-model-2099", m.ID)
-	assert.Equal(t, []string{"text", "image"}, m.InputModalities, "optimistic default = text + image")
-	// The optimistic default carries no inline budget; the caller uses
-	// DefaultResizeBudget(). Here we assert the budget surface is consistent.
-	assert.Nil(t, m.ResizeBudget, "optimistic model has no inline budget — caller uses catalog default")
+	assert.Equal(t, "unknown-future-model-2099", m.ID())
+	assert.Equal(t, []string{"text", "image"}, m.InputModalities(), "optimistic default = text + image")
+	budget := m.Budget()
+	assert.Equal(t, c.DefaultResizeBudget(), budget,
+		"optimistic model's budget matches the catalog default (TD-M6)")
 }
 
 // ── Test #13 ─────────────────────────────────────────────────────────────────
@@ -347,8 +351,14 @@ func TestCatalog_Refresh_PullsAndApplies(t *testing.T) {
 	assert.Equal(t, 1, puller.hits, "puller should be called exactly once")
 	assert.Equal(t, "z-2026-07-24", c.Version(), "version updates to the pulled value")
 	models := c.Models()
-	_, ok := models["new-model"]
-	assert.True(t, ok, "pulled model is in the catalog")
+	foundNew := false
+	for _, m := range models {
+		if m.ID == "new-model" {
+			foundNew = true
+			break
+		}
+	}
+	assert.True(t, foundNew, "pulled model is in the catalog")
 	assert.NotEmpty(t, store.data, "Store received the new catalog JSON")
 }
 
@@ -373,8 +383,14 @@ func TestCatalog_Refresh_FailureNonFatal(t *testing.T) {
 	// Post-refresh state: unchanged.
 	post := c.Models()
 	assert.Len(t, post, 2, "in-memory state must be retained on pull failure")
-	_, ok := post["gpt-4o"]
-	assert.True(t, ok, "embedded-seed entry still present")
+	foundGPT := false
+	for _, m := range post {
+		if m.ID == "gpt-4o" {
+			foundGPT = true
+			break
+		}
+	}
+	assert.True(t, foundGPT, "embedded-seed entry still present")
 }
 
 // ── Test #16 ─────────────────────────────────────────────────────────────────
@@ -424,8 +440,15 @@ func TestCatalog_Refresh_VersionRegress(t *testing.T) {
 	assert.Contains(t, refreshErr.Error(), "regressed")
 
 	post := c.Models()
-	_, hasCurrent := post["current"]
-	_, hasOlder := post["older"]
+	hasCurrent, hasOlder := false, false
+	for _, m := range post {
+		if m.ID == "current" {
+			hasCurrent = true
+		}
+		if m.ID == "older" {
+			hasOlder = true
+		}
+	}
 	assert.True(t, hasCurrent, "current model still present")
 	assert.False(t, hasOlder, "older model NOT applied")
 }
@@ -516,7 +539,7 @@ func TestCatalog_Resolve_ConcurrentRead(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			m := c.Resolve("gpt-4o")
-			if len(m.InputModalities) == 0 {
+			if len(m.InputModalities()) == 0 {
 				t.Error("Resolve returned empty modalities under load")
 			}
 		}()
@@ -541,9 +564,11 @@ func TestNewCatalog_InvalidEmbeddedSeed(t *testing.T) {
 // matches the catalog's behavior (orchestrator can construct the same
 // optimistic value for logging without calling Resolve).
 func TestOptimisticModel_DirectAPI(t *testing.T) {
-	m := OptimisticModel("foo-bar")
-	assert.Equal(t, "foo-bar", m.ID)
-	assert.Equal(t, []string{"text", "image"}, m.InputModalities)
+	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
+	require.NoError(t, err)
+	m := c.OptimisticModel("foo-bar")
+	assert.Equal(t, "foo-bar", m.ID())
+	assert.Equal(t, []string{"text", "image"}, m.InputModalities())
 }
 
 // ── Optional: integration with real catalog file via fileutil-style read ────

@@ -18,7 +18,7 @@
 //     GHReleasePuller (GitHub Release asset, semver-tagged, checksum-verified,
 //     with raw.githubusercontent.com fallback). Pull failure is non-fatal —
 //     last-known-good is retained (FR-025, SC-009).
-//   - Resolver: Resolve(modelID) returns the Model entry, or an optimistic
+//   - Resolver: Resolve(modelID) returns the resolved model, or an optimistic
 //     default (image-capable) for unknown models (FR-026). The optimistic
 //     default bounds blast radius: a wrong guess costs one outcome-based
 //     step-4 retry (pkg/agent/media_downgrade.go), never a dead turn.
@@ -26,14 +26,18 @@
 //     per-workspace override paths; operators edit the seed file directly and
 //     publish a new catalog release, which the next pull picks up.
 //
-// # Wire types
+// # Concurrency invariants (Wave 1 TD-M3 + TD-M4)
 //
-// The seed JSON is internal — not a wire format. It does NOT cross the
-// gateway/SPA boundary and is not in contracts/components/schemas/. Per
-// hard-constraint #8, the wire types referenced by the orchestrator are the
-// gen.* types in pkg/api/generated/. The Catalog returns internal Model values
-// to callers; the orchestrator translates them to wire types at the API edge
-// if/when SPA exposure is added (out of scope for v0.1.1 per the spec).
+//   - model is private. Resolve returns a *resolvedModel handle that
+//     exposes only accessor methods (Supports / Budget / ID / Provider).
+//     The handle is a deep-owned copy — the slice, the budget pointer, and
+//     the notes string are all independent of catalog state. External
+//     mutation through the handle cannot corrupt catalog state.
+//   - Refresh acquires a dedicated refreshMu (separate from the
+//     catalog-state mu) and serializes the whole transaction
+//     pull → parse → version-check → apply → store atomically. Two
+//     concurrent Refresh calls cannot both pass the version check and
+//     apply out of order.
 //
 // # Package size budget
 //
@@ -52,10 +56,15 @@ import (
 	"time"
 )
 
-// ResizeBudget is the per-model resize budget for step-2 normalize-and-resize
-// (FR-014/FR-015). When absent on a Model entry, callers fall back to the
-// catalog's DefaultResizeBudget (long_edge_px=7680, max_bytes=10 MB — the
-// documented default covering every provider in the freeze-gate matrix).
+// ResizeBudget is the canonical per-model resize budget for step-2
+// normalize-and-resize (FR-014/FR-015). The catalog default (LongEdgePx
+// = 7680, MaxBytes = 10 MB) is always returned by Budget() — a
+// resolved model never carries a nil budget. Bytes are int64 to match
+// the resize package's budget shape without overflow on 32-bit targets.
+//
+// Wave 1 TD-M6 unifies the budget shape with pkg/media/resize.Budget
+// through a checked conversion at the resize boundary (an internal
+// helper outside this package keeps the two definitions honest).
 type ResizeBudget struct {
 	// LongEdgePx is the max long-edge dimension after resize. Images longer
 	// than this on the long edge are scaled down (preserving aspect ratio)
@@ -66,32 +75,88 @@ type ResizeBudget struct {
 	MaxBytes int64 `json:"max_bytes"`
 }
 
-// Model is one catalog entry — the input_modalities a model accepts plus its
-// resize budget. ID is the canonical model identifier used by the omnipus
-// providers/* layer; provider is the lowercased catalog provider id
-// (openai/anthropic/google/xai/mistral/deepseek/z-ai/moonshot/minimax).
-//
-// Unknown models (Resolve returns the optimistic default) carry the marker
-// input_modalities=["text","image"] and the catalog's default resize budget.
-// Callers MUST NOT distinguish "explicitly optimistic" from "catalog optimistic"
-// — that distinction belongs to logs/diagnostics, not to runtime behavior
-// (FR-026).
-type Model struct {
-	// ID is the canonical model identifier. Stable across provider renames.
-	ID string `json:"id"`
-	// Provider is the lowercased provider id from pkg/providers/catalog.
-	Provider string `json:"provider"`
-	// InputModalities is the set of input modalities the model accepts.
-	// Permitted values: "text", "image", "pdf", "audio", "video". Unknown
-	// values are accepted at parse time (forward-compatibility) but flagged
-	// via the diagnostics channel; they do not change Resolve semantics.
-	InputModalities []string `json:"input_modalities"`
-	// ResizeBudget overrides the catalog default for this model. Nil →
-	// use catalog default (or the package-level DefaultResizeBudget).
-	ResizeBudget *ResizeBudget `json:"resize_budget,omitempty"`
-	// Notes is a free-form human-readable annotation (provider source, last
-	// validated date). Never sent on the wire; for diagnostic logs only.
-	Notes string `json:"notes,omitempty"`
+// model is the private, invariant-bearing catalog entry. The exposed
+// API surface is the *resolvedModel handle returned by Resolve and the
+// accessor methods on it; the underlying catalog state lives here and
+// is never returned to callers directly.
+type model struct {
+	id              string
+	provider        string
+	inputModalities []string
+	resizeBudget    *ResizeBudget
+	notes           string
+}
+
+// resolvedModel is the read-only accessor handle returned by Resolve
+// and from Models(). All slices and pointers are deep copies; the
+// handle cannot mutate catalog state.
+type resolvedModel struct {
+	id              string
+	provider        string
+	inputModalities []string
+	resizeBudget    ResizeBudget // value, not pointer — guaranteed non-zero
+	notes           string
+}
+
+// Supports reports whether the resolved model accepts modality.
+// Unknown modalities (not in the catalog's known set) are reported as
+// supported only when the model's slice explicitly carries them — the
+// forward-compat rule the seed validator applies (an unknown modality
+// is recorded as-is) preserves its truth value here.
+func (r *resolvedModel) Supports(modality string) bool {
+	for _, m := range r.inputModalities {
+		if m == modality {
+			return true
+		}
+	}
+	return false
+}
+
+// Budget returns the resolved model's resize budget. Always non-zero
+// (the catalog default is applied when a seed entry omits one).
+func (r *resolvedModel) Budget() ResizeBudget {
+	return r.resizeBudget
+}
+
+// ID returns the canonical model identifier.
+func (r *resolvedModel) ID() string {
+	return r.id
+}
+
+// Provider returns the lowercased provider id from the seed.
+func (r *resolvedModel) Provider() string {
+	return r.provider
+}
+
+// Notes returns the diagnostic annotation (provider source, last
+// validated date). Never sent on the wire.
+func (r *resolvedModel) Notes() string {
+	return r.notes
+}
+
+// InputModalities returns a copy of the model's modality slice.
+func (r *resolvedModel) InputModalities() []string {
+	out := make([]string, len(r.inputModalities))
+	copy(out, r.inputModalities)
+	return out
+}
+
+// resolve returns a deep-owned resolvedModel view of m, filling in the
+// catalog default budget when m.resizeBudget is nil. Caller MUST hold
+// the read lock.
+func (c *Catalog) resolve(m model) *resolvedModel {
+	budget := c.defaultBudget
+	if m.resizeBudget != nil {
+		budget = *m.resizeBudget
+	}
+	modalities := append([]string(nil), m.inputModalities...)
+	return &resolvedModel{
+		id:              m.id,
+		provider:        m.provider,
+		inputModalities: modalities,
+		resizeBudget:    budget,
+		notes:           m.notes,
+	}
 }
 
 // Puller fetches an updated catalog JSON from a remote source. Implementations
@@ -111,40 +176,74 @@ type Puller interface {
 // called on Catalog construction (before the first pull) so the catalog boots
 // with prior data even when the network is unreachable. Write is called after
 // a successful Refresh so the next boot has the latest data.
-//
-// Implementations need not be concurrent-safe across the full read/write
-// boundary — Catalog serializes both calls — but reads/writes on the same
-// Store instance from Catalog's own goroutine ordering are safe.
 type Store interface {
 	Read(ctx context.Context) ([]byte, error)
 	Write(ctx context.Context, data []byte) error
 }
 
 // Seed is the parsed in-memory representation of the embedded
-// data/providers_capabilities_seed.json. The Catalog holds a map of Model
-// keyed by Model.ID plus the catalog-wide default resize budget.
+// data/providers_capabilities_seed.json. The Catalog holds a map of model
+// keyed by id plus the catalog-wide default resize budget.
 type Seed struct {
 	Version             string       `json:"version"`
 	SchemaVersion       string       `json:"schema_version"`
 	UpdatedAt           time.Time    `json:"updated_at"`
 	Source              string       `json:"source"`
-	Models              []Model      `json:"models"`
+	Models              []modelDTO   `json:"models"`
 	DefaultResizeBudget ResizeBudget `json:"default_resize_budget"`
+}
+
+// modelDTO is the wire shape of a single catalog entry in the seed JSON.
+// Validated by Seed.validate (Wave 1 TD-M5) before being projected onto
+// the internal model type.
+type modelDTO struct {
+	ID              string        `json:"id"`
+	Provider        string        `json:"provider"`
+	InputModalities []string      `json:"input_modalities"`
+	ResizeBudget    *ResizeBudget `json:"resize_budget,omitempty"`
+	Notes           string        `json:"notes,omitempty"`
+}
+
+// toModel projects the validated DTO onto the private model type.
+// All invariants must already have been checked by Seed.validate.
+func (d modelDTO) toModel() model {
+	out := model{
+		id:       d.ID,
+		provider: d.Provider,
+		notes:    d.Notes,
+	}
+	if d.InputModalities != nil {
+		out.inputModalities = append([]string(nil), d.InputModalities...)
+	}
+	if d.ResizeBudget != nil {
+		budget := *d.ResizeBudget
+		out.resizeBudget = &budget
+	}
+	return out
 }
 
 // Catalog is the live in-memory model capability registry.
 //
-// Concurrent use: Resolve is read-mostly and takes a read-lock; Refresh takes
-// a write-lock. Pull failure (any error from Puller.Pull) is non-fatal — the
-// in-memory map retains its prior values and the error is returned to the
-// caller for logging/telemetry (FR-025, SC-009).
+// Concurrent use: Resolve / Models / HasModal take the stateMu read-lock;
+// Refresh acquires a dedicated refreshMu (separate from stateMu) and
+// holds stateMu only across the compare-and-apply window. Pull failure
+// (any error from Puller.Pull) is non-fatal — the in-memory map retains
+// its prior values and the error is returned to the caller for logging
+// (FR-025, SC-009).
 type Catalog struct {
-	mu            sync.RWMutex
-	models        map[string]Model
+	// stateMu guards models, defaultBudget, version, updatedAt, source.
+	stateMu       sync.RWMutex
+	models        map[string]model
 	defaultBudget ResizeBudget
 	version       string
 	updatedAt     time.Time
 	source        string
+
+	// refreshMu serializes the WHOLE Refresh transaction (pull → parse
+	// → version-check → apply → store). Two concurrent Refresh calls
+	// cannot both pass the version check and apply out of order (the
+	// Wave 1 TD-M4-major invariant).
+	refreshMu sync.Mutex
 
 	puller Puller
 	store  Store
@@ -162,16 +261,6 @@ type logger interface {
 // ParseSeed parses the embedded seed JSON. Used by tests and by
 // NewCatalog; exported so callers can inspect the seed without constructing
 // a Catalog (e.g. for documentation generators, smoke tests).
-//
-// Returns a Seed with Models as a slice (preserves order for diagnostics).
-// NewCatalog converts this slice to the internal map. Returns an error on
-// any JSON parse failure or schema validation failure (unknown modality,
-// invalid resize budget, etc.).
-//
-// Forward-compatibility: unknown top-level fields and unknown modality
-// strings are accepted (logged at warn via the catalog logger at apply time,
-// never persisted). This lets the seed schema evolve ahead of the
-// orchestrator's awareness — see Seed.validate.
 func ParseSeed(data []byte) (Seed, error) {
 	var s Seed
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -183,20 +272,14 @@ func ParseSeed(data []byte) (Seed, error) {
 	return s, nil
 }
 
-// validate enforces the seed schema invariants:
+// validate enforces the seed schema invariants (Wave 1 TD-M5):
 //   - DefaultResizeBudget has positive LongEdgePx and positive MaxBytes.
-//   - Each Model.ID is non-empty and unique.
-//   - Each Model.InputModalities is non-empty (every model accepts at least "text").
-//   - Each modality value is a known string OR a non-empty unknown value
-//     accepted for forward compatibility (recorded as-is).
-//   - Each ResizeBudget has positive LongEdgePx and positive MaxBytes.
-//
-// Forward-compatibility note: a NEW modality (e.g. "3d") added by a future
-// catalog release is accepted at parse time. Catalog.Resolve returns the
-// model as-is; callers that don't recognize the modality fall back to
-// capability-gate conservative (treat as unsupported). This is intentional
-// — the seed schema is allowed to evolve ahead of the orchestrator's
-// awareness.
+//   - Each model.ID is non-empty and unique.
+//   - Each model.Provider is non-empty.
+//   - Each model.InputModalities is non-empty, contains "text" (the
+//     text-invariant — every model supports text), and has no empty or
+//     duplicate values.
+//   - ResizeBudget, when present, has positive LongEdgePx and positive MaxBytes.
 func (s Seed) validate() error {
 	if s.DefaultResizeBudget.LongEdgePx <= 0 {
 		return fmt.Errorf("default_resize_budget.long_edge_px must be > 0, got %d", s.DefaultResizeBudget.LongEdgePx)
@@ -213,8 +296,28 @@ func (s Seed) validate() error {
 			return fmt.Errorf("models[%d].id %q is duplicated", i, m.ID)
 		}
 		seen[m.ID] = true
+		if m.Provider == "" {
+			return fmt.Errorf("models[%d].id %q: provider must be non-empty", i, m.ID)
+		}
 		if len(m.InputModalities) == 0 {
 			return fmt.Errorf("models[%d].id %q has empty input_modalities", i, m.ID)
+		}
+		hasText := false
+		modalSeen := make(map[string]bool, len(m.InputModalities))
+		for j, modality := range m.InputModalities {
+			if modality == "" {
+				return fmt.Errorf("models[%d].id %q: input_modalities[%d] is empty", i, m.ID, j)
+			}
+			if modalSeen[modality] {
+				return fmt.Errorf("models[%d].id %q: input_modalities has duplicate %q", i, m.ID, modality)
+			}
+			modalSeen[modality] = true
+			if modality == "text" {
+				hasText = true
+			}
+		}
+		if !hasText {
+			return fmt.Errorf("models[%d].id %q: input_modalities must include %q (every model supports text)", i, m.ID, "text")
 		}
 		if m.ResizeBudget != nil {
 			if m.ResizeBudget.LongEdgePx <= 0 {
@@ -239,25 +342,18 @@ func (s Seed) validate() error {
 // data source — useful for tests and CLI tools that should never call out).
 // If store is nil, last-known-good persistence is disabled (the in-memory
 // map is the only state; reboots start from the embedded seed).
-//
-// On construction, Catalog attempts to hydrate from Store first (last-known-good
-// from the prior boot); only on Store read failure does it fall back to the
-// embedded seed. This bounds the blast radius of a corrupted embedded seed
-// (boot still proceeds from prior good data) and matches the spec's
-// "last-known-good retained" guarantee.
 func NewCatalog(seed []byte, puller Puller, store Store, log logger) (*Catalog, error) {
 	if log == nil {
 		log = noopLogger{}
 	}
 	c := &Catalog{
-		models:        map[string]Model{},
+		models:        map[string]model{},
 		defaultBudget: ResizeBudget{LongEdgePx: 7680, MaxBytes: 10 * 1024 * 1024},
 		puller:        puller,
 		store:         store,
 		logger:        log,
 	}
 
-	// Step 1: try to hydrate from Store (last-known-good).
 	hydrated := false
 	if store != nil {
 		prior, err := store.Read(context.Background())
@@ -272,7 +368,6 @@ func NewCatalog(seed []byte, puller Puller, store Store, log logger) (*Catalog, 
 		}
 	}
 
-	// Step 2: apply embedded seed if Store didn't hydrate.
 	if !hydrated {
 		if err := c.applySeedJSON(seed); err != nil {
 			return nil, fmt.Errorf("capabilities: embedded seed invalid: %w", err)
@@ -282,9 +377,7 @@ func NewCatalog(seed []byte, puller Puller, store Store, log logger) (*Catalog, 
 	return c, nil
 }
 
-// applySeedJSON parses data and atomically replaces the catalog state. The
-// caller is responsible for calling applySeedJSON from a serialized context
-// (Catalog construction or Catalog.Refresh — both single-goroutine paths).
+// applySeedJSON parses data and atomically replaces the catalog state.
 func (c *Catalog) applySeedJSON(data []byte) error {
 	s, err := ParseSeed(data)
 	if err != nil {
@@ -295,11 +388,11 @@ func (c *Catalog) applySeedJSON(data []byte) error {
 }
 
 func (c *Catalog) applySeed(s Seed) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.models = make(map[string]Model, len(s.Models))
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.models = make(map[string]model, len(s.Models))
 	for _, m := range s.Models {
-		c.models[m.ID] = m
+		c.models[m.ID] = m.toModel()
 	}
 	if s.DefaultResizeBudget.LongEdgePx > 0 && s.DefaultResizeBudget.MaxBytes > 0 {
 		c.defaultBudget = s.DefaultResizeBudget
@@ -309,104 +402,103 @@ func (c *Catalog) applySeed(s Seed) {
 	c.source = s.Source
 }
 
-// Resolve returns the Model entry for modelID, or an optimistic default
-// (image-capable) when the model is not in the catalog (FR-026). The optimistic
-// default is a fresh Model value on each call; callers MUST NOT compare
-// pointer-equality with catalog-returned values.
-//
-// For known models, the returned Model is a copy (safe to mutate); the
-// catalog retains the original.
-func (c *Catalog) Resolve(modelID string) Model {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+// Resolve returns a read-only resolved model handle for modelID, or the
+// optimistic default (image-capable) when the model is not in the
+// catalog (FR-026). The handle is a deep-owned copy of the catalog
+// state; callers may mutate it freely without affecting catalog state.
+func (c *Catalog) Resolve(modelID string) *resolvedModel {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if m, ok := c.models[modelID]; ok {
-		return c.cloneWithDefaultBudget(m)
+		return c.resolve(m)
 	}
-	return OptimisticModel(modelID)
+	return c.optimistic(modelID)
 }
 
-// OptimisticModel returns the optimistic default for an unknown model
-// (FR-026): text + image modalities, the catalog default resize budget.
-// Exposed so callers (the orchestrator in Wave 3) can construct the same
-// value when they want to log or audit an unknown-model resolution without
-// re-querying the catalog.
-func OptimisticModel(modelID string) Model {
-	return Model{
-		ID:              modelID,
-		Provider:        "",
-		InputModalities: []string{"text", "image"},
-		ResizeBudget:    nil,
-		Notes:           "optimistic default for unknown model (FR-026)",
+// optimistic returns the FR-026 optimistic default for an unknown model.
+// Caller MUST hold the read lock (so the defaultBudget is consistent).
+func (c *Catalog) optimistic(modelID string) *resolvedModel {
+	return &resolvedModel{
+		id:              modelID,
+		provider:        "",
+		inputModalities: []string{"text", "image"},
+		resizeBudget:    c.defaultBudget,
+		notes:           "optimistic default for unknown model (FR-026)",
 	}
+}
+
+// OptimisticModel returns the optimistic default for an unknown model.
+func (c *Catalog) OptimisticModel(modelID string) *resolvedModel {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.optimistic(modelID)
 }
 
 // HasModal reports whether the catalog entry for modelID accepts the given
-// modality. Unknown models return true for "image" and "text" (the optimistic
-// default — FR-026); false for every other modality on unknown models.
-//
-// This is the convenience method the orchestrator calls during capability
-// gating (step 1 of the Layer-1 chain).
+// modality (FR-026 optimistic default for unknown models).
 func (c *Catalog) HasModal(modelID, modality string) bool {
-	m := c.Resolve(modelID)
-	for _, x := range m.InputModalities {
-		if x == modality {
-			return true
-		}
-	}
-	return false
+	return c.Resolve(modelID).Supports(modality)
 }
 
-// Models returns a snapshot copy of the catalog model map. The returned map
-// is safe to iterate and read; callers MUST NOT mutate the Model values
-// (the ResizeBudget pointer is shared — mutating it mutates the catalog).
-func (c *Catalog) Models() map[string]Model {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	out := make(map[string]Model, len(c.models))
-	for k, v := range c.models {
-		out[k] = v
+// ModelSnapshot is a single (id, accessor handle) pair returned by
+// Models(). The handle is a deep-owned copy.
+type ModelSnapshot struct {
+	ID     string
+	Handle *resolvedModel
+}
+
+// Models returns a snapshot of the catalog: a slice of (id, handle)
+// pairs sorted by id. The handles are deep-owned copies.
+func (c *Catalog) Models() []ModelSnapshot {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	out := make([]ModelSnapshot, 0, len(c.models))
+	for id, m := range c.models {
+		out = append(out, ModelSnapshot{ID: id, Handle: c.resolve(m)})
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1].ID > out[j].ID; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
 	}
 	return out
 }
 
-// DefaultResizeBudget returns the catalog-wide default resize budget. Callers
-// use this for the "model-specific budget absent → use default" path (FR-014,
-// package ambiguity #8 in the spec).
+// DefaultResizeBudget returns the catalog-wide default resize budget.
 func (c *Catalog) DefaultResizeBudget() ResizeBudget {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	return c.defaultBudget
 }
 
 // Version returns the catalog version string from the seed/refresh source.
-// Empty if the catalog has never been hydrated.
 func (c *Catalog) Version() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	return c.version
 }
 
 // UpdatedAt returns the timestamp from the most recently applied seed/refresh.
-// Zero time before the first apply.
 func (c *Catalog) UpdatedAt() time.Time {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	return c.updatedAt
 }
 
 // Source returns the source string from the most recently applied seed/refresh.
-// "embedded" when only the compiled-in seed has been applied; the freeze-gate
-// artifact path when a refresh loaded a pulled catalog.
 func (c *Catalog) Source() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	return c.source
 }
 
-// Refresh fetches an updated catalog via the configured Puller. On success,
-// the new catalog is applied atomically AND persisted to the Store (last-known-good
-// survives restart). On any error, the in-memory state is untouched and the
-// error is returned to the caller for logging (non-fatal — FR-025, SC-009).
+// Refresh fetches an updated catalog via the configured Puller. The whole
+// transaction — pull → parse → version-check → apply → store — runs
+// under a dedicated refreshMu, so two concurrent Refresh calls cannot
+// interleave (Wave 1 TD-M4-major invariant). On success, the new
+// catalog is applied atomically AND persisted to the Store (last-known-good
+// survives restart). On any error, the in-memory state is untouched
+// and the error is returned to the caller (non-fatal — FR-025, SC-009).
 //
 // If no Puller is configured (NewCatalog with puller=nil), Refresh returns
 // nil without doing anything.
@@ -414,54 +506,49 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 	if c.puller == nil {
 		return nil
 	}
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	return c.refreshLocked(ctx)
+}
+
+// refreshLocked runs the Refresh transaction. Caller MUST hold c.refreshMu.
+func (c *Catalog) refreshLocked(ctx context.Context) error {
+	// 1. Pull.
 	data, err := c.puller.Pull(ctx)
 	if err != nil {
 		c.logger.Warn("capabilities: pull failed; retaining last-known-good", "error", err)
 		return err
 	}
-	// Parse first; only mutate state on success.
+	// 2. Parse.
 	s, err := ParseSeed(data)
 	if err != nil {
 		c.logger.Warn("capabilities: pulled catalog invalid; retaining last-known-good", "error", err)
 		return err
 	}
-	// Validate version is non-decreasing. A regression to an older version is
-	// a strong signal of a bad pull (e.g. raw fallback returning a stale
-	// tag). We retain last-known-good.
-	if c.Version() != "" && s.Version != "" && s.Version < c.Version() {
+	// 3. Version check (under stateMu; the apply is the only state-mutating step).
+	c.stateMu.RLock()
+	currentVersion := c.version
+	c.stateMu.RUnlock()
+	if currentVersion != "" && s.Version != "" && s.Version < currentVersion {
 		c.logger.Warn("capabilities: pulled version regressed; retaining last-known-good",
-			"pulled", s.Version, "current", c.Version())
-		return fmt.Errorf("pulled catalog version %q regressed below current %q", s.Version, c.Version())
+			"pulled", s.Version, "current", currentVersion)
+		return fmt.Errorf("pulled catalog version %q regressed below current %q", s.Version, currentVersion)
 	}
+	// 4. Apply.
 	c.applySeed(s)
+	// 5. Store.
 	if c.store != nil {
 		if err := c.store.Write(ctx, data); err != nil {
 			c.logger.Warn(
 				"capabilities: last-known-good write failed (in-memory state updated, persistence lagged)",
 				"error", err,
 			)
-			// Non-fatal: the in-memory state is updated; the next boot will
-			// re-pull. Don't return the error here.
 		}
 	}
 	return nil
 }
 
-// cloneWithDefaultBudget returns a copy of m with a non-nil ResizeBudget
-// (the catalog default if m.ResizeBudget is nil). Caller MUST hold the
-// read lock.
-func (c *Catalog) cloneWithDefaultBudget(m Model) Model {
-	out := m
-	if out.ResizeBudget == nil {
-		b := c.defaultBudget
-		out.ResizeBudget = &b
-	}
-	return out
-}
-
-// noopLogger is the default logger when the caller passes nil — keeps
-// NewCatalog's contract "log is optional" without scattering nil-checks
-// throughout the package.
+// noopLogger is the default logger when the caller passes nil.
 type noopLogger struct{}
 
 func (noopLogger) Warn(string, ...any) {}
