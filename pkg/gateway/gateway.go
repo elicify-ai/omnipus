@@ -1903,20 +1903,16 @@ func setupAndStartServices(
 
 	// Wire the workspace-library provider into the media store so
 	// media://workspace/<ws>/<id> refs resolve through the owning
-	// workspace's library (FR-028). Uses a sync.Map to cache opened
-	// libraries so repeated resolutions for the same workspace share
-	// one in-memory manifest.
+	// workspace's library (FR-028). MUST share AgentLoop's workspace
+	// library cache — a separate cache here caused live UAT failures
+	// where uploads (via GetWorkspaceLibrary) updated one in-memory
+	// manifest while resolve (via this provider) read a stale sibling.
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
-		var libCache sync.Map
 		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
-			if cached, ok := libCache.Load(workspaceID); ok {
-				return cached.(*library.Library), nil
+			lib := agentLoop.GetWorkspaceLibrary(workspaceID)
+			if lib == nil {
+				return nil, fmt.Errorf("workspace library unavailable for %q", workspaceID)
 			}
-			lib, libErr := library.New(homePath, workspaceID)
-			if libErr != nil {
-				return nil, libErr
-			}
-			libCache.Store(workspaceID, lib)
 			return lib, nil
 		})
 	}

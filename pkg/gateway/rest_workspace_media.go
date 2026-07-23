@@ -71,9 +71,19 @@ func (a *restAPI) HandleWorkspaceMedia(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// openLibraryForWorkspace opens the media library for the given workspace.
+// openLibraryForWorkspace returns the shared workspace media library for the
+// given workspace (same instance the agent loop + media-store resolver use).
 // Returns nil, false on error after writing the HTTP response.
 func (a *restAPI) openLibraryForWorkspace(w http.ResponseWriter, workspaceID string) (*library.Library, bool) {
+	// Prefer the AgentLoop cache so REST list/get/delete and chat resolve
+	// share one in-memory manifest (upload already goes through
+	// GetWorkspaceLibrary). Falling back to library.New only if the loop
+	// seam is unavailable keeps boot-order edge cases from 500ing.
+	if a.agentLoop != nil {
+		if lib := a.agentLoop.GetWorkspaceLibrary(workspaceID); lib != nil {
+			return lib, true
+		}
+	}
 	lib, err := library.New(a.homePath, workspaceID)
 	if err != nil {
 		slog.Error("rest: workspace media: open library", "workspace_id", workspaceID, "error", err)
