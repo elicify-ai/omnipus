@@ -480,11 +480,23 @@ async function assertCancelCascadesToSubagent(
   await expect(stopBtn).toBeVisible({ timeout: 10_000 })
   await stopBtn.click()
 
-  // Assert the parent message shows "(interrupted)" within 5s.
-  await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
-  await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
+  // Assert the parent message shows "(interrupted)". Budget: RequestCancel's
+  // own escalation ladder (pkg/agent/cancel.go) is graceful-immediate → 3s
+  // hard-abort → +5s detach, so a hard-abort-bound cancel can legitimately
+  // take up to ~3s server-side before the parent turn actually ends, plus the
+  // MIN_STOPPING_DISPLAY_MS (1s, useCancelState.ts) the Stop button enforces
+  // before it's even eligible to reset, plus WS/render round-trip. A 5s
+  // window leaves ~1s of margin over that ~4s floor — too tight under
+  // parallel-shard CI load (the same class of flake already fixed for
+  // TestConcurrentSessions_TwoSessions/FiveSessions in this same wave, whose
+  // sibling doc note says "the prior budget flaked under the parallel
+  // matrix"). Widened to 10s for headroom; the sync cancel path itself was
+  // verified to unblock in ~3s via a dedicated Go repro
+  // (TestRepro_SyncDelegateCancel_RequestCancel, pkg/agent).
+  await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
+  await expect(chatInput(page)).toBeEnabled({ timeout: 10_000 })
   const interruptedLabels = page.locator('text=(interrupted)')
-  await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
+  await expect(interruptedLabels.first()).toBeVisible({ timeout: 10_000 })
 
   // Assert transcript.jsonl contains {type: "turn_canceled"} entry with a
   // non-empty descendants_canceled array. Allow a short settling window (max 3s)
