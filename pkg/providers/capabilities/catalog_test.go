@@ -298,6 +298,114 @@ func TestCatalog_Resolve_UnknownModel_Optimistic(t *testing.T) {
 		"optimistic model's budget matches the catalog default (TD-M6)")
 }
 
+// TestOptimisticModel_DefaultBudget (Wave 1 TD-M6) asserts the explicit
+// OptimisticModel helper returns a handle carrying the catalog default
+// budget — not a nil/zero value. This is the closure of the "unknown
+// resolved models return ResizeBudget:nil" complaint: every optimistic
+// model now carries the catalog default by value, never a zero budget.
+func TestOptimisticModel_DefaultBudget(t *testing.T) {
+	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
+	require.NoError(t, err)
+	def := c.DefaultResizeBudget()
+	require.Greater(t, def.LongEdgePx, 0, "default LongEdgePx must be positive")
+	require.Greater(t, def.MaxBytes, int64(0), "default MaxBytes must be positive")
+
+	m := c.OptimisticModel("mystery-future-model-2099")
+	budget := m.Budget()
+	assert.Equal(t, def, budget,
+		"optimistic model's budget must equal the catalog default")
+	assert.Greater(t, budget.LongEdgePx, 0,
+		"optimistic budget LongEdgePx must be non-zero (TD-M6 invariant)")
+	assert.Greater(t, budget.MaxBytes, int64(0),
+		"optimistic budget MaxBytes must be non-zero (TD-M6 invariant)")
+}
+
+// TestResolvedModel_AlwaysCarriesBudget (Wave 1 TD-M6) asserts that every
+// resolved model in the catalog carries a non-zero ResizeBudget — the
+// invariant the post-validation pipeline guarantees. Models that omit a
+// resize_budget in the seed (e.g. deepseek-chat, kimi-k2) must come
+// back with the catalog default applied; the in-memory model uses
+// ResizeBudget by value so a missing/zero budget is unrepresentable.
+func TestResolvedModel_AlwaysCarriesBudget(t *testing.T) {
+	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
+	require.NoError(t, err)
+	models := c.Models()
+	require.NotEmpty(t, models, "catalog must have at least one model")
+	for _, snap := range models {
+		budget := snap.Handle.Budget()
+		assert.Greater(t, budget.LongEdgePx, 0,
+			"resolved model %q must carry a non-zero LongEdgePx (TD-M6)", snap.ID)
+		assert.Greater(t, budget.MaxBytes, int64(0),
+			"resolved model %q must carry a non-zero MaxBytes (TD-M6)", snap.ID)
+	}
+}
+
+// TestSeedValidate_DefaultBudgetApplied (Wave 1 TD-M6) asserts that a
+// seed model lacking a resize_budget gets the catalog default applied
+// during validate — the post-validate Seed.Models[i].ResizeBudget is
+// guaranteed non-nil. The catalog default can be overridden per-model
+// (inline resize_budget wins) but is always present after validation.
+func TestSeedValidate_DefaultBudgetApplied(t *testing.T) {
+	body := []byte(`{
+		"version": "test-2026-07-23",
+		"schema_version": "1.0.0",
+		"updated_at": "2026-07-23T00:00:00Z",
+		"source": "test-fixture",
+		"models": [
+			{"id": "no-budget-model", "provider": "p", "input_modalities": ["text"]}
+		],
+		"default_resize_budget": {"long_edge_px": 1234, "max_bytes": 567890}
+	}`)
+	s, err := ParseSeed(body)
+	require.NoError(t, err)
+	require.Len(t, s.Models, 1)
+	got := s.Models[0].ResizeBudget
+	require.NotNil(t, got,
+		"post-validate model DTO must carry a non-nil ResizeBudget (TD-M6)")
+	assert.Equal(t, 1234, got.LongEdgePx, "default LongEdgePx applied to missing-budget model")
+	assert.Equal(t, int64(567890), got.MaxBytes, "default MaxBytes applied to missing-budget model")
+}
+
+// TestSeedValidate_InlineBudgetWinsOverDefault (Wave 1 TD-M6) asserts
+// that an explicit inline resize_budget is preserved when the catalog
+// default is also set — the validator applies the default only to
+// models that lack one. This is the regression guard for the apply-
+// default loop: a comparison with the default inside the loop must
+// not overwrite an explicit budget.
+func TestSeedValidate_InlineBudgetWinsOverDefault(t *testing.T) {
+	body := []byte(`{
+		"version": "test-2026-07-23",
+		"schema_version": "1.0.0",
+		"updated_at": "2026-07-23T00:00:00Z",
+		"source": "test-fixture",
+		"models": [
+			{"id": "explicit-budget", "provider": "p", "input_modalities": ["text"], "resize_budget": {"long_edge_px": 9876, "max_bytes": 4321}},
+			{"id": "default-budget",   "provider": "p", "input_modalities": ["text"]}
+		],
+		"default_resize_budget": {"long_edge_px": 1234, "max_bytes": 567890}
+	}`)
+	s, err := ParseSeed(body)
+	require.NoError(t, err)
+	require.Len(t, s.Models, 2)
+
+	byID := map[string]modelDTO{}
+	for _, m := range s.Models {
+		byID[m.ID] = m
+	}
+
+	explicit, ok := byID["explicit-budget"]
+	require.True(t, ok)
+	require.NotNil(t, explicit.ResizeBudget, "explicit model must carry its inline budget")
+	assert.Equal(t, 9876, explicit.ResizeBudget.LongEdgePx, "inline LongEdgePx preserved")
+	assert.Equal(t, int64(4321), explicit.ResizeBudget.MaxBytes, "inline MaxBytes preserved")
+
+	def, ok := byID["default-budget"]
+	require.True(t, ok)
+	require.NotNil(t, def.ResizeBudget, "default-budget model must have the catalog default applied")
+	assert.Equal(t, 1234, def.ResizeBudget.LongEdgePx, "catalog default LongEdgePx applied")
+	assert.Equal(t, int64(567890), def.ResizeBudget.MaxBytes, "catalog default MaxBytes applied")
+}
+
 // ── Test #13 ─────────────────────────────────────────────────────────────────
 
 // TestCatalog_HasModal exercises the capability-gate convenience method for

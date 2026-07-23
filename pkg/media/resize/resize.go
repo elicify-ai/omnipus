@@ -2,7 +2,7 @@
 // workspace media library (ADR-051 Rev 4, FR-011/012/013/014/015).
 //
 // The pipeline shrinks a decoded raster image until it fits a per-provider
-// Budget. The order of attempts at each candidate size is:
+// ResizeBudget. The order of attempts at each candidate size is:
 //
 //  1. PNG at the candidate size (FR-011: canonical PNG output when it fits).
 //  2. JPEG at the candidate size, quality ladder 90 → 40 (FR-015).
@@ -12,6 +12,14 @@
 // take the long edge below MinLongEdge — ResizeToFit returns ErrLadderFloor
 // and the presentation orchestrator (Step 5) offloads the file into the
 // workspace work/ dir.
+//
+// # Budget shape (Wave 1 TD-M6)
+//
+// ResizeToFit accepts the canonical pkg/providers/capabilities.ResizeBudget
+// directly. There is no resize.Budget type. Byte counts are int64
+// end-to-end so a 32-bit target cannot truncate the comparison; the
+// catalog allows MaxBytes up to math.MaxInt64 and the resize pipeline
+// compares in int64 space (no int cast at the budget boundary).
 package resize
 
 import (
@@ -23,6 +31,8 @@ import (
 	"math"
 
 	"golang.org/x/image/draw"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 )
 
 // ErrLadderFloor is returned by ResizeToFit when the image still does not
@@ -30,22 +40,6 @@ import (
 // the next 0.75× shrink would take the long edge below MinLongEdge).
 // The caller treats this as the routing signal for Step 5 offload.
 var ErrLadderFloor = errors.New("resize: ladder floor reached, image too large for budget")
-
-// Budget describes a per-provider image budget. The resize pipeline shrinks
-// the image until both constraints are met: long edge ≤ LongEdge AND
-// encoded bytes ≤ MaxBytes.
-type Budget struct {
-	LongEdge int
-	MaxBytes int
-}
-
-// DefaultLongEdge is the catalog fallback (FR-014): ~7680px long edge.
-// Covers every documented provider (Anthropic 8000×8000/10MB, Gemini 20MB,
-// xAI 20MiB, Mistral 10MB).
-const DefaultLongEdge = 7680
-
-// DefaultMaxBytes is the catalog fallback (FR-014): 10 MB.
-const DefaultMaxBytes = 10 * 1024 * 1024
 
 // MinLongEdge is the resize-ladder floor (FR-015). Below this long edge the
 // image is too small to be useful; the ladder terminates and the image is
@@ -77,11 +71,17 @@ type Result struct {
 // (see encodeImageToDataURL, FR-013): ResizeToFit does NOT enforce
 // maxImagePixels because it operates on a fully decoded image.Image.
 //
+// The budget shape is pkg/providers/capabilities.ResizeBudget — the
+// canonical per-model resize budget. LongEdgePx is the long-edge
+// ceiling; MaxBytes (int64) is the byte ceiling after the PNG→JPEG
+// quality ladder. Both must be positive; non-positive values surface
+// as an error (no silent truncation, no implicit cap).
+//
 // Pure-Go: uses stdlib image/jpeg, image/png, and golang.org/x/image/draw.
 // No CGo.
-func ResizeToFit(img image.Image, budget Budget) (Result, error) {
-	if budget.LongEdge <= 0 || budget.MaxBytes <= 0 {
-		return Result{}, errors.New("resize: invalid budget (LongEdge and MaxBytes must be > 0)")
+func ResizeToFit(img image.Image, budget capabilities.ResizeBudget) (Result, error) {
+	if budget.LongEdgePx <= 0 || budget.MaxBytes <= 0 {
+		return Result{}, errors.New("resize: invalid budget (LongEdgePx and MaxBytes must be > 0)")
 	}
 	if img == nil {
 		return Result{}, errors.New("resize: nil image")
@@ -96,10 +96,10 @@ func ResizeToFit(img image.Image, budget Budget) (Result, error) {
 	for {
 		longEdge := maxInt(curW, curH)
 
-		// If the long edge exceeds budget.LongEdge, shrink unconditionally
+		// If the long edge exceeds budget.LongEdgePx, shrink unconditionally
 		// (FR-014). The ladder cannot return an image whose long edge
 		// exceeds the budget — the budget is a hard ceiling on dimensions.
-		if longEdge > budget.LongEdge {
+		if longEdge > budget.LongEdgePx {
 			var floor bool
 			curW, curH, floor = shrinkOrFloor(curW, curH)
 			if floor {
@@ -110,7 +110,7 @@ func ResizeToFit(img image.Image, budget Budget) (Result, error) {
 
 		// 1. Try PNG at the current size (FR-011 canonical output).
 		if pngData, err := encodePNG(img, curW, curH); err == nil {
-			if len(pngData) <= budget.MaxBytes {
+			if int64(len(pngData)) <= budget.MaxBytes {
 				return Result{Data: pngData, Mime: "image/png", LongEdge: longEdge}, nil
 			}
 		}
@@ -121,7 +121,7 @@ func ResizeToFit(img image.Image, budget Budget) (Result, error) {
 			if err != nil {
 				return Result{}, err
 			}
-			if len(jpegData) <= budget.MaxBytes {
+			if int64(len(jpegData)) <= budget.MaxBytes {
 				return Result{Data: jpegData, Mime: "image/jpeg", LongEdge: longEdge}, nil
 			}
 		}

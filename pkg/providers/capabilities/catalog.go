@@ -57,14 +57,15 @@ import (
 )
 
 // ResizeBudget is the canonical per-model resize budget for step-2
-// normalize-and-resize (FR-014/FR-015). The catalog default (LongEdgePx
-// = 7680, MaxBytes = 10 MB) is always returned by Budget() — a
-// resolved model never carries a nil budget. Bytes are int64 to match
-// the resize package's budget shape without overflow on 32-bit targets.
+// normalize-and-resize (FR-014/FR-015). It is the single source of
+// truth for the budget shape across the catalog and the resize
+// pipeline (pkg/media/resize accepts this type directly — Wave 1
+// TD-M6 unifies the formerly duplicated Budget types).
 //
-// Wave 1 TD-M6 unifies the budget shape with pkg/media/resize.Budget
-// through a checked conversion at the resize boundary (an internal
-// helper outside this package keeps the two definitions honest).
+// The catalog default (LongEdgePx = 7680, MaxBytes = 10 MB) is always
+// returned by Budget(): a resolved model never carries a nil/zero
+// budget. MaxBytes is int64 to keep byte counts end-to-end without
+// the int truncation hazard on 32-bit targets.
 type ResizeBudget struct {
 	// LongEdgePx is the max long-edge dimension after resize. Images longer
 	// than this on the long edge are scaled down (preserving aspect ratio)
@@ -79,11 +80,16 @@ type ResizeBudget struct {
 // API surface is the *resolvedModel handle returned by Resolve and the
 // accessor methods on it; the underlying catalog state lives here and
 // is never returned to callers directly.
+//
+// resizeBudget is a value type (not a pointer) — the invariant
+// "every post-validate model carries a non-zero budget" is enforced
+// by Seed.validate, which mutates the DTO slice in place to apply
+// the catalog default to any model that omitted one (Wave 1 TD-M6).
 type model struct {
 	id              string
 	provider        string
 	inputModalities []string
-	resizeBudget    *ResizeBudget
+	resizeBudget    ResizeBudget
 	notes           string
 }
 
@@ -141,20 +147,18 @@ func (r *resolvedModel) InputModalities() []string {
 	return out
 }
 
-// resolve returns a deep-owned resolvedModel view of m, filling in the
-// catalog default budget when m.resizeBudget is nil. Caller MUST hold
-// the read lock.
+// resolve returns a deep-owned resolvedModel view of m. The input's
+// ResizeBudget is always populated (Wave 1 TD-M6: Seed.validate
+// guarantees every post-validate model DTO carries a non-nil budget,
+// and the internal model stores ResizeBudget by value). Caller MUST
+// hold the read lock.
 func (c *Catalog) resolve(m model) *resolvedModel {
-	budget := c.defaultBudget
-	if m.resizeBudget != nil {
-		budget = *m.resizeBudget
-	}
 	modalities := append([]string(nil), m.inputModalities...)
 	return &resolvedModel{
 		id:              m.id,
 		provider:        m.provider,
 		inputModalities: modalities,
-		resizeBudget:    budget,
+		resizeBudget:    m.resizeBudget,
 		notes:           m.notes,
 	}
 }
@@ -205,19 +209,23 @@ type modelDTO struct {
 }
 
 // toModel projects the validated DTO onto the private model type.
-// All invariants must already have been checked by Seed.validate.
+// All invariants must already have been checked by Seed.validate —
+// in particular, d.ResizeBudget is guaranteed non-nil after validate
+// (Wave 1 TD-M6: the catalog default is applied to any DTO that
+// omitted one). The internal type uses ResizeBudget by value so the
+// invariant "every post-validate model carries a non-zero budget"
+// is unrepresentable in the in-memory model.
 func (d modelDTO) toModel() model {
 	out := model{
 		id:       d.ID,
 		provider: d.Provider,
-		notes:    d.Notes,
+		// ResizeBudget invariant: post-validate DTO always has a non-nil
+		// ResizeBudget (validate applies the catalog default when missing).
+		resizeBudget: *d.ResizeBudget,
+		notes:        d.Notes,
 	}
 	if d.InputModalities != nil {
 		out.inputModalities = append([]string(nil), d.InputModalities...)
-	}
-	if d.ResizeBudget != nil {
-		budget := *d.ResizeBudget
-		out.resizeBudget = &budget
 	}
 	return out
 }
@@ -272,7 +280,10 @@ func ParseSeed(data []byte) (Seed, error) {
 	return s, nil
 }
 
-// validate enforces the seed schema invariants (Wave 1 TD-M5):
+// validate enforces the seed schema invariants (Wave 1 TD-M5) and
+// finalizes the per-model ResizeBudget so every post-validate DTO is
+// guaranteed non-nil (Wave 1 TD-M6).
+//
 //   - DefaultResizeBudget has positive LongEdgePx and positive MaxBytes.
 //   - Each model.ID is non-empty and unique.
 //   - Each model.Provider is non-empty.
@@ -280,7 +291,9 @@ func ParseSeed(data []byte) (Seed, error) {
 //     text-invariant — every model supports text), and has no empty or
 //     duplicate values.
 //   - ResizeBudget, when present, has positive LongEdgePx and positive MaxBytes.
-func (s Seed) validate() error {
+//   - After validation: every model.ResizeBudget is non-nil (the catalog
+//     default is applied in place to any model that omitted one).
+func (s *Seed) validate() error {
 	if s.DefaultResizeBudget.LongEdgePx <= 0 {
 		return fmt.Errorf("default_resize_budget.long_edge_px must be > 0, got %d", s.DefaultResizeBudget.LongEdgePx)
 	}
@@ -332,6 +345,15 @@ func (s Seed) validate() error {
 					i, m.ID, m.ResizeBudget.MaxBytes,
 				)
 			}
+		}
+	}
+	// Wave 1 TD-M6: apply the catalog default in place to any model that
+	// omitted a ResizeBudget. After this loop, every model DTO carries a
+	// non-nil budget so toModel can dereference without a nil check.
+	for i := range s.Models {
+		if s.Models[i].ResizeBudget == nil {
+			budget := s.DefaultResizeBudget
+			s.Models[i].ResizeBudget = &budget
 		}
 	}
 	return nil

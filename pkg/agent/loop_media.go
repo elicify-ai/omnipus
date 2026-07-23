@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 )
 
 // resolveMediaRefs resolves media:// refs in messages.
@@ -492,9 +493,17 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 	// (canonical) and JPEG via the q90→q40 ladder when PNG doesn't.
 	// ErrLadderFloor routes to step 5 offload (no valid wire format
 	// exists at any size on the ladder).
-	result, err := resize.ResizeToFit(decoded, resize.Budget{
-		LongEdge: resize.DefaultLongEdge,
-		MaxBytes: maxSize,
+	//
+	// The budget shape is pkg/providers/capabilities.ResizeBudget
+	// (Wave 1 TD-M6: one canonical type, int64 bytes — no int cast at
+	// the budget boundary; legacy resize.Budget / DefaultLongEdge are
+	// retired). The long-edge default matches the catalog's FR-014
+	// fallback; maxSize is the legacy agents.defaults.max_media_size
+	// cap (see W1-CR-05; Wave 3 wires per-model budgets from the
+	// catalog).
+	result, err := resize.ResizeToFit(decoded, capabilities.ResizeBudget{
+		LongEdgePx: 7680,
+		MaxBytes:   int64(maxSize),
 	})
 	if err != nil {
 		if errors.Is(err, resize.ErrLadderFloor) {
