@@ -461,8 +461,6 @@ func DefaultConfig() *Config {
 
 			IdleQuietWindow: duration(DefaultSMIdleQuietWindow),
 
-			TokenBudget: DefaultSMTokenBudget,
-
 			AttemptsMax:    DefaultSMAttemptsMax,
 			JudgeRoundsMax: DefaultSMJudgeRoundsMax,
 
