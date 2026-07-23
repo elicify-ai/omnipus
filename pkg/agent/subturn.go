@@ -408,8 +408,26 @@ func spawnSubTurn(
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
 	if parentTS.concurrencySem != nil {
-		// Create a timeout context for semaphore acquisition
-		timeoutCtx, cancel := context.WithTimeout(ctx, rtCfg.concurrencyTimeout)
+		// Create a timeout context for semaphore acquisition.
+		//
+		// Critical sub-turns (async/background delegation via DelegateTool's
+		// executeAsync, which always sets Critical:true) are designed to
+		// outlive the parent turn — the child runs on an INDEPENDENT
+		// context.Background()-derived childCtx built further below (line
+		// ~473), and runTurn receives that childCtx, never the parent ctx.
+		// Deriving the acquire timeout from ctx in that case races the parent
+		// turn's own completion: a background delegation's goroutine is
+		// frequently scheduled only after the parent turn has already ended
+		// and canceled its ctx, so the acquire's select would pick the
+		// already-done timeout channel and abort the spawn with ctx.Err() —
+		// silently dropping a delegation that was supposed to keep running.
+		// Base the timeout on context.Background() for Critical spawns so only
+		// a genuine concurrencyTimeout exhaustion bounds the acquire.
+		semTimeoutBase := ctx
+		if cfg.Critical {
+			semTimeoutBase = context.Background()
+		}
+		timeoutCtx, cancel := context.WithTimeout(semTimeoutBase, rtCfg.concurrencyTimeout)
 		defer cancel()
 
 		select {
@@ -421,8 +439,11 @@ func spawnSubTurn(
 				}
 			}()
 		case <-timeoutCtx.Done():
-			// Check parent context first - if it was canceled, propagate that error
-			if ctx.Err() != nil {
+			// A Critical acquire can no longer be aborted by parent
+			// cancellation (its base is context.Background()), so a done
+			// timeout here is a genuine concurrencyTimeout exhaustion. Only
+			// the non-Critical path can still surface a parent cancellation.
+			if !cfg.Critical && ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			// Otherwise it's our timeout
