@@ -169,10 +169,43 @@ interface PlanFields {
   bounds?: { plan_judge_max_rounds?: number; idle_expiry_days?: number }
 }
 
-const JIM_AGENT_ID = 'jim'
-
 function proseCriterion(text: string): Criterion {
   return { kind: 'prose', text, author: { kind: 'user', id: 'admin' }, status: 'pending' }
+}
+
+/**
+ * Create a fresh native Main agent (chat-target) for one conformance test.
+ *
+ * WHY a per-test agent instead of the seeded core "jim": the conformance
+ * shard runs all 9 specs sequentially in ONE gateway/OMNIPUS_HOME. Each
+ * plan/task test creates its own workspace and adds the worker agent to
+ * that workspace's core_team. Reusing jim across tests leaves jim in
+ * MULTIPLE workspaces' core_teams — and the task-executor's
+ * `find_for_agent` (pkg/workspace/find_for_agent.go:132) resolves an
+ * agent that belongs to >1 core team to "the first by sorted id order",
+ * which is NOT necessarily the task's own workspace. The dispatched
+ * member turn then lands in the wrong workspace and is canceled
+ * ("Agent execution failed (StartTaskNow path): turn canceled"), so the
+ * plan never reaches a terminal state. A freshly-created Main agent
+ * belongs to exactly ONE workspace → unambiguous resolution.
+ *
+ * A Main agent (vs Subagent) is required because plan ownership
+ * (validatePlanOwnerAgent) rejects non-chat-target agents — Main is a
+ * chat target; the seeded "worker" sub-agent is not. The new agent uses
+ * the gateway's default model (agents.defaults.model_name) and inherits
+ * the seeded default tool-policy set; the conformance member tasks only
+ * need a textual LLM reply, so no special tools are required.
+ */
+async function createMainAgent(page: Page, name: string): Promise<string> {
+  const res = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/agents', {
+    type: 'Main',
+    name,
+    soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+  })
+  if (!res.ok) {
+    throw new Error(`createMainAgent: POST /agents failed ${res.status}: ${res.raw}`)
+  }
+  return res.body.id
 }
 
 async function createPlan(
@@ -406,28 +439,23 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
   test.setTimeout(360_000)
   await startFreshChatWithJim(page)
 
-  // Create a workspace so the task has a real plan/team context. The
-  // task's agent_id must be a member of the workspace's team set
-  // (core_team ∪ delegation edges — validateTaskAgentID, rest_tasks.go).
-  // We seed the core agent "jim" into core_team; jim is a chat-target
-  // agent (IsChatTarget()==true) and the proven native worker for
-  // action="llm" tasks (verifier-eval.spec.ts uses the same pattern).
+  // Create a per-test Main agent + workspace so the task has a real
+  // plan/team context. The task's agent_id must be a member of the
+  // workspace's team set (core_team ∪ delegation edges —
+  // validateTaskAgentID, rest_tasks.go). We create a FRESH Main agent
+  // per test (not the seeded "jim") so the agent belongs to exactly ONE
+  // workspace's core_team — reusing jim across tests leaves it in
+  // multiple core_teams and the task executor's find_for_agent resolves
+  // the wrong workspace, canceling the turn.
+  const workerId = await createMainAgent(page, `conformance-t1-worker-${Date.now()}`)
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t1',
-    core_team: [JIM_AGENT_ID],
+    core_team: [workerId],
   })
   if (!wsRes.ok) {
     throw new Error(`Conformance_t1: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   }
   const workspaceId = wsRes.body.id
-
-  // Use the seeded core agent "jim" as the task assignee. (The prior
-  // implementation discovered a "Main"/"Subagent" agent via GET /agents
-  // and landed on the seeded "worker" sub-agent — but the worker was NOT
-  // in the workspace's core_team, so POST /tasks 400'd with "agent "worker"
-  // is not a member of this workspace's team". jim in core_team resolves
-  // the team-membership gate.)
-  const worker = { id: JIM_AGENT_ID }
 
   // Create the standalone task with a single criterion the LLM can satisfy.
   // action="llm" dispatches to the worker on the next processTick.
@@ -440,7 +468,7 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
       prompt: 'reply with the literal word done and nothing else',
       action: 'llm',
       workspace_id: workspaceId,
-      agent_id: worker.id,
+      agent_id: workerId,
       max_attempts: 3,
       criteria: [proseCriterion('the reply contains the word "done"')],
     },
@@ -524,7 +552,7 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
     prompt: 'this task will be cancelled before the worker completes',
     action: 'llm',
     workspace_id: workspaceId,
-    agent_id: worker.id,
+    agent_id: workerId,
     max_attempts: 3,
     criteria: [proseCriterion('the reply contains the word "done"')],
   })
@@ -576,16 +604,16 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
   test.setTimeout(480_000)
   await startFreshChatWithJim(page)
 
-  // Setup: workspace seeded with jim as the plan owner + member assignee.
-  // owner_agent_id must be a chat-target agent (IsChatTarget()==true); jim
-  // qualifies, the seeded "worker" sub-agent does not.
+  // Setup: per-test Main agent (chat-target plan owner + member assignee)
+  // in its own workspace core_team. A fresh agent per test avoids the
+  // multi-workspace find_for_agent ambiguity that cancels member turns.
+  const ownerId = await createMainAgent(page, `conformance-t2-owner-${Date.now()}`)
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t2',
-    core_team: [JIM_AGENT_ID],
+    core_team: [ownerId],
   })
   if (!wsRes.ok) throw new Error(`t2: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-  const owner = { id: JIM_AGENT_ID }
 
   // Create a plan with TWO members. The plan-lint gate (G-16) requires
   // disjoint write_sets per parallel member; we comply here. Members are
@@ -595,7 +623,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
   const { planId } = await createPlanWithMembers(
     page,
     workspaceId,
-    owner.id,
+    ownerId,
     {
       title: 't2 conformance plan',
       goal: 'produce a verdict of met or unmet for both members',
@@ -711,14 +739,15 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   test.setTimeout(480_000)
   await startFreshChatWithJim(page)
 
-  // Setup: workspace seeded with jim (chat-target owner + member assignee).
+  // Setup: per-test Main agent (chat-target owner + member assignee) in
+  // its own workspace core_team (avoids multi-workspace ambiguity).
+  const ownerId = await createMainAgent(page, `conformance-t3-owner-${Date.now()}`)
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t3',
-    core_team: [JIM_AGENT_ID],
+    core_team: [ownerId],
   })
   if (!wsRes.ok) throw new Error(`t3: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-  const owner = { id: JIM_AGENT_ID }
 
   // Create a plan with three members; m1 trivial criterion, m2 trivial
   // criterion, m3 explicitly UNMET (impossible criterion) so the plan
@@ -726,7 +755,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   const { planId } = await createPlanWithMembers(
     page,
     workspaceId,
-    owner.id,
+    ownerId,
     {
       title: 't3 conformance plan',
       goal: 'exercise the supersede + targeted-retry correction paths',
@@ -902,13 +931,14 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
   test.setTimeout(180_000)
   await startFreshChatWithJim(page)
 
+  // Setup: per-test Main agent in its own workspace core_team.
+  const ownerId = await createMainAgent(page, `conformance-g4-owner-${Date.now()}`)
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-g4',
-    core_team: [JIM_AGENT_ID],
+    core_team: [ownerId],
   })
   if (!wsRes.ok) throw new Error(`g4: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-  const owner = { id: JIM_AGENT_ID }
 
   // CASE 1: disjoint write_sets — must be accepted at approve (G-16 happy
   // path). Plan-lint runs at APPROVE (handlePlanApprove, rest_plans.go),
@@ -917,7 +947,7 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
   const { planId: disjointPlanId } = await createPlanWithMembers(
     page,
     workspaceId,
-    owner.id,
+    ownerId,
     {
       title: 'g4 disjoint plan',
       goal: 'lint passes',
@@ -961,7 +991,7 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
   const { planId: overlapPlanId } = await createPlanWithMembers(
     page,
     workspaceId,
-    owner.id,
+    ownerId,
     {
       title: 'g4 overlapping plan',
       goal: 'lint rejects',
@@ -1031,13 +1061,14 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
   test.setTimeout(360_000)
   await startFreshChatWithJim(page)
 
+  // Setup: per-test Main agent in its own workspace core_team.
+  const ownerId = await createMainAgent(page, `conformance-g5-owner-${Date.now()}`)
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-g5',
-    core_team: [JIM_AGENT_ID],
+    core_team: [ownerId],
   })
   if (!wsRes.ok) throw new Error(`g5: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
-  const owner = { id: JIM_AGENT_ID }
 
   // Topology (mirrors conformance_design_test.go's g5 dataset):
   //   schema → 3 disjoint shards → assemble
@@ -1048,7 +1079,7 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
   const { planId, memberIds } = await createPlanWithMembers(
     page,
     workspaceId,
-    owner.id,
+    ownerId,
     {
       title: 'g5 report-workbook',
       goal: 'serial schema, parallel shards, one assemble',
