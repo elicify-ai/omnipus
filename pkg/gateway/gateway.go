@@ -2283,8 +2283,20 @@ func setupAndStartServices(
 	// are folded into the plan engine's single boot pass via the setters below
 	// (SetLifecycleStore / SetIntentLog), so Start runs the intent-log replay,
 	// plan reconciliation, and session boot sweep as one atomic boot step.
+	//
+	// sec-MINOR-3/#539: derive the intent-log's own HMAC-chain key from the
+	// master key, domain-separated from the audit-chain key (distinct info
+	// tag) — mirrors the audit-chain derivation earlier in bootRun (see
+	// audit.SetProcessChainKey's call site). Failure here is logged and not
+	// fatal: NewIntentLog falls back to its dev-only deterministic key with a
+	// sticky slog.Warn, exactly like audit.NewLogger's fallback.
+	intentLogChainKey, ilKeyErr := credStore.DeriveSubkey(plan.IntentLogChainKeyInfo)
+	if ilKeyErr != nil {
+		slog.Warn("intent_log: could not derive HMAC chain key from master key — intent log will use dev-only fallback",
+			"error", ilKeyErr)
+	}
 	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
-	intentLog := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"))
+	intentLog := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"), intentLogChainKey)
 	bootSweepCfg := agentLoop.GetConfig().Planning
 
 	// ADR-053 Phase 2 on-ramp: construct the durable S3 child->parent message
