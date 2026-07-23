@@ -239,7 +239,7 @@ func TestErrorToProviderError(t *testing.T) {
 	})
 	t.Run("wrapped provider error", func(t *testing.T) {
 		want := &common.ProviderError{Status: 500, Body: "server"}
-		wrapped := &wrappedErr{inner: want}
+		wrapped := &wrappedError{inner: want}
 		got := errorToProviderError(wrapped)
 		assert.Equal(t, want.Status, got.Status)
 		assert.Equal(t, want.Body, got.Body)
@@ -255,10 +255,10 @@ func TestErrorToProviderError(t *testing.T) {
 	})
 }
 
-// wrappedErr is a tiny test helper that wraps an inner error.
-type wrappedErr struct {
+// wrappedError is a tiny test helper that wraps an inner error.
+type wrappedError struct {
 	inner error
 }
 
-func (w *wrappedErr) Error() string { return w.inner.Error() }
-func (w *wrappedErr) Unwrap() error { return w.inner }
+func (w *wrappedError) Error() string { return w.inner.Error() }
+func (w *wrappedError) Unwrap() error { return w.inner }

@@ -210,7 +210,8 @@ func TestPresentation_Step1Gate_TextOnlyModel_SVG_GetsOffloadPlusMarkup(t *testi
 
 	svgPath := filepath.Join(t.TempDir(), "circle.svg")
 	require.NoError(t, os.WriteFile(svgPath, []byte(
-		`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="blue"/></svg>`), 0o600))
+		`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="blue"/></svg>`,
+	), 0o600))
 	ref, err := store.Store(svgPath, media.MediaMeta{
 		Filename:    "circle.svg",
 		ContentType: "image/svg+xml",

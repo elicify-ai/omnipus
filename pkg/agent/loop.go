@@ -641,9 +641,13 @@ func NewAgentLoop(
 	// a puller-equipped catalog via SetCapabilityCatalog (FR-025 repo-pull).
 	// A construction failure is non-fatal — nil catalog → optimistic (FR-026).
 	if catalog, catErr := capabilities.NewCatalog(capabilities.EmbeddedSeed(), nil, nil, nil); catErr != nil {
-		logger.WarnCF("agent", "Capability catalog construction failed; presentation gate degrades to optimistic", map[string]any{
-			"error": catErr.Error(),
-		})
+		logger.WarnCF(
+			"agent",
+			"Capability catalog construction failed; presentation gate degrades to optimistic",
+			map[string]any{
+				"error": catErr.Error(),
+			},
+		)
 	} else {
 		al.capabilityCatalog = catalog
 	}

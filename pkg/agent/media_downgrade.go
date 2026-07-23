@@ -16,63 +16,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
-// TryMediaDowngrade inspects a provider/LLM error from the current LLM
-// call and, when it matches CodeMediaUnsupported OR the outcome-based
-// fallback gate fires AND the turn has not already performed one
-// downgrade-retry for the affected media class, mutates callMessages
-// in place to remove the offending media block(s) and returns true.
-// The caller should retry the LLM call once with the mutated messages;
-// subsequent calls (even if they return the same shape) return false
-// because the per-turn guard has flipped.
-//
-// Trigger paths (FR-017 / ADR-051 Rev 4 §4):
-//
-//  1. Classifier-primary — CodeMediaUnsupported from classifyByProviderError
-//     (xAI/Grok 400 with "valid JPG, PNG, WebP, or ICO image" body, etc.).
-//     Fired as before; no behavior change on this branch.
-//
-//  2. Outcome-based fallback — fires ONLY when ALL of:
-//     - classifier returned CodeUnknown OR CodeProviderRejected
-//     (i.e. inconclusive: no pinned phrase matched, and the status is
-//     not auth/permission/413 which already map deterministically),
-//     - pe.Status is in 4xx range,
-//     - pe.Status is NOT in {401, 403, 413},
-//     - pe.Body does NOT match any of the exclusion substrings
-//     (context-overflow / content-policy / bad-tool-args / schema),
-//     - callMessages carries at least one media block,
-//     - the matching per-class guard (mediaRetryDone or imageRetryDone)
-//     is not already set.
-//
-//     The exclusion substrings are checked here independently of the
-//     classifier verdict because a 4xx with a body matching e.g.
-//     "schema validation" still classifies as CodeProviderRejected under
-//     the existing 4xx-body rule, and we MUST NOT fire the strip-retry
-//     for that case (FR-018 + the round-2 grill F-L8-2 backstop).
-//
-// The downgrade path:
-//
-//   - Any data:application/pdf;base64,… block → downgradePDFMediaToText
-//     (existing RD2 helper) — extracts text via docextract and injects it
-//     into Content; the native PDF block is removed from Media.
-//   - Any data:image/… block → simply removed from Media and replaced with
-//     an "[attachment unavailable: <name> (provider rejected this format,
-//     retrying without it)]" marker in Content.
-//
-// Returns false (no downgrade, no retry) when:
-//
-//   - ts is nil,
-//   - neither trigger path fires,
-//   - both per-class guards are already set,
-//   - callMessages carries no media block to downgrade,
-//   - classifier returned a specific non-media code (auth/rate/network/
-//     policy/context-overflow/tool-args/schema) — those surface verbatim
-//     and the loop breaks out of the retry loop normally.
-//
-// On a successful downgrade, the function stamps the matching
-// per-class guard (mediaRetryDone for PDF, imageRetryDone for image)
-// and emits a debug-level slog entry. The two guards are independent:
-// a PDF downgrade does NOT consume the image-retry budget and vice
-// versa (FR-019 per-class independence).
 // DowngradeTrigger classifies which path fired a media-downgrade retry.
 // Internal-only — does NOT cross the gateway/SPA boundary (Wave 1
 // TD-M8). The loop-side relabel reads this value to decide whether to

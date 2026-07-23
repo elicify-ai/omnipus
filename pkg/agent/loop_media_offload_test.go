@@ -129,7 +129,11 @@ func TestResolveMediaRefsWithOffload_SanitizesTraversalFilename(t *testing.T) {
 			// (the real threat model: the user controls the filename metadata).
 			srcPath := filepath.Join(t.TempDir(), "src.avif")
 			require.NoError(t, os.WriteFile(srcPath, []byte("traversal-bytes"), 0o600))
-			ref, err := store.Store(srcPath, media.MediaMeta{Filename: payload, ContentType: "image/avif"}, "test-scope")
+			ref, err := store.Store(
+				srcPath,
+				media.MediaMeta{Filename: payload, ContentType: "image/avif"},
+				"test-scope",
+			)
 			require.NoError(t, err)
 
 			workDir := filepath.Join(t.TempDir(), "work")
@@ -196,7 +200,13 @@ func TestResolveMediaRefs_AVIF_NoSink_DegradesToMarker(t *testing.T) {
 // line prefixes the markup. The two steps compose; neither replaces the other.
 func TestResolveMediaRefsWithOffload_SVGFail_GuidancePlusMarkup(t *testing.T) {
 	store := media.NewFileMediaStore()
-	ref, _ := storeFile(t, store, "broken.svg", "image/svg+xml", []byte(`<svg xmlns="http://www.w3.org/2000/svg"><unclosed`))
+	ref, _ := storeFile(
+		t,
+		store,
+		"broken.svg",
+		"image/svg+xml",
+		[]byte(`<svg xmlns="http://www.w3.org/2000/svg"><unclosed`),
+	)
 
 	workDir := filepath.Join(t.TempDir(), "work")
 	sink := &offloadSink{workDir: workDir}

@@ -49,7 +49,10 @@ func TestEncodeImageToDataURL_NormalizesGIFToPNG(t *testing.T) {
 }
 
 func TestEncodeImageToDataURL_AnimatedGIFToStaticPNG(t *testing.T) {
-	first := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.RGBA{R: 255, A: 255}, color.RGBA{B: 255, A: 255}})
+	first := image.NewPaletted(
+		image.Rect(0, 0, 2, 2),
+		color.Palette{color.RGBA{R: 255, A: 255}, color.RGBA{B: 255, A: 255}},
+	)
 	second := image.NewPaletted(first.Rect, first.Palette)
 	for i := range first.Pix {
 		first.Pix[i] = 0

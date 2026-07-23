@@ -384,8 +384,12 @@ func TestSanitizeRunnerError_AlwaysGeneric(t *testing.T) {
 					break
 				}
 			}
-			assert.True(t, isKnown || strings.HasPrefix(s.AssistantText, "The external CLI failed"),
-				"AssistantText must be a generic user-message copy or the fail-closed fallback; got=%q", s.AssistantText)
+			assert.True(
+				t,
+				isKnown || strings.HasPrefix(s.AssistantText, "The external CLI failed"),
+				"AssistantText must be a generic user-message copy or the fail-closed fallback; got=%q",
+				s.AssistantText,
+			)
 		})
 	}
 }
@@ -413,7 +417,12 @@ func makeProviderErr(status int, body string) *common.ProviderError {
 // makeFailoverError wraps an inner error in a *providers.FailoverError
 // the way ClassifyError would. Status is best-effort from the inner
 // error's status; Wrapped is the inner error itself.
-func makeFailoverError(reason providers.FailoverReason, provider, model string, status int, wrapped error) *providers.FailoverError {
+func makeFailoverError(
+	reason providers.FailoverReason,
+	provider, model string,
+	status int,
+	wrapped error,
+) *providers.FailoverError {
 	return &providers.FailoverError{
 		Reason:   reason,
 		Provider: provider,

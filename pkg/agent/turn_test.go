@@ -530,8 +530,11 @@ func TestRecordRateLimitDenial_PersistsFriendlyRateLimitTranscript(t *testing.T)
 			break
 		}
 	}
-	assert.True(t, found,
-		"transcript must contain the friendly 'rate limit: ... (retry after Ns)' system entry verbatim (no double-translate)")
+	assert.True(
+		t,
+		found,
+		"transcript must contain the friendly 'rate limit: ... (retry after Ns)' system entry verbatim (no double-translate)",
+	)
 }
 
 // newTestAgentLoopForRateLimit builds a minimal AgentLoop + turnState

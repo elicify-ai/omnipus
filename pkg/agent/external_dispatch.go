@@ -894,7 +894,12 @@ func SanitizeRunnerError(rawMessage string) SanitizedRunnerError {
 // forwarder). The agent-loop appendErrorTranscript write choke point
 // also runs through translateLLMError, so the transcript gets the same
 // generic copy (NOT the raw CLI stderr).
-func emitExternalCLIErrorEvent(al *AgentLoop, ts *turnState, runnerErr *runner.ErrorEvent, sanitized SanitizedRunnerError) {
+func emitExternalCLIErrorEvent(
+	al *AgentLoop,
+	ts *turnState,
+	runnerErr *runner.ErrorEvent,
+	sanitized SanitizedRunnerError,
+) {
 	if al == nil || ts == nil {
 		return
 	}

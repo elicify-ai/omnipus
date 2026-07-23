@@ -199,10 +199,14 @@ func (al *AgentLoop) getWorkspaceLibrary(workspaceID string) *library.Library {
 	}
 	lib, err := library.New(home, workspaceID)
 	if err != nil {
-		logger.WarnCF("agent", "media library: workspace library unavailable, refcount tracking disabled", map[string]any{
-			"workspace_id": workspaceID,
-			"error":        err.Error(),
-		})
+		logger.WarnCF(
+			"agent",
+			"media library: workspace library unavailable, refcount tracking disabled",
+			map[string]any{
+				"workspace_id": workspaceID,
+				"error":        err.Error(),
+			},
+		)
 		return nil
 	}
 	// LoadOrStore so a concurrent caller that also constructed a library

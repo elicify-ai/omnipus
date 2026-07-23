@@ -448,7 +448,8 @@ func extractTARManifest(data []byte) (string, bool, string) {
 			return "", false, fmt.Sprintf("tar manifest failed: %v", err)
 		}
 		total++
-		if len(entries) >= maxArchiveEntries || hdr.Size < 0 || representedBytes+uint64(hdr.Size) > maxDecompressedBytes {
+		if len(entries) >= maxArchiveEntries || hdr.Size < 0 ||
+			representedBytes+uint64(hdr.Size) > maxDecompressedBytes {
 			capped = true
 			continue
 		}

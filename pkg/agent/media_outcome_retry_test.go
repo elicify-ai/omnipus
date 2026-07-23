@@ -329,8 +329,11 @@ func TestStep4_PerClassGuardsPreserved(t *testing.T) {
 		// the image class — the image guard is independent of the PDF
 		// guard (FR-019 per-class independence).
 		secondResult := TryMediaDowngrade(ts, callMessages, pe)
-		assert.True(t, secondResult.Applied,
-			"second outcome-based fallback must fire on the image class even after the PDF guard is set (FR-019 per-class independence)")
+		assert.True(
+			t,
+			secondResult.Applied,
+			"second outcome-based fallback must fire on the image class even after the PDF guard is set (FR-019 per-class independence)",
+		)
 		assert.True(t, ts.imageRetryDone.Load(),
 			"image-class guard must be set after the image downgrade")
 	})
@@ -353,16 +356,26 @@ func TestStep4_ExclusionSet_SuppressesFallback(t *testing.T) {
 	}{
 		{"401 auth → provider_rejected", &ProviderError{Status: 401, Body: ""}},
 		{"403 permission → provider_rejected", &ProviderError{Status: 403, Body: ""}},
-		{"413 request-too-large → provider_rejected",
-			&ProviderError{Status: 413, Body: "request too large"}},
-		{"400 context-overflow → context_too_long",
-			&ProviderError{Status: 400, Body: "context length exceeded"}},
-		{"400 content-policy → content_policy",
-			&ProviderError{Status: 400, Body: "content policy violation"}},
-		{"400 bad-tool-args (FR-018) → tool_args",
-			&ProviderError{Status: 400, Body: "invalid tool arguments"}},
-		{"400 schema-validation (FR-018) → schema",
-			&ProviderError{Status: 400, Body: "schema validation failed"}},
+		{
+			"413 request-too-large → provider_rejected",
+			&ProviderError{Status: 413, Body: "request too large"},
+		},
+		{
+			"400 context-overflow → context_too_long",
+			&ProviderError{Status: 400, Body: "context length exceeded"},
+		},
+		{
+			"400 content-policy → content_policy",
+			&ProviderError{Status: 400, Body: "content policy violation"},
+		},
+		{
+			"400 bad-tool-args (FR-018) → tool_args",
+			&ProviderError{Status: 400, Body: "invalid tool arguments"},
+		},
+		{
+			"400 schema-validation (FR-018) → schema",
+			&ProviderError{Status: 400, Body: "schema validation failed"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

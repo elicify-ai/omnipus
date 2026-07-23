@@ -1322,7 +1322,11 @@ func TestTriggerOverlapGuard_RecordsSkippedOccurrence(t *testing.T) {
 		t.Errorf("skipped run must carry no session_id (no session ever ran), got %q", got.SessionID)
 	}
 	if got.Kind != task.RunKindScheduled {
-		t.Errorf("skipped run kind = %q, want %q (this occurrence WAS the scheduled fire)", got.Kind, task.RunKindScheduled)
+		t.Errorf(
+			"skipped run kind = %q, want %q (this occurrence WAS the scheduled fire)",
+			got.Kind,
+			task.RunKindScheduled,
+		)
 	}
 	if got.EndedAt == nil {
 		t.Errorf("skipped run must be recorded already-closed (EndedAt set), got nil")
