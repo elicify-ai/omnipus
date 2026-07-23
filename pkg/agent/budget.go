@@ -70,8 +70,23 @@ func NewTokenBudget(capTok int64, persister *TokenBudgetPersister) *TokenBudget 
 	b := &TokenBudget{capTok: capTok, persister: persister}
 	if persister != nil {
 		if st, err := persister.Load(); err != nil {
-			slog.Warn("token_budget: could not load persisted counter; starting at 0",
-				"error", err.Error())
+			// BRAKE BASELINE UNRELIABLE (silent-MAJOR-1): a load failure means
+			// the prior consumed counter cannot be trusted, so consumed stays
+			// at 0. This is NOT a fresh-install-info Warn — when an operator
+			// has set a non-zero cap, that cap no longer protects the prior
+			// spend it was meant to bound (the counter that would have tripped
+			// Exhausted() has been reset). Future debits accumulate against
+			// the cap from zero. Surface this at ERROR grade so the operator
+			// knows the spend brake is effectively defeated for prior spend
+			// until the next successful save lands a fresh baseline.
+			if capTok > 0 {
+				slog.Error("token_budget: brake baseline unreliable — consumed counter reset to 0; "+
+					"the configured cap no longer protects prior spend (future debits accumulate from zero)",
+					"cap", capTok, "error", err.Error())
+			} else {
+				slog.Warn("token_budget: could not load persisted counter; starting at 0 (cap unset/unbounded)",
+					"error", err.Error())
+			}
 		} else if st.Consumed > 0 {
 			b.consumed = st.Consumed
 			slog.Info("token_budget: reconciled consumed counter at boot",
@@ -213,7 +228,14 @@ func NewTokenBudgetPersister(filePath string) *TokenBudgetPersister {
 }
 
 // Load reads the persisted consumed counter. Returns zero (and a nil error)
-// when the file does not yet exist (fresh install).
+// when the file does not yet exist (fresh install). A CORRUPT state file
+// (present but unparseable) is surfaced as a non-nil error — silently
+// returning {0}, nil here would defeat the spend brake for prior spend:
+// NewTokenBudget would skip reconcile, leave consumed at 0, and Exhausted()
+// would read false even though the operator set a cap to bound exactly that
+// prior spend (silent-MAJOR-1). The error lets NewTokenBudget emit a distinct
+// ERROR-grade "brake baseline unreliable" advisory so the operator knows the
+// cap they set no longer protects prior spend.
 func (p *TokenBudgetPersister) Load() (tokenBudgetState, error) {
 	data, err := os.ReadFile(p.filePath)
 	if err != nil {
@@ -224,8 +246,9 @@ func (p *TokenBudgetPersister) Load() (tokenBudgetState, error) {
 	}
 	var st tokenBudgetState
 	if err := json.Unmarshal(data, &st); err != nil {
-		slog.Warn("token_budget: invalid state file, resetting", "path", p.filePath, "error", err)
-		return tokenBudgetState{}, nil
+		// Do NOT swallow this as {0}, nil — surface it (see the doc comment
+		// above). NewTokenBudget decides what to do with the error.
+		return tokenBudgetState{}, fmt.Errorf("token_budget: corrupt state file %q: %w", p.filePath, err)
 	}
 	return st, nil
 }

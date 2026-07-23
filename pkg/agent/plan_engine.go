@@ -1164,6 +1164,13 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	}
 
 	verdict := result.Verdict
+	// FR-178: JudgeRounds (plan/goal scope) and AttemptCount (per member/task)
+	// are TWO DISTINCT brakes, never conflated. This line — the only place
+	// JudgeRounds is incremented — is the SOLE writer of the plan's rounds
+	// counter; it never touches a member task's AttemptCount, symmetric to
+	// TaskExecutor.consumeAttemptOrExhaust being the sole writer of
+	// AttemptCount (which never touches JudgeRounds). Whichever trips first
+	// stops its OWN scope locally. Pinned by TestAttemptsVsRounds_DistinctBrakes.
 	newRounds := current.JudgeRounds + 1
 	pe.touchActivity(current.ID)
 

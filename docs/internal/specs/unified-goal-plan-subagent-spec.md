@@ -1237,12 +1237,12 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 | Order | Test Name | Level | Traces to BDD Scenario | Description |
 |-------|-----------|-------|------------------------|-------------|
 | 1 | `TestGoalStatusMarkerParser_Family` | Unit | No marker means not-waiting / Waiting-on-user pause | `GOAL_STATUS: met/waiting_on_user` parse co-located with teaching fragment |
-| 2 | `TestClaimEvidenceGate_BounceEconomics` | Unit | Bounce economics (G-4) | 1st bare claim free, 2nd costs |
+| 2 | `TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond` | Unit | Bounce economics (G-4) | 1st bare claim free, 2nd costs |
 | 3 | `TestFeasibilityGate_RejectsOutOfPolicy` | Unit | Feasibility gate rejects (G-7) | out-of-policy tool/credential rejected at compile |
 | 4 | `TestFeasibilityGate_RejectsUnjudgeable` | Unit | Semantic non-judgeability (D9) | no-determinable-truth rejected |
 | 5 | `TestCriterionUnjudgeable_FailClosedEscalateOnce` | Unit | Compile-gate false-accept (R§8.1) | unmet verdict + one escalation, no verdict class |
 | 6 | `TestBlockedCheck_UnableToVerify` | Unit | Blocked machine check (G-3) | sandbox-denied → unable-to-verify, re-run, not absent |
-| 7 | `TestAuthorityValidator_RejectsOwnerRequiredRespond` | Unit | owner_required cannot be answered (R§8.2) | runtime rejects parent respond |
+| 7 | `TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked` | Unit | owner_required cannot be answered (R§8.2) | runtime rejects parent respond |
 | 8 | `TestTokenBudgetDebit_AtomicOnePool` | Unit | Overall budget debits every scope (G-14, R§8.3d) | concurrent debits atomic; ignores IsPrivilegedAgent |
 | 9 | `TestTokenBudget_UnsetUnbounded_Advisory` | Unit | Unset budget (R§8.3a) | 0 = unbounded + advisory |
 | 10 | `TestPlanLint_RejectsOverlappingWriteSets` | Unit | Overlapping write-sets (G-16) | overlap rejected at approve |
@@ -1251,31 +1251,31 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 | 13 | `TestIsNeedsInputReconstructable_Predicate` | Unit | Reconstructability predicate (R§8.6) | 4-clause AND, table-driven |
 | 14 | `TestRevisionEntry_ThreeVerbs` | Unit | Correction three verbs (G-11) | append/supersede/targeted_retry shapes |
 | 15 | `TestRoundAccounting_AdjudicationSemantics` | Unit | Round means adjudication (R§8.9) | increment site + migration no-op |
-| 16 | `TestClaimOrIdleTrigger_Loop` | Integration | Claim invokes once / Idle fires once (G-1/G-2) | claim-gated + quiet-window debounce, per goal-id |
-| 17 | `TestIdleSettlement_VerifierActivityNoSelfRace` | Integration | Verifier turn counts as activity (F5) | no second idle verdict races |
-| 18 | `TestWaitingOnUser_SuppressesIdle` | Integration | Waiting-on-user pause (G-5) | no verdict/round; idle suppressed |
+| 16 | `TestClaim_AdjudicatesExactlyOnce_G1` | Integration | Claim invokes once / Idle fires once (G-1/G-2) | claim-gated + quiet-window debounce, per goal-id |
+| 17 | `TestIdleSettlement_FiresOnceConsumesRoundRearms_G2` | Integration | Verifier turn counts as activity (F5) | no second idle verdict races |
+| 18 | `TestWaitingOnUser_PauseNoRoundNoVerdictIdleSuppressed_G5` | Integration | Waiting-on-user pause (G-5) | no verdict/round; idle suppressed |
 | 19 | `TestMultiGoalPerSession_Isolation` | Integration | Two goals independent (R§8.11) | 2 pills/timers/budgets; 2 cap slots |
 | 20 | `TestGoalCompile_EchoConfirm_Amendment` | Integration | Echo-confirm (G-8) / Re-statement amendment (N-6) | activate-on-reply + diff |
 | 21 | `TestSessionMessage_Transport_Caps` | Integration | Native child push (g6) / ceiling fails back (D15) | typed inbox, dedupe, per-child ceiling, sibling isolation |
-| 22 | `TestDelegateActionSet_LegalityTable` | Integration | Illegal combo rejected (MAJ-7) | 9 actions + profiles + reject illegal |
-| 23 | `TestContextSnapshot_DenyByDefault_Capped` | Integration | Snapshot capped (R§8.5) | discretionary over-cap rejected; mandatory core (prompt+criteria+identity) exempt from byte cap; contents allow-listed |
-| 24 | `TestNeedsInput_TTL_Escalation` | Integration | needs_input escalation (G-6) | fake-clock T1 + auto-handback at TTL |
-| 25 | `TestWarmResume_RespondByCorrelation` | Integration | Warm resume (g7) | same generation, correlation routing, out-of-order safe |
-| 26 | `Test3P_FireAndCollect_RespondNewSession` | Integration | 3P fire-and-collect (D5) | markers-only; respond spawns new session |
+| 22 | `TestDelegateTool_Run_IllegalLaunchProfile_Rejected` | Integration | Illegal combo rejected (MAJ-7) | 9 actions + profiles + reject illegal |
+| 23 | `TestValidateContextSnapshot_AllowlistAndCap` | Integration | Snapshot capped (R§8.5) | discretionary over-cap rejected; mandatory core (prompt+criteria+identity) exempt from byte cap; contents allow-listed |
+| 24 | `TestNeedsInput_Expired` | Integration | needs_input escalation (G-6) | fake-clock T1 + auto-handback at TTL |
+| 25 | `TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback` | Integration | Warm resume (g7) | same generation, correlation routing, out-of-order safe |
+| 26 | `TestDelegateTool_Respond_3P_OriginalNotLeftRunning` | Integration | 3P fire-and-collect (D5) | markers-only; respond spawns new session |
 | 27 | `TestOwnerLoop_AwaitingCorrection_OneRound` | Integration | Awaiting-owner-correction (G-9) | tick N times → one round → wait |
-| 28 | `TestOwnerLoop_AutoResetExcludesFrozen_HonestExit` | Integration | Auto-reset excludes frozen (G-10) | frozen excluded; unreachable → honest exit |
-| 29 | `TestCorrection_TransactionalAppend_Crash` | Integration | Correction transactional (G-11/INV-6) | kill mid-append → intent-log rollback → pre-append DAG |
+| 28 | `TestAutoReset_ExcludesFrozenDoneMembers` | Integration | Auto-reset excludes frozen (G-10) | frozen excluded; unreachable → honest exit |
+| 29 | `TestTransactionalAppend_KillMidAppend_PreAppendDAG` | Integration | Correction transactional (G-11/INV-6) | kill mid-append → intent-log rollback → pre-append DAG |
 | 30 | `TestPlay_ResumeFromCommit_NewGeneration` | Integration | Play from commit (G-12) | resumed_from; commit-resume / fresh-attempt fallback |
-| 31 | `TestGitBoundaryCommit_WriteSetScoped_Contention` | Integration | Write-set-scoped commit (G-15) | out-of-write-set → contention, not swallowed |
-| 32 | `TestGitDeny_ByOperation_SandboxBlock` | Integration | .git deny (D17) | reads allowed; mutations + `.git/` bash denied |
-| 33 | `TestGitHeadDivergence_IntegrityLost` | Integration | HEAD-divergence (G-15) | fail-closed diff channel |
-| 34 | `TestGitDegradedLadder_NoCommitFreshAttempt` | Integration | Degraded ladder (R§8.4) | subdir/nested → fresh attempt, signalled |
-| 35 | `TestSecretScan_OnAutoCommit` | Integration | Secret written then deleted (MIN-5) | registry scan + purge/gc |
+| 31 | `TestGitEvidence_Commit_WriteSetScopedAndContentionSurfaced` | Integration | Write-set-scoped commit (G-15) | out-of-write-set → contention, not swallowed |
+| 32 | `TestGitSec_OpPolicy_DenySet` | Integration | .git deny (D17) | reads allowed; mutations + `.git/` bash denied |
+| 33 | `TestGitEvidence_Integrity_LostOnOutOfBandHistoryRewrite` | Integration | HEAD-divergence (G-15) | fail-closed diff channel |
+| 34 | `TestGitEvidence_Open_NestedRepoAboveDirDegrades` | Integration | Degraded ladder (R§8.4) | subdir/nested → fresh attempt, signalled |
+| 35 | `TestGitSecSecretScan_WrittenThenDeleted` | Integration | Secret written then deleted (MIN-5) | registry scan + purge/gc |
 | 36 | `TestS4Interlock_SteerVerdictSerialization` | Integration | Concurrent steer/verdict (INV-3) | serialized, no lost/dup verdict |
 | 37 | `TestBootSweep_NonTerminalToFailedInterrupted` | Integration | Boot sweep (G-13) | within N s; session.failed; recovers |
-| 38 | `TestBootSweep_NeedsInputReconstructable` | Integration | Reconstructability at boot (R§8.6) | preserve vs sweep |
+| 38 | `TestBootSweep_NeedsInputReconstructable_Preserved` | Integration | Reconstructability at boot (R§8.6) | preserve vs sweep |
 | 39 | `TestLiveUpgradeReBaseline` | Integration | Live-upgrade re-baseline (N-15) | in-flight goal re-baselined |
-| 40 | `TestConfigLiveReload_KillSwitch` | Integration | Global kill switch (DoD-10) | enabled=false neuters live |
+| 40 | `TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled` | Integration | Global kill switch (DoD-10) | enabled=false neuters live |
 | 41 | `Conformance_t0_ChatGoalE2E` | E2E | t0 conformance | drawn path observed, real-LLM |
 | 42 | `Conformance_t1_StandaloneTaskE2E` | E2E | t1 conformance | ▶/■ + ladder |
 | 43 | `Conformance_t2_PlanLifecycleE2E` | E2E | t2 conformance | F2 proof + Play-from-commit + no per-member controls |
@@ -1288,15 +1288,80 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 | 50 | `TestNonVerdictClassifier_MechanismRanPredicate` | Unit | Non-verdict classifier (M1) | predicate "did the mechanism run?": blocked/unreadable→unable_to_verify (re-run); ran-no-judgment→criterion_unjudgeable |
 | 51 | `TestCriterionUnjudgeable_OwnerRemediation` | Integration | Owner remediation (M2) | re-statement mints amended generation fixing the criterion; owner-inert → failed(judge_rounds_exhausted) |
 | 52 | `TestAuthorityUpgrade_ContentDerived` | Unit | Runtime authority upgrade (M3) | self_ok→owner_required on credential/spend/irreversible/out-of-scope; omitted→owner_required; child cannot downgrade |
-| 53 | `TestBootSweep_AwaitingCorrectionDurable` | Integration | Awaiting-correction survives restart (C1/m-3) | persisted signature honored; paused owner session (owner_scope=human) exempt from sweep via the `Plan.owner_session_id`↔`owns_plan_id` linkage; pill reconstructs as re-planning; zero re-judge on restart |
-| 54 | `TestIntentLog_TailAppend_ReplayRollback` | Integration | Tail-append intent-log (M4/INV-6) | self-contained intent (full member bodies); commit-before-apply; uncommitted → discard → pre-append DAG; committed-not-done → idempotent replay-forward (double-apply is a no-op) |
-| 55 | `TestContentEgress_CrossBoundary` | Integration | Content-egress cross-boundary (FR-128) | secret redacted; child cannot exfiltrate through the parent inbox what it could not send directly |
+| 53 | `TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart` | Integration | Awaiting-correction survives restart (C1/m-3) | persisted signature honored; paused owner session (owner_scope=human) exempt from sweep via the `Plan.owner_session_id`↔`owns_plan_id` linkage; pill reconstructs as re-planning; zero re-judge on restart |
+| 54 | `TestIntentLog_ReplayAtBoot_DiscardUncommitted` | Integration | Tail-append intent-log (M4/INV-6) | self-contained intent (full member bodies); commit-before-apply; uncommitted → discard → pre-append DAG; committed-not-done → idempotent replay-forward (double-apply is a no-op) |
+| 55 | `TestMessageParentTool_ContentEgressFilter_Applied` | Integration | Content-egress cross-boundary (FR-128) | secret redacted; child cannot exfiltrate through the parent inbox what it could not send directly |
 | 56 | `TestSyncDelegateWait_Rejected` | Integration | Sync-wait reject (FR-130) | wait=true question rejected by default; human route only via explicit opt-in bounded wait |
 | 57 | `TestPlannerSkillExtend_NoForkedAgent` | Integration | Planner extends plan skill (FR-146) | behavior sourced from EXTENDED SKILL.md; no forked Planner agent; gaming-guard flags post-unmet artifacts |
 | 58 | `TestAttemptsVsRounds_DistinctBrakes` | Unit | Attempts vs rounds distinct (FR-178) | two separate counters; whichever trips first stops its scope; never conflated |
 | 59 | `TestMidSpanFrames_Reconstruct` | Integration | Mid-span frames reconstruct (FR-188) | since-cursor replay of subagent_message/subagent_state reconstructs pill/panel; no parallel channel |
 | 60 | `TestGoalClear_CancelsInflightCompilation` | Integration | Goal-clear cancels compilation (FR-114, minor m1) | `/goal clear` cancels an in-flight compilation turn as well as the verifier |
-| 61 | `TestSessionMessage_SiblingIsolation_Negative` | Integration | Sibling isolation negative (minor m2) | a noisy child AT its ceiling does NOT consume/affect a sibling child's ceiling or inbox |
+| 61 | `TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling` | Integration | Sibling isolation negative (minor m2) | a noisy child AT its ceiling does NOT consume/affect a sibling child's ceiling or inbox |
+
+### Test name reconciliation (planning label → implemented name)
+
+The TDD plan above and the Traceability Matrix below were authored against
+**pre-implementation TDD test names**. At implementation several were renamed
+(this is normal — the TDD name is a planning label, not a contract). The tables
+have been reconciled to the **actual `func` names** so a reviewer grepping the
+matrix lands on a real test; this subsection is the audit record of the rename.
+
+Already reconciled in the tables (planning label → implemented `func`):
+
+| Planning label (was) | Implemented test name |
+|---|---|
+| `TestClaimOrIdleTrigger_Loop` | `TestClaim_AdjudicatesExactlyOnce_G1` |
+| `TestIdleSettlement_VerifierActivityNoSelfRace` | `TestIdleSettlement_FiresOnceConsumesRoundRearms_G2` |
+| `TestClaimEvidenceGate_BounceEconomics` | `TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond` |
+| `TestWaitingOnUser_SuppressesIdle` | `TestWaitingOnUser_PauseNoRoundNoVerdictIdleSuppressed_G5` |
+| `TestAuthorityValidator_RejectsOwnerRequiredRespond` | `TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked` |
+| `TestContextSnapshot_DenyByDefault_Capped` | `TestValidateContextSnapshot_AllowlistAndCap` |
+| `TestNeedsInput_TTL_Escalation` | `TestNeedsInput_Expired` |
+| `Test3P_FireAndCollect_RespondNewSession` | `TestDelegateTool_Respond_3P_OriginalNotLeftRunning` |
+| `TestDelegateActionSet_LegalityTable` | `TestDelegateTool_Run_IllegalLaunchProfile_Rejected` (+ `TestDelegateTool_Execute_InvalidAction`) |
+| `TestOwnerLoop_AutoResetExcludesFrozen_HonestExit` | `TestAutoReset_ExcludesFrozenDoneMembers` |
+| `TestCorrection_TransactionalAppend_Crash` | `TestTransactionalAppend_KillMidAppend_PreAppendDAG` |
+| `TestGitBoundaryCommit_WriteSetScoped_Contention` | `TestGitEvidence_Commit_WriteSetScopedAndContentionSurfaced` |
+| `TestGitDeny_ByOperation_SandboxBlock` | `TestGitSec_OpPolicy_DenySet` |
+| `TestGitHeadDivergence_IntegrityLost` | `TestGitEvidence_Integrity_LostOnOutOfBandHistoryRewrite` |
+| `TestGitDegradedLadder_NoCommitFreshAttempt` | `TestGitEvidence_Open_NestedRepoAboveDirDegrades` |
+| `TestSecretScan_OnAutoCommit` | `TestGitSecSecretScan_WrittenThenDeleted` |
+| `TestBootSweep_NeedsInputReconstructable` | `TestBootSweep_NeedsInputReconstructable_Preserved` |
+| `TestBootSweep_AwaitingCorrectionDurable` | `TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart` |
+| `TestIntentLog_TailAppend_ReplayRollback` | `TestIntentLog_ReplayAtBoot_DiscardUncommitted` |
+| `TestContentEgress_CrossBoundary` | `TestMessageParentTool_ContentEgressFilter_Applied` |
+| `TestWarmResume_RespondByCorrelation` | `TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback` |
+| `TestSessionMessage_SiblingIsolation_Negative` | `TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling` |
+| `TestConfigLiveReload_KillSwitch` | `TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled` |
+
+Notes on the remaining planning-label citations:
+
+- **`Conformance_t0/t1/t2/t3/g4/g5/g6/g7/bootsweep` (rows 41–49 + the bare
+  `Conformance_gN` matrix cells):** these are **E2E / Playwright conformance
+  scenario labels**, not Go `func` names. Where a slice has a Go-level
+  counterpart it is named `TestConformance_<diagram>_<aspect>` (e.g.
+  `TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling`,
+  `TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback`); the rest
+  are driven by the CI e2e gate (Playwright) or are pending the conformance
+  harness. Grep `^func TestConformance_` in `pkg/` for the Go slices and see
+  `tests/e2e/` for the Playwright scenarios.
+- **`TestLiveUpgradeReBaseline` (FR-106/120), `TestMultiGoalPerSession_Isolation`
+  (FR-107/108), `TestOwnerLoop_AwaitingCorrection_OneRound` (FR-140/141),
+  `TestRoundAccounting_AdjudicationSemantics` (FR-105),
+  `TestRevisionEntry_ThreeVerbs` (row 14), `TestLifecyclePillCrosswalk`
+  (FR-185/186), `TestAuthorityUpgrade_ContentDerived` (FR-131/139),
+  `TestPlannerSkillExtend_NoForkedAgent` (FR-146),
+  `TestMidSpanFrames_Reconstruct` (FR-188), `TestS4Interlock_SteerVerdictSerialization`
+  (FR-190/191):** these planning labels do not have a same-named Go test; their
+  behavior is covered by the feature-area suites under different names (e.g.
+  round accounting by `TestApplyJudgeRoundOutcomeLocked_AppliesWhenStillRunning`;
+  steer/verdict serialization by the `TestParentFollowUp_ConcurrentSiblings_*`
+  and `TestVerifierInFlight_*` suites; pill rendering by the FE Vitest suites).
+  They are retained as planning labels for traceability; to locate the
+  implemented coverage, grep the feature keyword in `pkg/`/`src/`.
+
+The authoritative list of implemented Go test names is:
+`grep -rh '^func Test' pkg/ | sort -u` (plus `^func TestConformance_`).
 
 ### Test Datasets
 
@@ -1368,7 +1433,7 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 | Cap admission & overlap guard | `pkg/agent/cap_admission_adr052_qa_test.go` | Extend for per-goal-id cap slots (R§8.11) | multi-goal accounting |
 | Delegate identity from target (ADR-032) | `pkg/agent/subturn_target_identity_test.go` | No — must stay green | snapshot must NOT leak parent identity |
 | `TASK_STATUS`/`[goal:evidence]` parse + bounce | `pkg/agent/task_completion_signal*_test.go` | Add `GOAL_STATUS` family cases | co-located fragment |
-| F2 awaiting-owner-correction gate | (landed at `02171db1`, in-memory) | Regression test that FAILS if `lastUnmetTerminalSignature` removed (G-9); ADD `TestBootSweep_AwaitingCorrectionDurable` for the durable-across-restart version (C1 — persists the signature on the plan record so the gate survives restart) | standalone proof + durable upgrade |
+| F2 awaiting-owner-correction gate | (landed at `02171db1`, in-memory) | Regression test that FAILS if `lastUnmetTerminalSignature` removed (G-9); ADD `TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart` for the durable-across-restart version (C1 — persists the signature on the plan record so the gate survives restart) | standalone proof + durable upgrade |
 | Goal-clear cancels verifier + compilation | `pkg/agent/goal_loop*_test.go` | Extend for stray-claim-inert (N-12) | trigger gating |
 | PUT-lockdown / raw-body reject (ADR-035/037) | existing gateway tests | Add for `delegation_policy`/budget forbidden fields | precedent |
 | SEC-26 cost path | `pkg/security/ratelimit*_test.go` | Add token-budget-ignores-IsPrivilegedAgent (G-14) | D12 posture shift |
@@ -1531,15 +1596,15 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 
 | Requirement | User Story | BDD Scenario(s) | G / Diagram | Test Name(s) |
 |-------------|-----------|-----------------|-------------|--------------|
-| FR-101 | US-1 | Completion claim once; Round means adjudication | G-1 · t0 | TestClaimOrIdleTrigger_Loop; Conformance_t0 |
-| FR-102 | US-1 | Idle settlement fires once | G-2 · t0 | TestClaimOrIdleTrigger_Loop |
-| FR-103 | US-1, US-12 | Claimless idle judging | G-3 · t0 | TestIdleSettlement_VerifierActivityNoSelfRace |
-| FR-104 | US-2 | Waiting-on-user pause; No marker not-waiting | G-5 · t0 | TestWaitingOnUser_SuppressesIdle |
+| FR-101 | US-1 | Completion claim once; Round means adjudication | G-1 · t0 | TestClaim_AdjudicatesExactlyOnce_G1; Conformance_t0 |
+| FR-102 | US-1 | Idle settlement fires once | G-2 · t0 | TestClaim_AdjudicatesExactlyOnce_G1 |
+| FR-103 | US-1, US-12 | Claimless idle judging | G-3 · t0 | TestIdleSettlement_FiresOnceConsumesRoundRearms_G2 |
+| FR-104 | US-2 | Waiting-on-user pause; No marker not-waiting | G-5 · t0 | TestWaitingOnUser_PauseNoRoundNoVerdictIdleSuppressed_G5 |
 | FR-105 | US-1 | Round means adjudication | G-1 · t0 | TestRoundAccounting_AdjudicationSemantics |
 | FR-106 | US-5 | Live-upgrade re-baseline | §5 boot | TestLiveUpgradeReBaseline |
 | FR-107 | US-1 | Two goals independent | — | TestMultiGoalPerSession_Isolation |
 | FR-108 | US-1 | Two goals independent | — | TestMultiGoalPerSession_Isolation |
-| FR-109 | US-1 | Verifier turn counts as activity | G-2 | TestIdleSettlement_VerifierActivityNoSelfRace |
+| FR-109 | US-1 | Verifier turn counts as activity | G-2 | TestIdleSettlement_FiresOnceConsumesRoundRearms_G2 |
 | FR-110 | US-3 | Echo-confirm | G-8 · t0 | TestGoalCompile_EchoConfirm_Amendment |
 | FR-111 | US-3 | Feasibility rejects; Semantic non-judgeability | G-7 · t0 | TestFeasibilityGate_RejectsOutOfPolicy; _RejectsUnjudgeable |
 | FR-112 | US-12 | Blocked check; machine checks under own policy | G-3 | TestBlockedCheck_UnableToVerify |
@@ -1551,39 +1616,39 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 | FR-138 (M2) | US-3 | Owner remediates a criterion_unjudgeable by re-statement | — | TestCriterionUnjudgeable_OwnerRemediation |
 | FR-117 | US-5 | Boot sweep reconciles | G-13 · §5 boot | TestBootSweep_NonTerminalToFailedInterrupted |
 | FR-118 | US-5 | Boot sweep reconciles | G-13 · §5 boot | TestBootSweep_NonTerminalToFailedInterrupted |
-| FR-119 | US-5 | Reconstructability predicate | §5 boot | TestIsNeedsInputReconstructable_Predicate; TestBootSweep_NeedsInputReconstructable |
+| FR-119 | US-5 | Reconstructability predicate | §5 boot | TestIsNeedsInputReconstructable_Predicate; TestBootSweep_NeedsInputReconstructable_Preserved |
 | FR-120 | US-5 | Live-upgrade re-baseline | §5 boot | TestLiveUpgradeReBaseline |
 | FR-121 | US-6 | Native child push | g6 | TestSessionMessage_Transport_Caps |
-| FR-122 | US-6 | Illegal combo rejected | g6 | TestDelegateActionSet_LegalityTable |
-| FR-123 | US-6 | Illegal combo rejected | g6 | TestDelegateActionSet_LegalityTable |
-| FR-124 | US-6 | Snapshot capped | g6 | TestContextSnapshot_DenyByDefault_Capped |
+| FR-122 | US-6 | Illegal combo rejected | g6 | TestDelegateTool_Run_IllegalLaunchProfile_Rejected |
+| FR-123 | US-6 | Illegal combo rejected | g6 | TestDelegateTool_Run_IllegalLaunchProfile_Rejected |
+| FR-124 | US-6 | Snapshot capped | g6 | TestValidateContextSnapshot_AllowlistAndCap |
 | FR-125 | US-6 | Ceiling fails back | g6 | TestSessionMessage_Transport_Caps |
-| FR-126 | US-6 | needs_input escalation | G-6 · g6/g7 | TestNeedsInput_TTL_Escalation |
-| FR-127 | US-6 | Warm resume | g7 | TestWarmResume_RespondByCorrelation |
-| FR-128 | US-6 | Cross-boundary message obeys content-egress policy | g6 | TestContentEgress_CrossBoundary |
+| FR-126 | US-6 | needs_input escalation | G-6 · g6/g7 | TestNeedsInput_Expired |
+| FR-127 | US-6 | Warm resume | g7 | TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback |
+| FR-128 | US-6 | Cross-boundary message obeys content-egress policy | g6 | TestMessageParentTool_ContentEgressFilter_Applied |
 | FR-129 | US-6 | Ceiling fails back (durable inbox) | g6 | TestSessionMessage_Transport_Caps |
 | FR-130 | US-6 | Sync-delegate wait=true question rejected by default | g6 | TestSyncDelegateWait_Rejected |
-| FR-131 | US-7 | owner_required cannot be answered; Runtime derives authority (M3) | g6 | TestAuthorityValidator_RejectsOwnerRequiredRespond; TestAuthorityUpgrade_ContentDerived |
-| FR-132 | US-7 | owner_required cannot be answered | g6 | TestAuthorityValidator_RejectsOwnerRequiredRespond |
-| FR-133 | US-7 | self_ok answered by parent | g6 | TestWarmResume_RespondByCorrelation |
+| FR-131 | US-7 | owner_required cannot be answered; Runtime derives authority (M3) | g6 | TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked; TestAuthorityUpgrade_ContentDerived |
+| FR-132 | US-7 | owner_required cannot be answered | g6 | TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked |
+| FR-133 | US-7 | self_ok answered by parent | g6 | TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback |
 | FR-134 | US-7 | Human answers in normal chat | g6 | Conformance_g6 |
 | FR-135 | US-7 | Deep-chain direct-escalate | g6 | TestAuthorityValidator (escalate case) |
-| FR-136 | US-8 | 3P markers; respond new session | g6 | Test3P_FireAndCollect_RespondNewSession |
+| FR-136 | US-8 | 3P markers; respond new session | g6 | TestDelegateTool_Respond_3P_OriginalNotLeftRunning |
 | FR-139 (M3) | US-7 | Runtime derives authority fail-closed; child cannot downgrade | g6 | TestAuthorityUpgrade_ContentDerived |
 | FR-140 | US-9 | Awaiting-owner-correction | G-9 · t2/t3 | TestOwnerLoop_AwaitingCorrection_OneRound |
 | FR-141 | US-9, US-17 | Awaiting-owner-correction | G-9 · t2 | TestOwnerLoop_AwaitingCorrection_OneRound |
-| FR-142 | US-9 | Auto-reset excludes frozen | G-10 · t2/t3 | TestOwnerLoop_AutoResetExcludesFrozen_HonestExit |
-| FR-143 | US-9, US-16 | Correction transactional | G-11 · t3 | TestCorrection_TransactionalAppend_Crash |
+| FR-142 | US-9 | Auto-reset excludes frozen | G-10 · t2/t3 | TestAutoReset_ExcludesFrozenDoneMembers |
+| FR-143 | US-9, US-16 | Correction transactional | G-11 · t3 | TestTransactionalAppend_KillMidAppend_PreAppendDAG |
 | FR-144 | US-9 | Play from commit | G-12 · t2 | TestPlay_ResumeFromCommit_NewGeneration |
 | FR-145 | US-9, US-14 | No per-member controls | t2 | Conformance_t2 |
 | FR-146 | US-9 | Planner/re-planner extends the embedded plan skill | t3 | TestPlannerSkillExtend_NoForkedAgent; Conformance_t3 |
-| FR-147 (C1) | US-5, US-9, US-16 | Awaiting-owner-correction survives restart | G-9 · §5 boot | TestBootSweep_AwaitingCorrectionDurable |
-| FR-148 (M4) | US-9, US-16 | Crash mid tail-append rolls back (intent-log) | G-11 · t3 | TestCorrection_TransactionalAppend_Crash; TestIntentLog_TailAppend_ReplayRollback |
-| FR-151 | US-10 | Write-set-scoped commit | G-15 · g4 | TestGitBoundaryCommit_WriteSetScoped_Contention |
-| FR-152 | US-10 | .git deny; HEAD-divergence | G-15 · g4 | TestGitDeny_ByOperation_SandboxBlock; TestGitHeadDivergence_IntegrityLost |
-| FR-153 | US-10 | Secret written then deleted | g4 | TestSecretScan_OnAutoCommit |
+| FR-147 (C1) | US-5, US-9, US-16 | Awaiting-owner-correction survives restart | G-9 · §5 boot | TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart |
+| FR-148 (M4) | US-9, US-16 | Crash mid tail-append rolls back (intent-log) | G-11 · t3 | TestTransactionalAppend_KillMidAppend_PreAppendDAG; TestIntentLog_ReplayAtBoot_DiscardUncommitted |
+| FR-151 | US-10 | Write-set-scoped commit | G-15 · g4 | TestGitEvidence_Commit_WriteSetScopedAndContentionSurfaced |
+| FR-152 | US-10 | .git deny; HEAD-divergence | G-15 · g4 | TestGitSec_OpPolicy_DenySet; TestGitEvidence_Integrity_LostOnOutOfBandHistoryRewrite |
+| FR-153 | US-10 | Secret written then deleted | g4 | TestGitSecSecretScan_WrittenThenDeleted |
 | FR-154 | US-11 | Exploratory worktree | g4/g5 | Conformance_g5 |
-| FR-155 | US-10 | Degraded ladder fresh attempt | — | TestGitDegradedLadder_NoCommitFreshAttempt |
+| FR-155 | US-10 | Degraded ladder fresh attempt | — | TestGitEvidence_Open_NestedRepoAboveDirDegrades |
 | FR-156 | US-11 | Overlapping rejected; Join-less rejected | G-16 · g4/g5 | TestPlanLint_RejectsOverlappingWriteSets; _RejectsJoinlessConvergence |
 | FR-157 | US-11 | Exploratory member; conflict→correction | g4 | Conformance_g4 |
 | FR-158 | US-10 | config/non-behavioral — no BDD (build-time dependency) | — | build-size gate (SC-014) + NOTICE-file existence check |
@@ -1602,10 +1667,10 @@ Add mid-span `subagent_message` / `subagent_state` events between the brackets (
 | FR-188 | US-14 | Mid-span frames reconstruct pill/panel on reconnect | g6 | TestMidSpanFrames_Reconstruct; Conformance_g6 |
 | FR-190 | US-16 | Concurrent steer/verdict serialized | — | TestS4Interlock_SteerVerdictSerialization |
 | FR-191 | US-16 | Concurrent steer/verdict serialized | — | TestS4Interlock_SteerVerdictSerialization |
-| FR-192 | US-16 | Crash mid tail-append | G-11 · t3 | TestCorrection_TransactionalAppend_Crash |
+| FR-192 | US-16 | Crash mid tail-append | G-11 · t3 | TestTransactionalAppend_KillMidAppend_PreAppendDAG |
 | FR-193 | US-16 | Boot sweep no spurious re-judge | G-9 · §5 boot | TestBootSweep (INV-7 case) |
-| FR-195 | US-15 | Retention horizons named | — | TestConfigLiveReload_KillSwitch |
-| FR-196 | US-15 | Global kill switch | — | TestConfigLiveReload_KillSwitch |
+| FR-195 | US-15 | Retention horizons named | — | TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled |
+| FR-196 | US-15 | Global kill switch | — | TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled |
 | FR-197 | US-15 | Retention horizons named | — | config/retention test |
 | FR-198 | US-4 | One model two authors | — | schema unit + BOM review gate |
 | FR-199 | US-4 | One model two authors | — | make verify-contracts; co-location test |

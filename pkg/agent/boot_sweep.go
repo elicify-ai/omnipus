@@ -35,6 +35,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -206,13 +207,21 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 		return err
 	}
 	// Fire the session.failed hook best-effort (FR-118 deliverable 3): a hook
-	// panic/error is recovered and logged, never blocking the sweep.
+	// panic is recovered and LOGGED (the doc above promises "recovered and
+	// logged"), never blocking the sweep. The earlier `recover()` silently
+	// swallowed the panic despite that promise — an operator watching logs saw
+	// nothing, defeating the contract.
 	pe.mu.Lock()
 	hook := pe.sessionFailedHook
 	pe.mu.Unlock()
 	if hook != nil {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("plan_engine", "sessionFailedHook panicked (recovered, never blocking the sweep)",
+						map[string]any{"session_id": rec.SessionID, "failed_reason": failedReasonInterrupted, "panic": fmt.Sprint(r)})
+				}
+			}()
 			hook(rec.SessionID, failedReasonInterrupted)
 		}()
 	}

@@ -232,6 +232,87 @@ func TestDelegateTool_AwaitDelegationDenyChecker_Aborts(t *testing.T) {
 	}
 }
 
+// TestSyncDelegateWait_Rejected pins FR-130/MIN-3: a synchronous delegate.run
+// (wait=true, i.e. async=false) whose child question would block the caller is
+// REJECTED by default with a clear tool error (never a silent deadlock); the
+// bounded human route is available ONLY via the explicit opt-in (the await-mode
+// deny-checker approving), which routes the call through executeSync — the
+// bounded sync wait. The default-reject posture is implemented by the
+// delegationDenyAwait gate (the matrix row 56 claimed this test; it did not
+// exist). US-6/AS-2.
+func TestSyncDelegateWait_Rejected(t *testing.T) {
+	t.Run("default_rejects_wait_true_no_silent_deadlock", func(t *testing.T) {
+		tool := NewDelegateTool("test-model", 0, 0)
+		spawned := false
+		tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
+			spawned = true
+			return NewToolResult("ran"), nil
+		}))
+		// The DEFAULT posture: the await deny-checker DENIES a sync (wait=true)
+		// delegation whose child would block the caller — no opt-in recorded.
+		tool.SetDelegationDenyCheckerAwait(func(_ context.Context, target string) *DelegationDenial {
+			return &DelegationDenial{
+				Reason:        "sync wait=true question rejected by default (use the bounded human-route opt-in)",
+				Policy:        DenyTrustSet,
+				TargetAgentID: target,
+			}
+		})
+
+		// wait=true <=> async=false.
+		result := tool.Execute(context.Background(), map[string]any{
+			"task":     "block on a child question",
+			"agent_id": "child-agent",
+			"async":    false,
+		})
+
+		if result == nil || !result.IsError {
+			t.Fatalf("expected wait=true delegate to be REJECTED by default (clear tool error, never a silent deadlock), got %+v", result)
+		}
+		failure := decodeDelegationFailure(t, result)
+		if failure.Tool != "delegate" {
+			t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
+		}
+		if !strings.Contains(failure.Reason, "rejected by default") {
+			t.Errorf("expected the default-reject reason to surface, got: %s", failure.Reason)
+		}
+		if spawned {
+			t.Error("spawner must NOT run on a rejected sync delegate (no blocking wait can occur)")
+		}
+	})
+
+	t.Run("explicit_opt_in_permits_bounded_wait", func(t *testing.T) {
+		// The bounded human-route opt-in — the await deny-checker APPROVING —
+		// is the ONLY way a sync wait=true delegation proceeds: it routes to
+		// executeSync (the bounded sync wait), never a silent allow-through.
+		tool := NewDelegateTool("test-model", 0, 0)
+		spawned := false
+		tool.SetSpawner(spawnerFunc(func(_ context.Context, cfg SubTurnConfig) (*ToolResult, error) {
+			spawned = true
+			if cfg.Async {
+				t.Error("opt-in sync delegation must run via executeSync (Async=false), not the async path")
+			}
+			return NewToolResult("child answer"), nil
+		}))
+		tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+
+		result := tool.Execute(context.Background(), map[string]any{
+			"task":     "bounded wait on a child question",
+			"agent_id": "child-agent",
+			"async":    false, // wait=true
+		})
+
+		if result == nil || result.IsError {
+			t.Fatalf("expected the opt-in to PERMIT the bounded sync wait, got %+v", result)
+		}
+		if result.Async {
+			t.Error("an opt-in sync (wait=true) delegation must return a non-async (bounded wait) result")
+		}
+		if !spawned {
+			t.Error("the opt-in must route to executeSync (spawner runs the bounded wait)")
+		}
+	})
+}
+
 // TestDelegateTool_AwaitNilDenyChecker_FailsClosed proves that with NO
 // await-mode deny checker installed (SetDelegationDenyCheckerAwait never
 // called), an await (async=false) delegate call is DENIED, not silently
