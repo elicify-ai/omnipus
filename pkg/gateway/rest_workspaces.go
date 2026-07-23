@@ -1230,6 +1230,18 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// remains the authoritative delete, and a stale directory left behind on
 	// a RemoveAll failure is not fatal. Runs unlocked (see restructure note
 	// above) — it is best-effort and never touches workspaces/{id}.json.
+	//
+	// FR-009: cascade-delete the workspace's media library BEFORE the
+	// directory wipe so the library's CascadeDelete API can emit the
+	// media.cascade_delete audit event with the full deleted-entry summary
+	// (media_ids, filenames, bytes_freed). The actor is the authenticated
+	// principal that triggered DELETE — empty string when no principal is
+	// resolved (e.g. unauthenticated dev-mode bypass). The hook opens a
+	// fresh library instance because the original lib (if any) was held by
+	// the request scope, not the delete handler's scope.
+	if hookErr := workspace.WorkspaceDeleteHook(a.homePath, id, "", a.auditor); hookErr != nil {
+		slog.Warn("rest: delete workspace: media cascade-delete", "id", id, "error", hookErr)
+	}
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
 	if err := os.RemoveAll(wsDir); err != nil {
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)

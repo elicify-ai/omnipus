@@ -23,8 +23,24 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+// safeWorkspaceDir mirrors pkg/workspace.SafeWorkspaceDir's containment
+// check (an unsafe id could escape the workspaces/ root via traversal or
+// separators). It is duplicated here to avoid a workspace -> library ->
+// workspace import cycle: pkg/workspace/media_delete.go (the cascade-delete
+// wire-up) calls into this library, which would be impossible if the
+// library imported pkg/workspace transitively. The rule (single-segment
+// non-empty id, no "..") is the same one safeID in pkg/workspace/instructions.go
+// enforces; the inlined version is the authoritative single source of
+// truth at this layer because pkg/workspace can still go through the
+// library (downward edge of the cycle is now broken).
+func safeWorkspaceDir(home, id string) (string, error) {
+	if id == "" || strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+		return "", fmt.Errorf("workspace: invalid id %q", id)
+	}
+	return filepath.Join(home, "workspaces", id), nil
+}
 
 const (
 	DefaultOrphanAge = 30 * 24 * time.Hour
@@ -80,7 +96,7 @@ func WithClock(now func() time.Time) Option {
 }
 
 func New(home, workspaceID string, options ...Option) (*Library, error) {
-	workspaceDir, err := workspace.SafeWorkspaceDir(home, workspaceID)
+	workspaceDir, err := safeWorkspaceDir(home, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -323,6 +339,148 @@ func (l *Library) Refcount(id string) (int, error) {
 	return count, nil
 }
 
+// Delete removes a single media entry from the library: the raw file is
+// unlinked (best-effort quarantine pattern: rename to a hidden path first so
+// a partial-success leaves the entry recoverable, then unlink), the manifest
+// entry and refcount slot are dropped, and the manifest is rewritten. The
+// deleted entry view is returned to the caller so it can construct an audit
+// event without re-reading state. Returns ErrInvalidMediaID for an
+// ill-formed id and ErrNotFound for an id that is well-formed but absent.
+//
+// FR-008: callers MUST log a media.delete audit event with the returned
+// entry's filename + bytes_freed.
+func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, exists := l.manifest[id]
+	if !exists {
+		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	rawPath := l.rawPath(id)
+	quarantinePath := filepath.Join(l.path, ".delete-"+id+"-"+uuid.NewString())
+	quarantined := false
+	if err := os.Rename(rawPath, quarantinePath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return gen.MediaLibraryEntry{}, fmt.Errorf("media library: quarantine delete %s: %w", id, err)
+		}
+	} else {
+		quarantined = true
+	}
+
+	previousEntry := cloneEntry(entry)
+	previousCount := l.refcounts[id]
+	delete(l.manifest, id)
+	delete(l.refcounts, id)
+	if err := l.persistLocked(); err != nil {
+		l.manifest[id] = previousEntry
+		l.refcounts[id] = previousCount
+		if quarantined {
+			if renameErr := os.Rename(quarantinePath, rawPath); renameErr != nil {
+				logger.WarnCF("media-library", "delete rollback rename failed", map[string]any{
+					"workspace_id": l.workspaceID,
+					"media_id":     id,
+					"error":        renameErr.Error(),
+				})
+			}
+		}
+		return gen.MediaLibraryEntry{}, err
+	}
+	if quarantined {
+		if removeErr := os.Remove(quarantinePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			logger.WarnCF("media-library", "delete final unlink failed", map[string]any{
+				"workspace_id": l.workspaceID,
+				"media_id":     id,
+				"error":        removeErr.Error(),
+			})
+		}
+	}
+	return previousEntry, nil
+}
+
+// CascadeDelete removes every entry in the library and returns the summary
+// the caller needs to emit a media.cascade_delete audit event. Each entry
+// is quarantined-then-unlinked (same atomicity pattern as Delete / OrphanGC
+// — a partial failure on one entry leaves the others on disk and the
+// manifest entries intact). bytes_freed is the sum of *entry.Size over all
+// successfully deleted entries; filenames and ids are parallel slices in
+// the same deterministic order.
+//
+// Returns ([], 0, nil) for an empty library — a successful no-op cascade.
+//
+// FR-009: callers MUST log a media.cascade_delete audit event with the
+// returned summary.
+func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed int64, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	ids := make([]string, 0, len(l.manifest))
+	for id := range l.manifest {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) == 0 {
+		return nil, 0, nil
+	}
+
+	deleted := make([]cascadePending, 0, len(ids))
+	previousManifest := make(map[string]gen.MediaLibraryEntry, len(l.manifest))
+	previousCounts := make(map[string]int, len(l.refcounts))
+
+	for _, id := range ids {
+		entry := l.manifest[id]
+		rawPath := l.rawPath(id)
+		quarantinePath := filepath.Join(l.path, ".cascade-"+id+"-"+uuid.NewString())
+		item := cascadePending{id: id, entry: cloneEntry(entry), quarantinePath: quarantinePath}
+		if renameErr := os.Rename(rawPath, quarantinePath); renameErr != nil {
+			if errors.Is(renameErr, os.ErrNotExist) {
+				item.quarantined = false
+			} else {
+				l.restoreCascadeQuarantined(deleted)
+				return nil, 0, fmt.Errorf("media library: quarantine cascade %s: %w", id, renameErr)
+			}
+		} else {
+			item.quarantined = true
+		}
+		previousManifest[id] = cloneEntry(entry)
+		previousCounts[id] = l.refcounts[id]
+		delete(l.manifest, id)
+		delete(l.refcounts, id)
+		deleted = append(deleted, item)
+	}
+
+	if persistErr := l.persistLocked(); persistErr != nil {
+		l.manifest = previousManifest
+		l.refcounts = previousCounts
+		l.restoreCascadeQuarantined(deleted)
+		return nil, 0, persistErr
+	}
+
+	for _, item := range deleted {
+		if item.quarantined {
+			if removeErr := os.Remove(item.quarantinePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				logger.WarnCF("media-library", "cascade final unlink failed", map[string]any{
+					"workspace_id": l.workspaceID,
+					"media_id":     item.id,
+					"error":        removeErr.Error(),
+				})
+			}
+		}
+	}
+
+	out := make([]gen.MediaLibraryEntry, 0, len(deleted))
+	var totalBytes int64
+	for _, item := range deleted {
+		out = append(out, item.entry)
+		if item.entry.Size != nil {
+			totalBytes += *item.entry.Size
+		}
+	}
+	return out, totalBytes, nil
+}
+
 func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, error) {
 	if !config.Enabled {
 		return nil, nil
@@ -552,12 +710,34 @@ func (l *Library) entryViewLocked(id string) gen.MediaLibraryEntry {
 	return entry
 }
 
+type cascadePending struct {
+	id             string
+	entry          gen.MediaLibraryEntry
+	quarantinePath string
+	quarantined    bool
+}
+
 func (l *Library) restoreQuarantined(quarantined map[string]string) {
 	for id, quarantinePath := range quarantined {
 		if err := os.Rename(quarantinePath, l.rawPath(id)); err != nil {
 			logger.WarnCF("media-library", "orphan rollback failed", map[string]any{
 				"workspace_id": l.workspaceID,
 				"media_id":     id,
+				"error":        err.Error(),
+			})
+		}
+	}
+}
+
+func (l *Library) restoreCascadeQuarantined(deleted []cascadePending) {
+	for _, item := range deleted {
+		if !item.quarantined {
+			continue
+		}
+		if err := os.Rename(item.quarantinePath, l.rawPath(item.id)); err != nil {
+			logger.WarnCF("media-library", "cascade rollback failed", map[string]any{
+				"workspace_id": l.workspaceID,
+				"media_id":     item.id,
 				"error":        err.Error(),
 			})
 		}

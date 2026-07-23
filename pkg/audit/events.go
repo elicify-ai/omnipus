@@ -255,6 +255,26 @@ const (
 	// be removed and is now orphaned in the store (matches its sibling event
 	// EventChannelInstanceDeleted's field name for the same concept).
 	EventChannelInstanceConfigured = "channel.instance.configured"
+
+	// EventMediaDelete — INFO. A workspace library file was explicitly deleted
+	// by an operator (FR-008). Emitted by pkg/media/library/library.go's
+	// Delete method (the per-file delete API surface; the REST handler will
+	// pass through to this surface in a later slice). Fields: {actor,
+	// workspace_id, media_id, filename, bytes_freed, mime, sha256}. Matches
+	// the workspace.delete precedent in shape (Details carries the
+	// event-specific fields; the top-level `event` field IS the FR-033
+	// "action" discriminator).
+	EventMediaDelete = "media.delete"
+
+	// EventMediaCascadeDelete — INFO. A workspace's media library was
+	// cascade-deleted as part of workspace deletion (FR-009). Emitted by
+	// pkg/workspace/media_delete.go's WorkspaceDeleteHook after the library's
+	// CascadeDelete() returned the deleted-entry summary. ONE event per
+	// cascade operation (NOT one per file) — the spec calls for a list of
+	// media_ids and filenames. Fields: {actor, workspace_id, media_ids,
+	// filenames, bytes_freed, count}. Same shape convention as
+	// EventMediaDelete / workspace.delete.
+	EventMediaCascadeDelete = "media.cascade_delete"
 )
 
 // ---------------------------------------------------------------------------

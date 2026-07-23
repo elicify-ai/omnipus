@@ -204,6 +204,12 @@ func IsValidEventName(e EventName) bool {
 		"workspace.create",
 		"workspace.update",
 		"workspace.delete",
+		// Workspace media library mutation events (FR-008, FR-009, FR-033).
+		// Emitted by pkg/media/library/library.go (single-file delete) and
+		// pkg/workspace/media_delete.go (cascade-delete on workspace removal).
+		// See events.go for the wire shape contract.
+		EventMediaDelete,
+		EventMediaCascadeDelete,
 		// Legacy pre-rename project.* events, retained for back-compat with
 		// audit logs written before the project→workspace rename. No current
 		// handler emits them.
