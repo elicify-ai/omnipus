@@ -2112,11 +2112,20 @@ type CorrectionResult struct {
 }
 
 // commitResolver resolves the last boundary commit hash for a plan member
-// (the gitevidence checkpoint). Used by Play to resume failed/cancelled
-// members from the last commit (D13/G-12). nil = no git evidence available
+// (the gitevidence checkpoint) and materializes the member's resume working
+// tree at that commit. Used by Play to resume failed/cancelled members from
+// the last commit (D13/G-12, #537). nil = no git evidence available
 // (Play falls back to fresh attempt, signalled).
 type commitResolver interface {
 	LastMemberCommit(planID, taskID string) (hash string, err error)
+	// ResetMemberCheckout materializes the member's isolated working tree
+	// at hash via the gitevidence isolation ladder (replacing any prior
+	// resume tree for the member), returning the checkout directory.
+	// hash == "" removes any stale resume tree and returns "" — the
+	// fresh-attempt path leaves no tree behind. A materialization error
+	// degrades the member to the shared-tree resume (the baseline hash is
+	// still persisted); it is never fatal to Play.
+	ResetMemberCheckout(planID, taskID, hash string) (dir string, err error)
 }
 
 // SetCommitResolver installs the gitevidence checkpoint resolver for
@@ -2624,9 +2633,11 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 }
 
 // recordMemberResumePoint resolves the gitevidence checkpoint for a member
-// being resumed via Play (D13: "resume from last git commit") and PERSISTS it
+// being resumed via Play (D13: "resume from last git commit"), PERSISTS it
 // on the task record as ResumeFromCommit — the resume baseline the worker turn
-// and plan Judge consume (the next attempt's diff is measured from this hash).
+// and plan Judge consume (the next attempt's diff is measured from this hash)
+// — and materializes the member's isolated resume working tree at that commit
+// via the resolver's ResetMemberCheckout (#537: the D10 isolation ladder).
 //
 // If no commitResolver is wired, or the resolver returns no commit (unborn
 // repo / nested-repo degrade / member never committed), ResumeFromCommit is
@@ -2652,6 +2663,24 @@ func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 			hash = h
 			logger.InfoCF("plan_engine", "member resume: from commit",
 				map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash})
+		}
+	}
+
+	// D13/#537: materialize the member's resume working tree at the resolved
+	// commit via the isolation ladder (or clear any stale tree on the
+	// fresh-attempt path). A materialization failure degrades the member to
+	// the shared-tree resume — the baseline hash below is still persisted and
+	// the committed work remains in the shared tree — so it is logged, never
+	// fatal to Play.
+	if cr != nil {
+		dir, cerr := cr.ResetMemberCheckout(planID, taskID, hash)
+		switch {
+		case cerr != nil:
+			logger.WarnCF("plan_engine", "member resume: could not materialize resume checkout — shared-tree resume",
+				map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "error": cerr.Error()})
+		case dir != "":
+			logger.InfoCF("plan_engine", "member resume: working tree restored at commit",
+				map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "dir": dir})
 		}
 	}
 

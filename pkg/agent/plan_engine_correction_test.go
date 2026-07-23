@@ -290,10 +290,12 @@ func TestPlay_ResumeFromCommit_NewGeneration(t *testing.T) {
 	// from it), m-nocommit does not (fresh attempt). This asserts the engine
 	// actually consults the resolver and persists the hash — the corr-MAJOR-4
 	// fix — rather than logging "fresh attempt" for everyone.
-	h.pe.SetCommitResolver(fakeCommitResolver{
-		hashes: map[string]string{"m-failed": "deadbeef"},
-		errs:   map[string]error{},
-	})
+	resolver := &fakeCommitResolver{
+		hashes:       map[string]string{"m-failed": "deadbeef"},
+		errs:         map[string]error{},
+		checkoutDirs: map[string]string{"m-failed": "/tmp/resume/m-failed"},
+	}
+	h.pe.SetCommitResolver(resolver)
 
 	// Create a FAILED plan (the only state PlayPlan accepts).
 	stopped := plan.FailedReasonStoppedByUser
@@ -369,6 +371,24 @@ func TestPlay_ResumeFromCommit_NewGeneration(t *testing.T) {
 	if nc.ResumeFromCommit != "" {
 		t.Errorf("m-nocommit resume_from_commit = %q, want \"\" (fresh attempt — no commit)", nc.ResumeFromCommit)
 	}
+
+	// --- #537: Play drives the checkout-materialization seam per resumed
+	// member, with the resolved hash (or "" for the fresh-attempt cleanup) —
+	// and never for the preserved done member.
+	wantCalls := map[string]string{"m-failed": "deadbeef", "m-nocommit": ""}
+	if len(resolver.resetCalls) != len(wantCalls) {
+		t.Fatalf("ResetMemberCheckout calls = %v, want one per resumed member %v", resolver.resetCalls, wantCalls)
+	}
+	for _, c := range resolver.resetCalls {
+		want, ok := wantCalls[c.taskID]
+		if !ok {
+			t.Errorf("ResetMemberCheckout called for unexpected member %q (done members are preserved, not resumed)", c.taskID)
+			continue
+		}
+		if c.hash != want {
+			t.Errorf("ResetMemberCheckout(%s) hash = %q, want %q", c.taskID, c.hash, want)
+		}
+	}
 }
 
 // fakeCommitResolver is a test double for the commitResolver interface. It
@@ -376,16 +396,36 @@ func TestPlay_ResumeFromCommit_NewGeneration(t *testing.T) {
 // assert the Play path consults the resolver and persists the result without
 // standing up a real gitevidence repo (the real resolver + repo mechanics are
 // covered in pkg/gitevidence and plan_engine_commit_resolver_test.go).
+// ResetMemberCheckout records its (taskID, hash) calls and returns the
+// configured dir/err per taskID, so tests can assert Play drives the
+// checkout-materialization seam (#537) with the resolved hash.
 type fakeCommitResolver struct {
 	hashes map[string]string
 	errs   map[string]error
+
+	checkoutDirs map[string]string
+	checkoutErrs map[string]error
+	resetCalls   []fakeResetCall
 }
 
-func (f fakeCommitResolver) LastMemberCommit(planID, taskID string) (string, error) {
+type fakeResetCall struct {
+	taskID string
+	hash   string
+}
+
+func (f *fakeCommitResolver) LastMemberCommit(planID, taskID string) (string, error) {
 	if err, ok := f.errs[taskID]; ok {
 		return "", err
 	}
 	return f.hashes[taskID], nil
+}
+
+func (f *fakeCommitResolver) ResetMemberCheckout(planID, taskID, hash string) (string, error) {
+	f.resetCalls = append(f.resetCalls, fakeResetCall{taskID: taskID, hash: hash})
+	if err, ok := f.checkoutErrs[taskID]; ok {
+		return "", err
+	}
+	return f.checkoutDirs[taskID], nil
 }
 
 // TestNoPerMemberControls (D7): plan members have no per-member
