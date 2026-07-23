@@ -99,7 +99,9 @@ func TestTryMediaDowngrade_CapturesMediaClassImage(t *testing.T) {
 		{
 			Role:    "user",
 			Content: "hello",
-			Media:   []string{"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="},
+			Media: []string{
+				"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+			},
 		},
 	}
 	pe := &ProviderError{Status: 400, Body: "image not supported"}

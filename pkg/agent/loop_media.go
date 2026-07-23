@@ -129,14 +129,17 @@ func resolveMediaRefsWithOffload(
 			// loop path MUST verify before opening the file. A mismatch is terminal
 			// for this ref — route to step-7 honest marker.
 			if media.IsWorkspaceRef(ref) && meta.SHA256 != "" {
-				if err := verifyFileIntegrity(localPath, meta.SHA256); err != nil {
+				if verifyErr := verifyFileIntegrity(localPath, meta.SHA256); verifyErr != nil {
 					name := sanitizeInjectedName(fallbackName(meta.Filename, ref))
 					logger.WarnCF("agent", "SHA-256 integrity check failed for workspace ref", map[string]any{
 						"ref":   ref,
 						"path":  localPath,
-						"error": err.Error(),
+						"error": verifyErr.Error(),
 					})
-					contentInjections = append(contentInjections, "[attachment unavailable: "+name+" (integrity check failed)]")
+					contentInjections = append(
+						contentInjections,
+						"[attachment unavailable: "+name+" (integrity check failed)]",
+					)
 					continue
 				}
 			}
@@ -171,7 +174,13 @@ func resolveMediaRefsWithOffload(
 				// outcome-based step-4 retry.
 				var dataURL string
 				if modelSupportsImage(catalog, model) {
-					dataURL = encodeImageToDataURL(localPath, mime, info, maxSize, resizeBudgetForModel(catalog, model, maxSize))
+					dataURL = encodeImageToDataURL(
+						localPath,
+						mime,
+						info,
+						maxSize,
+						resizeBudgetForModel(catalog, model, maxSize),
+					)
 				}
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
@@ -526,7 +535,12 @@ const maxImagePixels = 16 * 1024 * 1024
 // budget is optional: when absent, defaults to 7680px long edge (the catalog
 // default) and maxSize for MaxBytes. Passing a non-zero budget overrides the
 // long-edge default and blends MaxBytes with the maxSize cap (the smaller wins).
-func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int, budget ...capabilities.ResizeBudget) string {
+func encodeImageToDataURL(
+	localPath, mime string,
+	info os.FileInfo,
+	maxSize int,
+	budget ...capabilities.ResizeBudget,
+) string {
 	if info.Size() > int64(maxSize) {
 		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
 			"size":     info.Size(),

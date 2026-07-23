@@ -7641,7 +7641,7 @@ turnLoop:
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "llm_empty_retry", Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID},
+					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: ts.opts.ChatID},
 				)
 				// FR-002: persist this provider error to the transcript (write
 				// choke point).

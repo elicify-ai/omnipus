@@ -487,6 +487,7 @@ type SubTurnOrphanPayload struct {
 // WS path surfaces it, behind Verbose Chat (operator Q2).
 type ErrorPayload struct {
 	Stage         string
+	Code          string
 	Message       string
 	ProviderError *ProviderError
 	// ChatID is needed so the WS event forwarder can route this event to the

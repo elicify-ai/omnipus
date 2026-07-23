@@ -1083,34 +1083,6 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func derefString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-func derefInt(value *int) int {
-	if value == nil {
-		return 0
-	}
-	return *value
-}
-
-func derefInt64(value *int64) int64 {
-	if value == nil {
-		return 0
-	}
-	return *value
-}
-
-func derefTime(value *time.Time) time.Time {
-	if value == nil {
-		return time.Time{}
-	}
-	return *value
-}
-
 // manifestFile is the persisted JSON shape. Version is required so a
 // future schema migration can branch on it; Entries carries the
 // gen.MediaLibraryEntry projection only — refcount lives ON each entry
