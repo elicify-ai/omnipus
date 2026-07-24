@@ -88,6 +88,23 @@ func withFromModelPrefix(cond bool, msg string) string {
 	return msg
 }
 
+// userMessage* hold the user-facing copy that backs the userMessages map.
+// The strings are kept as package constants so the literal stays under the
+// 120-char line-length cap (golangci lll), and so a future test or renderer
+// can reference the same source of truth. Names are pinned to their code
+// for grep-ability.
+const (
+	userMessageMediaUnsupported = "it can’t use that attachment. Try another format, or switch to a vision-capable model."
+	userMessageProviderRejected = "it refused this request. Retry once, or pick a different model."
+	userMessageRateLimited      = "it’s rate-limited right now. Wait a moment, then retry."
+	userMessageNetwork          = "Couldn’t reach the model. Check the network, then retry."
+	userMessageContentPolicy    = "it blocked this under its safety policy. Rephrase, or remove the flagged content."
+	userMessageContextTooLong   = "this chat is too long for its context window. Start a new session, or drop older turns."
+	userMessageToolArgs         = "a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool."
+	userMessageSchema           = "the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup."
+	userMessageUnknown          = "it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models."
+)
+
 // LLMError is the structured, wire-stable shape produced by the classifier.
 // All four fields are required for the wire shape; Code/Message/Retryable
 // must always be populated. Detail is computed live at the forwarder
@@ -127,15 +144,15 @@ type LLMError struct {
 // See docs/internal/uat/ADR-051-rev4-error-copy-review.md for the full
 // rationale, including the four attribution options considered.
 var userMessages = map[LLMErrorCode]string{
-	CodeMediaUnsupported: withFromModelPrefix(true, "it can’t use that attachment. Try another format, or switch to a vision-capable model."),
-	CodeProviderRejected: withFromModelPrefix(true, "it refused this request. Retry once, or pick a different model."),
-	CodeRateLimited:      withFromModelPrefix(true, "it’s rate-limited right now. Wait a moment, then retry."),
-	CodeNetwork:          withFromModelPrefix(false, "Couldn’t reach the model. Check the network, then retry."),
-	CodeContentPolicy:    withFromModelPrefix(true, "it blocked this under its safety policy. Rephrase, or remove the flagged content."),
-	CodeContextTooLong:   withFromModelPrefix(true, "this chat is too long for its context window. Start a new session, or drop older turns."),
-	CodeToolArgs:         withFromModelPrefix(true, "a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool."),
-	CodeSchema:           withFromModelPrefix(true, "the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup."),
-	CodeUnknown:          withFromModelPrefix(true, "it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models."),
+	CodeMediaUnsupported: withFromModelPrefix(true, userMessageMediaUnsupported),
+	CodeProviderRejected: withFromModelPrefix(true, userMessageProviderRejected),
+	CodeRateLimited:      withFromModelPrefix(true, userMessageRateLimited),
+	CodeNetwork:          withFromModelPrefix(false, userMessageNetwork),
+	CodeContentPolicy:    withFromModelPrefix(true, userMessageContentPolicy),
+	CodeContextTooLong:   withFromModelPrefix(true, userMessageContextTooLong),
+	CodeToolArgs:         withFromModelPrefix(true, userMessageToolArgs),
+	CodeSchema:           withFromModelPrefix(true, userMessageSchema),
+	CodeUnknown:          withFromModelPrefix(true, userMessageUnknown),
 }
 
 // defaultUserMessage returns the canonical user-facing message for code.
