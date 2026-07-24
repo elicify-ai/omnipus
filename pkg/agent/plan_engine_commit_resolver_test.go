@@ -40,8 +40,8 @@ func TestLastMemberCommitResolver_Glue(t *testing.T) {
 	}
 
 	// m-1's boundary commit (write a file in its declared write-set).
-	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("alpha"), 0o600); err != nil {
-		t.Fatalf("write a.txt: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("alpha"), 0o600); writeErr != nil {
+		t.Fatalf("write a.txt: %v", writeErr)
 	}
 	res, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1", AgentID: "owner"}, []string{"a.txt"})
 	if err != nil || res.Skipped {
@@ -115,18 +115,18 @@ func TestLastMemberCommitResolver_ResetMemberCheckout_TreeMatchesCommit(t *testi
 	// boundary AFTER a follow-up attempt (a.txt=v2, c2only.txt present).
 	// The "last commit" the engine records for m-1 is c2 — the resume must
 	// reproduce THAT tree, not HEAD-equivalent v1.
-	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("v1"), 0o600); err != nil {
-		t.Fatalf("write v1: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("v1"), 0o600); writeErr != nil {
+		t.Fatalf("write v1: %v", writeErr)
 	}
 	res1, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1", AgentID: "owner"}, []string{"a.txt"})
 	if err != nil || res1.Skipped {
 		t.Fatalf("commit c1: err=%v skipped=%v %v", err, res1.Skipped, res1.SkipReason)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("v2"), 0o600); err != nil {
-		t.Fatalf("write v2: %v", err)
+	if writeErr2 := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("v2"), 0o600); writeErr2 != nil {
+		t.Fatalf("write v2: %v", writeErr2)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "c2only.txt"), []byte("only in c2"), 0o600); err != nil {
-		t.Fatalf("write c2only: %v", err)
+	if writeErr3 := os.WriteFile(filepath.Join(workDir, "c2only.txt"), []byte("only in c2"), 0o600); writeErr3 != nil {
+		t.Fatalf("write c2only: %v", writeErr3)
 	}
 	res2, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1", AgentID: "owner"}, []string{"a.txt", "c2only.txt"})
 	if err != nil || res2.Skipped {
@@ -172,8 +172,8 @@ func TestLastMemberCommitResolver_ResetMemberCheckout_TreeMatchesCommit(t *testi
 	if string(got) != "v2" {
 		t.Errorf("resume tree a.txt = %q, want %q (the recorded commit's tree, not HEAD's v2)", got, "v2")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "c2only.txt")); err != nil {
-		t.Errorf("c2only.txt missing from resume tree: %v — tree does not match the recorded commit", err)
+	if _, statErr := os.Stat(filepath.Join(dir, "c2only.txt")); statErr != nil {
+		t.Errorf("c2only.txt missing from resume tree: %v — tree does not match the recorded commit", statErr)
 	}
 
 	// A second member with NO commits: ResetMemberCheckout removes any stale
@@ -210,8 +210,8 @@ func TestLastMemberCommitResolver_ResetMemberCheckout_ReplaceSemantics(t *testin
 		t.Fatalf("gitevidence.Open: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("first"), 0o600); err != nil {
-		t.Fatalf("write first: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("first"), 0o600); writeErr != nil {
+		t.Fatalf("write first: %v", writeErr)
 	}
 	res1, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1"}, []string{"a.txt"})
 	if err != nil || res1.Skipped {
@@ -232,8 +232,8 @@ func TestLastMemberCommitResolver_ResetMemberCheckout_ReplaceSemantics(t *testin
 	}
 
 	// Member makes another attempt, commits v=second.
-	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("second"), 0o600); err != nil {
-		t.Fatalf("write second: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("second"), 0o600); writeErr != nil {
+		t.Fatalf("write second: %v", writeErr)
 	}
 	res2, err := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{TaskID: "m-1"}, []string{"a.txt"})
 	if err != nil || res2.Skipped {

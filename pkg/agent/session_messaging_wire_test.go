@@ -117,7 +117,7 @@ func TestSessionMessagingConsumer_ChildToParent_QuestionReachesInboxAndWakes(t *
 		msgs, _, _, err := inbox.Drain("owner-chat-1", "child-sess-1", "", 10)
 		return err == nil && len(msgs) == 1
 	})
-	msgs, _, _, _ := inbox.Drain("owner-chat-1", "child-sess-1", "", 10)
+	msgs, _, _, _ := inbox.Drain("owner-chat-1", "child-sess-1", "", 10) //nolint:dogsled // Only messages are relevant from Drain's four returns.
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message after consumer drain, got %d", len(msgs))
 	}
@@ -177,7 +177,7 @@ func TestSessionMessagingConsumer_Error_ReachesInboxAndWakes_M2(t *testing.T) {
 		msgs, _, _, err := inbox.Drain("owner-err", "child-err", "", 10)
 		return err == nil && len(msgs) == 1
 	})
-	msgs, _, _, _ := inbox.Drain("owner-err", "child-err", "", 10)
+	msgs, _, _, _ := inbox.Drain("owner-err", "child-err", "", 10) //nolint:dogsled // Only messages are relevant from Drain's four returns.
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message (error) after consumer drain, got %d", len(msgs))
 	}
@@ -310,7 +310,7 @@ func TestSessionMessagingConsumer_KillSwitch_NoOpsWhenDisabled(t *testing.T) {
 
 	// Give the consumer a moment to drain + (not) dispatch.
 	time.Sleep(300 * time.Millisecond)
-	msgs, _, _, _ := inbox.Drain("owner-3", "child-sess-3", "", 10)
+	msgs, _, _, _ := inbox.Drain("owner-3", "child-sess-3", "", 10) //nolint:dogsled // Only messages are relevant from Drain's four returns.
 	if len(msgs) != 0 {
 		t.Fatalf("kill switch ON: expected 0 inbox messages, got %d (consumer must no-op when disabled)", len(msgs))
 	}
@@ -363,7 +363,7 @@ func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testin
 		t.Fatalf("message_parent Execute returned error: %s", res.ForLLM)
 	}
 	// The message must have reached the durable inbox directly.
-	msgs, _, _, _ := inbox.Drain("owner-direct-1", "child-direct-1", "", 10)
+	msgs, _, _, _ := inbox.Drain("owner-direct-1", "child-direct-1", "", 10) //nolint:dogsled // Only messages are relevant from Drain's four returns.
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message from direct Execute, got %d", len(msgs))
 	}
@@ -487,7 +487,7 @@ func TestSessionMessagingConsumer_Egress_RedactsSecretAtSink(t *testing.T) {
 		msgs, _, _, err := inbox.Drain("owner-egress", "child-egress", "", 10)
 		return err == nil && len(msgs) == 1
 	})
-	msgs, _, _, _ := inbox.Drain("owner-egress", "child-egress", "", 10)
+	msgs, _, _, _ := inbox.Drain("owner-egress", "child-egress", "", 10) //nolint:dogsled // Only messages are relevant from Drain's four returns.
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message after consumer drain, got %d", len(msgs))
 	}

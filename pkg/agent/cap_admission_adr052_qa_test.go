@@ -83,8 +83,8 @@ func TestCapAdmission_SixteenRunningSeventeenthQueuedThenPromotedWhenSlotFrees(t
 
 	// --- A slot frees: one filler plan completes (running -> done) ---
 	doneState := plan.StateDone
-	if _, err := h.plans.Update(fillerIDs[0], plan.Patch{State: &doneState}); err != nil {
-		t.Fatalf("free a cap slot (filler plan -> done): %v", err)
+	if _, updateErr := h.plans.Update(fillerIDs[0], plan.Patch{State: &doneState}); updateErr != nil {
+		t.Fatalf("free a cap slot (filler plan -> done): %v", updateErr)
 	}
 
 	// --- The NEXT Tick must now promote the previously-queued 17th plan ---

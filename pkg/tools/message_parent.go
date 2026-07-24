@@ -417,8 +417,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			}
 			v.Pct = &pct
 		}
-		if err := sm.FromSessionMessageProgress(v); err != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode progress: %v", err))
+		if encodeErr := sm.FromSessionMessageProgress(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode progress: %v", encodeErr))
 		}
 
 	case "checkpoint":
@@ -447,8 +447,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			filtered := t.filterText(cr)
 			v.CommitRef = &filtered
 		}
-		if err := sm.FromSessionMessageCheckpoint(v); err != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode checkpoint: %v", err))
+		if encodeErr := sm.FromSessionMessageCheckpoint(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode checkpoint: %v", encodeErr))
 		}
 
 	case "artifact":
@@ -476,8 +476,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			filtered := t.filterText(note)
 			v.Note = &filtered
 		}
-		if err := sm.FromSessionMessageArtifact(v); err != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode artifact: %v", err))
+		if encodeErr := sm.FromSessionMessageArtifact(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode artifact: %v", encodeErr))
 		}
 
 	case "blocker":
@@ -505,8 +505,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		if cid, ok := stringArg(args, "correlation_id"); ok && cid != "" {
 			v.CorrelationId = &cid
 		}
-		if err := sm.FromSessionMessageBlocker(v); err != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode blocker: %v", err))
+		if encodeErr := sm.FromSessionMessageBlocker(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode blocker: %v", encodeErr))
 		}
 
 	case "question":
@@ -549,8 +549,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 			CorrelationId:   correlationID,
 			Authority:       &authority,
 		}
-		if err := sm.FromSessionMessageQuestion(v); err != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode question: %v", err))
+		if encodeErr := sm.FromSessionMessageQuestion(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode question: %v", encodeErr))
 		}
 		waitParks = wait
 
@@ -596,8 +596,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		if v.OpenQuestions == nil {
 			v.OpenQuestions = []string{}
 		}
-		if err := sm.FromSessionMessageHandback(v); err != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode handback: %v", err))
+		if encodeErr := sm.FromSessionMessageHandback(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode handback: %v", encodeErr))
 		}
 
 	default:

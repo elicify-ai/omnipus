@@ -273,7 +273,7 @@ func TestMessageParentTool_Handback_Wakes(t *testing.T) {
 }
 
 func TestMessageParentTool_InvalidKind_Rejected(t *testing.T) {
-	tool, _, _, _ := newMessageParentTestSetup(t)
+	tool, _, _, _ := newMessageParentTestSetup(t) //nolint:dogsled // Only the tool is relevant from the four test fixtures.
 	result := tool.Execute(withChildContext("child-1"), map[string]any{"kind": "bogus"})
 	if !result.IsError {
 		t.Fatal("expected an error for an invalid kind")
@@ -395,7 +395,7 @@ func TestMessageParentTool_EgressFilter_AppliedToPathFields(t *testing.T) {
 // touching the inbox. Also proves the positive path (enabled → proceeds) and
 // that an unset closure fails OPEN (backward-compatible with bare unit tests).
 func TestMessageParentTool_KillSwitchDisabled_FailsClosed_ArchM2(t *testing.T) {
-	tool, _, _, _ := newMessageParentTestSetup(t)
+	tool, _, _, _ := newMessageParentTestSetup(t) //nolint:dogsled // Only the tool is relevant from the four test fixtures.
 
 	// Disabled plane → every kind is rejected at the guard, before the inbox.
 	tool.SetSessionMessagingEnabled(func() bool { return false })
@@ -412,7 +412,7 @@ func TestMessageParentTool_KillSwitchDisabled_FailsClosed_ArchM2(t *testing.T) {
 	}
 
 	// Unset closure → fail OPEN (matches the async consumer's nil-config posture).
-	tool2, _, _, _ := newMessageParentTestSetup(t)
+	tool2, _, _, _ := newMessageParentTestSetup(t) //nolint:dogsled // Only the tool is relevant from the four test fixtures.
 	openRes := tool2.Execute(withChildContext("child-1"), map[string]any{"kind": "progress", "text": "y"})
 	if openRes == nil || strings.Contains(openRes.ForLLM, "disabled") {
 		t.Fatalf("unset closure must fail open, got: %+v", openRes)

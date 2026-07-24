@@ -43,8 +43,8 @@ func TestGitEvidence_Isolation_OpenAtSystemGitWorktreeRung(t *testing.T) {
 		t.Fatalf("OpenIsolatedCheckout: %v", err)
 	}
 	defer func() {
-		if err := ic.Cleanup(); err != nil {
-			t.Errorf("Cleanup: %v", err)
+		if cleanupErr := ic.Cleanup(); cleanupErr != nil {
+			t.Errorf("Cleanup: %v", cleanupErr)
 		}
 	}()
 
@@ -95,8 +95,8 @@ func TestGitEvidence_Isolation_ForcedGoGitCloneRungProducesIndependentCopy(t *te
 	}
 
 	// Prove independence: mutating the clone must not affect the source.
-	if err := os.WriteFile(filepath.Join(ic.Dir, "seed.txt"), []byte("mutated in clone"), 0o600); err != nil {
-		t.Fatalf("mutate clone: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(ic.Dir, "seed.txt"), []byte("mutated in clone"), 0o600); writeErr != nil {
+		t.Fatalf("mutate clone: %v", writeErr)
 	}
 	origData, err := os.ReadFile(filepath.Join(dir, "seed.txt"))
 	if err != nil {
@@ -278,8 +278,8 @@ func TestGitEvidence_Isolation_RestoreAtCommit_TreeMatchesRecordedCommit(t *test
 				t.Fatalf("Rung = %v, want <= %v (rungs above startRung are never attempted)", ic.Rung, tc.startRung)
 			}
 			defer func() {
-				if err := ic.Cleanup(); err != nil {
-					t.Errorf("Cleanup: %v", err)
+				if cleanupErr := ic.Cleanup(); cleanupErr != nil {
+					t.Errorf("Cleanup: %v", cleanupErr)
 				}
 			}()
 			assertTreeMatchesC1(t, ic.Dir)

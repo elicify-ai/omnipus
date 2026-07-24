@@ -220,8 +220,8 @@ func TestMessageInboxStore_UnackedCountAndAck(t *testing.T) {
 		t.Fatalf("expected UnackedCount=2, got %d", count)
 	}
 
-	if err := s.Ack("owner-1", []string{"uc-1"}); err != nil {
-		t.Fatalf("Ack failed: %v", err)
+	if ackErr := s.Ack("owner-1", []string{"uc-1"}); ackErr != nil {
+		t.Fatalf("Ack failed: %v", ackErr)
 	}
 	count, err = s.UnackedCount("owner-1", "child-1")
 	if err != nil {

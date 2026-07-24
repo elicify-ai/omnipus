@@ -72,7 +72,6 @@ func TestEffectiveResolution_InspectSession_JudgeAllow_OthersDeny(t *testing.T) 
 	for _, id := range []coreagent.CoreAgentID{
 		coreagent.IDMia, coreagent.IDRay, coreagent.IDAva, coreagent.IDWorker,
 	} {
-		id := id
 		assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), "inspect_session", nil),
 			"(%s, inspect_session) must resolve deny through the real compositor merge", id)
 	}

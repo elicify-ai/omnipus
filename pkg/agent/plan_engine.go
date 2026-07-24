@@ -2591,8 +2591,8 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 	// (plan.ValidateRestartTransition). This is the same gate the REST
 	// /restart endpoint uses.
 	approved := plan.StateApproved
-	if _, err := pe.planStore.Update(planID, plan.Patch{State: &approved}); err != nil {
-		return nil, fmt.Errorf("plan_engine: PlayPlan: restart transition: %w", err)
+	if _, updateErr := pe.planStore.Update(planID, plan.Patch{State: &approved}); updateErr != nil {
+		return nil, fmt.Errorf("plan_engine: PlayPlan: restart transition: %w", updateErr)
 	}
 
 	// Reset failed/cancelled members to `next`; preserve done members.

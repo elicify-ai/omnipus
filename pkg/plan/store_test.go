@@ -106,8 +106,8 @@ func TestPlan_Store_AtomicWriteAndList(t *testing.T) {
 
 	// A corrupt file in the store dir is skipped (logged WARN), not fatal.
 	corruptPath := filepath.Join(s.Dir(), "corrupt-id.json")
-	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
-		t.Fatalf("write corrupt file: %v", err)
+	if writeErr := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); writeErr != nil {
+		t.Fatalf("write corrupt file: %v", writeErr)
 	}
 	stillOK, err := s.List(Filter{})
 	if err != nil {
@@ -338,7 +338,6 @@ func TestPlan_RestartTransition_ViaStoreUpdate(t *testing.T) {
 
 	t.Run("genuine failures stay frozen — restart rejected", func(t *testing.T) {
 		for _, reason := range []FailedReason{FailedReasonJudgeRoundsExhausted, FailedReasonIdleExpired} {
-			reason := reason
 			t.Run(string(reason), func(t *testing.T) {
 				s := newStore(t)
 				p := mkPlan("Frozen Plan", "ws-1", "agent-a")

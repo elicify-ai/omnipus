@@ -68,8 +68,8 @@ func TestLifecycleStore_PersistAndReload(t *testing.T) {
 
 	// Transition to running — a new line, same generation, tail updates.
 	loaded.State = LifecycleRunning
-	if err := s.Persist(loaded); err != nil {
-		t.Fatalf("Persist(running) failed: %v", err)
+	if persistErr := s.Persist(loaded); persistErr != nil {
+		t.Fatalf("Persist(running) failed: %v", persistErr)
 	}
 	reloaded, err := s.Load("sess-1")
 	if err != nil {
@@ -135,8 +135,8 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 	next.Generation = rec.Generation + 1
 	next.State = LifecycleQueued
 	next.ResumedFrom = rec.SessionID
-	if err := s.Persist(&next); err != nil {
-		t.Fatalf("Persist(new generation after terminal) failed: %v", err)
+	if persistErr := s.Persist(&next); persistErr != nil {
+		t.Fatalf("Persist(new generation after terminal) failed: %v", persistErr)
 	}
 	reloaded, err := s.Load("sess-term")
 	if err != nil {

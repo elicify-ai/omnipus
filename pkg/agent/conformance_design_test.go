@@ -367,17 +367,17 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	// child's steering queue via the bus consumer (deliverParentToChild). The
 	// generation is unchanged — a respond is a warm injection, NOT a restart.
 	var resp generated.SessionMessage
-	if err := resp.FromSessionMessageRespond(generated.SessionMessageRespond{
+	if buildErr := resp.FromSessionMessageRespond(generated.SessionMessageRespond{
 		MessageId: "resp-1", SessionId: childSession, CreatedAt: time.Now(),
 		CorrelationId: correlationID, Text: "implement against openapi.yaml",
-	}); err != nil {
-		t.Fatalf("(2) FromSessionMessageRespond: %v", err)
+	}); buildErr != nil {
+		t.Fatalf("(2) FromSessionMessageRespond: %v", buildErr)
 	}
-	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
+	if publishErr := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
 		TargetSessionID: childSession,
 		Message:         resp,
-	}); err != nil {
-		t.Fatalf("(2) PublishSessionMessage: %v", err)
+	}); publishErr != nil {
+		t.Fatalf("(2) PublishSessionMessage: %v", publishErr)
 	}
 	// The consumer forms the steering scope "agent:<agentID>:<sessionID>".
 	scope := "agent:" + childAgent + ":" + childSession
@@ -423,7 +423,7 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 		}
 		return false
 	})
-	msgs, _, _, _ := inbox.Drain(parentSession, childSession, "", 20)
+	msgs, _, _, _ := inbox.Drain(parentSession, childSession, "", 20) //nolint:dogsled // Only messages are relevant from Drain's four returns.
 	var hb *generated.SessionMessageHandback
 	for _, m := range msgs {
 		if k, _ := m.Discriminator(); k == "handback" {
@@ -703,8 +703,8 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 		Title: "t1 standalone task", Status: task.StatusNext,
 		Criteria: []task.AcceptanceCriterion{proseCriterion("c1", "must do X")},
 	}
-	if err := taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
+	if createErr := taskStore.Create(tk); createErr != nil {
+		t.Fatalf("create task: %v", createErr)
 	}
 
 	// A met-verdict judge that echoes the criterion id (the verifier reaches it
@@ -716,8 +716,8 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	}}
 
 	// (1) ▶ Run: claim the next task into in_progress (the dispatch).
-	if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
-		t.Fatalf("(1) Run/claim: %v", err)
+	if _, claimErr := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr != nil {
+		t.Fatalf("(1) Run/claim: %v", claimErr)
 	}
 	current, _ := taskStore.Get(tk.ID)
 	if current.Status != task.StatusInProgress {
@@ -738,8 +738,8 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	}
 
 	// (3) re-claim → 2nd bare claim → consumes a real attempt (AttemptCount 1).
-	if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
-		t.Fatalf("(3) re-claim: %v", err)
+	if _, claimErr3 := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr3 != nil {
+		t.Fatalf("(3) re-claim: %v", claimErr3)
 	}
 	current, _ = taskStore.Get(tk.ID)
 	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, ""); redis == "" {
@@ -754,8 +754,8 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	}
 
 	// (4) claim WITH evidence → verifier dispatched → met → done.
-	if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
-		t.Fatalf("(4) re-claim: %v", err)
+	if _, claimErr4 := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr4 != nil {
+		t.Fatalf("(4) re-claim: %v", claimErr4)
 	}
 	current, _ = taskStore.Get(tk.ID)
 	withEvidence := "verified output matches c1.\n[goal:evidence] compared to acceptance criterion c1, matches\nTASK_STATUS: success\n"

@@ -218,7 +218,6 @@ func TestStatusPriority_EveryIsDoneTerminalStatusRanksAtLeastOne(t *testing.T) {
 	terminal := []SessionStatus{StatusDone, StatusExited, StatusKilled, StatusTimeout, StatusCanceled}
 
 	for _, s := range terminal {
-		s := s
 		t.Run(string(s), func(t *testing.T) {
 			t.Parallel()
 

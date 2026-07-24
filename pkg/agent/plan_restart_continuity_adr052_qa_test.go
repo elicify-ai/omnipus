@@ -118,8 +118,8 @@ func TestRestartContinuity_DoneMembersPreservedNonDoneReset(t *testing.T) {
 		Status: task.StatusFailed, AttemptCount: 3, Result: "attempt limit exhausted (genuine failure)",
 	}
 	for _, tk := range []*task.Task{m3, m1, m2, m4} {
-		if err := taskStore.Create(tk); err != nil {
-			t.Fatalf("create %s: %v", tk.ID, err)
+		if createErr := taskStore.Create(tk); createErr != nil {
+			t.Fatalf("create %s: %v", tk.ID, createErr)
 		}
 	}
 
@@ -136,8 +136,8 @@ func TestRestartContinuity_DoneMembersPreservedNonDoneReset(t *testing.T) {
 	// RestartReset itself refuses to touch one (ErrNotRestartable), which
 	// this loop relies on implicitly by only listing failed/cancelled ids.
 	for _, id := range []string{m1.ID, m2.ID, m4.ID} {
-		if _, err := taskStore.RestartReset(id); err != nil {
-			t.Fatalf("RestartReset(%s): %v", id, err)
+		if _, resetErr := taskStore.RestartReset(id); resetErr != nil {
+			t.Fatalf("RestartReset(%s): %v", id, resetErr)
 		}
 	}
 
@@ -259,7 +259,6 @@ func TestRestartContinuity_RejectsGenuineFailureReason(t *testing.T) {
 		plan.FailedReasonIdleExpired,
 	}
 	for _, reason := range cases {
-		reason := reason
 		t.Run(string(reason), func(t *testing.T) {
 			dir := t.TempDir()
 			planStore := plan.New(filepath.Join(dir, "plans"))

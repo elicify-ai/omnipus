@@ -2373,9 +2373,9 @@ func setupAndStartServices(
 			if store == nil {
 				return 0, nil
 			}
-			sessions, err := store.ListSessions()
-			if err != nil {
-				return 0, fmt.Errorf("active-goal counter: list sessions: %w", err)
+			sessions, listErr := store.ListSessions()
+			if listErr != nil {
+				return 0, fmt.Errorf("active-goal counter: list sessions: %w", listErr)
 			}
 			count := 0
 			for _, s := range sessions {

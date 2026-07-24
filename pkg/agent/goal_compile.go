@@ -148,9 +148,10 @@ type markerHit struct {
 // returned criteria are NOT yet shape-validated — compileGoalIntent runs
 // task.NormalizeCriteria over the full ladder.
 func parseIntentMarkers(intent string, authorID string) ([]task.AcceptanceCriterion, string, []markerHit) {
+	// Upper bound on marker matches: every marker has exactly one opening '['.
+	hits := make([]markerHit, 0, strings.Count(intent, "["))
 	var (
 		criteria []task.AcceptanceCriterion
-		hits     []markerHit
 		author   = task.CriterionAuthor{Kind: task.AuthorKindUser, ID: authorID}
 	)
 

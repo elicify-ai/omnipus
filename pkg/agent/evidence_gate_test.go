@@ -378,8 +378,8 @@ func TestEvidenceGate_ConsecutiveRejectionsRouteThroughAttemptBudgetOnSecond(t *
 			// that point). Skipping this claim would make attempt 1 look,
 			// from the store's perspective, indistinguishable from a
 			// concurrent Stop having landed — which it is not.
-			if _, err := taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
-				t.Fatalf("re-claim before attempt %d: %v", i, err)
+			if _, claimErr := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr != nil {
+				t.Fatalf("re-claim before attempt %d: %v", i, claimErr)
 			}
 		}
 		current, gerr := taskStore.Get(tk.ID)

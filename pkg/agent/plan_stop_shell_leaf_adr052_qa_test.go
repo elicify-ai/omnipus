@@ -186,18 +186,18 @@ func TestStopReachesShellLeaf_RealBackgroundProcessGroupDies(t *testing.T) {
 	dir := t.TempDir()
 	planStore := plan.New(filepath.Join(dir, "plans"))
 	taskStore := task.New(filepath.Join(dir, "tasks"))
-	if err := planStore.Create(&plan.Plan{
+	if createPlanErr := planStore.Create(&plan.Plan{
 		ID: "p-shell-leaf", Title: "p-shell-leaf", WorkspaceID: "ws",
 		OwnerAgentID: "native-agent", State: plan.StateRunning,
-	}); err != nil {
-		t.Fatalf("create plan: %v", err)
+	}); createPlanErr != nil {
+		t.Fatalf("create plan: %v", createPlanErr)
 	}
 	member := &task.Task{
 		Title: "member-with-real-bg-shell", WorkspaceID: "ws", PlanID: "p-shell-leaf",
 		Status: task.StatusInProgress, SessionID: sessionKey,
 	}
-	if err := taskStore.Create(member); err != nil {
-		t.Fatalf("create task: %v", err)
+	if createTaskErr := taskStore.Create(member); createTaskErr != nil {
+		t.Fatalf("create task: %v", createTaskErr)
 	}
 
 	// NewPlanEngine wires pe.canceller = al (the REAL *AgentLoop) by default

@@ -1802,7 +1802,6 @@ func TestValidateStandaloneRestart(t *testing.T) {
 		{"done_rejected_not_a_cancel", StatusDone, CancelReasonStoppedByUser, false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			err := ValidateStandaloneRestart(c.status, c.cancelReason)
 			if c.wantLegal {

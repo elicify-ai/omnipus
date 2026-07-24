@@ -19,8 +19,8 @@ func TestGitEvidence_Open_InitializesFreshRepoIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Open() = %v, want nil error", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-		t.Fatalf(".git not created: %v", err)
+	if _, statErr := os.Stat(filepath.Join(dir, ".git")); statErr != nil {
+		t.Fatalf(".git not created: %v", statErr)
 	}
 	if !hasMarker(dir) {
 		t.Fatalf("expected omnipus marker after first Open()")

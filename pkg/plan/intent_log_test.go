@@ -271,11 +271,11 @@ func TestIntentLog_Hardening(t *testing.T) {
 		t.Fatalf("intent directory mode = %o, want 700", got)
 	}
 
-	if err := il.MarkCommitted(rec.PlanID, rec.IntentID); err != nil {
-		t.Fatalf("MarkCommitted: %v", err)
+	if markErr := il.MarkCommitted(rec.PlanID, rec.IntentID); markErr != nil {
+		t.Fatalf("MarkCommitted: %v", markErr)
 	}
-	if err := il.MarkDone(rec.PlanID, rec.IntentID); err != nil {
-		t.Fatalf("MarkDone: %v", err)
+	if doneErr := il.MarkDone(rec.PlanID, rec.IntentID); doneErr != nil {
+		t.Fatalf("MarkDone: %v", doneErr)
 	}
 	chain, err := il.VerifyChain(t.Context(), rec.PlanID)
 	if err != nil {
@@ -294,8 +294,8 @@ func TestIntentLog_Hardening(t *testing.T) {
 	if bytes.Equal(forged, data) {
 		t.Fatal("test fixture did not modify an intent line")
 	}
-	if err := os.WriteFile(path, forged, 0o600); err != nil {
-		t.Fatalf("forge intent log: %v", err)
+	if writeErr := os.WriteFile(path, forged, 0o600); writeErr != nil {
+		t.Fatalf("forge intent log: %v", writeErr)
 	}
 	chain, err = il.VerifyChain(t.Context(), rec.PlanID)
 	if err != nil {

@@ -24,7 +24,6 @@ var allStates = []State{StateDraft, StateApproved, StateRunning, StateDone, Stat
 func TestPlan_StateTransitions(t *testing.T) {
 	for _, from := range allStates {
 		for _, to := range allStates {
-			from, to := from, to
 			legal := legalPlanTransitions[from][to]
 			t.Run(string(from)+"_to_"+string(to), func(t *testing.T) {
 				err := ValidateStateTransition(from, to)
@@ -135,8 +134,8 @@ func TestPlan_StateTransitions(t *testing.T) {
 	// done is frozen: done->failed must be rejected through Update too, and
 	// the plan must remain unmodified on disk.
 	failed := StateFailed
-	if _, err := s.Update(p.ID, Patch{State: &failed}); !errors.Is(err, ErrIllegalPlanTransition) {
-		t.Fatalf("done->failed via Update must be rejected, got %v", err)
+	if _, updateErr := s.Update(p.ID, Patch{State: &failed}); !errors.Is(updateErr, ErrIllegalPlanTransition) {
+		t.Fatalf("done->failed via Update must be rejected, got %v", updateErr)
 	}
 	reloaded, err := s.Get(p.ID)
 	if err != nil {
@@ -209,7 +208,6 @@ func TestPlan_ValidateRestartTransition(t *testing.T) {
 		{"done_rejected_not_a_cancel", StateDone, FailedReasonStoppedByUser, false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			err := ValidateRestartTransition(c.from, c.failedReason)
 			if c.wantLegal {

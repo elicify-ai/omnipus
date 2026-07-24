@@ -66,12 +66,9 @@ linters:
     # duplicated-code) is out of scope for the F4 delivery. (gofumpt, golines,
     # gci, godot removed: v2 calls them formatters, not linters.) Re-enable
     # after a dedicated style-cleanup commit post-merge.
-    - copyloopvar
-    - dogsled
     - dupl
     - godoclint
     - misspell
-    - prealloc
   settings:
     errcheck:
       check-type-assertions: true
@@ -89,7 +86,6 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
-        - shadow
     lll:
       line-length: 120
       tab-width: 4

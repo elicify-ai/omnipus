@@ -136,8 +136,8 @@ func rewriteHeadAsOrphan(t *testing.T, r *Repo, message string) plumbing.Hash {
 		// No ParentHashes: an orphan commit, not a descendant of headRef.
 	}
 	obj := r.repo.Storer.NewEncodedObject()
-	if err := orphan.Encode(obj); err != nil {
-		t.Fatalf("encode orphan commit: %v", err)
+	if encodeErr := orphan.Encode(obj); encodeErr != nil {
+		t.Fatalf("encode orphan commit: %v", encodeErr)
 	}
 	hash, err := r.repo.Storer.SetEncodedObject(obj)
 	if err != nil {

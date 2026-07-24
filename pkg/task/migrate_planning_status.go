@@ -108,16 +108,16 @@ func migrateOneTaskPlanningStatus(path string) (migrated bool, err error) {
 		return false, fmt.Errorf("read: %w", err)
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return false, fmt.Errorf("parse: %w", err)
+	if parseErr := json.Unmarshal(data, &raw); parseErr != nil {
+		return false, fmt.Errorf("parse: %w", parseErr)
 	}
 	statusRaw, ok := raw["status"]
 	if !ok {
 		return false, nil
 	}
 	var status string
-	if err := json.Unmarshal(statusRaw, &status); err != nil {
-		return false, fmt.Errorf("parse status: %w", err)
+	if parseStatusErr := json.Unmarshal(statusRaw, &status); parseStatusErr != nil {
+		return false, fmt.Errorf("parse status: %w", parseStatusErr)
 	}
 	if status != legacyPlanningStatus {
 		return false, nil

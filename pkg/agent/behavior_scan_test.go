@@ -330,8 +330,8 @@ func TestBehaviorScan_ViaPartitionStore_SessionID(t *testing.T) {
 			Timestamp: baseTime.Add(time.Duration(i) * time.Second),
 			ToolCalls: []session.ToolCall{mkToolCall("web_search", "success")},
 		}
-		if err := store.AppendMessage(meta.ID, entry); err != nil {
-			t.Fatalf("AppendMessage: %v", err)
+		if appendErr := store.AppendMessage(meta.ID, entry); appendErr != nil {
+			t.Fatalf("AppendMessage: %v", appendErr)
 		}
 	}
 

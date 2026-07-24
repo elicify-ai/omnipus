@@ -93,7 +93,7 @@ func runAndExtractSessionID(t *testing.T, tool *DelegateTool, ctx context.Contex
 }
 
 func TestDelegateTool_Run_IllegalLaunchProfile_Rejected(t *testing.T) {
-	tool, _, _, _ := newADR053TestTool(t)
+	tool, _, _, _ := newADR053TestTool(t) //nolint:dogsled // Only the tool is relevant from the four test fixtures.
 	result := tool.Execute(context.Background(), map[string]any{
 		"task": "do something", "launch_profile": "bogus-profile",
 	})
@@ -106,8 +106,8 @@ func TestDelegateTool_Run_IllegalLaunchProfile_Rejected(t *testing.T) {
 }
 
 func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
-	tool, _, _, _ := newADR053TestTool(t)
-	refs := make([]any, 100) // over the default 50-ref cap
+	tool, _, _, _ := newADR053TestTool(t) //nolint:dogsled // Only the tool is relevant from the four test fixtures.
+	refs := make([]any, 100)              // over the default 50-ref cap
 	for i := range refs {
 		refs[i] = "ref"
 	}

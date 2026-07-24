@@ -592,7 +592,8 @@ func resolveGoalAgent(al *AgentLoop, s *session.UnifiedMeta) *AgentInstance {
 	if registry == nil {
 		return nil
 	}
-	candidates := []string{s.ActiveAgentID}
+	candidates := make([]string, 0, 1+len(s.AgentIDs))
+	candidates = append(candidates, s.ActiveAgentID)
 	candidates = append(candidates, s.AgentIDs...)
 	for _, id := range candidates {
 		if id == "" {
