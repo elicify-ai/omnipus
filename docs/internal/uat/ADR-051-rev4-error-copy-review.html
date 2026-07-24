@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Error-message translation — critical review &amp; rewrite</title>
+<style>
+  :root{
+    --bg:#0A0A0B;        /* Deep Space Black */
+    --bg-2:#111113;
+    --bg-3:#16161A;
+    --border:#232328;
+    --fg:#E2E8F0;          /* Liquid Silver */
+    --muted:#8B8F99;
+    --dim:#5F636B;
+    --gold:#D4AF37;        /* Forge Gold */
+    --ruby:#EF4444;
+    --emerald:#10B981;
+    --link:#7BB7FF;
+    --code-bg:#0E0E10;
+  }
+  *{box-sizing:border-box}
+  body{
+    background:var(--bg);
+    color:var(--fg);
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    line-height:1.6;
+    margin:0;
+    padding:48px 24px 96px;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  h1,h2,h3,h4{font-family:Outfit,Inter,sans-serif;letter-spacing:-.01em;color:var(--fg)}
+  h1{font-size:36px;font-weight:700;margin:0 0 6px;line-height:1.15}
+  h2{font-size:24px;font-weight:700;margin:48px 0 8px;padding-top:8px;border-top:1px solid var(--border);line-height:1.2}
+  h2:first-of-type{border-top:none;padding-top:0}
+  h3{font-size:18px;font-weight:700;margin:24px 0 6px;color:var(--gold)}
+  h4{font-size:15px;font-weight:700;margin:18px 0 4px;color:var(--fg)}
+  p{margin:8px 0}
+  .lede{color:var(--muted);font-size:17px;margin:0 0 28px}
+  ul,ol{margin:6px 0 14px;padding-left:22px}
+  li{margin:4px 0}
+  code,kbd{
+    font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+    font-size:.9em;
+    background:var(--code-bg);
+    color:#D7DCE5;
+    padding:1px 6px;
+    border-radius:4px;
+    border:1px solid var(--border);
+  }
+  pre{
+    background:var(--code-bg);
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:12px 14px;
+    overflow-x:auto;
+    font-family:"JetBrains Mono",Menlo,Consolas,monospace;
+    font-size:13px;
+    color:#D7DCE5;
+  }
+  .badge{
+    display:inline-block;
+    font-size:11px;
+    font-weight:600;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    padding:2px 8px;
+    border-radius:999px;
+    border:1px solid var(--border);
+    color:var(--muted);
+    margin-right:6px;
+  }
+  .b-good{color:var(--emerald);border-color:#1F5A41;background:#0D1F18}
+  .b-warn{color:#E0A53A;border-color:#5A4318;background:#1F1606}
+  .b-bad{color:var(--ruby);border-color:#5A1F22;background:#1F0708}
+  .b-p0{color:#FFD479;border-color:#5A4318;background:#1F1606}
+  .b-p1{color:#B4C8FF;border-color:#2A3A5A;background:#0E1626}
+  .b-p2{color:#C8C8C8;border-color:#3A3A40;background:#16161A}
+  .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;background:var(--bg-2)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  thead th{
+    background:var(--bg-3);
+    color:var(--gold);
+    text-align:left;
+    font-weight:600;
+    padding:10px 12px;
+    border-bottom:1px solid var(--border);
+    position:sticky;top:0;
+    font-size:12.5px;
+    letter-spacing:.02em;
+  }
+  tbody td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:nth-child(even){background:rgba(255,255,255,.012)}
+  td.num{color:var(--muted);font-variant-numeric:tabular-nums;width:40px}
+  td.current{color:#BFBFC2}
+  td.improved{color:#D7F5E5;font-weight:500}
+  td.crit{color:#D7D7D7}
+  .ok{color:var(--emerald)}
+  .warn{color:#E0A53A}
+  .bad{color:var(--ruby)}
+  .hr{height:1px;background:var(--border);margin:48px 0}
+  .toc{
+    background:var(--bg-2);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:14px 18px;
+    margin:18px 0 36px;
+  }
+  .toc h3{margin:0 0 8px;font-size:14px;color:var(--gold);letter-spacing:.04em;text-transform:uppercase}
+  .toc ol{margin:0;padding-left:22px}
+  .toc a{color:var(--link);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .meta{color:var(--dim);font-size:13px}
+  .callout{
+    border-left:3px solid var(--gold);
+    background:var(--bg-2);
+    padding:10px 14px;
+    border-radius:0 8px 8px 0;
+    margin:14px 0;
+  }
+  .callout.bad{border-left-color:var(--ruby)}
+  .callout.good{border-left-color:var(--emerald)}
+  .pillrow{margin:6px 0 16px}
+  .pill{display:inline-block;padding:3px 10px;border:1px solid var(--border);border-radius:999px;font-size:12px;margin:2px 4px 2px 0;color:var(--muted);background:var(--bg-2)}
+  .pill.gold{color:var(--gold);border-color:#5A4318}
+  footer{margin-top:64px;color:var(--dim);font-size:12px;text-align:center;border-top:1px solid var(--border);padding-top:24px}
+  .panel{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+  .panel .col{background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+  .panel h4{margin:0 0 6px;font-size:12px;color:var(--gold);text-transform:uppercase;letter-spacing:.04em}
+  .panel p{margin:0}
+  @media (max-width:780px){
+    .panel{grid-template-columns:1fr}
+  }
+  .tag-p0{background:#3a2a10;color:#FFD479;border-color:#5A4318}
+  .tag-p1{background:#10172a;color:#B4C8FF;border-color:#2A3A5A}
+  .tag-p2{background:#1a1a1d;color:#C8C8C8;border-color:#3A3A40}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="meta">ADR-051 Rev 4 — error-message translation review · 2026-07-23 · <code>sendfile-fix</code> · branch head <code>8a8ee007</code></div>
+  <h1>Error-message translation — critical review &amp; rewrite</h1>
+  <p class="lede">Inventory of every user-facing error string Omnipus can show today, critique of each in the brand voice, and a concrete rewrite in the Omnipus tone (<em>calm, precise, operator-respecting, no blame-the-service</em>). This is a review only — nothing is changed yet.</p>
+
+  <div class="toc">
+    <h3>Contents</h3>
+    <ol>
+      <li><a href="#brand">Brand voice and the rules I used</a></li>
+      <li><a href="#method">Method &amp; scope of the audit</a></li>
+      <li><a href="#src">Source attribution — should we prefix “Provider:” on upstream errors?</a></li>
+      <li><a href="#A">A. LLM error codes — chat bubble (9 rows)</a></li>
+      <li><a href="#B">B. HTTP / API defaults (11 rows)</a></li>
+      <li><a href="#C">C. Upload / composer toasts (5 rows)</a></li>
+      <li><a href="#D">D. Agent-context injections (6 rows)</a></li>
+      <li><a href="#E">E. UI chrome — boundaries &amp; error boundaries (3 rows)</a></li>
+      <li><a href="#diag">F. Diagnostic surface — what goes to <em>Verbose chat</em></a></li>
+      <li><a href="#cross">G. Cross-cutting judgments</a></li>
+      <li><a href="#priority">H. Priority if you only change five</a></li>
+      <li><a href="#files">I. Where each string lives today</a></li>
+    </ol>
+  </div>
+</header>
+
+<section id="brand">
+  <h2>1. Brand voice and the rules I used</h2>
+
+  <p>From <code>docs/internal/brand/brand-guidelines.md</code> §6 (<em>Voice Personality</em>): <strong>Sophisticated, Protective, Visionary, Calm, Reliable, Approachable.</strong> Tone spectrum:</p>
+  <ul>
+    <li><em>Technical context (API, logs)</em> — surgical, precise, minimal jargon, confidence.</li>
+    <li><em>User interface (dashboard, onboarding)</em> — clear, helpful, efficient, lowers complexity.</li>
+    <li><em>Marketing</em> — visionary, empowering, secure, inviting.</li>
+  </ul>
+
+  <p>The brand archetype is the <em>Sovereign Deep</em> (Sage + Caregiver). Errors fall in the user-interface band, so my rewrites apply the <strong>calm, helpful, lowers-complexity</strong> rule, with the technical-band rule reused for the optional <em>Verbose chat</em> diagnostic surface.</p>
+
+  <h4>Rewrite rules I applied</h4>
+  <ol>
+    <li><strong>Name the cause, not a vague "service."</strong> The failure usually lives in <em>model / provider / network / attachment / request shape</em>. "AI service" is brand-wrong and uninformative.</li>
+    <li><strong>Lead with the user, not the system.</strong> "Couldn’t read this model" beats "The model rejected this."</li>
+    <li><strong>State what to do.</strong> Each new copy names a recovery action: <em>retry, switch model, drop turns, remove flagged content</em>.</li>
+    <li><strong>No "Please" excess.</strong> One politeness per message; "please retry" once max.</li>
+    <li><strong>No apologies for the product.</strong> "Sorry, an error occurred" is un-Omnipus; describe what happened.</li>
+    <li><strong>Code-names are fine in chrome.</strong> Operators see <code>media_unsupported</code> in the activity log; end-users see plain English.</li>
+    <li><strong>Short.</strong> ≤ 22 words, one sentence where possible, two max.</li>
+    <li><strong>Brand-words preserved.</strong> Keep <em>Omnipus</em>, <em>model</em>, <em>attachment</em>, <em>turn</em>, <em>tool</em> — drop <em>AI service</em>, <em>The system</em>.</li>
+  </ol>
+</section>
+
+<section id="src">
+  <h2>3. Source attribution — should we prefix “Provider:” on upstream errors?</h2>
+
+  <p>Yes, with nuance. The reason it matters: today, when the upstream rejects a request, a user has no way to tell whether Omnipus or the model provider is at fault. A short attribution prefix closes that gap, sets correct support expectations, and protects the brand when the cause is clearly upstream.</p>
+
+  <h4>The four options I considered</h4>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>Option</th><th>Example</th><th>Pros</th><th>Cons</th><th>Verdict</th></tr>
+</thead>
+<tbody>
+  <tr>
+    <td><strong>A. No prefix</strong><br><span class="badge">status quo</span></td>
+    <td><em>“The model refused this request. Retry once, or pick a different model.”</em></td>
+    <td>Clean, calm.</td>
+    <td>Ambiguous — feels Omnipus-blaming when upstream rejected.</td>
+    <td><span class="bad">✗ keep</span></td>
+  </tr>
+  <tr>
+    <td><strong>B. “Provider:” literal prefix</strong><br><span class="badge">your suggestion</span></td>
+    <td><em>“Provider: the model refused this request. Retry once, or switch models.”</em></td>
+    <td>Maximum clarity, zero ambiguity.</td>
+    <td>Slight enterprise / blame-shift tone; “Provider” is jargon.</td>
+    <td><span class="warn">≈ partial</span></td>
+  </tr>
+  <tr>
+    <td><strong>C. “From the model:” prose</strong></td>
+    <td><em>“From the model: it refused this request. Retry once, or switch models.”</em></td>
+    <td>Natural English, sets source without jargon, keeps calm tone.</td>
+    <td>3 words overhead per message.</td>
+    <td><span class="ok">✓ recommended</span></td>
+  </tr>
+  <tr>
+    <td><strong>D. Inline parenthetical + Verbose chip</strong></td>
+    <td><em>“This model refused the request (upstream). Retry once, or pick a different model.”</em><br>+ <em>“Open provider details ▸”</em> in Verbose chat</td>
+    <td>Shortest in-chrome; escalates detail in Verbose.</td>
+    <td>Two surfaces to keep aligned; not as visible to users.</td>
+    <td><span class="ok">✓ if you want minimal chrome</span></td>
+  </tr>
+</tbody>
+</table>
+</div>
+
+  <h4>My recommendation: <strong>option C — “From the model:”</strong></h4>
+  <p>It reads like plain English, doesn’t blame a nameless “service,” and sets the right expectation (the failure is upstream of Omnipus). Reserve <strong>no prefix</strong> for issues we own outright (Omnipus gateway 5xx, attachment-handling bugs) so users know where to report.</p>
+
+  <h4>Decision matrix per surface</h4>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>Cause</th><th>Prefix?</th><th>Why</th></tr>
+</thead>
+<tbody>
+  <tr><td>5xx / fallback (Omnipus infra)</td><td><strong>None</strong> — own the failure</td><td>Users report to <em>us</em>; no deflection.</td></tr>
+  <tr><td>Network (DNS, TCP, TLS)</td><td><strong>None</strong> — could be either side</td><td>Ambiguous; “check the network” already disambiguates.</td></tr>
+  <tr><td>429 / rate_limited</td><td><strong>From the model:</strong></td><td>Provider quota, not Omnipus.</td></tr>
+  <tr><td>provider_rejected (auth, generic 4xx)</td><td><strong>From the model:</strong></td><td>Provider refused it.</td></tr>
+  <tr><td>content_policy</td><td><strong>From the model:</strong></td><td>Provider safety filter.</td></tr>
+  <tr><td>media_unsupported</td><td><strong>From the model:</strong></td><td>Provider capability.</td></tr>
+  <tr><td>context_too_long</td><td><strong>From the model:</strong></td><td>Provider window.</td></tr>
+  <tr><td>tool_args / schema</td><td><strong>From the model:</strong></td><td>Provider rejected shape.</td></tr>
+  <tr><td>unknown (unclassified)</td><td><strong>From the model:</strong> (default) + a small chance to <strong>escalate</strong> to <em>“Omnipus couldn’t classify this.”</em> if Verbose indicates our side</td><td>Default to upstream; let Verbose correct if our classifier missed.</td></tr>
+</tbody>
+</table>
+</div>
+
+  <h4>If you still want the literal “Provider:” prefix (option B)</h4>
+  <p>Apply it to the same rows as option C, and keep it as the title case <em>Provider</em>. Use a colon, not a dash. The example for A2 would become:</p>
+  <pre>"Provider: the model refused this request. Retry once, or pick a different model."</pre>
+
+  <h4>How I’d roll it out</h4>
+  <ol>
+    <li>Pick <strong>option C</strong> (recommended) or <strong>option B</strong> (your literal suggestion) — either is defensible.</li>
+    <li>Add the chosen prefix to rows A1–A8 in section A of this report (the “Improved” column).</li>
+    <li>Add a tiny visual treatment: render the prefix as a muted <code>&lt;small&gt;From the model&lt;/small&gt;</code> tag in <code>MessageItem.tsx</code> so the bubble stays one voice.</li>
+    <li>Mirror in Go <code>userMessages</code> so transcripts and WS frames carry the same prefix.</li>
+    <li>Cover with a test in <code>llm-error.test.ts</code> asserting each code starts with the chosen prefix (or none).</li>
+  </ol>
+</section>
+
+<section id="method">
+  <h2>2. Method &amp; scope of the audit</h2>
+  <p>I read the actual code paths that emit the strings you see in chat:</p>
+  <ul>
+    <li><code>src/lib/llm-error.ts</code> — SPA <code>codeToDisplay</code> (user bubble)</li>
+    <li><code>src/lib/api-error.ts</code> — SPA HTTP defaults (<code>ApiError.defaultUserMessage</code>)</li>
+    <li><code>src/lib/attachment-adapter.ts</code> — SPA composer toasts</li>
+    <li><code>src/components/ui/error-boundary.tsx</code>, <code>RouteErrorFallback.tsx</code>, <code>agents/AgentCard.tsx</code> — UI chrome</li>
+    <li><code>pkg/agent/translate_error.go</code> — Go wire <code>userMessages</code> map (transcript + WS frames)</li>
+    <li><code>pkg/agent/loop_media.go</code> — agent-context injections (<code>[attachment unavailable: …]</code>, <code>Cannot read this … with …</code>)</li>
+    <li><code>pkg/agent/media_downgrade.go</code> — strip-retry injection copy</li>
+    <li><code>pkg/agent/external_dispatch.go</code> + <code>loop.go</code> — where wire copy lands in transcripts and frames</li>
+  </ul>
+  <p>Two parallel catalogs exist today (Go <code>userMessages</code> + SPA <code>codeToDisplay</code>). They already diverge on <code>media_unsupported</code>, <code>unknown</code>, <code>context_too_long</code>. The bubble is built from <em>SPA</em> copy, the transcript/frame carries the <em>Go</em> copy. I review both and call out divergence.</p>
+</section>
+
+<section id="A">
+  <h2>4. A. LLM error codes — chat bubble</h2>
+  <p>Surface: <strong>user-facing chat bubble</strong> (rendered by <code>MessageItem.tsx</code> from the SPA-side <code>codeToDisplay</code> map). The wire <code>message</code> field is suppressed in the bubble; it can leak provider internals, so it surfaces only in <em>Verbose chat → Technical details</em>.</p>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>Code</th><th>Today — SPA bubble<br><span style="color:var(--muted);font-weight:400">(also the wire copy from Go unless marked)</span></th><th>Why it’s not ideal in the Omnipus tone</th><th>Improved — Omnipus tone</th><th>Priority</th></tr>
+</thead>
+<tbody>
+  <tr>
+    <td class="num">A1</td>
+    <td><code>media_unsupported</code><br><span class="badge b-good">user-frequent</span></td>
+    <td class="current">
+      <em>SPA</em>: <em>"That file type isn't supported by this model yet. Try a different format or model."</em><br>
+      <em>Go</em>: <em>"The AI service couldn't process an attachment. I've continued without it."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>Go copy is passive and "AI service" is brand-wrong.</li>
+        <li>"I've continued without it" is the agent talking inside a system bubble — wrong voice.</li>
+        <li>Doesn't surface a fix (use a different format/model) consistently.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> it can’t use that attachment. Try another format, or switch to a vision-capable model."</td>
+    <td><span class="tag-p0">P0</span></td>
+  </tr>
+  <tr>
+    <td class="num">A2</td>
+    <td><code>provider_rejected</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"The model provider rejected the request. Try again, or switch models."</em><br>
+      <em>Go</em>: <em>"The AI service rejected the request."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>Go copy is a dead-end — no action, just blame.</li>
+        <li>SPA "provider" is slightly jargon-y but acceptable.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> it refused this request. Retry once, or pick a different model."</td>
+    <td><span class="tag-p1">P1</span></td>
+  </tr>
+  <tr>
+    <td class="num">A3</td>
+    <td><code>rate_limited</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"The model provider is rate-limiting requests. Please wait a moment and retry."</em><br>
+      <em>Go</em>: <em>"The AI service is busy. Please retry shortly."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>Both work; Go softens "rate-limit" into "busy" — less precise.</li>
+        <li>Two "please"s in one sentence feels tentative.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> it’s rate-limited right now. Wait a moment, then retry."</td>
+    <td><span class="tag-p1">P1</span></td>
+  </tr>
+  <tr>
+    <td class="num">A4</td>
+    <td><code>network</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"Couldn't reach the model provider. Check your connection and retry."</em><br>
+      <em>Go</em>: <em>"Couldn't reach the AI service. Please retry."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>SPA: "model provider" is accurate when upstream is unreachable, but if the failure is local-network the wording slightly misleads.</li>
+        <li>Go: missing the "check connection" hint.</li>
+      </ul>
+    </td>
+    <td class="improved">"Couldn’t reach the model. Check the network, then retry." <span style="color:var(--muted)">(no prefix — could be either side)</span></td>
+    <td><span class="tag-p1">P1</span></td>
+  </tr>
+  <tr>
+    <td class="num">A5</td>
+    <td><code>content_policy</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"The model provider refused the request under its content policy."</em><br>
+      <em>Go</em>: <em>"The AI service declined this request."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>Go is dangerously vague — reads like a generic failure.</li>
+        <li>SPA lacks a recovery hint; users don't know if it's the wording or the topic.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> it blocked this under its safety policy. Rephrase, or remove the flagged content."</td>
+    <td><span class="tag-p1">P1</span></td>
+  </tr>
+  <tr>
+    <td class="num">A6</td>
+    <td><code>context_too_long</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"That conversation is too long for this model's context window. Start a fresh session or trim older turns."</em><br>
+      <em>Go</em>: <em>"The conversation is too long for the model; trim and retry."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>SPA is the best-in-set copy — clear cause + two named actions.</li>
+        <li>Go is fine but thinner; only one recovery hint.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> this chat is too long for its context window. Start a new session, or drop older turns."</td>
+    <td><span class="tag-p2">P2</span> (SPA copy is already strong; align Go)</td>
+  </tr>
+  <tr>
+    <td class="num">A7</td>
+    <td><code>tool_args</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"The model rejected a tool argument. Fix the call and retry."</em><br>
+      <em>Go</em>: <em>"The AI service rejected a tool argument; fix the call and try again."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>Aimed at operators/agents, not end-users. In a chat bubble it feels broken.</li>
+        <li>"Fix the call" is meaningless to a non-operator.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool."</td>
+    <td><span class="tag-p1">P1</span></td>
+  </tr>
+  <tr>
+    <td class="num">A8</td>
+    <td><code>schema</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"The model rejected the request shape. Review the schema and retry."</em><br>
+      <em>Go</em>: <em>"The AI service rejected the request shape; review the schema and try again."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li>"Schema" is pure engineering in a user bubble.</li>
+        <li>Two voices; "AI service" again.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup."</td>
+    <td><span class="tag-p1">P1</span></td>
+  </tr>
+  <tr>
+    <td class="num">A9</td>
+    <td><code>unknown</code></td>
+    <td class="current">
+      <em>SPA</em>: <em>"Something went wrong talking to the model. Please try again."</em><br>
+      <em>Go</em>: <em>"The AI service encountered an error."</em>
+    </td>
+    <td class="crit">
+      <ul>
+        <li><strong>Worst offender.</strong> Empty, corporate, no agency. This is what you saw after the SVG-history pollution — the strip-retry exhausted and fell through to <code>unknown</code>.</li>
+        <li>Go copy is on par with generic SaaS boilerplate.</li>
+        <li>No surface for Verbose chat or model swap hint.</li>
+      </ul>
+    </td>
+    <td class="improved">"<em>From the model:</em> it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models."</td>
+    <td><span class="tag-p0">P0</span></td>
+  </tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="B">
+  <h2>5. B. HTTP / API defaults</h2>
+  <p>Surface: <strong>non-2xx fetch responses and transport failures</strong>. Thrown by <code>ApiError</code> in <code>src/lib/api-error.ts</code>; rendered into toasts by call sites.</p>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>Status</th><th>Today</th><th>Why it’s not ideal</th><th>Improved</th><th>Priority</th></tr>
+</thead>
+<tbody>
+  <tr><td class="num">B10</td><td><code>0</code> (network)</td><td class="current">"Network unavailable. Check your connection."</td><td class="crit">"Unavailable" is passive; the user did nothing wrong.</td><td class="improved">"Offline or unreachable. Check the connection, then retry."</td><td><span class="tag-p1">P1</span></td></tr>
+  <tr><td class="num">B11</td><td><code>401</code></td><td class="current">"Your session has expired. Please log in again."</td><td class="crit">Already strong.</td><td class="improved">"Session expired. Sign in again."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B12</td><td><code>403</code></td><td class="current">"You don't have permission to perform this action."</td><td class="crit">"Perform this action" is stiff.</td><td class="improved">"You don’t have permission for that."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B13</td><td><code>404</code></td><td class="current">"The requested resource was not found."</td><td class="crit">Formal; "requested resource" is a server term.</td><td class="improved">"Nothing found at that path."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B14</td><td><code>409</code></td><td class="current">"This conflicts with the current state. Please refresh and try again."</td><td class="crit">"This conflicts" is empty subject.</td><td class="improved">"That conflicts with the current state. Refresh, then retry."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B15</td><td><code>410</code></td><td class="current">"This item is no longer available."</td><td class="crit">OK.</td><td class="improved">"That’s gone — it was removed or expired."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B16</td><td><code>413</code></td><td class="current">"The request is too large."</td><td class="crit">Empty subject.</td><td class="improved">"That request is too large. Use a smaller file or shorter message."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B17</td><td><code>429</code></td><td class="current">"Too many requests. Please slow down and try again shortly."</td><td class="crit">Two "please"s.</td><td class="improved">"Too many requests. Pause briefly, then retry."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B18</td><td><code>5xx</code></td><td class="current">"The server is unavailable. Please try again in a moment."</td><td class="crit">"Server" is generic; we are the server.</td><td class="improved">"Omnipus couldn’t complete that. Retry in a moment."</td><td><span class="tag-p1">P1</span></td></tr>
+  <tr><td class="num">B19</td><td>other 4xx</td><td class="current">"The request was rejected by the server."</td><td class="crit">"Server" again; "rejected" is blaming.</td><td class="improved">"Request rejected. Check the input and retry."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">B20</td><td>fallback</td><td class="current">"An unexpected error occurred."</td><td class="crit">Stock.</td><td class="improved">"Something unexpected happened. Retry; if it persists, check the logs."</td><td><span class="tag-p2">P2</span></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="C">
+  <h2>6. C. Upload / composer toasts</h2>
+  <p>Surface: <strong>SPA composer</strong> — shown when the user picks a file via the paperclip/drag-drop/paste path. From <code>src/lib/attachment-adapter.ts</code>.</p>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>Today</th><th>Why it’s not ideal</th><th>Improved</th><th>Priority</th></tr>
+</thead>
+<tbody>
+  <tr><td class="num">C21</td><td class="current"><code>"${file.name}" is too large (max 100 MB).</code></td><td class="crit">Generic, leaks the limit as a parenthetical, mentions filename twice when the toast also shows it.</td><td class="improved">"<code>${file.name}</code> is over the 100 MB limit."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">C22</td><td class="current"><code>Audio files aren't supported yet.</code></td><td class="crit">Acceptable; could name the path forward.</td><td class="improved">"Audio isn’t supported in chat yet."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">C23</td><td class="current"><code>Can't attach "${file.name}": file type not supported</code></td><td class="crit">Colon-separated; reads as a stack error.</td><td class="improved">"Can’t attach <code>${file.name}</code> — that type isn’t allowed here."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">C24</td><td class="current"><code>Upload failed for "${attachment.name}": ${msg}</code></td><td class="crit">Concatenates raw <code>msg</code> from the server — can leak provider internals or stack traces.</td><td class="improved">"Upload failed for <code>${name}</code>. ${shortSafeReason}" where <code>shortSafeReason</code> comes from an allow-list of safe causes (size, type, network).</td><td><span class="tag-p1">P1</span> (safety)</td></tr>
+  <tr><td class="num">C25</td><td class="current"><code>Upload failed for "${attachment.name}" — no path returned.</code></td><td class="crit">Leaks internal contract ("no path returned") to end-users.</td><td class="improved">"Upload failed for <code>${name}</code> — the server didn’t accept the file. Try again."</td><td><span class="tag-p1">P1</span></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="D">
+  <h2>7. D. Agent-context injections</h2>
+  <p>Surface: <strong>model-visible</strong> text injected into the prompt when the gateway downgrades/offloads media. The model paraphrases these to the user, so they drive how a user hears the failure second-hand.</p>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>Where</th><th>Today</th><th>Why it’s not ideal</th><th>Improved (for model + eventual user paraphrase)</th><th>Priority</th></tr>
+</thead>
+<tbody>
+  <tr><td class="num">D26</td><td><code>loop_media.go:133</code><br>(resolve failed)</td><td class="current"><code>[attachment unavailable: ${name}]</code></td><td class="crit">Telemetry tone; brackets feel like a stack dump.</td><td class="improved"><code>[Attachment skipped: ${name} — couldn’t load.]</code></td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">D27</td><td><code>loop_media.go:152</code><br>(integrity fail)</td><td class="current"><code>[attachment unavailable: ${name} (integrity check failed)]</code></td><td class="crit">"Integrity check" is engineering.</td><td class="improved"><code>[Attachment skipped: ${name} — file failed verification. Not sent to the model.]</code></td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">D28</td><td><code>loop_media.go:229</code><br>(too large)</td><td class="current"><code>[attachment unavailable: ${name} (too large or unreadable)]</code></td><td class="crit">Mostly OK.</td><td class="improved"><code>[Attachment skipped: ${name} — too large or unreadable.]</code></td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">D29</td><td><code>media_downgrade.go:276</code><br>(strip-retry)</td><td class="current"><code>[attachment unavailable: ${name} (provider rejected this image format, retrying without it)]</code></td><td class="crit">Leaks "provider"; goal is clear but tone is forensic.</td><td class="improved"><code>[Attachment skipped: ${name} — this model rejected the image format. Retrying without it.]</code></td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">D30</td><td><code>loop_media.go:951</code><br>(image offload)</td><td class="current"><code>Cannot read this image with ${model}; switch to a vision-capable model. File available at: ${path}</code></td><td class="crit">"Cannot" is harsh. Model slug + "vision-capable" jargon.</td><td class="improved"><code>This model (${model}) can’t view that image. Use a vision-capable model, or read the file at: ${path}</code></td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">D31</td><td><code>loop_media.go:951</code> variants<br>(document / file)</td><td class="current">Same shape with <code>document</code> / <code>file</code> noun.</td><td class="crit">Same as D30.</td><td class="improved"><code>This model (${model}) can’t read that document…</code> / <code>…that file…</code></td><td><span class="tag-p2">P2</span></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="E">
+  <h2>8. E. UI chrome — boundaries &amp; error boundaries</h2>
+
+  <div class="table-wrap">
+<table>
+<thead>
+<tr><th>#</th><th>Where</th><th>Today</th><th>Why it’s not ideal</th><th>Improved</th><th>Priority</th></tr>
+</thead>
+<tbody>
+  <tr><td class="num">E32</td><td><code>components/ui/error-boundary.tsx</code></td><td class="current"><code>Something went wrong</code> + <code>Try again</code></td><td class="crit">Telepathic; the user can't tell where the error is.</td><td class="improved">"This view hit an error. Reload the page." (button label: <em>Reload</em>)</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">E33</td><td><code>components/shared/RouteErrorFallback.tsx</code></td><td class="current"><code>Something went wrong loading this page.</code></td><td class="crit">Could be route-specific.</td><td class="improved">"Couldn’t load this page. Reload, or go back."</td><td><span class="tag-p2">P2</span></td></tr>
+  <tr><td class="num">E34</td><td><code>components/agents/AgentCard.tsx:110</code></td><td class="current"><code>Agent encountered an error — check the activity log</code></td><td class="crit">"Encountered" is filler; no verb.</td><td class="improved">"This agent hit an error. Open Activity for details."</td><td><span class="tag-p2">P2</span></td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="diag">
+  <h2>9. F. Diagnostic surface — Verbose chat → Technical details</h2>
+  <p>Rendered by <code>MessageItem.tsx</code> when <em>Verbose chat</em> is on and the wire carried a non-empty <code>errorDetail</code>. This is the surface where it IS OK to leak provider identity, model slug, status code, body preview — that’s the point. The current prefix-free dump is fine; I’d only tighten the **header**.</p>
+
+  <ul>
+    <li><strong>Today</strong>: a collapsed disclosure under the error bubble, body shown as preformatted text.</li>
+    <li><strong>Proposed header</strong>: <em>"Technical details — provider, model, status, body preview"</em>. Tells the operator what they’re looking at, no surprise.</li>
+    <li><strong>Safety</strong>: keep the <code>ERROR_DETAIL_MAX_CHARS</code> cap; show a "copy to clipboard" affordance so operators can paste into an issue without scrolling.</li>
+    <li><strong>Recommendation</strong>: leave the body content <em>verbatim</em> (it is diagnostic by design) but fix only the header string.</li>
+  </ul>
+</section>
+
+<section id="cross">
+  <h2>10. G. Cross-cutting judgments</h2>
+  <ol>
+    <li><strong>Kill "The AI service…" everywhere.</strong> The failure is usually model / network / attachment, not a nameless service. Both Go and SPA strings need to lose that phrase.</li>
+    <li><strong>Unify Go <code>userMessages</code> and SPA <code>codeToDisplay</code>.</strong> Today SPA ignores wire <code>message</code> for the bubble — good for safety, bad for one voice. Prefer one canonical map (contract or a shared copy pack generated alongside the wire types).</li>
+    <li><strong><code>unknown</code> must not stay generic</strong> when the real cause was <code>media_unsupported</code> after strip-retry exhaustion. The SVG-history pollution case should surface media copy, not "Something went wrong talking to the model." That's a classification/display bug as much as a copy bug.</li>
+    <li><strong><code>tool_args</code> and <code>schema</code> rarely hit end-users.</strong> If they do, soften and point to Activity / Verbose. Avoid "schema" in user chrome.</li>
+    <li><strong>Agent-context markers should stay machine-parseable but sound like calm system notes.</strong> Square brackets are fine for downstream grep; the prose around them should read like an engineer's footnote, not a kernel panic.</li>
+    <li><strong>Upload toasts must never concatenate raw <code>msg</code>.</strong> That string comes from the server body and can leak paths, IDs, or stack traces. Use an allow-list of safe causes (size, type, network).</li>
+    <li><strong>"Server" → "Omnipus"</strong> on 5xx and fallback paths. We are the server. We can own the failure without inventing a third party.</li>
+  </ol>
+
+  <div class="callout bad">
+    <strong>Live bug observed in the multi-format UAT:</strong> after <em>send_file</em> of an SVG, subsequent turns in the <em>same session</em> can surface row A9 ("Something went wrong talking to the model") because the SVG MIME survives in history and the provider rejects it. A copy fix alone does not solve this — the presentation path must sanitize outbound/history SVG (rasterize or strip) the same way it does inbound SVG. <strong>Track this as a follow-up ADR item.</strong>
+  </div>
+</section>
+
+<section id="priority">
+  <h2>11. H. Priority if you only change five</h2>
+
+  <div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>Change</th><th>Where</th><th>Why</th></tr></thead>
+<tbody>
+  <tr><td class="num">P0</td><td>Rewrite row A9 <code>unknown</code></td><td>SPA <code>llm-error.ts</code>, Go <code>translate_error.go</code></td><td>The generic that hides real causes, including the SVG-history case.</td></tr>
+  <tr><td class="num">P0</td><td>Align Go <code>media_unsupported</code> with SPA + ensure exhausted media retries don’t fall through to <code>unknown</code></td><td>Go <code>translate_error.go</code> + <code>loop.go</code> relabel</td><td>Currently Go copy leaks into transcripts and diverges from the SPA bubble.</td></tr>
+  <tr><td class="num">P1</td><td>Drop "AI service" from all Go strings</td><td>Go <code>translate_error.go</code></td><td>Brand-wrong; rows A1–A9 Go column.</td></tr>
+  <tr><td class="num">P1</td><td>Soften <code>schema</code> / <code>tool_args</code> for non-operator users</td><td>SPA + Go</td><td>Rows A7–A8.</td></tr>
+  <tr><td class="num">P2</td><td>Humanize attachment markers and upload toasts</td><td>Go <code>loop_media.go</code>, SPA <code>attachment-adapter.ts</code></td><td>Rows C21–C25 and D26–D31.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="files">
+  <h2>12. I. Where each string lives today</h2>
+
+  <div class="panel">
+    <div class="col">
+      <h4>SPA</h4>
+      <ul>
+        <li><code>src/lib/llm-error.ts</code> — <code>codeToDisplay</code> (A1–A9)</li>
+        <li><code>src/lib/api-error.ts</code> — <code>defaultUserMessage</code> (B10–B20)</li>
+        <li><code>src/lib/attachment-adapter.ts</code> — toasts (C21–C25)</li>
+        <li><code>src/components/ui/error-boundary.tsx</code> — E32</li>
+        <li><code>src/components/shared/RouteErrorFallback.tsx</code> — E33</li>
+        <li><code>src/components/agents/AgentCard.tsx</code> — E34</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h4>Backend</h4>
+      <ul>
+        <li><code>pkg/agent/translate_error.go</code> — <code>userMessages</code> (A1–A9 Go)</li>
+        <li><code>pkg/agent/loop_media.go</code> — D26–D31</li>
+        <li><code>pkg/agent/media_downgrade.go</code> — D29</li>
+        <li><code>pkg/agent/loop.go</code> — relabel sites that route failures through <code>UserMessageForCode</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>How I’d land it:</strong> a single PR titled <em>copy(adr-051-rev4): unify LLM error copy in Omnipus tone</em> that touches both SPA and Go copy maps + a small backend guard that prevents <code>media_unsupported</code> from being relabeled to <code>unknown</code> after strip-retry exhaustion. Tests: extend <code>translate_error_test.go</code> <code>media_unsupported → media_unsupported on exhausted retry</code> and <code>llm-error.test.ts</code> per-code copy assertions.
+  </div>
+</section>
+
+<footer>
+  Generated 2026-07-23 · branch <code>sendfile-fix</code> · head <code>8a8ee007</code> · based on code under <code>pkg/agent/</code>, <code>src/lib/</code>, and <code>src/components/</code>.
+</footer>
+
+</div>
+</body>
+</html>
