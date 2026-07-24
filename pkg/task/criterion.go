@@ -89,8 +89,8 @@ type CriterionBehavior struct {
 // (the deterministic scanner, validation, reason rendering) should always go
 // through this method rather than dereferencing MinCount directly, so the
 // nil-default is resolved in exactly one place.
-func (b CriterionBehavior) EffectiveMinCount() int {
-	if b.MinCount == nil {
+func (b *CriterionBehavior) EffectiveMinCount() int {
+	if b == nil || b.MinCount == nil {
 		return 1
 	}
 	return *b.MinCount

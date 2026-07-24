@@ -53,7 +53,7 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 }
 
 // String returns the canonical time.Duration string form.
-func (d duration) String() string { return time.Duration(d).String() }
+func (d *duration) String() string { return time.Duration(*d).String() }
 
 // ADR-053 §8 operability — the session_messaging config section (FR-195's 20
 // keys). Defaults mirror the ADR §Contract Surface "Caps" and the constants in

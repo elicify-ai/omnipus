@@ -470,7 +470,7 @@ func (g *GitGuard) inspectGitArgs(args []string, cwd string) ExecDecision {
 		effCwd = "."
 	}
 	var gitDirOverride string
-	verb := ""
+	var verb string
 
 	i := 0
 	for i < len(args) {

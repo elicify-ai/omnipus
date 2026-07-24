@@ -497,6 +497,7 @@ func TestTaskTool_CreateWithoutCriteria_Rejected(t *testing.T) {
 // never be adjudicated MET, so the write is rejected at create time instead
 // of letting the goal loop retry forever against an unsatisfiable DoD.
 func TestJudge_AllMachineCriteria_UnsatisfiableBashPolicy_RejectedAtWrite(t *testing.T) {
+	t.Parallel()
 	checkCriterion := []any{
 		map[string]any{
 			"kind": "check",

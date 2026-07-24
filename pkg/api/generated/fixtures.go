@@ -1540,8 +1540,6 @@ func intPtr(i int) *int { return &i }
 
 func boolPtr(b bool) *bool { return &b }
 
-func float32Ptr(f float32) *float32 { return &f }
-
 func repeatStr(s string, n int) string {
 	result := make([]byte, 0, len(s)*n)
 	for i := 0; i < n; i++ {

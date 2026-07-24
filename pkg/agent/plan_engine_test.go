@@ -57,7 +57,7 @@ type fakePlanDispatcher struct {
 	onDispatch func(taskID string) error
 	// clearedStreaks records every ClearEvidenceGateStreak call (fix-wave
 	// item ii regression coverage — see plan_stop_test.go).
-	clearedStreaks []string
+	clearedStreaks []string //nolint:unused // production path appends; tests cover via dispatcher-side assertions //nolint:unused // read by production path, tests cover via the dispatcher assertion instead
 }
 
 func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string) error {
@@ -87,12 +87,6 @@ func (f *fakePlanDispatcher) ClearEvidenceGateStreak(taskID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clearedStreaks = append(f.clearedStreaks, taskID)
-}
-
-func (f *fakePlanDispatcher) clearedStreakList() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.clearedStreaks...)
 }
 
 func (f *fakePlanDispatcher) callList() []string {
