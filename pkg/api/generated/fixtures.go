@@ -270,7 +270,7 @@ func FixtureErrorFrame_Populated() ErrorFrame {
 		Payload: &ErrorPayload{
 			LlmError: LLMError{
 				Code:      "rate_limited",
-				Message:   "The AI service is busy. Please retry shortly.",
+				Message:   "From the model: it’s rate-limited right now. Wait a moment, then retry.",
 				Retryable: true,
 				Detail:    &detail,
 			},

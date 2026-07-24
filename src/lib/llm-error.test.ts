@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   codeToDisplay,
   codeToMessage,
+  fromModelPrefix,
   getLLMErrorDisplay,
   readEntryIdFromFrame,
   readLLMErrorFromFrame,
@@ -49,6 +50,47 @@ describe('llm-error — codeToDisplay map', () => {
     expect(codeToMessage(undefined)).toBe(codeToDisplay.unknown)
     // Null is passed defensively — some downstream callers treat absent as null.
     expect(codeToMessage(null as unknown as undefined)).toBe(codeToDisplay.unknown)
+  })
+
+  // Attribution: errors whose cause is upstream of Omnipus carry the
+  // "From the model:" prefix so the user knows the failure is not a product
+  // bug. Failures we own outright (5xx, fallback) carry no prefix;
+  // `network` is ambiguous and carries no prefix because the wording
+  // ("check the network") already disambiguates. Mirrors Go userMessages
+  // in pkg/agent/translate_error.go so the bubble and the persisted
+  // transcript stay in one voice. See
+  // docs/internal/uat/ADR-051-rev4-error-copy-review.md for rationale.
+  it('upstream-caused codes start with the "From the model:" attribution prefix', () => {
+    const upstreamCodes: LLMErrorCode[] = [
+      'media_unsupported',
+      'provider_rejected',
+      'rate_limited',
+      'content_policy',
+      'context_too_long',
+      'tool_args',
+      'schema',
+      'unknown',
+    ]
+    for (const code of upstreamCodes) {
+      expect(
+        codeToDisplay[code].startsWith('From the model:'),
+        `code "${code}" copy must start with "From the model:" prefix; got: ${codeToDisplay[code]}`,
+      ).toBe(true)
+    }
+  })
+
+  it('ambiguous codes (network) do NOT carry the prefix', () => {
+    expect(codeToDisplay.network.startsWith('From the model:')).toBe(false)
+    // Wording already disambiguates; "check the network" cues the user.
+    expect(codeToDisplay.network.toLowerCase()).toContain('network')
+  })
+
+  it('exposes the fromModelPrefix constant so renderers can style it', () => {
+    // Renderers may want to split the bubble copy on this prefix and render
+    // the attribution in a muted `<small>` tag. Pin the exact wording so
+    // the prefix match between the constant and every prefixed copy stays
+    // a compile-time invariant.
+    expect(fromModelPrefix).toBe('From the model:')
   })
 })
 

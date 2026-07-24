@@ -119,7 +119,7 @@ exit 0
 	// raw CLI stderr. "boom happened" is unknown-classification and maps
 	// to the generic user-message copy. The raw stderr stays in
 	// gateway.log only.
-	assert.Equal(t, "The AI service encountered an error.", *resp.Error,
+	assert.Equal(t, "From the model: it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models.", *resp.Error,
 		"smoke-test response body must carry the sanitized generic copy, not the raw CLI stderr")
 	assert.NotEqual(t, "boom happened", *resp.Error,
 		"raw CLI stderr must NOT leak to the smoke-test response body (sanitizer regression)")

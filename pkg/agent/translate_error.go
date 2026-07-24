@@ -73,6 +73,21 @@ const (
 	CodeUnknown LLMErrorCode = "unknown"
 )
 
+// FromModelPrefix is the attribution marker prepended to userMessages for
+// upstream-caused error codes. The bubble can render this with a muted
+// style to make the attribution skim-friendly without changing the copy
+// itself; the string is the single source of truth for both the bubble and
+// the persisted transcript. See the comment on userMessages for rationale.
+const FromModelPrefix = "From the model:"
+
+// withFromModelPrefix prefixes msg with FromModelPrefix when cond is true.
+func withFromModelPrefix(cond bool, msg string) string {
+	if cond {
+		return FromModelPrefix + " " + msg
+	}
+	return msg
+}
+
 // LLMError is the structured, wire-stable shape produced by the classifier.
 // All four fields are required for the wire shape; Code/Message/Retryable
 // must always be populated. Detail is computed live at the forwarder
@@ -98,16 +113,29 @@ type LLMError struct {
 // over server text by design — the message must NOT carry provider
 // identity, model names, or raw body substrings. Operators see the same
 // copy regardless of which upstream rejected the request.
+//
+// Attribution: errors whose cause is upstream of Omnipus (model/provider
+// rejections, capability, rate limits, content policy, shape, unclassified)
+// are prefixed with "From the model:" so the user knows the failure is
+// not a product bug — they should retry or switch models. Failures we own
+// outright (5xx, fallback) carry no prefix; we take the blame. `network`
+// is ambiguous and carries no prefix; the wording ("check the network")
+// already disambiguates. This copy mirrors the SPA catalog in
+// src/lib/llm-error.ts so the chat bubble and the persisted transcript
+// stay in one voice.
+//
+// See docs/internal/uat/ADR-051-rev4-error-copy-review.md for the full
+// rationale, including the four attribution options considered.
 var userMessages = map[LLMErrorCode]string{
-	CodeMediaUnsupported: "The AI service couldn't process an attachment. I've continued without it.",
-	CodeProviderRejected: "The AI service rejected the request.",
-	CodeRateLimited:      "The AI service is busy. Please retry shortly.",
-	CodeNetwork:          "Couldn't reach the AI service. Please retry.",
-	CodeContentPolicy:    "The AI service declined this request.",
-	CodeContextTooLong:   "The conversation is too long for the model; trim and retry.",
-	CodeToolArgs:         "The AI service rejected a tool argument; fix the call and try again.",
-	CodeSchema:           "The AI service rejected the request shape; review the schema and try again.",
-	CodeUnknown:          "The AI service encountered an error.",
+	CodeMediaUnsupported: withFromModelPrefix(true, "it can’t use that attachment. Try another format, or switch to a vision-capable model."),
+	CodeProviderRejected: withFromModelPrefix(true, "it refused this request. Retry once, or pick a different model."),
+	CodeRateLimited:      withFromModelPrefix(true, "it’s rate-limited right now. Wait a moment, then retry."),
+	CodeNetwork:          withFromModelPrefix(false, "Couldn’t reach the model. Check the network, then retry."),
+	CodeContentPolicy:    withFromModelPrefix(true, "it blocked this under its safety policy. Rephrase, or remove the flagged content."),
+	CodeContextTooLong:   withFromModelPrefix(true, "this chat is too long for its context window. Start a new session, or drop older turns."),
+	CodeToolArgs:         withFromModelPrefix(true, "a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool."),
+	CodeSchema:           withFromModelPrefix(true, "the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup."),
+	CodeUnknown:          withFromModelPrefix(true, "it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models."),
 }
 
 // defaultUserMessage returns the canonical user-facing message for code.

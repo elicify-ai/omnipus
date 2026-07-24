@@ -4,6 +4,14 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 
 /**
+ * fromModelPrefix is the attribution marker applied to upstream-caused
+ * error codes. The bubble can render this with a muted style to make the
+ * attribution skim-friendly without changing the copy itself; the string
+ * is the single source of truth for both the bubble and the transcript.
+ */
+export const fromModelPrefix = 'From the model:'
+
+/**
  * llm-error.ts — ADR-051 SPA-side error translation.
  *
  * The backend emits a typed `ErrorFrame` (live) and `ReplayErrorFrame`
@@ -39,29 +47,38 @@ export type LLMErrorCode = GeneratedLLMError['code']
  * Copy is intentionally actionable — tells the user what happened and what
  * (if anything) they can do.
  *
+ * Attribution: errors whose cause is upstream of Omnipus (model/provider
+ * rejections, capability, rate limits, content policy, shape, unclassified)
+ * are prefixed with "From the model:" so the user knows the failure is
+ * not a product bug — they should retry or switch models. Failures we own
+ * outright (5xx, fallback) carry no prefix; we take the blame. `network`
+ * is ambiguous and carries no prefix; the wording ("check the network")
+ * already disambiguates. See `docs/internal/uat/ADR-051-rev4-error-copy-review.md`
+ * for the full rationale.
+ *
  * The `Record<LLMErrorCode, string>` shape is a compile-time gate: adding
  * a new code to the generated AsyncAPI types without updating this map
  * fails `tsc -b --noEmit`.
  */
 export const codeToDisplay: Record<LLMErrorCode, string> = {
   media_unsupported:
-    "That file type isn't supported by this model yet. Try a different format or model.",
+    "From the model: it can’t use that attachment. Try another format, or switch to a vision-capable model.",
   provider_rejected:
-    'The model provider rejected the request. Try again, or switch models.',
+    "From the model: it refused this request. Retry once, or pick a different model.",
   rate_limited:
-    'The model provider is rate-limiting requests. Please wait a moment and retry.',
+    "From the model: it’s rate-limited right now. Wait a moment, then retry.",
   network:
-    "Couldn't reach the model provider. Check your connection and retry.",
+    "Couldn’t reach the model. Check the network, then retry.",
   content_policy:
-    'The model provider refused the request under its content policy.',
+    "From the model: it blocked this under its safety policy. Rephrase, or remove the flagged content.",
   context_too_long:
-    "That conversation is too long for this model's context window. Start a fresh session or trim older turns.",
+    "From the model: this chat is too long for its context window. Start a new session, or drop older turns.",
   tool_args:
-    'The model rejected a tool argument. Fix the call and retry.',
+    "From the model: a tool call had invalid arguments. Retry the turn — Verbose chat shows which tool.",
   schema:
-    'The model rejected the request shape. Review the schema and retry.',
+    "From the model: the request didn’t match what it expects. Retry; if it keeps failing, switch models or check the tool setup.",
   unknown:
-    'Something went wrong talking to the model. Please try again.',
+    "From the model: it didn’t complete this turn. Retry. If it keeps failing, open Technical details (Verbose chat) or switch models.",
 }
 
 /**

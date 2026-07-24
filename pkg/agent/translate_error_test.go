@@ -261,7 +261,7 @@ func TestTranslateLLMError_MessageGenericOverServerText(t *testing.T) {
 		"message must not echo provider body shape")
 }
 
-// TestTranslateLLMError_NilSafety locks the "pe==nil, message==\"\""
+// TestTranslateLLMError_NilSafety locks the "pe==nil, message==""
 // path: must NOT panic and must return CodeUnknown with a non-empty
 // generic message.
 func TestTranslateLLMError_NilSafety(t *testing.T) {
@@ -269,6 +269,54 @@ func TestTranslateLLMError_NilSafety(t *testing.T) {
 	assert.NotEmpty(t, llm.Message, "even unknown-classified errors get a generic message")
 	assert.Equal(t, CodeUnknown, llm.Code)
 	assert.False(t, llm.Retryable)
+}
+
+// TestUserMessageForCode_AttributionPrefix locks the "From the model:"
+// attribution contract for upstream-caused codes. Failures whose cause is
+// upstream of Omnipus (model/provider rejections, capability, rate
+// limits, content policy, shape, unclassified) MUST carry the prefix so
+// the user knows the failure is not a product bug — they should retry or
+// switch models. Failures we own outright (5xx, fallback) carry no
+// prefix; we take the blame. `network` is ambiguous and carries no prefix
+// because the wording ("check the network") already disambiguates.
+//
+// This mirrors the SPA catalog in src/lib/llm-error.ts so the chat
+// bubble and the persisted transcript stay in one voice. See
+// docs/internal/uat/ADR-051-rev4-error-copy-review.md for rationale.
+func TestUserMessageForCode_AttributionPrefix(t *testing.T) {
+	upstreamCodes := []LLMErrorCode{
+		CodeMediaUnsupported,
+		CodeProviderRejected,
+		CodeRateLimited,
+		CodeContentPolicy,
+		CodeContextTooLong,
+		CodeToolArgs,
+		CodeSchema,
+		CodeUnknown,
+	}
+	for _, code := range upstreamCodes {
+		msg := UserMessageForCode(code)
+		assert.True(t, strings.HasPrefix(msg, FromModelPrefix),
+			"code %q must carry FromModelPrefix attribution; got %q", code, msg)
+	}
+
+	// Network is ambiguous — caller-side or upstream-side; wording must
+	// disambiguate instead of the prefix.
+	assert.False(t, strings.HasPrefix(UserMessageForCode(CodeNetwork), FromModelPrefix),
+		"network must not carry the prefix; wording disambiguates instead")
+	assert.Contains(t, strings.ToLower(UserMessageForCode(CodeNetwork)), "network",
+		"network copy must name the network so users know where to look")
+}
+
+// TestUserMessageForCode_NoLegacyAIServiceCopy locks the brand-tone
+// regression: none of the userMessages entries may use "The AI service"
+// prose. The product is Omnipus; the failure is upstream. See
+// docs/internal/uat/ADR-051-rev4-error-copy-review.md for rationale.
+func TestUserMessageForCode_NoLegacyAIServiceCopy(t *testing.T) {
+	for code, msg := range userMessages {
+		assert.NotContains(t, msg, "AI service",
+			"code %q copy must not say 'AI service' (regression to legacy voice); got %q", code, msg)
+	}
 }
 
 // TestClassifyByProviderError_UnknownSubstring verifies that an
@@ -291,8 +339,8 @@ func TestClassifyByProviderError_UnknownSubstring(t *testing.T) {
 	llm := TranslateLLMError(pe, pe.Body)
 	assert.NotEmpty(t, llm.Message)
 	assert.Equal(t, CodeUnknown, llm.Code)
-	assert.Equal(t, "The AI service encountered an error.", llm.Message,
-		"CodeUnknown must map to the generic 'encountered an error' copy")
+	assert.Equal(t, userMessages[CodeUnknown], llm.Message,
+		"CodeUnknown must map to the canonical userMessages[CodeUnknown] entry")
 }
 
 // TestIsPDFRejectionMessage / TestIsImageRejectionMessage /
