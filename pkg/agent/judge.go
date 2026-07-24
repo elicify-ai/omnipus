@@ -708,10 +708,7 @@ func (al *AgentLoop) evidenceStore() *task.EvidenceStore {
 // the Judge is type "system" — never privileged — so this always applies in a
 // real install.
 //
-// ADR-053 D12 retired the SEC-26 global daily USD cost cap that used to live
-// here — TokenBudget is the sole app-level spend brake, consulted at the
-// next turn/adjudication boundary from the normal Judge dispatch path. This
-// helper now handles ONLY the per-agent LLM/hr sliding-window check.
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 func (al *AgentLoop) checkJudgeSEC26(agentType, agentID string) (allowed bool, retryAfter time.Duration, reason string) {
 	cfg := al.GetConfig()
 	if al.rateLimiter == nil || cfg == nil || security.IsPrivilegedAgent(agentType) {

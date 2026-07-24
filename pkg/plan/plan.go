@@ -45,6 +45,14 @@ var ErrIllegalPlanTransition = fmt.Errorf("%w: illegal plan state transition", E
 // specifically.
 var ErrRestartNotPermitted = fmt.Errorf("%w: restart (failed -> approved) is only permitted from failed(stopped_by_user)", ErrIllegalPlanTransition)
 
+// ErrNotFailed is returned by PlayPlan (engine) when a play operation is
+// requested on a plan that is not currently in StateFailed. Play resumes a
+// stopped/failed plan; any other state is rejected with this sentinel so the
+// REST seam can map it to HTTP 409 via errors.Is without resorting to a
+// fragile substring match on the wrapped error message. Modeled after
+// ErrRestartNotPermitted above.
+var ErrNotFailed = fmt.Errorf("%w: play is only permitted from failed", ErrIllegalPlanTransition)
+
 // verr wraps a formatted message as a user-facing validation error (ErrValidation).
 func verr(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrValidation}, args...)...)

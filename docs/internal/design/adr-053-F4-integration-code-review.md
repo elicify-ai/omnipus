@@ -22,7 +22,7 @@ The integration story is **not closed end-to-end**:
 
 1. **Play-from-commit (`PlayPlan` + `ResetMemberCheckout`) is not on the REST ▶ Play path** — production `POST /plans/{id}/restart` reimplements member reset without calling `PlayPlan`, so generation mint, `ResumeFromCommit`, and isolated checkout never run in operator-facing Play.
 2. **Owner-authority gate leaks the real OwnerAgentID** in denial errors, contradicting its own “non-owner learns nothing” contract.
-3. **E2E correctness depended on product workarounds** (force members `inbox→next`, per-test Main agents) that paper over real gaps both the design gate and live gateway will keep hitting.
+3. **E2E correctness depended on product workarounds** (force members `inbox→next`, per-test Main agents) that paper over real gaps both the design gate and live gateway will keep hitting. (M3 + M4 each now resolved — see "Post-review fixes" below.)
 
 Secondary issues: SetCap freeze does not cover constructor-set caps; broken HMAC chains log but still replay; SPA/embed drift risk on rate-limit schemas if pack is not refreshed.
 
@@ -103,13 +103,15 @@ Log owner/caller detail server-side only.
 
 ---
 
-### M4 — Multi-workspace `find_for_agent` ambiguity survives outside test isolation
+### M4 — Multi-workspace `find_for_agent` ambiguity survives outside test isolation — **FIXED**
 
 **Evidence:** commit `2358521c` — Jim in several core teams → wrong workspace → turn canceled.
 
 **Impact:** F4 e2e invented per-test Main agents to avoid a real dispatcher routing bug. Any install with one agent on multiple workspace teams still races plan member turns. Out of pure F4 file list but blocks claiming e2e green proves the design diagram under multi-workspace product use.
 
 **Required fix:** `find_for_agent` must prefer the **task’s** `workspace_id` (or hard-fail multi-membership) rather than “first sorted id.”
+
+**Resolution:** `workspace.FindForAgentPreferring` (`pkg/workspace/find_for_agent.go:176`) implements the exact preferred-workspace fast path prescribed + a `FindForAgent` fallback. The agent workspace reroot path (`pkg/agent/workspace_reroot.go:106`) calls it with the task workspace as `preferredWsID`, and the per-turn env-injection block (`pkg/agent/loop_env.go:240`) threads the current turn's `workspaceID` through the same resolver. Regression coverage: `pkg/workspace/find_for_agent_test.go` (4 tests, including `TestFindForAgentPreferring_DisambiguatesMultiMembership`). F4 e2e continues to use per-test agents (cheap, deterministic) but the production code path now resolves multi-membership safely without the test workaround.
 
 ---
 
@@ -233,6 +235,11 @@ Ship F4 engine pieces only after addressing at least **M1** (Play single-path) a
 3. (Strongly recommended) inbox→next on plan execute + task-workspace preference in `find_for_agent`.  
 4. Re-run Conformance_t0 + Play/correction unit packs + project e2e gate on `ci-omnipus`.
 
+**Revisions on M3/M4 (2026-07-24, post-review):**
+
+- **M4 FIXED** — `workspace.FindForAgentPreferring` (task-workspace preference) is now the production code path used by the agent workspace reroot + per-turn env-injection blocks. Regression tests in `pkg/workspace/find_for_agent_test.go`. Per-test Main agents in F4 e2e remain as a defensive isolation tactic, but the underlying product gap is closed.
+- **M3** — inbox→next triage remains a tracked product follow-up (see `adr-053-DoD7-signoff-summary.md`); harness-shaped e2e workaround continues to apply on the F4-PR.
+
 ---
 
 ## Commit map (F4 core → green-up)
@@ -257,6 +264,7 @@ Ship F4 engine pieces only after addressing at least **M1** (Play single-path) a
 
 - **M1 FIXED:** `handlePlanRestart` now delegates to `PlanEngine.PlayPlan` (single chokepoint for D13 generation + ResumeFromCommit + checkout). Partial member-reset failures still surface as HTTP 500.
 - **M2 FIXED:** owner-denial errors are opaque (no OwnerAgentID leak); detail logged server-side only.
-- **M3/M4:** tracked as product follow-ups (inbox→next triage; multi-workspace find_for_agent) — e2e workarounds remain; not blocking this landing if operator accepts.
+- **M4 FIXED:** `workspace.FindForAgentPreferring` (task-workspace preference) is now the production code path used by the agent workspace reroot + per-turn env-injection blocks. Regression coverage: `pkg/workspace/find_for_agent_test.go`.
+- **M3:** tracked as product follow-up (inbox→next triage) — e2e workaround remains on the F4-PR; not blocking this landing if operator accepts.
 
-**Revised verdict after fixes: PASS with tracked follow-ups (M3/M4).**
+**Revised verdict after fixes: PASS with one tracked follow-up (M3).**

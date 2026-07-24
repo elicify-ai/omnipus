@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -112,9 +113,15 @@ type MessageParentTool struct {
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
 	// tool path. The async consumer honors the same switch per event; without
 	// this guard a disabled plane still accepted direct inbox.Append calls
-	// (arch-M2 review). Nil = fail open (unwired, e.g. unit tests), matching
-	// the consumer's nil-config posture.
+	// (arch-M2 review).
+	//
+	// sessionMessagingWired tracks whether SetSessionMessagingEnabled was
+	// EVER called, so an unwired tool fails CLOSED on the kill switch rather
+	// than fail-open (silent-failure hunter #12 — fix B.5). The FR-196
+	// kill switch is a security boundary; an unwired production tool is a
+	// configuration bug, not a permission grant.
 	sessionMessagingEnabled func() bool
+	sessionMessagingWired   atomic.Bool
 
 	needsInputTTL time.Duration
 	now           func() time.Time
@@ -148,15 +155,29 @@ func (t *MessageParentTool) SetContentEgressFilter(f ContentEgressFilter) { t.eg
 // Wired live (re-reads config per call) by wireSessionMessagingForAgent.
 func (t *MessageParentTool) SetSessionMessagingEnabled(fn func() bool) {
 	t.sessionMessagingEnabled = fn
+	// Mark the tool as wired regardless of whether fn is nil — once the
+	// gateway has explicitly installed a reader (even one that always
+	// returns false), the wiring has been acknowledged and we honor the
+	// closure's verdict rather than falling through to the fail-closed
+	// default below.
+	t.sessionMessagingWired.Store(true)
 }
 
 // sessionMessagingPlaneEnabled reports whether the session-messaging plane is
-// live for this tool's sync path. A nil closure (unwired — e.g. a bare unit
-// test that did not call SetSessionMessagingEnabled) fails OPEN, matching the
-// async consumer's nil-config posture (session_messaging_wire.go dispatch).
+// live for this tool's sync path. An UNWIRED tool (SetSessionMessagingEnabled
+// never called — e.g. a bare unit test that did not configure the kill switch)
+// fails CLOSED, matching the FR-196 security boundary's "no silent default"
+// posture (silent-failure hunter #12 — fix B.5). The wired-but-nil case is
+// the explicit "always disabled" sentinel the gateway uses to ship a build-
+// time kill.
 func (t *MessageParentTool) sessionMessagingPlaneEnabled() bool {
+	if !t.sessionMessagingWired.Load() {
+		// Unwired = fail closed (no silent fail-open on a security boundary).
+		return false
+	}
 	if t.sessionMessagingEnabled == nil {
-		return true
+		// Wired with a nil closure = explicit "always disabled" sentinel.
+		return false
 	}
 	return t.sessionMessagingEnabled()
 }
@@ -710,11 +731,32 @@ func toIntArg(v any) (int, error) {
 	}
 }
 
-// logMessageParentWakeFailure is a tiny indirection so tests can assert a
-// wake failure/suppression never propagates to the tool result without
-// needing a real logger.
+// logMessageParentWakeFailure is the default logger-injection hook for
+// surfacing wake failures (B.6). It defaults to a no-op so a fresh
+// MessageParentTool without an injected logger still runs; the gateway
+// calls SetMessageParentWakeFailureLogger at boot to install the real slog
+// handler so a missing-wake path is visible on the production runtime.
+//
+// The var indirection remains (renamed, now wrapped by SetMessageParentWakeFailureLogger)
+// so tests can assert a wake failure never propagates to the tool result
+// without needing a real logger — they can override the package-level
+// variable for the duration of the test.
 var logMessageParentWakeFailure = func(kind string, err error) { //nolint:gochecknoglobals
-	// Intentionally best-effort; see the WakeParent call site's comment.
+	// Intentionally best-effort by default; see the WakeParent call site's
+	// comment. Production callers should install a real slog handler via
+	// SetMessageParentWakeFailureLogger at boot so a wake failure is
+	// surfaced as a slog.Warn rather than silently swallowed.
 	_ = kind
 	_ = err
+}
+
+// SetMessageParentWakeFailureLogger installs the slog-backed wake-failure
+// logger used on the production runtime path (B.6). It wraps the existing
+// package-level var indirection so test-time overrides via direct assignment
+// still work; install a no-op explicitly to silence the wake log in tests.
+func SetMessageParentWakeFailureLogger(logger func(string, error)) {
+	if logger == nil {
+		return
+	}
+	logMessageParentWakeFailure = logger
 }

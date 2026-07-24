@@ -105,6 +105,13 @@ func (r *LastMemberCommitResolver) LastMemberCommit(planID, taskID string) (stri
 // false (with nil error) for every fresh-attempt degrade: nil resolver fields,
 // unloaded task, no workspace, or a work dir that was never materialized —
 // which is deliberately NOT created as a side effect of Play.
+//
+// On a stat error, only os.ErrNotExist is treated as the documented
+// "unmaterialized work dir" fresh-attempt degrade. Every other error
+// (permission, I/O, ELOOP, ENOTDIR, EACCES, broken symlink) is logged as
+// a WARN and returned as a wrapped error so the caller's "degrade to fresh
+// attempt" path can log the real reason — fixes the silent-failure pattern
+// where any stat error looked like an unmaterialized work dir.
 func (r *LastMemberCommitResolver) memberEvidenceDir(planID, taskID string) (dir string, ok bool, err error) {
 	if r == nil || r.taskStore == nil || r.home == "" || taskID == "" {
 		return "", false, nil
@@ -122,7 +129,16 @@ func (r *LastMemberCommitResolver) memberEvidenceDir(planID, taskID string) (dir
 	}
 	dir = workspace.WorkDir(r.home, t.WorkspaceID)
 	if _, statErr := os.Stat(dir); statErr != nil {
-		return "", false, nil //nolint:nilerr
+		if errors.Is(statErr, os.ErrNotExist) {
+			return "", false, nil
+		}
+		// Any other stat error (permission, ELOOP, broken symlink, ENOTDIR,
+		// EACCES, I/O) is NOT the documented "unmaterialized" case — surface
+		// it so the caller can log the real reason instead of degrading
+		// silently.
+		logger.WarnCF("plan_engine", "member resume: workspace work dir stat failed — fresh attempt",
+			map[string]any{"plan_id": planID, "task_id": taskID, "dir": dir, "error": statErr.Error()})
+		return "", false, fmt.Errorf("plan_engine: member resume: stat work dir %s: %w", dir, statErr)
 	}
 	return dir, true, nil
 }

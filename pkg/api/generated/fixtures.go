@@ -1668,7 +1668,8 @@ func FixturePromptGuardUpdateResponse_Edge() PromptGuardUpdateResponse {
 
 // ── RateLimitsResponse ────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsResponse.yaml
-// ADR-053 D12 retired the SEC-26 USD cost cap (DailyCostCap / DailyCostUsd).
+
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 
 func FixtureRateLimitsResponse_Populated() RateLimitsResponse {
 	return RateLimitsResponse{
@@ -1692,7 +1693,8 @@ func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 
 // ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml
-// ADR-053 D12 retired the SEC-26 USD cost cap (DailyCostCapUsd).
+
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 
 func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
 	llm := int64(200)
@@ -1714,7 +1716,8 @@ func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml
-// ADR-053 D12 retired the SEC-26 USD cost cap (DailyCostCapUsd in Applied).
+
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 
 func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
 	llm := int64(200)

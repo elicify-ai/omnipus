@@ -393,7 +393,7 @@ func (s *MessageInboxStore) Ack(ownerKey string, messageIDs []string) error {
 	return nil
 }
 
-// Drain returns up to max unacked messages for childSessionID under
+// Drain returns up to maxMessages unacked messages for childSessionID under
 // ownerKey, oldest first, after the opaque sinceCursor (empty = from the
 // start). nextCursor, when non-empty, is passed back on the next Drain call
 // to continue where this one left off (delegate.inbox's since-cursor

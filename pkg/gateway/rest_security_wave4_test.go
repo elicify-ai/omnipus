@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -95,11 +94,7 @@ func TestHandleRateLimits_Enabled(t *testing.T) {
 func TestHandleRateLimits_RejectsRetiredUSDField(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/rate-limits",
-		strings.NewReader(`{"daily_cost_cap_usd": 5.0}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleRateLimits(w, r)
+	w := putRateLimits(t, api, `{"daily_cost_cap_usd": 5.0}`)
 
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"daily_cost_cap_usd is retired per ADR-053 D12 — must 400, never silent no-op")
@@ -107,6 +102,10 @@ func TestHandleRateLimits_RejectsRetiredUSDField(t *testing.T) {
 		"error body must name the retired field so operators find the migration path")
 	assert.Contains(t, w.Body.String(), "D12",
 		"error body must cite the ADR that retired the field")
+	// SEC: raw field value must NOT be echoed into the 400 body — see
+	// rest_rate_limits.go's daily_cost_cap_usd rejection comment.
+	assert.NotContains(t, w.Body.String(), "5.0",
+		"rejection must not echo raw field value (MaxBytesReader/1MB body)")
 }
 
 // TestHandleRateLimitsWave4_MethodNotAllowed returns 405 for unsupported methods.

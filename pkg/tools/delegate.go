@@ -347,9 +347,15 @@ type DelegateTool struct {
 	// session-messaging-plane actions (inbox/inbox_ack/steer/respond/cancel/
 	// follow_up/peek). The async consumer honors the same switch per event;
 	// without this guard those actions bypassed it (calling
-	// EnqueueSteeringMessage / inbox directly). Nil = fail open (unwired, e.g.
-	// unit tests), matching the consumer's nil-config posture. (arch-M2 review.)
+	// EnqueueSteeringMessage / inbox directly).
+	//
+	// sessionMessagingWired tracks whether SetSessionMessagingEnabled was
+	// EVER called, so an unwired tool fails CLOSED on the kill switch rather
+	// than fail-open (silent-failure hunter #12 — fix B.5). The FR-196
+	// kill switch is a security boundary; an unwired production tool is a
+	// configuration bug, not a permission grant.
 	sessionMessagingEnabled func() bool
+	sessionMessagingWired   atomic.Bool
 
 	snapshotMaxBytes int
 	snapshotMaxRefs  int
@@ -418,15 +424,29 @@ func (t *DelegateTool) SetSteeringSink(sink DelegateSteeringSink) {
 // actions and are intentionally NOT gated.
 func (t *DelegateTool) SetSessionMessagingEnabled(fn func() bool) {
 	t.sessionMessagingEnabled = fn
+	// Mark the tool as wired regardless of whether fn is nil — once the
+	// gateway has explicitly installed a reader (even one that always
+	// returns false), the wiring has been acknowledged and we honor the
+	// closure's verdict rather than falling through to the fail-closed
+	// default below.
+	t.sessionMessagingWired.Store(true)
 }
 
 // sessionMessagingPlaneEnabled reports whether the session-messaging plane is
-// live for the SYNC action surface. A nil closure (unwired — e.g. a bare unit
-// test that did not call SetSessionMessagingEnabled) fails OPEN, matching the
-// async consumer's nil-config posture (session_messaging_wire.go dispatch).
+// live for the SYNC action surface. An UNWIRED tool (SetSessionMessagingEnabled
+// never called — e.g. a bare unit test that did not configure the kill switch)
+// fails CLOSED, matching the FR-196 security boundary's "no silent default"
+// posture (silent-failure hunter #12 — fix B.5). The wired-but-nil case is
+// the explicit "always disabled" sentinel the gateway uses to ship a build-
+// time kill.
 func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
+	if !t.sessionMessagingWired.Load() {
+		// Unwired = fail closed (no silent fail-open on a security boundary).
+		return false
+	}
 	if t.sessionMessagingEnabled == nil {
-		return true
+		// Wired with a nil closure = explicit "always disabled" sentinel.
+		return false
 	}
 	return t.sessionMessagingEnabled()
 }

@@ -2296,7 +2296,10 @@ func setupAndStartServices(
 			"error", ilKeyErr)
 	}
 	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
-	intentLog := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"), intentLogChainKey)
+	intentLog, ilDirErr := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"), intentLogChainKey)
+	if ilDirErr != nil {
+		return nil, fmt.Errorf("gateway: failed to create intent log dir: %w", ilDirErr)
+	}
 	bootSweepCfg := agentLoop.GetConfig().Planning
 
 	// ADR-053 Phase 2 on-ramp: construct the durable S3 child->parent message

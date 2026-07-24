@@ -41,6 +41,10 @@ func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.Lifec
 
 	tool := NewMessageParentTool(inbox, lc)
 	tool.SetWaker(waker)
+	// Enable the session-messaging plane by default for tests so the
+	// fail-closed kill switch (fix B.5) does not reject every test call.
+	// Tests that exercise the kill switch itself override this.
+	tool.SetSessionMessagingEnabled(func() bool { return true })
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID:        "child-1",
@@ -193,6 +197,7 @@ func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	tool := NewMessageParentTool(inbox, lc)
+	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-3p", State: session.LifecycleRunning,
@@ -213,6 +218,7 @@ func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	tool := NewMessageParentTool(inbox, lc)
+	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	result := tool.Execute(context.Background(), map[string]any{"kind": "progress", "text": "x"})
 	if !result.IsError {

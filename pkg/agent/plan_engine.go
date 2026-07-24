@@ -2261,19 +2261,8 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 	// Owner-authority gate (sec-MAJOR-2): only the plan's owner may correct
 	// it. Runs before any state/phase inspection so a non-owner cannot probe
 	// plan state via error differentiation, and before any mutation.
-	if caller.AgentID == "" {
-		return nil, fmt.Errorf("%w: plan %q: caller agent identity is empty", ErrCorrectionNotOwner, planID)
-	}
-	if caller.AgentID != p.OwnerAgentID {
-		// Opaque denial (sec-MAJOR-2): do not leak the real OwnerAgentID to a
-		// non-owner. Detail is logged server-side only.
-		logger.WarnCF("plan_engine", "AppendCorrection denied: caller is not plan owner",
-			map[string]any{"plan_id": planID, "caller_agent": caller.AgentID, "owner_agent": p.OwnerAgentID})
-		return nil, fmt.Errorf("%w: plan %q", ErrCorrectionNotOwner, planID)
-	}
-	if p.OwnerSessionID != "" && caller.SessionID != p.OwnerSessionID {
-		return nil, fmt.Errorf("%w: plan %q: caller session does not match the plan's owner session",
-			ErrCorrectionNotOwner, planID)
+	if err := pe.requireOwner(caller, p, planID); err != nil {
+		return nil, err
 	}
 	if p.State != plan.StateRunning {
 		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is %s, not running", planID, p.State)
@@ -2386,33 +2375,15 @@ func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req Correc
 		if req.SupersededMemberID == "" {
 			return fmt.Errorf("plan_engine: supersede requires superseded_member_id")
 		}
-		t, err := pe.taskStore.Get(req.SupersededMemberID)
-		if err != nil {
-			return fmt.Errorf("plan_engine: superseded member %q: %w", req.SupersededMemberID, err)
-		}
-		if t.Status != task.StatusDone {
-			return fmt.Errorf("plan_engine: member %q is %s, not done (only done members can be superseded)",
-				req.SupersededMemberID, t.Status)
-		}
-		if t.PlanID != planID {
-			return fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
-				req.SupersededMemberID, t.PlanID, planID)
+		if err := pe.validateMemberRef(planID, req.SupersededMemberID, "supersede", task.StatusDone, "done"); err != nil {
+			return err
 		}
 	case CorrectionTargetedRetry:
 		if req.RetriedMemberID == "" {
 			return fmt.Errorf("plan_engine: targeted_retry requires retried_member_id")
 		}
-		t, err := pe.taskStore.Get(req.RetriedMemberID)
-		if err != nil {
-			return fmt.Errorf("plan_engine: retried member %q: %w", req.RetriedMemberID, err)
-		}
-		if t.Status != task.StatusFailed {
-			return fmt.Errorf("plan_engine: member %q is %s, not failed (only failed members can be targeted-retried)",
-				req.RetriedMemberID, t.Status)
-		}
-		if t.PlanID != planID {
-			return fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
-				req.RetriedMemberID, t.PlanID, planID)
+		if err := pe.validateMemberRef(planID, req.RetriedMemberID, "targeted_retry", task.StatusFailed, "failed"); err != nil {
+			return err
 		}
 	case CorrectionAppend:
 		if len(req.TailMembers) == 0 {
@@ -2420,6 +2391,59 @@ func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req Correc
 		}
 	default:
 		return fmt.Errorf("plan_engine: unknown correction verb %q", req.Verb)
+	}
+	return nil
+}
+
+// validateMemberRef is the shared preflight for member-targeted corrections:
+// resolve the member, require the expected status (verb-dependent), and
+// confirm the task actually belongs to planID. Used by both CorrectionSupersede
+// (wantStatus=done, statusMsg="done") and CorrectionTargetedRetry
+// (wantStatus=failed, statusMsg="failed") so the only call-site difference is
+// the verb label and the status check.
+func (pe *PlanEngine) validateMemberRef(planID, memberID, verb string, wantStatus task.Status, statusMsg string) error {
+	t, err := pe.taskStore.Get(memberID)
+	if err != nil {
+		return fmt.Errorf("plan_engine: %s member %q: %w", verb, memberID, err)
+	}
+	if t.Status != wantStatus {
+		return fmt.Errorf("plan_engine: member %q is %s, not %s (only %s members can be %s)",
+			memberID, t.Status, statusMsg, statusMsg, verb)
+	}
+	if t.PlanID != planID {
+		return fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
+			memberID, t.PlanID, planID)
+	}
+	return nil
+}
+
+// requireOwner is the owner-authority gate for AppendCorrection
+// (sec-MAJOR-2, FR-143/G-11). It enforces the three checks that must run
+// before any state/phase inspection so a non-owner cannot probe plan state
+// via error differentiation, and before any mutation:
+//   - AgentID non-empty (a caller with no identity is a non-owner).
+//   - AgentID matches the plan's OwnerAgentID (opaque denial — the real
+//     owner ID is logged server-side, not echoed in the error).
+//   - When OwnerSessionID is populated (Phase-2 owner loop), SessionID must
+//     match it. When OwnerSessionID is empty (owner session not yet opened),
+//     the agent match alone gates.
+//
+// Returns ErrCorrectionNotOwner (wrapped) on every denial; callers propagate
+// the wrapped sentinel so the REST seam can map to HTTP 403.
+func (pe *PlanEngine) requireOwner(caller CorrectionCaller, p *plan.Plan, planID string) error {
+	if caller.AgentID == "" {
+		return fmt.Errorf("%w: plan %q: caller agent identity is empty", ErrCorrectionNotOwner, planID)
+	}
+	if caller.AgentID != p.OwnerAgentID {
+		// Opaque denial (sec-MAJOR-2): do not leak the real OwnerAgentID to a
+		// non-owner. Detail is logged server-side only.
+		logger.WarnCF("plan_engine", "AppendCorrection denied: caller is not plan owner",
+			map[string]any{"plan_id": planID, "caller_agent": caller.AgentID, "owner_agent": p.OwnerAgentID})
+		return fmt.Errorf("%w: plan %q", ErrCorrectionNotOwner, planID)
+	}
+	if p.OwnerSessionID != "" && caller.SessionID != p.OwnerSessionID {
+		return fmt.Errorf("%w: plan %q: caller session does not match the plan's owner session",
+			ErrCorrectionNotOwner, planID)
 	}
 	return nil
 }
@@ -2561,11 +2585,17 @@ func buildUnreachableDoDHandover(p *plan.Plan, tasks []task.Task) string {
 
 // PlayResult is the outcome of a Play (resume) operation.
 //
+// StillFailedMemberIDs lists the task IDs whose RestartReset failed (the
+// per-member reset is logged-and-continued — see PlayPlan — so a partial
+// failure is not fatal but the REST handler must surface it to the operator
+// rather than returning an unqualified 200).
+//
 // not-wire-format: engine-internal type.
 type PlayResult struct {
-	NewGeneration int    `json:"new_generation"`
-	ResumedFrom   string `json:"resumed_from,omitempty"`
-	PlanID        string `json:"plan_id"`
+	NewGeneration        int      `json:"new_generation"`
+	ResumedFrom          string   `json:"resumed_from,omitempty"`
+	PlanID               string   `json:"plan_id"`
+	StillFailedMemberIDs []string `json:"still_failed_member_ids,omitempty"`
 }
 
 // PlayPlan resumes a stopped/failed plan as a new owner-session generation
@@ -2584,8 +2614,7 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 		return nil, fmt.Errorf("plan_engine: PlayPlan: get plan %q: %w", planID, err)
 	}
 	if p.State != plan.StateFailed {
-		return nil, fmt.Errorf("plan_engine: PlayPlan: plan %q is %s, not failed (Play resumes a stopped/failed plan)",
-			planID, p.State)
+		return nil, fmt.Errorf("%w: plan %q is %s", plan.ErrNotFailed, planID, p.State)
 	}
 	// The restart transition validates failed_reason == stopped_by_user
 	// (plan.ValidateRestartTransition). This is the same gate the REST
@@ -2597,10 +2626,13 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 
 	// Reset failed/cancelled members to `next`; preserve done members.
 	// Resume from last git commit if available (D13); fresh attempt otherwise.
+	// Track still-failed members so the REST handler can surface partial
+	// resets (RestartReset is logged-and-continued, never fatal).
 	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})
 	if err != nil {
 		return nil, fmt.Errorf("plan_engine: PlayPlan: list member tasks: %w", err)
 	}
+	var stillFailed []string
 	for i := range tasks {
 		t := &tasks[i]
 		if task.IsTerminal(t.Status) && t.Status != task.StatusDone {
@@ -2608,6 +2640,8 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 			if _, rerr := pe.taskStore.RestartReset(t.ID); rerr != nil {
 				logger.WarnCF("plan_engine", "PlayPlan: could not reset member",
 					map[string]any{"plan_id": planID, "task_id": t.ID, "error": rerr.Error()})
+				stillFailed = append(stillFailed, t.ID)
+				continue
 			}
 			pe.recordMemberResumePoint(planID, t.ID)
 		}
@@ -2629,9 +2663,10 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 		map[string]any{"plan_id": planID, "generation": newGen, "resumed_from": prevGen})
 
 	return &PlayResult{
-		NewGeneration: newGen,
-		ResumedFrom:   fmt.Sprintf("gen-%d", prevGen),
-		PlanID:        planID,
+		NewGeneration:        newGen,
+		ResumedFrom:          fmt.Sprintf("gen-%d", prevGen),
+		PlanID:               planID,
+		StillFailedMemberIDs: stillFailed,
 	}, nil
 }
 
@@ -2677,11 +2712,10 @@ func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 	// fatal to Play.
 	if cr != nil {
 		dir, cerr := cr.ResetMemberCheckout(planID, taskID, hash)
-		switch {
-		case cerr != nil:
+		if cerr != nil {
 			logger.WarnCF("plan_engine", "member resume: could not materialize resume checkout — shared-tree resume",
 				map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "error": cerr.Error()})
-		case dir != "":
+		} else if dir != "" {
 			logger.InfoCF("plan_engine", "member resume: working tree restored at commit",
 				map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "dir": dir})
 		}

@@ -60,6 +60,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sort"
 	"sync"
 
@@ -103,8 +104,12 @@ func GenesisSeed() []byte {
 // the agent.NewAgentLoop signature.
 //
 // In test contexts where neither LoggerConfig.HMACKey nor processChainKey is
-// set, NewLogger falls back to a deterministic dev-only key with a
-// sticky-once slog.Warn so the gap is loud but the test still runs.
+// set, the dev-only fallback fires ONLY when an explicit test-mode opt-in
+// is set (env var OMNIPUS_AUDIT_DEV_KEY=1) — production deploys must fail
+// closed (NewLogger returns a fatal boot error) so a missing master key
+// never silently degrades tamper-evidence integrity.
+const auditDevKeyEnvVar = "OMNIPUS_AUDIT_DEV_KEY"
+
 var (
 	processChainKeyMu   sync.RWMutex
 	processChainKey     []byte
@@ -163,25 +168,32 @@ func DeriveAuditKey(masterKey []byte) ([]byte, error) {
 // resolveChainKey picks the chain key for a Logger in the documented
 // precedence order: LoggerConfig.HMACKey → processChainKey → dev fallback.
 // The dev fallback is deterministic (sha256("omnipus-audit-dev-only-key"))
-// so tests across the suite see consistent behavior, but emits a sticky
-// slog.Warn the first time it fires so a misconfigured production deploy
-// is loud.
-func resolveChainKey(cfgKey []byte) []byte {
+// and only fires when the explicit test-mode opt-in is set
+// (OMNIPUS_AUDIT_DEV_KEY=1) so a misconfigured production deploy fails
+// closed with a non-nil error rather than silently losing tamper-evidence
+// integrity to a public dev key. A sticky slog.Warn fires the first time
+// the dev fallback is used, so even an opted-in test boot is loud.
+func resolveChainKey(cfgKey []byte) ([]byte, error) {
 	if len(cfgKey) > 0 {
 		out := make([]byte, len(cfgKey))
 		copy(out, cfgKey)
-		return out
+		return out, nil
 	}
 	if k := getProcessChainKey(); k != nil {
-		return k
+		return k, nil
 	}
-	devChainKeyWarnOnce.Do(func() {
-		slog.Warn("audit: HMAC chain key not configured, using insecure dev-only fallback "+
-			"(set LoggerConfig.HMACKey or call audit.SetProcessChainKey at boot)",
-			"info_tag", AuditChainKeyInfo)
-	})
-	h := sha256.Sum256([]byte("omnipus-audit-dev-only-key"))
-	return h[:]
+	if os.Getenv(auditDevKeyEnvVar) == "1" {
+		devChainKeyWarnOnce.Do(func() {
+			slog.Warn("audit: HMAC chain key not configured, using insecure dev-only fallback "+
+				"(set LoggerConfig.HMACKey or call audit.SetProcessChainKey at boot)",
+				"info_tag", AuditChainKeyInfo)
+		})
+		h := sha256.Sum256([]byte("omnipus-audit-dev-only-key"))
+		return h[:], nil
+	}
+	return nil, fmt.Errorf("audit: HMAC chain key not configured and %s=1 is not set "+
+		"(set LoggerConfig.HMACKey or call audit.SetProcessChainKey at boot)",
+		auditDevKeyEnvVar)
 }
 
 // computeEntryHMAC computes the chain HMAC for a single entry given the

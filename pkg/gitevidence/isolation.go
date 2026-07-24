@@ -164,6 +164,56 @@ var isolationLadder = []rungStep{
 	{RungSubdir, openSubdir},
 }
 
+// runLadder is the single implementation of isolation-ladder traversal with
+// rung filtering and exhaustion handling (used by both
+// OpenIsolatedCheckoutAtRung and OpenIsolatedCheckoutAtCommitRung — the two
+// callers differ only in WHAT they do once a rung's checkout opens:
+// plain-open returns immediately; restore-at-commit must additionally walk
+// the checkout back to the recorded commit hash and degrade on a mismatch).
+//
+// onOpened runs immediately after a rung's `open` succeeds; if it returns
+// an error the rung degrades (its checkout is cleaned up via ic.Cleanup
+// when cleanupOnError is non-nil) and the ladder continues. onOpened MAY
+// also return the (ic, nil) success pair directly for callers like the
+// plain-open path that have no post-open check.
+//
+// The returned (ic, nil) signals the ladder produced a checkout the caller
+// can use; the returned error wraps every per-rung error when the ladder
+// exhausts without a winner.
+func runLadder(
+	startRung Rung,
+	baseDir, targetDir string,
+	logPrefix string,
+	onOpened func(ic *IsolatedCheckout, step rungStep) (*IsolatedCheckout, error),
+) (*IsolatedCheckout, error) {
+	var errs []error
+
+	for _, step := range isolationLadder {
+		if step.rung < startRung {
+			continue // rungs above startRung are never attempted
+		}
+		ic, err := step.open(baseDir, targetDir)
+		if err != nil {
+			errs = append(errs, err)
+			logger.WarnCF("gitevidence", logPrefix+": rung failed, degrading", map[string]any{
+				"rung": step.rung.String(), "base_dir": baseDir, "target_dir": targetDir, "error": err.Error(),
+			})
+			continue
+		}
+		out, oerr := onOpened(ic, step)
+		if oerr == nil {
+			return out, nil
+		}
+		errs = append(errs, oerr)
+		if cerr := ic.Cleanup(); cerr != nil {
+			logger.WarnCF("gitevidence", logPrefix+": cleanup of unsuccessful checkout failed", map[string]any{
+				"rung": ic.Rung.String(), "target_dir": targetDir, "error": cerr.Error(),
+			})
+		}
+	}
+	return nil, fmt.Errorf("gitevidence: isolation ladder exhausted, even the subdir rung failed: %w", errors.Join(errs...))
+}
+
 // OpenIsolatedCheckoutAtRung is OpenIsolatedCheckout but starts the ladder
 // at startRung instead of the top (e.g. a caller who already knows, from
 // the SizeGuard media-bloat concern, that a full clone of this particular
@@ -173,22 +223,10 @@ var isolationLadder = []rungStep{
 // so this only returns an error when that fails too — there is no lower
 // rung to degrade to.
 func OpenIsolatedCheckoutAtRung(baseDir, targetDir string, startRung Rung) (*IsolatedCheckout, error) {
-	var errs []error
-
-	for _, step := range isolationLadder {
-		if step.rung < startRung {
-			continue // rungs above startRung are never attempted
-		}
-		ic, err := step.open(baseDir, targetDir)
-		if err == nil {
+	return runLadder(startRung, baseDir, targetDir, "isolation ladder",
+		func(ic *IsolatedCheckout, step rungStep) (*IsolatedCheckout, error) {
 			return ic, nil
-		}
-		errs = append(errs, err)
-		logger.WarnCF("gitevidence", "isolation ladder: rung failed, degrading", map[string]any{
-			"rung": step.rung.String(), "base_dir": baseDir, "target_dir": targetDir, "error": err.Error(),
 		})
-	}
-	return nil, fmt.Errorf("gitevidence: isolation ladder exhausted, even the subdir rung failed: %w", errors.Join(errs...))
 }
 
 func openSystemGitWorktree(baseDir, targetDir string) (*IsolatedCheckout, error) {

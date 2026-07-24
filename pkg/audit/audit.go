@@ -402,9 +402,13 @@ func NewLogger(cfg LoggerConfig) (*Logger, error) {
 		maxSize:  cfg.MaxSizeBytes,
 		retDays:  cfg.RetentionDays,
 		redactor: redactor,
-		chainKey: resolveChainKey(cfg.HMACKey),
 		prevHMAC: GenesisSeed(),
 	}
+	chainKey, keyErr := resolveChainKey(cfg.HMACKey)
+	if keyErr != nil {
+		return nil, &LoggerConstructionError{Dir: cfg.Dir, Err: keyErr}
+	}
+	l.chainKey = chainKey
 
 	l.recoverCorruption()
 

@@ -17,19 +17,7 @@ import (
 // Wave 4 — SEC-26 rate-limiting wiring tests + ADR-053 D12 token-budget
 // regression tests.
 //
-// These tests prove that:
-//   - The RateLimiterRegistry is always initialized in NewAgentLoop.
-//   - IsPrivilegedAgent identifies privileged (core-only) agent types
-//     (ADR-049 D3 narrowing; the SEC-26 USD cap it used to gate is now
-//     retired per ADR-053 D12 — the IsPrivilegedAgent exemption remains
-//     in force ONLY for the surviving per-agent LLM/hr + tool/min
-//     sliding-window rate limits).
-//   - estimateLLMCallCost returns non-negative values for various models.
-//   - **TokenBudget is the sole app-level spend brake** (D12 / FR-171..178):
-//     the USD cap path (CheckGlobalCostCap / RecordSpend / SetDailyCostCap /
-//     GetDailyCost) is gone from the security package; core agents debit
-//     the same pool as non-core, and Exhausted() is the boundary gate
-//     (FR-174 / R§8.3c). Regression tests pin both invariants.
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 
 func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 	t.Helper()
@@ -45,8 +33,7 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			RateLimits: config.OmnipusRateLimitsConfig{
-				// ADR-053 D12 retired DailyCostCapUSD — only the per-agent
-				// sliding-window limits remain.
+				// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 				MaxAgentLLMCallsPerHour:    100,
 				MaxAgentToolCallsPerMinute: 20,
 			},
@@ -56,9 +43,8 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 }
 
 // TestRateLimiter_InitializedFromConfig verifies that NewAgentLoop constructs
-// a non-nil RateLimiterRegistry and exposes it via RateLimiter(). After
-// ADR-053 D12 the registry no longer enforces a USD cost cap — it hosts the
-// per-agent sliding-window rate limits (LLM/hr, tool/min) only.
+// a non-nil RateLimiterRegistry and exposes it via RateLimiter().
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 func TestRateLimiter_InitializedFromConfig(t *testing.T) {
 	cfg, msgBus := makeRateLimitCfg(t)
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
@@ -72,9 +58,9 @@ func TestRateLimiter_InitializedFromConfig(t *testing.T) {
 
 // TestIsPrivilegedAgent verifies that IsPrivilegedAgent identifies privileged
 // agent types. Privileges flow from agent type (FR-045), not from a hardcoded
-// agent ID. After ADR-053 D12 this predicate gates ONLY the surviving SEC-26
-// sliding-window rate limits (LLM/hr, tool/min) — the daily USD cost cap it
-// used to gate is retired.
+// agent ID. This predicate gates the surviving SEC-26 sliding-window rate
+// limits (LLM/hr, tool/min). TokenBudget is the sole app-level spend brake;
+// see pkg/agent/budget.go (D12 / R§8.3).
 func TestIsPrivilegedAgent(t *testing.T) {
 	cases := []struct {
 		agentType string
@@ -137,9 +123,7 @@ func TestEstimateLLMCallCost_NilUsage(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ADR-053 D12 / R§8.3 — TokenBudget regression tests (issue #540)
 //
-// These pin the sole-brake invariant: the USD cap is retired; TokenBudget
-// is the only app-level spend brake; core agents (ADR-049 D3 narrowing)
-// debit the same pool as non-core; Exhausted is the boundary gate.
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 // ─────────────────────────────────────────────────────────────────────────────
 
 // TestTokenBudget_SoleBrake_NonCore verifies that the token budget debits
@@ -200,10 +184,7 @@ func TestTokenBudget_SoleBrake_Core(t *testing.T) {
 // against a re-introduction that would re-create the dual-brake
 // anti-pattern (#540 / S5 anti-drift).
 //
-// Implemented as a runtime reflect guard: if any of the banned methods are
-// re-added to RateLimiterRegistry, this test fails — surfacing the
-// dual-brake regression at the next test run rather than silently
-// re-creating the SEC-26 path alongside TokenBudget.
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 func TestTokenBudget_USDCapPathRemoved(t *testing.T) {
 	// Sanity: the registry still constructs and exposes GetOrCreate for the
 	// surviving sliding-window rate limits.

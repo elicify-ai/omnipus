@@ -80,18 +80,44 @@ func resolveChainKey(key []byte) []byte {
 	return h[:]
 }
 
+// intentLogReanchorWarnOnce is the per-process sticky warn-once used by
+// embedChainHMAC to flag a chain re-anchoring at a legacy/malformed gap
+// (silent-failure hunter #11 / R#3, R#13 — fix B.3). Without this warning
+// the chain silently re-anchors at GenesisSeed() at a corrupt gap and keeps
+// appending, obscuring lineage at write time.
+var intentLogReanchorWarnOnce sync.Once
+
 // embedChainHMAC computes and sets rec.Hmac by chaining off the last record
 // in `records` (the plan file's current on-disk content, read under the
 // per-plan striped lock by the caller) — audit.GenesisSeed() when records is
 // empty or its last entry predates the chain (a pre-#539 legacy row, or one
 // whose hmac field failed to decode). rec.Hmac is cleared before computing so
 // re-embedding is idempotent regardless of what the caller passed in.
+//
+// When a malformed/legacy gap is detected (the previous record's Hmac is
+// non-empty but did not decode as a 32-byte SHA-256 mac), a sticky
+// slog.Warn fires once per process so the lineage break at write time is
+// loud rather than silent — fixes the silent-failure pattern where the
+// chain kept appending from GenesisSeed() against a corrupt predecessor.
 func embedChainHMAC(records []IntentRecord, rec *IntentRecord, key []byte) error {
 	prev := audit.GenesisSeed()
 	if n := len(records); n > 0 {
 		if last := records[n-1].Hmac; last != "" {
 			if mac, decErr := hex.DecodeString(last); decErr == nil && len(mac) == 32 {
 				prev = mac
+			} else {
+				// Previous record has a non-empty Hmac that did not decode as
+				// a 32-byte mac — corrupt, truncated, or legacy malformed.
+				// We re-anchor at GenesisSeed() so the chain can keep
+				// appending, but warn loudly (once per process) so the
+				// lineage break at write time is visible to operators
+				// instead of being silently masked by the genesis fallback.
+				intentLogReanchorWarnOnce.Do(func() {
+					slog.Warn("intent_log: HMAC chain re-anchoring at a legacy/malformed gap "+
+						"(previous record's Hmac did not decode as a 32-byte mac — chain continues from GenesisSeed(); "+
+						"lineage is obscured from this point forward)",
+						"plan_id", rec.PlanID, "previous_intent_id", records[n-1].IntentID)
+				})
 			}
 		}
 	}

@@ -1,7 +1,7 @@
 # DoD-6 Live E2E Evidence — ADR-053
 
 **Date:** 2026-07-24  
-**Branch:** `feature/plan-swimlane-board` @ `82e58701` (+ subsequent e2e fixes through `82e58701`)  
+**Branch:** `feature/plan-swimlane-board` @ `82e58701` (range `2358521c..82e58701`)  
 **Environment:** fresh `OMNIPUS_HOME=/tmp/omnipus-dod6-e2e`, binary `/tmp/omnipus-adr053`, gateway `localhost:5000`  
 **Browser:** Playwright MCP (Chromium) against `http://127.0.0.1:5000`
 

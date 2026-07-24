@@ -19,8 +19,14 @@ type duration time.Duration
 
 // MarshalJSON emits the duration as time.Duration's canonical string form
 // (e.g. "24h0m0s"), so a round-tripped config.json stays human-readable.
-func (d duration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(time.Duration(d).String())
+// Pointer receiver for consistency with the package's UnmarshalJSON / String
+// methods; JSON marshalers are called on addressable values by encoding/json
+// in practice, so the receiver kind is invisible to callers.
+func (d *duration) MarshalJSON() ([]byte, error) {
+	if d == nil {
+		return json.Marshal("0s")
+	}
+	return json.Marshal(time.Duration(*d).String())
 }
 
 // UnmarshalJSON accepts either a JSON string ("24h", "5s", "500ms") parsed via
@@ -52,8 +58,17 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// String returns the canonical time.Duration string form.
-func (d *duration) String() string { return time.Duration(*d).String() }
+// String returns the canonical time.Duration string form. Pointer receiver
+// for consistency with UnmarshalJSON; the nil guard below prevents a panic
+// when the value is reached through an interface (fmt's %s verb, log
+// formatters, etc.) — the prior form would panic on a nil receiver, which
+// is a footgun for a type that lives in optional config slots.
+func (d *duration) String() string {
+	if d == nil {
+		return "0s"
+	}
+	return time.Duration(*d).String()
+}
 
 // ADR-053 §8 operability — the session_messaging config section (FR-195's 20
 // keys). Defaults mirror the ADR §Contract Surface "Caps" and the constants in

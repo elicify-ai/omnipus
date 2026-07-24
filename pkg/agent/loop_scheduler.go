@@ -196,7 +196,8 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 		// than firing a run nobody asked for.
 		s.cs.RemoveJob(job.ID)
 		// No session to fire into — by design this is a no-op success (the
-		// race is expected; see comment above). Not an error condition.
+		// race is expected — the loop was stopped/cleared out from under
+		// this job, so there's no session to fire into). Not an error condition.
 		return "", nil //nolint:nilerr
 	}
 

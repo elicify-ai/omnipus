@@ -23,7 +23,10 @@ import (
 func newCorrectionHarness(t *testing.T) *planEngineHarness {
 	t.Helper()
 	h := newTestPlanEngine(t)
-	il := plan.NewIntentLog(filepath.Join(t.TempDir(), "plan_intents"))
+	il, err := plan.NewIntentLog(filepath.Join(t.TempDir(), "plan_intents"))
+	if err != nil {
+		t.Fatalf("plan.NewIntentLog: %v", err)
+	}
 	h.pe.SetIntentLog(il)
 	return h
 }
@@ -202,7 +205,10 @@ func TestTargetedRetry_RetriesTransientFailed(t *testing.T) {
 // intent is replayed forward (post-append DAG).
 func TestTransactionalAppend_KillMidAppend_PreAppendDAG(t *testing.T) {
 	dir := t.TempDir()
-	il := plan.NewIntentLog(filepath.Join(dir, "plan_intents"))
+	il, err := plan.NewIntentLog(filepath.Join(dir, "plan_intents"))
+	if err != nil {
+		t.Fatalf("plan.NewIntentLog: %v", err)
+	}
 
 	// Scenario A: uncommitted intent (crash before MarkCommitted).
 	// The intent carries a tail member that does NOT exist in the task store yet.
@@ -218,8 +224,8 @@ func TestTransactionalAppend_KillMidAppend_PreAppendDAG(t *testing.T) {
 		},
 	}
 	// Step 1 only — AppendIntent. NO MarkCommitted (simulates crash before commit).
-	if err := il.AppendIntent(recA); err != nil {
-		t.Fatalf("AppendIntent: %v", err)
+	if appendErr := il.AppendIntent(recA); appendErr != nil {
+		t.Fatalf("AppendIntent: %v", appendErr)
 	}
 
 	// Scenario B: committed-but-not-done (crash after MarkCommitted, before MarkDone).
@@ -234,11 +240,11 @@ func TestTransactionalAppend_KillMidAppend_PreAppendDAG(t *testing.T) {
 			Verb: plan.RevisionAppend, Generation: 0,
 		},
 	}
-	if err := il.AppendIntent(recB); err != nil {
-		t.Fatalf("AppendIntent B: %v", err)
+	if appendErr := il.AppendIntent(recB); appendErr != nil {
+		t.Fatalf("AppendIntent B: %v", appendErr)
 	}
-	if err := il.MarkCommitted("p-tx", "rev-committed"); err != nil {
-		t.Fatalf("MarkCommitted B: %v", err)
+	if commitErr := il.MarkCommitted("p-tx", "rev-committed"); commitErr != nil {
+		t.Fatalf("MarkCommitted B: %v", commitErr)
 	}
 	// NO MarkDone — simulates crash after commit, before apply completes.
 

@@ -46,6 +46,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -181,12 +182,24 @@ type IntentLog struct {
 // key falls back to a deterministic dev-only key with a sticky slog.Warn
 // (mirrors pkg/audit's resolveChainKey precedent), so tests and early-dev
 // boots without a credential store still run — loud, not silent.
-func NewIntentLog(dir string, chainKeys ...[]byte) *IntentLog {
+func NewIntentLog(dir string, chainKeys ...[]byte) (*IntentLog, error) {
 	var chainKey []byte
 	if len(chainKeys) > 0 {
 		chainKey = chainKeys[0]
 	}
-	return &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: resolveChainKey(chainKey)}
+	// sec-MINOR-3/#539: 0700 (owner-only), matching the tamper-evidence
+	// posture of other authoritative Omnipus state (master.key 0600 under a
+	// 0700 home dir; credentials.Store's own MkdirAll calls) rather than the
+	// prior world-/group-readable 0755. The directory is global across all
+	// plans and MkdirAll is idempotent, so materializing it ONCE here at the
+	// canonical constructor (rather than on every AppendIntent) is both
+	// cheaper and free of any lock ordering concerns (AppendIntent's
+	// per-plan lock no longer wraps a fs path that nothing else would be
+	// touching).
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("intent_log: mkdir: %w", err)
+	}
+	return &IntentLog{dir: dir, lock: &StripedLock{}, chainKey: resolveChainKey(chainKey)}, nil
 }
 
 // Dir returns the log's root directory.
@@ -200,10 +213,33 @@ func (l *IntentLog) lockFor(planID string) *sync.Mutex {
 	return l.lock.Get(planID)
 }
 
+// writeLocked appends rec to planID's log file under the per-plan lock —
+// the shared write path for both the initial uncommitted record (AppendIntent)
+// and the status-update appends (markLocked → MarkCommitted/MarkDone). It
+// embeds the chain HMAC against the prior records then calls fileutil for
+// the durable append. The caller MUST hold the per-plan lock; it does NOT
+// take MkdirAll's job — callers that need the directory created do so
+// before calling writeLocked (AppendIntent; markLocked assumes the directory
+// already exists from an earlier AppendIntent).
+func (l *IntentLog) writeLocked(planID string, rec *IntentRecord) error {
+	previous, err := l.readAllLocked(planID)
+	if err != nil {
+		return fmt.Errorf("intent_log: read existing for hmac chain: %w", err)
+	}
+	if err := embedChainHMAC(previous, rec, l.chainKey); err != nil {
+		return fmt.Errorf("intent_log: chain embed: %w", err)
+	}
+	return fileutil.AppendJSONLSync(l.path(planID), rec)
+}
+
 // AppendIntent writes rec as status=uncommitted (the pre-commit record). This
 // is step (1) of the FR-148 ordering — the linearization point is the
 // SUBSEQUENT MarkCommitted call, not this one. rec.Status is forced to
 // IntentUncommitted regardless of the caller's input.
+//
+// The log directory is materialized once at NewIntentLog construction (fix
+// B.8) — MkdirAll is idempotent and the dir is global across all plans, so
+// it has no business being re-run under the per-plan lock on every append.
 func (l *IntentLog) AppendIntent(rec IntentRecord) error {
 	if rec.IntentID == "" {
 		return fmt.Errorf("intent_log: intent_id must not be empty")
@@ -218,21 +254,7 @@ func (l *IntentLog) AppendIntent(rec IntentRecord) error {
 	mu := l.lockFor(rec.PlanID)
 	mu.Lock()
 	defer mu.Unlock()
-	// sec-MINOR-3/#539: 0700 (owner-only), matching the tamper-evidence
-	// posture of other authoritative Omnipus state (master.key 0600 under a
-	// 0700 home dir; credentials.Store's own MkdirAll calls) rather than the
-	// prior world-/group-readable 0755.
-	if err := os.MkdirAll(l.dir, 0o700); err != nil {
-		return fmt.Errorf("intent_log: mkdir: %w", err)
-	}
-	existing, err := l.readAllLocked(rec.PlanID)
-	if err != nil {
-		return fmt.Errorf("intent_log: read existing for hmac chain: %w", err)
-	}
-	if err := embedChainHMAC(existing, &rec, l.chainKey); err != nil {
-		return fmt.Errorf("intent_log: chain embed: %w", err)
-	}
-	return appendJSONLSync(l.path(rec.PlanID), &rec)
+	return l.writeLocked(rec.PlanID, &rec)
 }
 
 // markLocked rewrites the log file for planID with the matching intent's
@@ -264,36 +286,7 @@ func (l *IntentLog) markLocked(planID, intentID string, status IntentStatus) err
 	case IntentDone:
 		latest.DoneAt = time.Now().UTC()
 	}
-	if err := embedChainHMAC(records, latest, l.chainKey); err != nil {
-		return fmt.Errorf("intent_log: chain embed: %w", err)
-	}
-	return appendJSONLSync(l.path(planID), latest)
-}
-
-// appendJSONLSync appends one intent record and synchronizes the file before
-// returning. Commit and done markers use this helper so their durability is
-// the linearization point documented above.
-func appendJSONLSync(path string, record any) error {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("intent_log: marshal: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("intent_log: open for append: %w", err)
-	}
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("intent_log: append: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("intent_log: sync: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("intent_log: close: %w", err)
-	}
-	return nil
+	return l.writeLocked(planID, latest)
 }
 
 // ErrIntentNotFound is returned when an intent id does not exist.
@@ -486,6 +479,10 @@ func (l *IntentLog) ReplayAtBoot(planID string, apply ApplyFunc) (ReplayResult, 
 // startup, after the plan/task stores are open. A per-plan replay error is
 // returned in the slice rather than aborting the whole pass (one corrupt log
 // must not wedge the others).
+//
+// All per-plan errors are joined via errors.Join so the caller sees every
+// failing plan rather than only the first one (fix B.4 — the prior `if err
+// == nil` branch silently dropped subsequent failures).
 func (l *IntentLog) ReplayAllPlans(apply ApplyFunc) ([]ReplayResult, error) {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
@@ -495,6 +492,7 @@ func (l *IntentLog) ReplayAllPlans(apply ApplyFunc) ([]ReplayResult, error) {
 		return nil, fmt.Errorf("intent_log: read dir: %w", err)
 	}
 	var results []ReplayResult
+	var errs []error
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -507,15 +505,14 @@ func (l *IntentLog) ReplayAllPlans(apply ApplyFunc) ([]ReplayResult, error) {
 		res, rerr := l.ReplayAtBoot(planID, apply)
 		if rerr != nil {
 			results = append(results, ReplayResult{PlanID: planID, Classification: res.Classification})
-			// Continue rather than abort; collect the error but keep going.
-			if err == nil {
-				err = fmt.Errorf("intent_log: plan %q: %w", planID, rerr)
-			}
+			// Collect every failing plan via errors.Join so the caller sees
+			// the full failure set rather than only the first error.
+			errs = append(errs, fmt.Errorf("intent_log: plan %q: %w", planID, rerr))
 			continue
 		}
 		results = append(results, res)
 	}
-	return results, err
+	return results, errors.Join(errs...)
 }
 
 // CommitCorrection transactionally commits a correction via the 4-step

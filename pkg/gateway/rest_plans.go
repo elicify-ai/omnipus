@@ -33,7 +33,6 @@ package gateway
 // successful Create/Update — this file never emits frames directly.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,14 +87,25 @@ func isPlanValidationErr(err error) bool {
 }
 
 // auditPlan writes an audit entry for a plan mutation (best-effort, mirrors auditTask).
-func (a *restAPI) auditPlan(event, id string) {
+// Optional trailing key/value pairs are merged into Details so callers can
+// surface restart metadata (new_generation, still_failed_members, …) without
+// inventing a parallel audit path.
+func (a *restAPI) auditPlan(event, id string, kvs ...any) {
 	if a.auditor == nil {
 		return
+	}
+	details := map[string]any{"id": id}
+	for i := 0; i+1 < len(kvs); i += 2 {
+		k, ok := kvs[i].(string)
+		if !ok {
+			continue
+		}
+		details[k] = kvs[i+1]
 	}
 	if err := a.auditor.Log(&audit.Entry{
 		Event:    event,
 		Decision: audit.DecisionAllow,
-		Details:  map[string]any{"id": id},
+		Details:  details,
 	}); err != nil {
 		slog.Error("rest: plan audit log failed", "event", event, "error", err)
 	}
@@ -612,7 +622,7 @@ func (a *restAPI) HandlePlans(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.handlePlanRestart(w, id)
+			a.handlePlanRestart(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1009,17 +1019,13 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 // ResumeFromCommit, and materializes the isolated resume checkout (#537).
 // The plan lands in `approved`; the engine promotes approved→running under
 // the global cap on its next tick (same as first execute).
-func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
+func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
 		return
 	}
-	if a.agentLoop == nil {
-		jsonErr(w, http.StatusServiceUnavailable, "agent loop is not available")
-		return
-	}
 	pe := agent.GetPlanEngine(a.agentLoop)
-	if pe == nil {
+	if a.agentLoop == nil || pe == nil {
 		jsonErr(w, http.StatusServiceUnavailable, "plan engine is not available")
 		return
 	}
@@ -1041,41 +1047,33 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
 		return
 	}
 
-	playRes, perr := pe.PlayPlan(context.Background(), id)
+	playRes, perr := pe.PlayPlan(r.Context(), id)
 	if perr != nil {
-		if errors.Is(perr, plan.ErrRestartNotPermitted) || errors.Is(perr, plan.ErrNotFound) {
+		if errors.Is(perr, plan.ErrRestartNotPermitted) || errors.Is(perr, plan.ErrNotFound) || errors.Is(perr, plan.ErrNotFailed) {
 			jsonErr(w, http.StatusConflict, perr.Error())
-			return
-		}
-		// PlayPlan wraps store errors; surface validation-ish messages as 400/409.
-		msg := perr.Error()
-		if strings.Contains(msg, "not failed") {
-			jsonErr(w, http.StatusConflict, msg)
 			return
 		}
 		slog.Error("rest: plan restart: PlayPlan failed", "id", id, "error", perr)
 		jsonErr(w, http.StatusInternalServerError, "could not restart plan")
 		return
 	}
-	_ = playRes // generation/resume metadata is on the plan record + tasks
 
-	updated, uerr := a.planStore.Get(id)
-	if uerr != nil {
-		slog.Error("rest: plan restart: re-read after PlayPlan failed", "id", id, "error", uerr)
-		jsonErr(w, http.StatusInternalServerError, "could not read restarted plan")
-		return
-	}
 	// Partial member-reset honesty (ADR-052 §6.4 Item 5 / prior REST contract):
 	// PlayPlan logs and continues when RestartReset fails for a member. Surface
 	// that as 500 naming the still-failed task IDs rather than an unqualified
 	// 200 — the plan may already be approved, but the operator must re-check.
-	var stillFailed []string
-	if a.taskStore != nil {
-		if members, lerr := a.taskStore.List(task.Filter{PlanID: id}); lerr == nil {
-			for i := range members {
-				m := &members[i]
-				if m.Status == task.StatusFailed {
-					stillFailed = append(stillFailed, m.ID)
+	// Iterate ONLY the failed members PlayPlan reported; the rest of the
+	// reset-success members need no chat-side status fan-out (they will
+	// re-emit naturally on dispatch).
+	if len(playRes.StillFailedMemberIDs) > 0 {
+		if a.taskStore != nil {
+			for _, memberID := range playRes.StillFailedMemberIDs {
+				m, gerr := a.taskStore.Get(memberID)
+				if gerr != nil {
+					slog.Error("rest: plan restart: get failed member after PlayPlan",
+						"id", id, "member_id", memberID, "error", gerr)
+					jsonErr(w, http.StatusInternalServerError, "could not verify member reset state after PlayPlan")
+					return
 				}
 				a.emitTaskStatus(m)
 				if a.agentLoop != nil {
@@ -1083,12 +1081,14 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
 				}
 			}
 		}
-	}
-	a.auditPlan("plan.restart", id)
-	if len(stillFailed) > 0 {
+		a.auditPlan("plan.restart", id,
+			"still_failed_members", playRes.StillFailedMemberIDs,
+			"new_generation", playRes.NewGeneration)
 		jsonErr(w, http.StatusInternalServerError,
-			fmt.Sprintf("plan restarted, but member reset failed for task(s) %v; re-check their state", stillFailed))
+			fmt.Sprintf("plan restarted, but member reset failed for task(s) %v; re-check their state", playRes.StillFailedMemberIDs))
 		return
 	}
-	jsonOK(w, a.toWirePlan(*updated))
+
+	a.auditPlan("plan.restart", id, "new_generation", playRes.NewGeneration)
+	jsonOK(w, a.toWirePlan(*p))
 }

@@ -180,14 +180,17 @@ function proseCriterion(text: string): Criterion {
  * shard runs all 9 specs sequentially in ONE gateway/OMNIPUS_HOME. Each
  * plan/task test creates its own workspace and adds the worker agent to
  * that workspace's core_team. Reusing jim across tests leaves jim in
- * MULTIPLE workspaces' core_teams — and the task-executor's
- * `find_for_agent` (pkg/workspace/find_for_agent.go:132) resolves an
- * agent that belongs to >1 core team to "the first by sorted id order",
- * which is NOT necessarily the task's own workspace. The dispatched
- * member turn then lands in the wrong workspace and is canceled
- * ("Agent execution failed (StartTaskNow path): turn canceled"), so the
- * plan never reaches a terminal state. A freshly-created Main agent
- * belongs to exactly ONE workspace → unambiguous resolution.
+ * MULTIPLE workspaces' core_teams — and the agent workspace reroot path
+ * (`pkg/agent/workspace_reroot.go:106`, also used by the verifier turn
+ * resolution) calls `workspace.FindForAgentPreferring` to resolve an
+ * agent that belongs to >1 core team in favor of the task workspace
+ * passed in via optWorkspaceID / ctx. The default multi-membership
+ * resolution still falls back to `FindForAgent` (sorted-first id win)
+ * when no preferred workspace is supplied, which is brittle for the
+ * rapid test sequence: between sibling tests a fresh workspace may not
+ * yet be the reroot target by the time the task dispatches. A
+ * freshly-created Main agent belongs to exactly ONE workspace →
+ * unambiguous resolution on every code path.
  *
  * A Main agent (vs Subagent) is required because plan ownership
  * (validatePlanOwnerAgent) rejects non-chat-target agents — Main is a
@@ -464,9 +467,11 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
   // workspace's team set (core_team ∪ delegation edges —
   // validateTaskAgentID, rest_tasks.go). We create a FRESH Main agent
   // per test (not the seeded "jim") so the agent belongs to exactly ONE
-  // workspace's core_team — reusing jim across tests leaves it in
-  // multiple core_teams and the task executor's find_for_agent resolves
-  // the wrong workspace, canceling the turn.
+  // workspace's core_team. The agent workspace reroot path
+  // (pkg/agent/workspace_reroot.go:106) calls FindForAgentPreferring
+  // with the task workspace as the preferred id, so multi-membership
+  // is now resolved deterministically; the per-test isolation here is
+  // defensive belt-and-suspenders to keep tests independent.
   const workerId = await createMainAgent(page, `conformance-t1-worker-${Date.now()}`)
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t1',

@@ -17,7 +17,11 @@ import (
 
 func newTestIntentLog(t *testing.T) *IntentLog {
 	t.Helper()
-	return NewIntentLog(filepath.Join(t.TempDir(), "plan_intents"))
+	il, err := NewIntentLog(filepath.Join(t.TempDir(), "plan_intents"), nil)
+	if err != nil {
+		t.Fatalf("NewIntentLog: %v", err)
+	}
+	return il
 }
 
 func TestIntentLog_AppendMarkCommittedMarkDone(t *testing.T) {
@@ -257,11 +261,14 @@ func TestIntentLog_CommitCorrection_NilApply(t *testing.T) {
 func TestIntentLog_Hardening(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "plan_intents")
 	key := []byte("0123456789abcdef0123456789abcdef")
-	il := NewIntentLog(dir, key)
+	il, err := NewIntentLog(dir, key)
+	if err != nil {
+		t.Fatalf("NewIntentLog: %v", err)
+	}
 	rec := IntentRecord{IntentID: "i-hard", PlanID: "p-hard"}
 
-	if err := il.AppendIntent(rec); err != nil {
-		t.Fatalf("AppendIntent: %v", err)
+	if appendErr := il.AppendIntent(rec); appendErr != nil {
+		t.Fatalf("AppendIntent: %v", appendErr)
 	}
 	info, err := os.Stat(dir)
 	if err != nil {

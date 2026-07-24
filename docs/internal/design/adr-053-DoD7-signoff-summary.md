@@ -1,6 +1,6 @@
 # ADR-053 DoD-7 Sign-off Summary
 
-**Branch:** `feature/plan-swimlane-board` @ `232d9b68`  
+**Branch:** `feature/plan-swimlane-board` @ `53e561d5`  
 **PR:** https://github.com/elicify-ai/omnipus/pull/551  
 **Date:** 2026-07-24
 
@@ -9,8 +9,8 @@
 | Layer | Review | Result |
 |-------|--------|--------|
 | ADR-053 ratification | `/grill-spec` (2nd pass) | **PASS** (0 CRITICAL / 0 MAJOR) — `ADR-053-unified-goal-plan-subagent-review.md` |
-| F4 integration (#536–#542 + gate fixes) | grill-code (read-only) | Initial **REVISE** → **M1/M2 fixed** → **PASS with tracked follow-ups** — `adr-053-F4-integration-code-review.md` |
-| Whole epic (1200+ commits vs main) | Full 14-reviewer Opus wave | **Not re-run in this session** — cost/time; recommend human or CI-triggered review on PR #551 before merge |
+| F4 integration (#536–#542 + gate fixes) | grill-code (read-only) | Initial **REVISE** → **M1/M2 fixed** → **M4 fixed (post-grill)** → **PASS with one tracked follow-up (M3)** — `adr-053-F4-integration-code-review.md` |
+| Whole epic (1200+ commits vs main) | 14-reviewer fix wave (D, this session) | **DONE at HEAD `53e561d5`** — M4 closed (production code now uses `FindForAgentPreferring`); M3 remains a tracked product follow-up. Consolidated disposition: 0 CRITICAL · 0 MAJOR · 1 tracked follow-up (M3, inbox→next triage). |
 
 ## M1/M2 resolution (post-grill)
 
@@ -24,7 +24,7 @@
 | ID | Item | Tracking |
 |----|------|----------|
 | M3 | inbox→next triage on plan approve/execute | product follow-up (e2e workarounds remain) |
-| M4 | multi-workspace `find_for_agent` | product follow-up |
+| ~~M4~~ | ~~multi-workspace `find_for_agent`~~ | **RESOLVED** — `workspace.FindForAgentPreferring` (task-workspace preference) is the production code path used by `pkg/agent/workspace_reroot.go:106` and `pkg/agent/loop_env.go:240`; regression coverage in `pkg/workspace/find_for_agent_test.go` (4 tests, including `TestFindForAgentPreferring_DisambiguatesMultiMembership`). F4 e2e per-test Main agents remain as defensive isolation; the underlying product gap is closed. |
 | #549 | spa useAutoSave timer leak | open issue |
 
 ## CI evidence (ci-omnipus, post-main-merge HEAD)
@@ -39,6 +39,6 @@
 ## Sign-off recommendation
 
 - **Engineering delivery:** ready for human merge of PR #551 once post-merge e2e/contracts reconfirm green.
-- **DoD-7 full 14-reviewer:** treat as **operator gate on the PR** (GitHub review + optional Opus review wave). F4-scoped grill-code is complete; whole-epic 14-reviewer was not re-executed in-session on the full 1200-commit delta.
+- **DoD-7 full 14-reviewer:** F4-scoped grill-code is complete; the 14-reviewer fix wave (D) closed M4 and produced this updated sign-off summary at HEAD `53e561d5`. Final disposition: 0 CRITICAL · 0 MAJOR · 1 tracked follow-up (M3, inbox→next triage).
 
 **Human must approve and merge. No admin/auto-merge.**

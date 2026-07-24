@@ -9667,7 +9667,7 @@ type RateLimitConfig struct {
 	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 }
 
-// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired; the app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
+// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. The app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
 type RateLimitsResponse struct {
 	Enabled bool `json:"enabled"`
 
@@ -9679,7 +9679,7 @@ type RateLimitsResponse struct {
 }
 
 // RateLimitsUpdateRequest Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the two sliding-window cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
-// Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
+// The SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
 type RateLimitsUpdateRequest struct {
 	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour. 0 = unlimited.
 	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
@@ -9688,7 +9688,7 @@ type RateLimitsUpdateRequest struct {
 	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 }
 
-// RateLimitsUpdateResponse Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration. Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the applied block returns only the surviving sliding-window fields.
+// RateLimitsUpdateResponse Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration. The SEC-26 daily_cost_cap_usd field was retired; the applied block returns only the surviving sliding-window fields.
 type RateLimitsUpdateResponse struct {
 	// Applied The effective configuration after the update. Present only when hot-reload succeeded.
 	Applied *struct {

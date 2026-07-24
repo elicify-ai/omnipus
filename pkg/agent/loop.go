@@ -313,13 +313,10 @@ type AgentLoop struct {
 
 	// Per-agent sliding-window rate limiting (SEC-26). rateLimiter manages
 	// the LLM/hr and tool/min counters per agent; always non-nil after
-	// NewAgentLoop so the per-call sites can check for nil and read
-	// counters without guarding. The per-call sites check
+	// NewAgentLoop so per-call sites add a defensive nil-check that is
+	// structurally unreachable. The per-call sites check
 	// cfg.Sandbox.RateLimits.* > 0 to decide whether to enforce.
-	//
-	// ADR-053 D12 retired the SEC-26 global daily USD cost cap that this
-	// registry used to enforce. The token budget (tokenBudget below) is the
-	// sole app-level spend brake.
+	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	rateLimiter *security.RateLimiterRegistry
 
 	// tokenBudget is the ADR-053 Phase-2 / D12 app-level OVERALL token budget
@@ -874,11 +871,7 @@ func NewAgentLoop(
 
 	// SEC-26: Initialize rate limiter registry. The registry always exists
 	// so per-agent windows can be created even when no limit is configured.
-	//
-	// ADR-053 D12 retired the SEC-26 global daily USD cost cap that this
-	// registry used to enforce via SetDailyCostCap / CheckGlobalCostCap /
-	// RecordSpend; the sole app-level spend brake is now al.tokenBudget
-	// below. Sliding-window rate limits (LLM/hr, tool/min) remain.
+	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	al.rateLimiter = security.NewRateLimiterRegistry()
 
 	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget — the
@@ -3346,10 +3339,6 @@ func (al *AgentLoop) Close() {
 		al.orphanWatches.Delete(k)
 		return true
 	})
-
-	// (ADR-053 D12 retired the SEC-26 USD cost cap that previously lived
-	// here; costTracker.SaveFromRegistry is gone — the sole app-level spend
-	// brake is TokenBudget, whose own persister reconciled at boot.)
 
 	// FR-048: On graceful shutdown, write turn_canceled_restart synthetic entries
 	// to any sessions that have active turns paused awaiting approval. This makes
@@ -6701,11 +6690,6 @@ turnLoop:
 
 		// SEC-26: Per-agent LLM call rate limit check. Runs once per turn
 		// iteration, before the actual LLM call. The system agent is exempt.
-		//
-		// (ADR-053 D12 retired the SEC-26 global daily USD cost cap that
-		// lived below this block — the sole app-level spend brake is
-		// TokenBudget.Exhausted(), consulted at the next turn/adjudication
-		// boundary per FR-174.)
 		if al.rateLimiter != nil && cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour > 0 &&
 			!security.IsPrivilegedAgent(ts.agent.AgentType) {
 			window := al.rateLimiter.GetOrCreate(
@@ -7725,9 +7709,7 @@ turnLoop:
 		// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
 		// even when unbounded (cap 0) so Usage accounting stays correct.
 		//
-		// ADR-053 D12 retired the SEC-26 USD cost cap that previously lived here
-		// (RecordSpend + costTracker.SaveFromRegistry). TokenBudget is the sole
-		// app-level spend brake.
+		// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 		if response != nil && response.Usage != nil {
 			callCost := estimateLLMCallCost(llmModel, response.Usage)
 			if al.tokenBudget != nil && response.Usage.TotalTokens > 0 {

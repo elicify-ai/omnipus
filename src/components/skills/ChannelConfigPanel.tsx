@@ -823,12 +823,14 @@ export function ChannelConfigPanel({
 
             Rendered as a plain <p> rather than <SheetDescription> because
             Radix's DialogPrimitive.Content auto-appends its own Description
-            child's id to the Content's aria-describedby attribute. That
-            produced a space-separated aria-describedby list (e.g.
-            "channel-config-desc-telegram radix-_r_2_") which is invalid ARIA
-            — getElementById on a space-separated id returns null. Using a
-            plain <p id={descriptionId}> here keeps aria-describedby as a
-            single valid id, which is what the AC2 assertion expects. */}
+            child's id to the Content's aria-describedby attribute, which
+            produces a space-separated ID-reference list (ARIA permits
+            multiple whitespace-separated IDs in aria-describedby, but
+            passing that entire list to getElementById to fetch a single
+            element is invalid usage and returns null). Using a plain
+            <p id={descriptionId}> here keeps this component's description
+            reference as a single id, which is what the AC2 assertion
+            expects. */}
         <p
           id={descriptionId}
           className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3"

@@ -23,11 +23,9 @@ import (
 // TestHandleRateLimits_* covers the PUT rate-limits semantics for the
 // surviving SEC-26 sliding-window fields.
 //
-// ADR-053 D12 retired the SEC-26 daily USD cost cap (`daily_cost_cap_usd`)
-// from this endpoint. The endpoint now handles ONLY per-agent sliding-window
-// limits (LLM/hr, tool/min); the app-level spend brake is the token budget
-// (PUT /api/v1/settings/token-budget). Retired-field rejection is tested in
-// TestHandleRateLimits_RejectsRetiredUSDField in rest_security_wave4_test.go.
+// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+// Retired-field rejection is tested in TestHandleRateLimits_RejectsRetiredUSDField
+// in rest_security_wave4_test.go.
 
 func putRateLimits(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -57,7 +55,7 @@ func TestHandleRateLimits_PersistsBothFields(t *testing.T) {
 	require.True(t, ok, "applied must be an object")
 	assert.Equal(t, float64(100), applied["max_agent_llm_calls_per_hour"])
 	assert.Equal(t, float64(30), applied["max_agent_tool_calls_per_minute"])
-	// ADR-053 D12: USD cap retired; must NOT be in applied.
+	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	_, hasUSD := applied["daily_cost_cap_usd"]
 	assert.False(t, hasUSD,
 		"daily_cost_cap_usd must NOT appear in applied after D12 retirement")
@@ -247,7 +245,7 @@ func TestHandleRateLimits_EmitsAuditEntry(t *testing.T) {
 			assert.NotNil(t, newVal, "new_value must be an object")
 			assert.Equal(t, float64(25), newVal["max_agent_llm_calls_per_hour"],
 				"new_value.max_agent_llm_calls_per_hour must match the PUT body")
-			// ADR-053 D12: USD cap retired; must NOT appear in the audit record.
+			// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 			_, hasUSD := newVal["daily_cost_cap_usd"]
 			assert.False(t, hasUSD,
 				"audit new_value must not carry the retired daily_cost_cap_usd field")

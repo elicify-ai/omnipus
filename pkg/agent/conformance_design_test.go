@@ -1090,7 +1090,10 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	//     NOT exist); a committed-but-not-done intent is replayed forward (its
 	//     tail member DOES exist). This is the t3 "transactional append" node.
 	dir := t.TempDir()
-	il := plan.NewIntentLog(filepath.Join(dir, "plan_intents"))
+	il, ilErr := plan.NewIntentLog(filepath.Join(dir, "plan_intents"), nil)
+	if ilErr != nil {
+		t.Fatalf("(4) NewIntentLog: %v", ilErr)
+	}
 	// uncommitted intent (crash before MarkCommitted) — must be DISCARDED.
 	recUncommitted := plan.IntentRecord{
 		IntentID: "rev-t3-uncommitted", PlanID: "plan-t3",

@@ -165,7 +165,11 @@ export function useAutoSave<T>(
   // production the setStatus call is harmless; in jsdom it dereferences a
   // torn-down `window` and throws an unhandled ReferenceError that fails
   // the whole vitest run. The guard makes the late callback a no-op.
-  const mountedRef = useRef(true)
+  // Initial value intentionally false — the effect below sets it true on
+  // mount. Initializing during render (`useRef(true)`) broke under React
+  // StrictMode, where effects run setup→cleanup→setup on initial mount in
+  // dev, leaving `mountedRef.current` permanently false in development.
+  const mountedRef = useRef(false)
   const latestDataRef = useRef<T>(data)
   const saveFnRef = useRef(saveFn)
   saveFnRef.current = saveFn
@@ -311,6 +315,11 @@ export function useAutoSave<T>(
   // defined" that fails the whole vitest run (a flaky false-positive that CI
   // caught). Mount-once so it runs only on final unmount.
   useEffect(() => {
+    // Own both sides of the lifecycle so StrictMode's setup→cleanup→setup
+    // dance doesn't leave `mountedRef.current` permanently false after the
+    // initial-mount cleanup. Setting true here (not at render) means the
+    // post-cleanup re-setup restores it correctly in development.
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)

@@ -318,7 +318,8 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 //
 // Emitting the pre-ADR-053 "cleared" value is FORBIDDEN: it is not in the
 // GoalStatusFrame schema enum, so the SPA zod edge drops the frame and the
-// pill freezes on its last valid state (the t0 e2e failure mode).
+// pill freezes on its last valid state (see Conformance_t0_E2E in
+// tests/e2e/conformance-design-e2e.spec.ts).
 func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, note string) string {
 	meta, err := store.GetMeta(sessionID)
 	// FR-114 (N-12): /goal clear cancels the in-flight verifier AND any in-flight
@@ -343,7 +344,7 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 
 	empty := ""
 	zero := 0
-	if serr := store.SetMeta(sessionID, session.MetaPatch{
+	serr := store.SetMeta(sessionID, session.MetaPatch{
 		GoalCondition:      &empty,
 		GoalCriteriaJSON:   &empty,
 		GoalPendingJSON:    &empty,
@@ -352,9 +353,19 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 		GoalLatestReason:   &empty,
 		GoalStartedAt:      &empty,
 		GoalLastActivityAt: &empty,
-	}); serr != nil {
-		logger.WarnCF("agent", "goal: failed to clear goal state",
+	})
+	if serr != nil {
+		// SetMeta failed — the on-disk goal fields are still set. Do NOT
+		// emit the terminal "cleared" pill (the user would see a cleared
+		// status while the durable state still has the live goal), and do
+		// NOT release the verifier / clear the trigger state (that would
+		// diverge the in-memory surface from the still-set on-disk state).
+		// Let the next turn re-drive the clear. (Fix B.7 — silent-failure
+		// hunter #11: prior code logged the warning but proceeded as if the
+		// clear succeeded.)
+		logger.WarnCF("agent", "goal: failed to clear goal state — skipping terminal side effects; next turn will re-drive clear",
 			map[string]any{"session_id": sessionID, "error": serr.Error()})
+		return "Goal clear deferred (SetMeta failed — will retry on next turn)."
 	}
 	if !hadGoal {
 		return "No active goal to clear."
