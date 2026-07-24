@@ -306,6 +306,16 @@ func (l *Library) Path() string {
 	return l.path
 }
 
+// NormalizeCache returns the process-wide sha256-keyed normalization
+// cache (FR-004). The cache is lazy-initialized via sync.Once and
+// shared across every Library instance in the process — raw bytes do
+// not change mid-process so a stale-OK process-local cache is the
+// right scope. See pkg/media/library/normalize_cache.go for the key
+// shape, capacity, and concurrency contract.
+func (l *Library) NormalizeCache() NormalizeCache {
+	return GlobalNormalizeCache()
+}
+
 func (l *Library) List() []gen.MediaLibraryEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

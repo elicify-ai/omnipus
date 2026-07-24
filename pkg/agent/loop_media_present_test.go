@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 )
@@ -422,4 +423,96 @@ func TestE2E_TextOnlyModel_ImageSurvivesAsOffload(t *testing.T) {
 		"image survives: offload guidance present")
 	assert.Contains(t, result[0].Content, workDir,
 		"image survives: the offloaded copy is reachable at the injected path")
+}
+
+// TestNormalizeImage_CachedBySHA256 (FR-004, ADR-051 Rev 4 Gap 1):
+// calling encodeImageToDataURLCached twice with the same source bytes +
+// same model slot + same budget must return a byte-identical data URL,
+// and the second call must hit the sha256-keyed cache (verified via
+// the process-wide GlobalNormalizeCacheStats counters).
+//
+// The contract under test:
+//
+//   - The sha256 is the source-of-truth identity (NOT the sha256 of
+//     the normalized output), so the cache key is content-derived and
+//     identical inputs trivially produce identical outputs.
+//   - The cache is consulted BEFORE the decode → resize → encode
+//     pipeline (FR-004), so the second call must skip that work
+//     entirely — observable via a +1 hit on the global counter.
+//   - The model slot and the budget are part of the cache key, so two
+//     calls that differ in either field do NOT collide. Verified by
+//     asserting hit-counter deltas across budget/model variations.
+//   - The cache is process-wide (sync.Once); the test reads the
+//     counters via library.GlobalNormalizeCacheStats to assert the
+//     relative deltas around each call.
+func TestNormalizeImage_CachedBySHA256(t *testing.T) {
+	const model = "anthropic/claude-sonnet-4"
+
+	pngPath := filepath.Join(t.TempDir(), "cache-img.png")
+	require.NoError(t, os.WriteFile(pngPath, realPNGBytes(), 0o600))
+	info, err := os.Stat(pngPath)
+	require.NoError(t, err)
+
+	// Use the same budget shape the production orchestrator would
+	// produce for this model via resizeBudgetForModel (the FR-014 path).
+	budget := capabilities.ResizeBudget{LongEdgePx: 7680, MaxBytes: 10 * 1024 * 1024}
+
+	// First call: populates the cache (FR-004 miss path).
+	dataURL1 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budget)
+	require.NotEmpty(t, dataURL1, "first call must produce a data URL")
+	assert.True(t, strings.HasPrefix(dataURL1, "data:image/png;base64,"),
+		"first call: PNG output for a 1×1 PNG within budget, got prefix %q",
+		dataURL1[:min(40, len(dataURL1))])
+
+	// Second call with identical inputs: must hit the cache and return
+	// byte-identical output. The hit-counter delta across this call is
+	// the FR-004 hit assertion.
+	hitsBefore2 := library.GlobalNormalizeCacheStats().Hits
+	dataURL2 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budget)
+	hitsAfter2 := library.GlobalNormalizeCacheStats().Hits
+
+	assert.Equal(t, dataURL1, dataURL2,
+		"second call must return byte-identical data URL (cache hit)")
+	assert.Equal(t, hitsBefore2+1, hitsAfter2,
+		"second call must register exactly one cache hit (FR-004)")
+
+	// Third call: distinct budget. The cache key MUST differ (the
+	// budget is part of the key), so the call is a MISS — hit counter
+	// is unchanged across this call.
+	budgetTight := capabilities.ResizeBudget{LongEdgePx: 1024, MaxBytes: 1 * 1024 * 1024}
+	hitsBefore3 := library.GlobalNormalizeCacheStats().Hits
+	dataURL3 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budgetTight)
+	hitsAfter3 := library.GlobalNormalizeCacheStats().Hits
+	require.NotEmpty(t, dataURL3)
+	assert.Equal(t, hitsBefore3, hitsAfter3,
+		"distinct budget = distinct cache key = MISS, hit counter unchanged")
+
+	// Fourth call: same tight budget as call 3. This MUST hit (same
+	// cache key as call 3 just populated).
+	hitsBefore4 := library.GlobalNormalizeCacheStats().Hits
+	dataURL4 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budgetTight)
+	hitsAfter4 := library.GlobalNormalizeCacheStats().Hits
+	assert.Equal(t, dataURL3, dataURL4,
+		"same inputs as call 3 = same cache key = byte-identical output")
+	assert.Equal(t, hitsBefore4+1, hitsAfter4,
+		"fourth call must register exactly one cache hit (same key as call 3)")
+
+	// Fifth call: distinct model slot, original budget. The model
+	// slot is part of the cache key, so this MUST miss.
+	hitsBefore5 := library.GlobalNormalizeCacheStats().Hits
+	dataURL5 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, "openai/gpt-4o", budget)
+	hitsAfter5 := library.GlobalNormalizeCacheStats().Hits
+	require.NotEmpty(t, dataURL5)
+	assert.Equal(t, hitsBefore5, hitsAfter5,
+		"distinct model slot = distinct cache key = MISS, hit counter unchanged")
+
+	// Sixth call: back to the original (model, budget) pair. This MUST
+	// hit (call 1 populated this exact key).
+	hitsBefore6 := library.GlobalNormalizeCacheStats().Hits
+	dataURL6 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budget)
+	hitsAfter6 := library.GlobalNormalizeCacheStats().Hits
+	assert.Equal(t, dataURL1, dataURL6,
+		"sixth call (original inputs) returns the same data URL as call 1")
+	assert.Equal(t, hitsBefore6+1, hitsAfter6,
+		"sixth call must register exactly one cache hit (same key as call 1)")
 }

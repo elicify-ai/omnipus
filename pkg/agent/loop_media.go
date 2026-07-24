@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/docextract"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
@@ -185,11 +186,12 @@ func resolveMediaRefsWithOffload(
 				// outcome-based step-4 retry.
 				var dataURL string
 				if modelSupportsImage(catalog, model) {
-					dataURL = encodeImageToDataURL(
+					dataURL = encodeImageToDataURLCached(
 						localPath,
 						mime,
 						info,
 						maxSize,
+						model,
 						resizeBudgetForModel(catalog, model, maxSize),
 					)
 				}
@@ -533,6 +535,13 @@ const maxImagePixels = 16 * 1024 * 1024
 // PNG does not fit (FR-015). The pixel budget is checked before full
 // decode to bound memory use (FR-013).
 //
+// FR-004 (ADR-051 Rev 4 Gap 1): the normalized PNG/JPEG artifact is
+// cached by sha256 of the raw source bytes plus the cache-affecting
+// budget inputs (model slot, MaxBytes, LongEdgePx). Repeated
+// presentations of the same attachment skip the decode → resize →
+// encode pipeline and return the cached data URL. The sha256 is the
+// source-of-truth identity (NOT the sha256 of the normalized output).
+//
 // FR-016 (ADR-051 Rev 4): the prior D2 passthrough for AVIF/HEIC/HEIF/ICO
 // is DELETED. These formats are not in the stdlib + x/image decoder set;
 // image.DecodeConfig fails on them, the function returns "", and the caller
@@ -546,10 +555,31 @@ const maxImagePixels = 16 * 1024 * 1024
 // budget is optional: when absent, defaults to 7680px long edge (the catalog
 // default) and maxSize for MaxBytes. Passing a non-zero budget overrides the
 // long-edge default and blends MaxBytes with the maxSize cap (the smaller wins).
+//
+// encodeImageToDataURL is the backward-compatible entry point used by the
+// regression tests; it delegates to encodeImageToDataURLCached with an
+// empty model slot. The production orchestrator calls the cached variant
+// directly so the model slot is part of the cache key (two different
+// models may have different budgets and therefore different normalized
+// artifacts for the same raw bytes).
 func encodeImageToDataURL(
 	localPath, mime string,
 	info os.FileInfo,
 	maxSize int,
+	budget ...capabilities.ResizeBudget,
+) string {
+	return encodeImageToDataURLCached(localPath, mime, info, maxSize, "", budget...)
+}
+
+// encodeImageToDataURLCached is the cache-aware implementation. See
+// encodeImageToDataURL for the full contract. modelSlot is part of the
+// cache key (FR-004) — empty in the wrapper path, populated by the
+// production orchestrator.
+func encodeImageToDataURLCached(
+	localPath, mime string,
+	info os.FileInfo,
+	maxSize int,
+	modelSlot string,
 	budget ...capabilities.ResizeBudget,
 ) string {
 	if info.Size() > int64(maxSize) {
@@ -563,9 +593,25 @@ func encodeImageToDataURL(
 	// ADR-051 RD1 extension (Option A): SVG is XML, not a raster format, so
 	// DecodeConfig below can never read it. Rasterize to canonical PNG via
 	// the pure-Go oksvg/rasterx path instead — the provider receives an
-	// image it can actually see.
+	// image it can actually see. The rasterized-SVG path is NOT cached
+	// here — its inputs (the SVG markup) are not the same shape as the
+	// raster decode pipeline, and FR-004 covers the latter.
 	if mime == "image/svg+xml" {
 		return encodeSVGToDataURL(localPath, info, maxSize)
+	}
+
+	// FR-011/014/015: resolve the effective budget BEFORE reading bytes
+	// so the cache key carries the resolved budget, not the variadic
+	// shell. The cache key requires numeric budget fields (MaxBytes,
+	// LongEdgePx) — the variadic may be empty (legacy call path), in
+	// which case the defaults below apply.
+	longEdgePx := 7680
+	maxBytes := int64(maxSize)
+	if len(budget) > 0 && budget[0].LongEdgePx > 0 {
+		longEdgePx = budget[0].LongEdgePx
+		if budget[0].MaxBytes > 0 && budget[0].MaxBytes < maxBytes {
+			maxBytes = budget[0].MaxBytes
+		}
 	}
 
 	f, err := os.Open(localPath)
@@ -579,8 +625,32 @@ func encodeImageToDataURL(
 		}
 	}()
 
+	// FR-004: hash the raw source bytes for the cache key. Read once
+	// (io.ReadAll) so we can both hash AND feed the same bytes to
+	// image.DecodeConfig + image.Decode via bytes.NewReader. The sha256
+	// is the source-of-truth identity — NOT the sha256 of the
+	// normalized output, which would defeat the purpose.
+	rawBytes, err := io.ReadAll(f)
+	if err != nil {
+		logImageNormalizationFailure(localPath, mime, "read-failed", err, nil)
+		return ""
+	}
+
+	cacheKey := library.NormalizeCacheKey{
+		Sha256:         library.HashRawBytes(rawBytes),
+		ModelSlot:      modelSlot,
+		BudgetMaxBytes: maxBytes,
+		BudgetMaxEdge:  longEdgePx,
+	}
+	if cached, ok := library.GlobalNormalizeCache().Get(cacheKey); ok {
+		// FR-004 hit: skip the entire decode → resize → encode
+		// pipeline. The cached value is the data URL string bytes
+		// (caller-converted).
+		return string(cached)
+	}
+
 	// FR-013: DecodeConfig pre-flight pixel guard.
-	config, format, err := image.DecodeConfig(f)
+	config, format, err := image.DecodeConfig(bytes.NewReader(rawBytes))
 	if err != nil {
 		logImageNormalizationFailure(localPath, mime, "decode-config-failed", err, nil)
 		return ""
@@ -604,14 +674,7 @@ func encodeImageToDataURL(
 		return ""
 	}
 
-	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
-		logImageNormalizationFailure(localPath, mime, "rewind-failed", seekErr, map[string]any{
-			"format": format,
-		})
-		return ""
-	}
-
-	decoded, decodedFormat, err := image.Decode(f)
+	decoded, decodedFormat, err := image.Decode(bytes.NewReader(rawBytes))
 	if err != nil {
 		logImageNormalizationFailure(localPath, mime, "decode-failed", err, map[string]any{
 			"format": format,
@@ -619,19 +682,6 @@ func encodeImageToDataURL(
 		return ""
 	}
 
-	// FR-011/014/015: resize-to-fit using the per-model budget from the
-	// capability catalog (FR-014), falling back to the legacy maxSize
-	// cap for MaxBytes. LongEdgePx from the catalog budget; MaxBytes
-	// blends the catalog budget with the per-agent max_media_size cap
-	// (the smaller of the two wins).
-	longEdgePx := 7680
-	maxBytes := int64(maxSize)
-	if len(budget) > 0 && budget[0].LongEdgePx > 0 {
-		longEdgePx = budget[0].LongEdgePx
-		if budget[0].MaxBytes > 0 && budget[0].MaxBytes < maxBytes {
-			maxBytes = budget[0].MaxBytes
-		}
-	}
 	result, err := resize.ResizeToFit(decoded, capabilities.ResizeBudget{
 		LongEdgePx: longEdgePx,
 		MaxBytes:   maxBytes,
@@ -651,8 +701,14 @@ func encodeImageToDataURL(
 		return ""
 	}
 
-	prefix := "data:" + result.Mime + ";base64,"
-	return prefix + base64.StdEncoding.EncodeToString(result.Data)
+	dataURL := "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data)
+
+	// FR-004: populate the cache for the next presentation. The cache
+	// value is the data URL bytes; the mime is recoverable from the
+	// data-URL prefix so we don't need a separate mime field.
+	library.GlobalNormalizeCache().Put(cacheKey, []byte(dataURL))
+
+	return dataURL
 }
 
 func maxInt(a, b int) int {
