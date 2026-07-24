@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // TestWebchatChannel_SendSkipsWhenStreamed verifies that webchatChannel.Send is a no-op

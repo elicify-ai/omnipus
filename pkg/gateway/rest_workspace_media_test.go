@@ -11,10 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
 func TestHandleMedia_WorkspaceRef_Resolves(t *testing.T) {

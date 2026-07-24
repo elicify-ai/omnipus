@@ -33,6 +33,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -59,7 +61,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/google/uuid"
 )
 
 // Version is set at build time via -ldflags "-X github.com/elicify-ai/omnipus/pkg/gateway.Version=x.y.z".
@@ -9165,7 +9166,13 @@ func (a *restAPI) HandleMediaByRef(w http.ResponseWriter, r *http.Request) {
 	a.serveMedia(w, r, ref, media.WithCallerWorkspace(workspaceID), ref)
 }
 
-func (a *restAPI) serveMedia(w http.ResponseWriter, r *http.Request, ref string, opts media.ResolveOpts, logRef string) {
+func (a *restAPI) serveMedia(
+	w http.ResponseWriter,
+	r *http.Request,
+	ref string,
+	opts media.ResolveOpts,
+	logRef string,
+) {
 	store := a.agentLoop.GetMediaStore()
 	if store == nil {
 		store = a.mediaStore

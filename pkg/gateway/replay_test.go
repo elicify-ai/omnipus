@@ -19,12 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
-	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func TestReplay_MediaRefURL(t *testing.T) {

@@ -28,7 +28,10 @@ func TestChannels_ResolveWithCallerWorkspace(t *testing.T) {
 		}
 		return lib, nil
 	})
-	channels := []string{"telegram", "discord", "slack", "matrix", "feishu", "irc", "googlechat", "whatsapp_native", "weixin", "qq", "wecom"}
+	channels := []string{
+		"telegram", "discord", "slack", "matrix", "feishu",
+		"irc", "googlechat", "whatsapp_native", "weixin", "qq", "wecom",
+	}
 	for _, channel := range channels {
 		t.Run(channel, func(t *testing.T) {
 			if channel == "irc" || channel == "googlechat" || channel == "whatsapp_native" {

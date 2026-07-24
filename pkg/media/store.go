@@ -254,15 +254,19 @@ func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) 
 // sites: the caller-workspace context is the channel's bound workspace
 // (already on the channel config). It is a nilable semantics — empty
 // callerWorkspace preserves the legacy global-registry-only behavior.
-func (s *FileMediaStore) ResolveWithCallerWorkspace(ref string, callerWorkspace string) (localPath string, meta MediaMeta, err error) {
+func (s *FileMediaStore) ResolveWithCallerWorkspace(
+	ref string,
+	callerWorkspace string,
+) (localPath string, meta MediaMeta, err error) {
 	return s.ResolveWithMetaOpts(ref, WithCallerWorkspace(callerWorkspace))
 }
 
-// discriminates on the ref prefix: "media://workspace/<ws>/<id>" routes to
-// the owning workspace library after the membership guard, every other
-// "media://<uuid>" ref resolves via the legacy global registry. A nil
-// CallerWorkspace bypasses the guard for legacy refs (FR-029) and is
-// rejected for workspace refs (FR-028a).
+// ResolveWithOpts discriminates on the ref prefix:
+// "media://workspace/<ws>/<id>" routes to the owning workspace library
+// after the membership guard, every other "media://<uuid>" ref resolves
+// via the legacy global registry. A nil CallerWorkspace bypasses the
+// guard for legacy refs (FR-029) and is rejected for workspace refs
+// (FR-028a).
 func (s *FileMediaStore) ResolveWithOpts(ref string, opts ResolveOpts) (string, error) {
 	path, _, err := s.ResolveWithMetaOpts(ref, opts)
 	return path, err
