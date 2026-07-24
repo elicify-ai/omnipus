@@ -1540,6 +1540,8 @@ func intPtr(i int) *int { return &i }
 
 func boolPtr(b bool) *bool { return &b }
 
+func float32Ptr(f float32) *float32 { return &f }
+
 func repeatStr(s string, n int) string {
 	result := make([]byte, 0, len(s)*n)
 	for i := 0; i < n; i++ {
@@ -2293,7 +2295,7 @@ func FixtureWorkspace_ZeroValue() Workspace {
 // Traces to: contracts/components/schemas/ExecutorConfig.yaml
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
-	kind := ExecutorConfigKindExternalCli
+	kind := ExternalCli
 	cli := ClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
@@ -2552,7 +2554,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 
 	return AgentCreateRequestSubagent3p{
 		Name:           "Claude Code Worker",
-		Type:           AgentCreateRequestSubagent3pTypeSubagent3p,
+		Type:           Subagent3p,
 		Description:    &description,
 		Model:          &model,
 		Provider:       &provider,
