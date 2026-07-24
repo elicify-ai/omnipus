@@ -40,7 +40,9 @@ import (
 // circleSVG, sized to the spec's 64×64 to keep the rasterized PNG byte
 // budget bounded for the unit test (encodeSVGToDataURL enforces the
 // same maxSize cap as the production path).
-const toolResultMediaBlue64x64SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="blue"/></svg>`
+const toolResultMediaBlue64x64SVG = `<svg xmlns="http://www.w3.org/2000/svg"` +
+	` width="64" height="64">` +
+	`<circle cx="32" cy="32" r="28" fill="blue"/></svg>`
 
 // toolResultMediaMaxSize is the byte budget attachToolResultMedia uses
 // in the test. 1 MiB is the production default (cfg.Agents.Defaults.
@@ -143,7 +145,10 @@ func TestToolResultMedia_AVIFSkipsInlineAttach(t *testing.T) {
 	for _, mime := range []string{"image/avif", "image/heic", "image/heif", "image/x-icon"} {
 		t.Run(mime, func(t *testing.T) {
 			store := media.NewFileMediaStore()
-			ref, _ := storeFile(t, store, "photo"+strings.ReplaceAll(mime, "/", "_"), mime, []byte("unsupported-fake-bytes"))
+			ref, _ := storeFile(t, store,
+				"photo"+strings.ReplaceAll(mime, "/", "_"),
+				mime,
+				[]byte("unsupported-fake-bytes"))
 
 			msg := &providers.Message{Role: "tool", Content: "tool output", ToolCallID: "call_1"}
 			attachToolResultMedia(msg, []string{ref}, store, toolResultMediaMaxSize)

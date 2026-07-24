@@ -618,11 +618,13 @@ func attachToolResultMedia(msg *providers.Message, refs []string, store media.Me
 				// site at loop.go:8246) still names the file path —
 				// the model can read it via tools.file_read or the
 				// next tool invocation.
-				logger.WarnCF("agent", "attachToolResultMedia: non-universal image normalize failed, skipping inline attach", map[string]any{
-					"ref":  ref,
-					"path": localPath,
-					"mime": mime,
-				})
+				logger.WarnCF("agent",
+					"attachToolResultMedia: non-universal image normalize failed, skipping inline attach",
+					map[string]any{
+						"ref":  ref,
+						"path": localPath,
+						"mime": mime,
+					})
 				continue
 			}
 			msg.Media = append(msg.Media, dataURL)
