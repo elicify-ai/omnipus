@@ -315,6 +315,7 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 //   - user clear / stop / cancel → state "failed" with the note as reason
 //     (user-initiated stop is not success; SPA may hide empty-condition pills)
 //   - round/budget/idle brakes → state "failed"
+//
 // Emitting the pre-ADR-053 "cleared" value is FORBIDDEN: it is not in the
 // GoalStatusFrame schema enum, so the SPA zod edge drops the frame and the
 // pill freezes on its last valid state (the t0 e2e failure mode).
