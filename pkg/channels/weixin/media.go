@@ -694,6 +694,7 @@ func (c *WeixinChannel) downloadRemoteMediaToTemp(
 func (c *WeixinChannel) resolveOutboundPart(
 	ctx context.Context,
 	part bus.MediaPart,
+	callerWorkspace string,
 ) (string, string, string, func(), error) {
 	cleanup := func() {}
 	filename := sanitizeFilename(part.Filename)
@@ -712,7 +713,7 @@ func (c *WeixinChannel) resolveOutboundPart(
 		if store == nil {
 			return "", "", "", cleanup, fmt.Errorf("no media store available")
 		}
-		localPath, meta, err := store.ResolveWithMetaOpts(part.Ref, media.ResolveOpts{})
+		localPath, meta, err := store.ResolveWithCallerWorkspace(part.Ref, callerWorkspace)
 		if err != nil {
 			return "", "", "", cleanup, err
 		}
@@ -1118,7 +1119,7 @@ func (c *WeixinChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 	}
 
 	for _, part := range msg.Parts {
-		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part)
+		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part, msg.WorkspaceID)
 		if err != nil {
 			logger.ErrorCF("weixin", "Failed to resolve outbound media", map[string]any{
 				"chat_id": msg.ChatID,

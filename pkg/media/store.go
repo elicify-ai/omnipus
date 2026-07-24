@@ -71,6 +71,8 @@ type MediaStore interface {
 	// ResolveWithOpts. See ResolveWithOpts for the FR-028/FR-028a rules.
 	ResolveWithMetaOpts(ref string, opts ResolveOpts) (localPath string, meta MediaMeta, err error)
 
+	ResolveWithCallerWorkspace(ref string, callerWorkspace string) (localPath string, meta MediaMeta, err error)
+
 	// ReleaseAll deletes all files registered under the given scope
 	// and removes the mapping entries. File-not-exist errors are ignored.
 	ReleaseAll(scope string) error
@@ -248,7 +250,14 @@ func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) 
 	return s.ResolveWithMetaOpts(ref, ResolveOpts{})
 }
 
-// ResolveWithOpts is the workspace-aware resolver (FR-028/FR-028a). It
+// ResolveWithCallerWorkspace is a convenience for channel delivery
+// sites: the caller-workspace context is the channel's bound workspace
+// (already on the channel config). It is a nilable semantics — empty
+// callerWorkspace preserves the legacy global-registry-only behavior.
+func (s *FileMediaStore) ResolveWithCallerWorkspace(ref string, callerWorkspace string) (localPath string, meta MediaMeta, err error) {
+	return s.ResolveWithMetaOpts(ref, WithCallerWorkspace(callerWorkspace))
+}
+
 // discriminates on the ref prefix: "media://workspace/<ws>/<id>" routes to
 // the owning workspace library after the membership guard, every other
 // "media://<uuid>" ref resolves via the legacy global registry. A nil

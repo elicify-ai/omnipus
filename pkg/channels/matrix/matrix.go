@@ -457,7 +457,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			return err
 		}
 
-		localPath, meta, err := store.ResolveWithMetaOpts(part.Ref, media.ResolveOpts{})
+		localPath, meta, err := store.ResolveWithCallerWorkspace(part.Ref, msg.WorkspaceID)
 		if err != nil {
 			logger.ErrorCF("matrix", "Failed to resolve media ref", map[string]any{
 				"ref":   part.Ref,

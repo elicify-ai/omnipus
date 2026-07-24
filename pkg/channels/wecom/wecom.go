@@ -246,7 +246,7 @@ func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			continue
 		}
 
-		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part)
+		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part, msg.WorkspaceID)
 		if err != nil {
 			return fmt.Errorf("wecom resolve media %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
 		}

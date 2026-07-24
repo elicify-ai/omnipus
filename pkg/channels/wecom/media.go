@@ -471,6 +471,7 @@ func (c *WeComChannel) downloadRemoteMediaToTemp(
 func (c *WeComChannel) resolveOutboundPart(
 	ctx context.Context,
 	part bus.MediaPart,
+	callerWorkspace string,
 ) (string, string, string, func(), error) {
 	cleanup := func() {}
 	filename := sanitizeWeComFilename(part.Filename)
@@ -494,7 +495,7 @@ func (c *WeComChannel) resolveOutboundPart(
 			return "", "", "", cleanup, fmt.Errorf("no media store available")
 		}
 
-		localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+		localPath, meta, err := store.ResolveWithCallerWorkspace(ref, callerWorkspace)
 		if err != nil {
 			return "", "", "", cleanup, err
 		}

@@ -338,7 +338,7 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 	chatKind := c.getChatKind(msg.ChatID)
 
 	for _, part := range msg.Parts {
-		fileInfo, err := c.uploadMedia(ctx, chatKind, msg.ChatID, part)
+		fileInfo, err := c.uploadMedia(ctx, chatKind, msg.ChatID, part, msg.WorkspaceID)
 		if err != nil {
 			logger.ErrorCF("qq", "Failed to upload media", map[string]any{
 				"type":    part.Type,
@@ -376,8 +376,9 @@ func (c *QQChannel) uploadMedia(
 	ctx context.Context,
 	chatKind, chatID string,
 	part bus.MediaPart,
+	callerWorkspace string,
 ) ([]byte, error) {
-	payload, err := c.buildMediaUpload(part)
+	payload, err := c.buildMediaUpload(part, callerWorkspace)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +399,7 @@ func (c *QQChannel) uploadMedia(
 	return uploaded.FileInfo, nil
 }
 
-func (c *QQChannel) buildMediaUpload(part bus.MediaPart) (*qqMediaUpload, error) {
+func (c *QQChannel) buildMediaUpload(part bus.MediaPart, callerWorkspace string) (*qqMediaUpload, error) {
 	payload := &qqMediaUpload{}
 
 	mediaRef := part.Ref
@@ -414,7 +415,7 @@ func (c *QQChannel) buildMediaUpload(part bus.MediaPart) (*qqMediaUpload, error)
 		return nil, fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
 	}
 
-	resolved, meta, err := store.ResolveWithMetaOpts(part.Ref, media.ResolveOpts{})
+	resolved, meta, err := store.ResolveWithCallerWorkspace(part.Ref, callerWorkspace)
 	if err != nil {
 		return nil, fmt.Errorf("qq resolve media ref %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
 	}

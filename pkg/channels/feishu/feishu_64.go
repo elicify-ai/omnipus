@@ -364,7 +364,7 @@ func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 	}
 
 	for _, part := range msg.Parts {
-		if err := c.sendMediaPart(ctx, msg.ChatID, part, store); err != nil {
+		if err := c.sendMediaPart(ctx, msg.ChatID, part, store, msg.WorkspaceID); err != nil {
 			return err
 		}
 	}
@@ -378,8 +378,9 @@ func (c *FeishuChannel) sendMediaPart(
 	chatID string,
 	part bus.MediaPart,
 	store media.MediaStore,
+	callerWorkspace string,
 ) error {
-	localPath, err := store.ResolveWithOpts(part.Ref, media.ResolveOpts{})
+	localPath, _, err := store.ResolveWithCallerWorkspace(part.Ref, callerWorkspace)
 	if err != nil {
 		logger.ErrorCF("feishu", "Failed to resolve media ref", map[string]any{
 			"ref":   part.Ref,
