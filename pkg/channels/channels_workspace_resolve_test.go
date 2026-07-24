@@ -41,7 +41,10 @@ func TestChannels_ResolveWithCallerWorkspace(t *testing.T) {
 			if err != nil || path == "" {
 				t.Fatalf("resolve: path=%q err=%v", path, err)
 			}
-			if _, _, err := store.ResolveWithCallerWorkspace(ref, "other-workspace"); !errors.Is(err, media.ErrCrossWorkspaceRef) {
+			if _, _, err := store.ResolveWithCallerWorkspace(ref, "other-workspace"); !errors.Is(
+				err,
+				media.ErrCrossWorkspaceRef,
+			) {
 				t.Fatalf("cross-workspace resolve: got %v", err)
 			}
 			if _, err := os.Stat(filepath.Clean(path)); err != nil {
