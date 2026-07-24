@@ -33,8 +33,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -61,6 +59,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // Version is set at build time via -ldflags "-X github.com/elicify-ai/omnipus/pkg/gateway.Version=x.y.z".
@@ -4795,6 +4794,9 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// Chain: withAuth (verifies token) → handler.
 	cm.RegisterHTTPHandler("/api/v1/credentials", a.withAuth(a.HandleCredentials))
 	cm.RegisterHTTPHandler("/api/v1/credentials/", a.withAuth(a.HandleCredentials))
+	// Option A keeps workspace and media IDs as separately validated path segments;
+	// the legacy global media route remains below for backward compatibility.
+	cm.RegisterHTTPHandler("/api/v1/media/workspace/", a.withOptionalAuth(a.HandleMediaByRef))
 	cm.RegisterHTTPHandler("/api/v1/media/", a.withOptionalAuth(a.HandleMedia))
 	cm.RegisterHTTPHandler("/api/v1/backup", a.withAuth(a.HandleCreateBackup))
 	cm.RegisterHTTPHandler("/api/v1/backups", a.withAuth(a.HandleListBackups))
@@ -9123,8 +9125,8 @@ func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 
 // --- Media ---
 
-// HandleMedia serves a media file by its ref ID extracted from the URL path
-// (e.g. /api/v1/media/abc123 resolves "media://abc123" via MediaStore).
+// HandleMedia serves a legacy global media file by its ref ID extracted from
+// the URL path (e.g. /api/v1/media/abc123 resolves "media://abc123").
 func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -9132,9 +9134,38 @@ func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	a.setCORSHeaders(w, r)
 
-	// Always read the current store via the agent loop. The store is replaced
-	// on every restartServices, so a.mediaStore would go stale after the first
-	// reload (screenshots stored in the new store are invisible to the old one).
+	refID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/media/"), "/")
+	if refID == "" || strings.ContainsAny(refID, "/\\") || strings.Contains(refID, "..") {
+		jsonErr(w, http.StatusBadRequest, "invalid media ref")
+		return
+	}
+
+	a.serveMedia(w, r, "media://"+refID, media.ResolveOpts{}, refID)
+}
+
+// HandleMediaByRef serves workspace-library media through the split path shape
+// /api/v1/media/workspace/{workspace}/{id}; the split keeps each path segment
+// independently validated while preserving the opaque media ref for resolution.
+func (a *restAPI) HandleMediaByRef(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	a.setCORSHeaders(w, r)
+
+	const prefix = "/api/v1/media/workspace/"
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
+	if len(parts) != 2 || validateEntityID(parts[0]) != nil || validateEntityID(parts[1]) != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid media ref")
+		return
+	}
+
+	workspaceID, mediaID := parts[0], parts[1]
+	ref := media.WorkspaceRefPrefix + workspaceID + "/" + mediaID
+	a.serveMedia(w, r, ref, media.WithCallerWorkspace(workspaceID), ref)
+}
+
+func (a *restAPI) serveMedia(w http.ResponseWriter, r *http.Request, ref string, opts media.ResolveOpts, logRef string) {
 	store := a.agentLoop.GetMediaStore()
 	if store == nil {
 		store = a.mediaStore
@@ -9144,15 +9175,13 @@ func (a *restAPI) HandleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/media/"), "/")
-	if refID == "" || strings.ContainsAny(refID, "/\\") || strings.Contains(refID, "..") {
-		jsonErr(w, http.StatusBadRequest, "invalid media ref")
-		return
-	}
-
-	localPath, meta, err := store.ResolveWithMetaOpts("media://"+refID, media.ResolveOpts{})
+	localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
 	if err != nil {
-		slog.Warn("rest: media ref not found", "ref", refID, "error", err.Error())
+		slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+		if errors.Is(err, media.ErrCrossWorkspaceRef) || errors.Is(err, library.ErrWorkspaceMismatch) {
+			jsonErr(w, http.StatusForbidden, "media access denied")
+			return
+		}
 		jsonErr(w, http.StatusNotFound, "media not found")
 		return
 	}

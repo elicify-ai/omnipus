@@ -12,9 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestWebchatChannel_SendSkipsWhenStreamed verifies that webchatChannel.Send is a no-op
@@ -115,6 +114,11 @@ func TestWebchatChannel_SendBroadcastsToSecondAttachedTab(t *testing.T) {
 		assert.True(t, gotToken, "each session-attached connection must receive the token frame")
 		assert.True(t, gotDone, "each session-attached connection must receive the done frame")
 	}
+}
+
+func TestWebchatChannel_MediaRefURL(t *testing.T) {
+	assert.Equal(t, "/api/v1/media/workspace/ws-1/abc", mediaRefURL("media://workspace/ws-1/abc"))
+	assert.Equal(t, "/api/v1/media/uuid-1", mediaRefURL("media://uuid-1"))
 }
 
 func bytesContains(haystack []byte, needle string) bool {

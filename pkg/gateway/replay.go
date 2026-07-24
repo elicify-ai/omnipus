@@ -683,7 +683,7 @@ func buildMediaFrame(
 		}
 		parts = append(parts, generated.MediaPart{
 			Type:        mediaType,
-			Url:         "/api/v1/media/" + refStr[len(refPrefix):],
+			Url:         mediaRefURL(refStr),
 			Filename:    filename,
 			ContentType: contentType,
 		})

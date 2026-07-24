@@ -19,20 +19,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
-
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
+
+func TestReplay_MediaRefURL(t *testing.T) {
+	assert.Equal(t, "/api/v1/media/workspace/ws-1/abc", mediaRefURL("media://workspace/ws-1/abc"))
+	assert.Equal(t, "/api/v1/media/uuid-1", mediaRefURL("media://uuid-1"))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-// sliceSink accumulates emitted frames as JSON bytes; safe for single-goroutine use.
 // It stores raw JSON so that tests are not coupled to the internal Go frame type —
 // any generated type emitted through streamReplay can be decoded here.
 type sliceSink struct {
