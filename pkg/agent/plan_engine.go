@@ -2265,8 +2265,11 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 		return nil, fmt.Errorf("%w: plan %q: caller agent identity is empty", ErrCorrectionNotOwner, planID)
 	}
 	if caller.AgentID != p.OwnerAgentID {
-		return nil, fmt.Errorf("%w: plan %q: caller agent %q is not owner %q",
-			ErrCorrectionNotOwner, planID, caller.AgentID, p.OwnerAgentID)
+		// Opaque denial (sec-MAJOR-2): do not leak the real OwnerAgentID to a
+		// non-owner. Detail is logged server-side only.
+		logger.WarnCF("plan_engine", "AppendCorrection denied: caller is not plan owner",
+			map[string]any{"plan_id": planID, "caller_agent": caller.AgentID, "owner_agent": p.OwnerAgentID})
+		return nil, fmt.Errorf("%w: plan %q", ErrCorrectionNotOwner, planID)
 	}
 	if p.OwnerSessionID != "" && caller.SessionID != p.OwnerSessionID {
 		return nil, fmt.Errorf("%w: plan %q: caller session does not match the plan's owner session",

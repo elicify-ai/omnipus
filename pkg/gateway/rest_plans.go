@@ -33,6 +33,7 @@ package gateway
 // successful Create/Update — this file never emits frames directly.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1002,31 +1003,29 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 	jsonOK(w, a.toWirePlan(*updated))
 }
 
-// handlePlanRestart handles POST /api/v1/plans/{id}/restart (ADR-052 §6.7,
-// FR-016/017/026, US-9 — the ▶ Play route). Resets every non-done member
-// task via task.Store.RestartReset — any-reason failed->next un-freeze
-// (FR-016/DS-5: a genuinely-failed member inside an otherwise user-cancelled
-// plan is reset too, "re-run all its non-done members") — then transitions
-// the plan itself failed[stopped_by_user] -> approved via the store-level
-// reason-aware guard (plan.ValidateRestartTransition / plan.Store.Update's
-// restarting branch), NEVER straight to running: the engine promotes
-// approved->running under the global cap on its next tick, exactly like a
-// first execute (restarting straight to running would skip cap admission,
-// the same hole class the PUT-lockdown, FR-007, closed for approve).
-// Store.Update's restart branch also clears FailedReason and resets
-// JudgeRounds to 0 (A4) — this handler does not set either directly.
-//
-// Member resets happen BEFORE the plan's own state write: while the plan is
-// still `failed`, the engine's tick loop and event loop both ignore it
-// (they only act on `approved`/`running`), so there is no lock-free race
-// with dispatch here the way Stop has (grill F3 does not apply — restart's
-// own state write is the single point where the engine can react, and it
-// runs last).
+// handlePlanRestart handles POST /api/v1/plans/{id}/restart (ADR-052 §6.7 +
+// ADR-053 D13/G-12 ▶ Play). Delegates to PlanEngine.PlayPlan — the single
+// chokepoint that mints a new generation, resets non-done members, persists
+// ResumeFromCommit, and materializes the isolated resume checkout (#537).
+// The plan lands in `approved`; the engine promotes approved→running under
+// the global cap on its next tick (same as first execute).
 func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
 		return
 	}
+	if a.agentLoop == nil {
+		jsonErr(w, http.StatusServiceUnavailable, "agent loop is not available")
+		return
+	}
+	pe := agent.GetPlanEngine(a.agentLoop)
+	if pe == nil {
+		jsonErr(w, http.StatusServiceUnavailable, "plan engine is not available")
+		return
+	}
+
+	// Fail-fast existence + restart-permission check for a specific 404/409
+	// before PlayPlan's heavier work (PlayPlan re-validates under its lock).
 	p, err := a.planStore.Get(id)
 	if err != nil {
 		if errors.Is(err, plan.ErrNotFound) {
@@ -1037,78 +1036,58 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
-	// Fail fast with a specific 409 before touching any member task.
-	// plan.Store.Update re-validates against the FRESH on-disk state at write
-	// time regardless (fix-wave finding #4's onDiskFailedReason capture), so
-	// this early check is a targeted error message, not the sole guard.
 	if rerr := plan.ValidateRestartTransition(p.State, p.FailedReason); rerr != nil {
 		jsonErr(w, http.StatusConflict, rerr.Error())
 		return
 	}
 
-	if a.taskStore == nil {
-		jsonErr(w, http.StatusServiceUnavailable, "task store is not available")
-		return
-	}
-	members, lerr := a.taskStore.List(task.Filter{PlanID: id})
-	if lerr != nil {
-		slog.Error("rest: plan restart: list member tasks failed", "id", id, "error", lerr)
-		jsonErr(w, http.StatusInternalServerError, "could not list member tasks")
-		return
-	}
-	var resetFailures []string
-	for i := range members {
-		m := &members[i]
-		if m.Status != task.StatusFailed {
-			// done members are preserved untouched (FR-017); next/blocked
-			// members never ran and are already sitting in a fresh
-			// pre-run state — RestartReset only ever applies to `failed`
-			// (ErrNotRestartable otherwise), so only failed members need it.
-			continue
-		}
-		reset, rrerr := a.taskStore.RestartReset(m.ID)
-		if rrerr != nil {
-			slog.Error("rest: plan restart: member reset failed", "plan_id", id, "task_id", m.ID, "error", rrerr)
-			resetFailures = append(resetFailures, m.ID)
-			continue
-		}
-		a.emitTaskStatus(reset)
-		if a.agentLoop != nil {
-			a.agentLoop.NotifyTaskUpserted(reset)
-		}
-	}
-	if len(resetFailures) > 0 {
-		slog.Error("rest: plan restart: some member resets failed; proceeding with plan transition anyway",
-			"plan_id", id, "task_ids", resetFailures)
-	}
-
-	approved := plan.StateApproved
-	updated, uerr := a.planStore.Update(id, plan.Patch{State: &approved})
-	if uerr != nil {
-		if errors.Is(uerr, plan.ErrRestartNotPermitted) {
-			jsonErr(w, http.StatusConflict, uerr.Error())
+	playRes, perr := pe.PlayPlan(context.Background(), id)
+	if perr != nil {
+		if errors.Is(perr, plan.ErrRestartNotPermitted) || errors.Is(perr, plan.ErrNotFound) {
+			jsonErr(w, http.StatusConflict, perr.Error())
 			return
 		}
-		if isPlanValidationErr(uerr) {
-			jsonErr(w, http.StatusBadRequest, uerr.Error())
+		// PlayPlan wraps store errors; surface validation-ish messages as 400/409.
+		msg := perr.Error()
+		if strings.Contains(msg, "not failed") {
+			jsonErr(w, http.StatusConflict, msg)
 			return
 		}
-		slog.Error("rest: plan restart: update failed", "id", id, "error", uerr)
+		slog.Error("rest: plan restart: PlayPlan failed", "id", id, "error", perr)
 		jsonErr(w, http.StatusInternalServerError, "could not restart plan")
 		return
 	}
+	_ = playRes // generation/resume metadata is on the plan record + tasks
+
+	updated, uerr := a.planStore.Get(id)
+	if uerr != nil {
+		slog.Error("rest: plan restart: re-read after PlayPlan failed", "id", id, "error", uerr)
+		jsonErr(w, http.StatusInternalServerError, "could not read restarted plan")
+		return
+	}
+	// Partial member-reset honesty (ADR-052 §6.4 Item 5 / prior REST contract):
+	// PlayPlan logs and continues when RestartReset fails for a member. Surface
+	// that as 500 naming the still-failed task IDs rather than an unqualified
+	// 200 — the plan may already be approved, but the operator must re-check.
+	var stillFailed []string
+	if a.taskStore != nil {
+		if members, lerr := a.taskStore.List(task.Filter{PlanID: id}); lerr == nil {
+			for i := range members {
+				m := &members[i]
+				if m.Status == task.StatusFailed {
+					stillFailed = append(stillFailed, m.ID)
+				}
+				a.emitTaskStatus(m)
+				if a.agentLoop != nil {
+					a.agentLoop.NotifyTaskUpserted(m)
+				}
+			}
+		}
+	}
 	a.auditPlan("plan.restart", id)
-	if len(resetFailures) > 0 {
-		// Mirror handlePlanStop's partial-fan-out-failure honesty precedent
-		// (ADR-052 §6.4 Item 5): the plan itself DID transition to approved —
-		// updated reflects that, and the audit entry above records it
-		// happened — but >=1 member's own RestartReset write failed and stays
-		// `failed`, never re-run. Report this honestly as a server error
-		// naming the un-reset task IDs rather than an unqualified 200: the
-		// caller must re-check member state instead of assuming every
-		// non-done member was actually reset.
+	if len(stillFailed) > 0 {
 		jsonErr(w, http.StatusInternalServerError,
-			fmt.Sprintf("plan restarted, but member reset failed for task(s) %v; re-check their state", resetFailures))
+			fmt.Sprintf("plan restarted, but member reset failed for task(s) %v; re-check their state", stillFailed))
 		return
 	}
 	jsonOK(w, a.toWirePlan(*updated))
