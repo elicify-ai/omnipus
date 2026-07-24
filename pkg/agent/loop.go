@@ -8,7 +8,6 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8323,19 +8322,18 @@ turnLoop:
 			// Attach inline image data URLs so vision-capable models can SEE the
 			// screenshot/image returned by the tool. Without this the LLM only
 			// gets the placeholder text and cannot reason about the picture.
+			//
+			// ADR-051 Rev 4 Gap 4: the inline-attach site must normalize
+			// non-universal image MIMEs (SVG / AVIF / HEIC / HEIF / ICO)
+			// before building the data URL — providers 400 on image/svg+xml
+			// blocks and the pure-Go decoder set cannot normalize the rest,
+			// and the tool-result message is persisted into session
+			// history at loop.go:8442-8443, so a bad MIME would poison
+			// every subsequent turn. attachToolResultMedia owns that
+			// guard; the artifact tag at loop.go:8246 is the path-based
+			// fallback hook for the rare "rasterize failed" case.
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
-				for _, ref := range toolResult.Media {
-					localPath, meta, err := turnMediaStore.ResolveWithMetaOpts(ref, media.ResolveOpts{})
-					if err != nil || !strings.HasPrefix(meta.ContentType, "image/") {
-						continue
-					}
-					data, err := os.ReadFile(localPath)
-					if err != nil {
-						continue
-					}
-					dataURL := "data:" + meta.ContentType + ";base64," + base64.StdEncoding.EncodeToString(data)
-					toolResultMsg.Media = append(toolResultMsg.Media, dataURL)
-				}
+				attachToolResultMedia(&toolResultMsg, toolResult.Media, turnMediaStore, maxMediaSize)
 			}
 			al.emitEvent(
 				EventKindToolExecEnd,

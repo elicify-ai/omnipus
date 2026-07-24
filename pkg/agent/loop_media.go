@@ -525,6 +525,126 @@ func detectMIME(localPath string, meta media.MediaMeta) string {
 	return kind.MIME.Value
 }
 
+// attachToolResultMedia mutates msg.Media by appending a base64 data URL
+// for each ref in refs that resolves to an image the model can see.
+//
+// The behavior is the outbound counterpart of resolveMediaRefs's image
+// path (FR-016 / ADR-051 Rev 4 Gap 4):
+//
+//   - Non-image refs (audio/video/PDF/document) are skipped — the
+//     tool-result Media channel is reserved for inline vision input,
+//     and PDF already routes through native document blocks in
+//     resolveMediaRefs. The artifact tag built by buildArtifactTags
+//     (loop.go:8246) covers the path/filename signal for non-image
+//     refs so the caller still has a hook to the file on disk.
+//   - Universal image MIMEs (PNG/JPEG/WebP/GIF/BMP/TIFF) get the
+//     verbatim "data:<mime>;base64,<bytes>" URL — same as the pre-fix
+//     loop.go path. Backward compatible (Constraint #6).
+//   - Non-universal image MIMEs (SVG / AVIF / HEIC / HEIF / ICO)
+//     NEVER reach the wire as their raw data URL — most vision
+//     providers 400 on image/svg+xml and the pure-Go decoder set
+//     cannot normalize AVIF/HEIC/ICO. SVG is rasterized to PNG via
+//     encodeSVGToDataURL (oxsvg/rasterx, no new deps); the others
+//     route through encodeImageToDataURL (which already returns ""
+//     for undecodable formats) and fall back to "skip inline attach,
+//     keep artifact tag". In either case the URL attached to msg
+//     (and persisted into session history at loop.go:8442-8443) is
+//     always a format the provider can consume — the next turn of
+//     the same session cannot replay a poison image block.
+//
+// maxSize is the byte budget for the encoded data URL — both
+// encodeSVGToDataURL and encodeImageToDataURL enforce it and return
+// "" on oversize, which the helper treats as "skip inline attach".
+//
+// Errors during resolve / read / rasterize are logged-not-fatal at
+// WARN level and silently skipped (matching the pre-fix behavior at
+// loop.go:8332-8335). The artifact tag remains the user/agent's
+// fallback hook to the file on disk.
+func attachToolResultMedia(msg *providers.Message, refs []string, store media.MediaStore, maxSize int) {
+	if msg == nil || len(refs) == 0 || store == nil {
+		return
+	}
+	for _, ref := range refs {
+		localPath, meta, err := store.ResolveWithMetaOpts(ref, media.ResolveOpts{})
+		if err != nil {
+			logger.WarnCF("agent", "attachToolResultMedia: resolve failed", map[string]any{
+				"ref":   ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+		mime := meta.ContentType
+		if mime == "" {
+			// Detect from bytes if the store did not capture the type.
+			mime = detectMIME(localPath, meta)
+		}
+		if !strings.HasPrefix(mime, "image/") {
+			continue
+		}
+
+		if isNonUniversalImageMIME(mime) {
+			// FR-016 / Gap 4: SVG rasterizes to PNG via encodeSVGToDataURL;
+			// AVIF/HEIC/ICO cannot be decoded by the pure-Go set, so
+			// encodeImageToDataURL returns "" and the inline attach is
+			// skipped. Either way the data URL that ends up in session
+			// history is something the provider can see.
+			var dataURL string
+			switch mime {
+			case "image/svg+xml", "image/svg":
+				info, statErr := os.Stat(localPath)
+				if statErr != nil {
+					logger.WarnCF("agent", "attachToolResultMedia: svg stat failed", map[string]any{
+						"path":  localPath,
+						"error": statErr.Error(),
+					})
+					continue
+				}
+				dataURL = encodeSVGToDataURL(localPath, info, maxSize)
+			default:
+				info, statErr := os.Stat(localPath)
+				if statErr != nil {
+					logger.WarnCF("agent", "attachToolResultMedia: stat failed", map[string]any{
+						"path":  localPath,
+						"mime":  mime,
+						"error": statErr.Error(),
+					})
+					continue
+				}
+				dataURL = encodeImageToDataURL(localPath, mime, info, maxSize)
+			}
+			if dataURL == "" {
+				// Rasterize or decode failed / oversize / format
+				// unsupported. The artifact tag (built above this
+				// site at loop.go:8246) still names the file path —
+				// the model can read it via tools.file_read or the
+				// next tool invocation.
+				logger.WarnCF("agent", "attachToolResultMedia: non-universal image normalize failed, skipping inline attach", map[string]any{
+					"ref":  ref,
+					"path": localPath,
+					"mime": mime,
+				})
+				continue
+			}
+			msg.Media = append(msg.Media, dataURL)
+			continue
+		}
+
+		// Universal image MIME: build the data URL verbatim. Same
+		// shape as the pre-fix loop.go:8332-8337 site, so PNG/JPEG/
+		// WebP/GIF/BMP/TIFF behavior is preserved exactly.
+		data, err := os.ReadFile(localPath)
+		if err != nil {
+			logger.WarnCF("agent", "attachToolResultMedia: read failed", map[string]any{
+				"path":  localPath,
+				"mime":  mime,
+				"error": err.Error(),
+			})
+			continue
+		}
+		msg.Media = append(msg.Media, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(data))
+	}
+}
+
 const maxImagePixels = 16 * 1024 * 1024
 
 // encodeImageToDataURL normalizes a decodable image to the provider-friendly
