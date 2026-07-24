@@ -158,6 +158,14 @@ export function useAutoSave<T>(
   const rerunPendingRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Mounted-flag for late-firing fade timers: the useEffect cleanup that
+  // clears fadeTimerRef runs synchronously on unmount, but a real (not fake)
+  // timer that already started dispatching its callback at unmount time is
+  // not cancellable — clearTimeout only stops a still-pending timer. In
+  // production the setStatus call is harmless; in jsdom it dereferences a
+  // torn-down `window` and throws an unhandled ReferenceError that fails
+  // the whole vitest run. The guard makes the late callback a no-op.
+  const mountedRef = useRef(true)
   const latestDataRef = useRef<T>(data)
   const saveFnRef = useRef(saveFn)
   saveFnRef.current = saveFn
@@ -209,6 +217,7 @@ export function useAutoSave<T>(
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
       fadeTimerRef.current = setTimeout(() => {
+        if (!mountedRef.current) return
         setStatus((s) => (s === 'saved' ? 'idle' : s))
         fadeTimerRef.current = null
       }, 2000)
@@ -303,6 +312,7 @@ export function useAutoSave<T>(
   // caught). Mount-once so it runs only on final unmount.
   useEffect(() => {
     return () => {
+      mountedRef.current = false
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
       if (timerRef.current) clearTimeout(timerRef.current)
     }
