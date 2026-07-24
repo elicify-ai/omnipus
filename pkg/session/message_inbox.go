@@ -398,12 +398,12 @@ func (s *MessageInboxStore) Ack(ownerKey string, messageIDs []string) error {
 // start). nextCursor, when non-empty, is passed back on the next Drain call
 // to continue where this one left off (delegate.inbox's since-cursor
 // replay).
-func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, max int) (msgs []generated.SessionMessage, nextCursor string, hasMore bool, err error) {
+func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, maxMessages int) (msgs []generated.SessionMessage, nextCursor string, hasMore bool, err error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return nil, "", false, ErrInboxEmptyOwnerKey
 	}
-	if max <= 0 {
-		max = DefaultInboxUnackedMax
+	if maxMessages <= 0 {
+		maxMessages = DefaultInboxUnackedMax
 	}
 
 	mu := s.lock.Get(ownerKey)
@@ -451,9 +451,9 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 		candidateEntryIdx = append(candidateEntryIdx, i)
 	}
 
-	if len(candidates) > max {
-		lastEmittedEntryIdx := candidateEntryIdx[max-1]
-		return candidates[:max], strconv.Itoa(lastEmittedEntryIdx + 1), true, nil
+	if len(candidates) > maxMessages {
+		lastEmittedEntryIdx := candidateEntryIdx[maxMessages-1]
+		return candidates[:maxMessages], strconv.Itoa(lastEmittedEntryIdx + 1), true, nil
 	}
 	// Exhausted — cursor points just past the final scanned entry so the next
 	// Drain does not re-scan it. lastScanned stays sinceIdx-1 when the loop

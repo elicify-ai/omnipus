@@ -185,7 +185,10 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		}
 		result.SweptToFailed = append(result.SweptToFailed, rec.SessionID)
 	}
-	return result, nil
+	// Sweep errors above are deliberately logged + continued, not propagated:
+	// one bad record must not abort the entire boot sweep (CRIT-1). The outer
+	// err from ls.List is the only error the boot-sweep contract surfaces.
+	return result, nil //nolint:nilerr
 }
 
 // sweepToFailedInterrupted persists rec's transition to failed(interrupted),

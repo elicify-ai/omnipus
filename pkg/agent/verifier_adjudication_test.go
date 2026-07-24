@@ -835,13 +835,13 @@ func TestRunVerifierAdjudication_UnavailabilityEscalatesAfterThreeConsecutive(t 
 // test in this package that happens to share a unit id.
 func resetVerifierUnavailabilityStreakForTest(t *testing.T, unitID string) {
 	t.Helper()
-	clear := func() {
+	clearFn := func() {
 		verifierUnavailabilityMu.Lock()
 		delete(verifierUnavailabilityStreak, unitID)
 		verifierUnavailabilityMu.Unlock()
 	}
-	clear()
-	t.Cleanup(clear)
+	clearFn()
+	t.Cleanup(clearFn)
 }
 
 // verifierUnavailabilityStreakForTest reads back the current streak count for

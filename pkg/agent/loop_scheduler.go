@@ -195,7 +195,9 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 		// stop raced a fire, or a crash left an orphan) — remove it rather
 		// than firing a run nobody asked for.
 		s.cs.RemoveJob(job.ID)
-		return "", nil
+		// No session to fire into — by design this is a no-op success (the
+		// race is expected; see comment above). Not an error condition.
+		return "", nil //nolint:nilerr
 	}
 
 	maxRuns := meta.LoopMaxRuns

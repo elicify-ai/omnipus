@@ -1523,7 +1523,7 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLin
 // Append-only view) — least privilege per tool, each only gets the methods
 // it actually calls.
 type DelegateInboxStore interface {
-	Drain(ownerKey, childSessionID, sinceCursor string, max int) ([]generated.SessionMessage, string, bool, error)
+	Drain(ownerKey, childSessionID, sinceCursor string, maxMessages int) ([]generated.SessionMessage, string, bool, error)
 	Ack(ownerKey string, messageIDs []string) error
 	UnackedCount(ownerKey, childSessionID string) (int, error)
 	Peek(ownerKey, childSessionID string) (*session.PeekSnapshot, error)
@@ -1641,16 +1641,16 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	}
 
 	sinceCursor, _ := args["since_cursor"].(string)
-	max := 0
+	maxMessages := 0
 	if raw, present := args["max"]; present && raw != nil {
 		n, cerr := toIntArg(raw)
 		if cerr != nil {
 			return ErrorResult("max must be an integer")
 		}
-		max = n
+		maxMessages = n
 	}
 
-	msgs, nextCursor, hasMore, derr := t.inbox.Drain(ownerKey, sessionID, sinceCursor, max)
+	msgs, nextCursor, hasMore, derr := t.inbox.Drain(ownerKey, sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}

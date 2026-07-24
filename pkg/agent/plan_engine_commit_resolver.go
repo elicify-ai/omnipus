@@ -115,14 +115,14 @@ func (r *LastMemberCommitResolver) memberEvidenceDir(planID, taskID string) (dir
 		// is no workspace to resolve a repo for. Degrade to fresh attempt.
 		logger.WarnCF("plan_engine", "member resume: could not load task for commit resolve — fresh attempt",
 			map[string]any{"plan_id": planID, "task_id": taskID, "error": err.Error()})
-		return "", false, nil
+		return "", false, nil //nolint:nilerr
 	}
 	if t.WorkspaceID == "" {
 		return "", false, nil
 	}
 	dir = workspace.WorkDir(r.home, t.WorkspaceID)
 	if _, statErr := os.Stat(dir); statErr != nil {
-		return "", false, nil
+		return "", false, nil //nolint:nilerr
 	}
 	return dir, true, nil
 }
@@ -150,7 +150,7 @@ func (r *LastMemberCommitResolver) ResetMemberCheckout(planID, taskID, hash stri
 	if err != nil {
 		logger.WarnCF("plan_engine", "member resume checkout: could not load task — no tree materialized",
 			map[string]any{"plan_id": planID, "task_id": taskID, "error": err.Error()})
-		return "", nil
+		return "", nil //nolint:nilerr
 	}
 	if t.WorkspaceID == "" {
 		return "", nil

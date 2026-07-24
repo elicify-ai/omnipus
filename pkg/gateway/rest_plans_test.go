@@ -460,10 +460,10 @@ func TestPlanEngineBoot_ConstructStartStop(t *testing.T) {
 
 	// Admission works against an empty plan store (0 active, cap from config
 	// default since Planning is unset on this minimal cfg).
-	ok, active, cap := pe.Admit("plan")
+	ok, active, capOut := pe.Admit("plan")
 	assert.True(t, ok)
 	assert.Equal(t, 0, active)
-	assert.Positive(t, cap)
+	assert.Positive(t, capOut)
 
 	pe.Stop()
 

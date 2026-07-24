@@ -103,15 +103,15 @@ func (es *EvidenceStore) Record(
 	redactedCmd := redact(command)
 	redactedOut := redact(output)
 
-	cap := es.OutputCap
-	if cap <= 0 {
-		cap = DefaultEvidenceOutputCap
+	outputCap := es.OutputCap
+	if outputCap <= 0 {
+		outputCap = DefaultEvidenceOutputCap
 	}
 	truncated := false
 	out := redactedOut
-	if len(out) > cap {
-		cut := len(out) - cap
-		out = out[:cap] + fmt.Sprintf("...[truncated %d bytes]", cut)
+	if len(out) > outputCap {
+		cut := len(out) - outputCap
+		out = out[:outputCap] + fmt.Sprintf("...[truncated %d bytes]", cut)
 		truncated = true
 	}
 

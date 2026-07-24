@@ -1858,7 +1858,7 @@ func buildPlanRoundsExhaustedHandover(p *plan.Plan, maxRounds int) string {
 // per-kind); Wave 2-C's /goal and /loop admission paths call this exact
 // method before starting a new loop, and this engine calls it itself (as
 // "plan") before promoting an approved plan to running.
-func (pe *PlanEngine) Admit(kind string) (ok bool, active, cap int) {
+func (pe *PlanEngine) Admit(kind string) (ok bool, active, maxConcurrent int) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	return pe.admitLocked(kind)

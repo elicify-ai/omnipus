@@ -473,6 +473,7 @@ func TestTaskTool_CreateWithoutCriteria_Rejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			res := tool.Execute(ctx, tc.args)
 			if !res.IsError {
 				t.Fatal("expected an agent-created task with zero criteria to be rejected")

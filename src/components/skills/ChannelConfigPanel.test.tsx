@@ -962,8 +962,12 @@ describe('ChannelConfigPanel — human-label errors + a11y (#326 / US-C4)', () =
     await waitFor(() => {
       expect(document.getElementById('field-token')).not.toBeNull()
     })
-    // The SheetContent must have aria-describedby pointing at the description element
-    const sheetContent = document.querySelector('[aria-describedby]')
+    // The SheetContent (Radix DialogContent, role="dialog") must have
+    // aria-describedby pointing at the description element. Multiple
+    // inner inputs also carry aria-describedby pointing at their own
+    // per-field help/error, so query the dialog specifically — not the
+    // first element with the attribute.
+    const sheetContent = document.querySelector('[role="dialog"]')
     expect(sheetContent).not.toBeNull()
     const descId = sheetContent!.getAttribute('aria-describedby')
     expect(descId).toBeTruthy()

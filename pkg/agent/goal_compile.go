@@ -490,11 +490,11 @@ func criterionEchoLine(c task.AcceptanceCriterion) string {
 	switch c.Kind {
 	case task.KindBehavior:
 		if c.Behavior != nil {
-			min := c.Behavior.EffectiveMinCount()
+			minCount := c.Behavior.EffectiveMinCount()
 			if c.Behavior.MaxCount != nil {
-				return fmt.Sprintf("%s: call %s between %d and %d times", c.Text, c.Behavior.Tool, min, *c.Behavior.MaxCount)
+				return fmt.Sprintf("%s: call %s between %d and %d times", c.Text, c.Behavior.Tool, minCount, *c.Behavior.MaxCount)
 			}
-			return fmt.Sprintf("%s: call %s at least %d times", c.Text, c.Behavior.Tool, min)
+			return fmt.Sprintf("%s: call %s at least %d times", c.Text, c.Behavior.Tool, minCount)
 		}
 	case task.KindCheck:
 		if c.Check != nil {

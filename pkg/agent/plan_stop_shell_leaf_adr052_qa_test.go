@@ -69,14 +69,14 @@ func waitForProcessGroupDeath(t *testing.T, pid int, timeout time.Duration) erro
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastErr == nil {
-		return errUnexpectedNilKillErr
+		return errUnexpectedNilKill
 	}
 	return lastErr
 }
 
-// errUnexpectedNilKillErr guards the pathological case where syscall.Kill(-pid, 0)
+// errUnexpectedNilKill guards the pathological case where syscall.Kill(-pid, 0)
 // returns nil (still alive, no error) right up to the deadline.
-var errUnexpectedNilKillErr = &stillAliveError{}
+var errUnexpectedNilKill = &stillAliveError{}
 
 type stillAliveError struct{}
 

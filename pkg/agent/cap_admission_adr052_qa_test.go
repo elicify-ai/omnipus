@@ -75,10 +75,10 @@ func TestCapAdmission_SixteenRunningSeventeenthQueuedThenPromotedWhenSlotFrees(t
 		t.Fatalf("precondition failed: state = %q, want approved (cap-waiting) with 16 plans running",
 			gotWaiting.State)
 	}
-	ok, active, cap := h.pe.Admit("plan")
-	if ok || active != 16 || cap != 16 {
+	ok, active, capOut := h.pe.Admit("plan")
+	if ok || active != 16 || capOut != 16 {
 		t.Fatalf("precondition failed: Admit at 16 running = (ok=%v active=%d cap=%d), want (false, 16, 16)",
-			ok, active, cap)
+			ok, active, capOut)
 	}
 
 	// --- A slot frees: one filler plan completes (running -> done) ---
@@ -120,10 +120,10 @@ func TestCapAdmission_DirectAdmitDeniesAtSixteenAllowsAfterRelease(t *testing.T)
 	}
 
 	// The 17th admission attempt is refused while all 16 are still running.
-	ok, active, cap := h.pe.Admit("plan")
-	if ok || active != 16 || cap != 16 {
+	ok, active, capOut := h.pe.Admit("plan")
+	if ok || active != 16 || capOut != 16 {
 		t.Fatalf("Admit at 16/16 = (ok=%v active=%d cap=%d), want (false, 16, 16) — the 17th must be refused",
-			ok, active, cap)
+			ok, active, capOut)
 	}
 
 	// Release exactly one slot (running -> failed, a legal terminal
@@ -136,10 +136,10 @@ func TestCapAdmission_DirectAdmitDeniesAtSixteenAllowsAfterRelease(t *testing.T)
 		t.Fatalf("release a slot: %v", err)
 	}
 
-	ok, active, cap = h.pe.Admit("plan")
-	if !ok || active != 15 || cap != 16 {
+	ok, active, capOut = h.pe.Admit("plan")
+	if !ok || active != 15 || capOut != 16 {
 		t.Fatalf("Admit after releasing one slot = (ok=%v active=%d cap=%d), want (true, 15, 16)",
-			ok, active, cap)
+			ok, active, capOut)
 	}
 }
 

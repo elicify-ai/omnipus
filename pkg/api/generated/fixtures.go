@@ -2293,7 +2293,7 @@ func FixtureWorkspace_ZeroValue() Workspace {
 // Traces to: contracts/components/schemas/ExecutorConfig.yaml
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
-	kind := ExternalCli
+	kind := ExecutorConfigKindExternalCli
 	cli := ClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
@@ -2552,7 +2552,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 
 	return AgentCreateRequestSubagent3p{
 		Name:           "Claude Code Worker",
-		Type:           Subagent3p,
+		Type:           AgentCreateRequestSubagent3pTypeSubagent3p,
 		Description:    &description,
 		Model:          &model,
 		Provider:       &provider,

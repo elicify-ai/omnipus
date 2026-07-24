@@ -57,7 +57,7 @@ type fakePlanDispatcher struct {
 	onDispatch func(taskID string) error
 	// clearedStreaks records every ClearEvidenceGateStreak call (fix-wave
 	// item ii regression coverage — see plan_stop_test.go).
-	clearedStreaks []string //nolint:unused // production path appends; tests cover via dispatcher-side assertions //nolint:unused // read by production path, tests cover via the dispatcher assertion instead
+	clearedStreaks []string
 }
 
 func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string) error {
@@ -219,16 +219,16 @@ func TestGlobalCap_AdmitBoundary_15_16_17(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		mustCreateRunningPlan(t, h.plans, fmt.Sprintf("p-%02d", i), "owner")
 	}
-	ok, active, cap := h.pe.Admit("plan")
-	if !ok || active != 15 || cap != 16 {
-		t.Fatalf("at 15 active: ok=%v active=%d cap=%d, want ok=true active=15 cap=16", ok, active, cap)
+	ok, active, capOut := h.pe.Admit("plan")
+	if !ok || active != 15 || capOut != 16 {
+		t.Fatalf("at 15 active: ok=%v active=%d cap=%d, want ok=true active=15 cap=16", ok, active, capOut)
 	}
 
 	mustCreateRunningPlan(t, h.plans, "p-16", "owner") // 16th running plan
-	ok, active, cap = h.pe.Admit("plan")
-	if ok || active != 16 || cap != 16 {
+	ok, active, capOut = h.pe.Admit("plan")
+	if ok || active != 16 || capOut != 16 {
 		t.Fatalf("at 16 active (17th admission attempt): ok=%v active=%d cap=%d, want ok=false active=16 cap=16",
-			ok, active, cap)
+			ok, active, capOut)
 	}
 }
 
@@ -240,10 +240,10 @@ func TestGlobalCap_RegisteredCountersContributeToTotal(t *testing.T) {
 	h.pe.RegisterActiveCounter("goal", func() (int, error) { return 4, nil })
 	h.pe.RegisterActiveCounter("loop", func() (int, error) { return 2, nil })
 
-	ok, active, cap := h.pe.Admit("goal")
-	if ok || active != 16 || cap != 16 {
+	ok, active, capOut := h.pe.Admit("goal")
+	if ok || active != 16 || capOut != 16 {
 		t.Fatalf("ok=%v active=%d cap=%d, want ok=false active=16 cap=16 (10 plans + 4 goal + 2 loop == cap)",
-			ok, active, cap)
+			ok, active, capOut)
 	}
 }
 
@@ -260,10 +260,10 @@ func TestGlobalCap_AdmitFailsClosedOnCounterError(t *testing.T) {
 	}
 	h.pe.RegisterActiveCounter("goal", func() (int, error) { return 0, errors.New("boom: counter unavailable") })
 
-	ok, active, cap := h.pe.Admit("goal")
+	ok, active, capOut := h.pe.Admit("goal")
 	if ok {
 		t.Fatalf("expected admission to be denied (fail-closed) when a registered counter errors, "+
-			"got ok=true active=%d cap=%d", active, cap)
+			"got ok=true active=%d cap=%d", active, capOut)
 	}
 }
 
