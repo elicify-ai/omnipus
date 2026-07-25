@@ -89,6 +89,20 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 		return systemAgentHomeDir(agentID, agentHome)
 	}
 
+	// D13/G-12 (E.5): a Play-resumed plan member runs in the tree that was
+	// materialized from its last boundary commit, not the workspace's shared
+	// work/ dir. Checked BEFORE the workspace resolution below because the
+	// resume tree IS the answer for this turn — the member's workspace
+	// membership was already validated when Play resolved and materialized it,
+	// so re-deriving work/ here would only discard it.
+	//
+	// Deliberately placed AFTER the System Agent agent-home override: a
+	// verifier turn adjudicating a resumed member must still root at its own
+	// agent home, not at the member's resume tree.
+	if resumeDir := resumeWorkDirOverrideFromContext(ctx); resumeDir != "" {
+		return resumeDir, nil
+	}
+
 	// The verifier turn's work-under-review workspace (ADR-052
 	// JudgeCriteriaInput.WorkspaceID) has no other channel into this
 	// function — processTaskDirect's fixed signature carries no
@@ -176,6 +190,45 @@ func systemAgentHomeDir(agentID, agentHome string) (string, error) {
 		return "", fmt.Errorf("system agent home dir unavailable for agent_id=%s: %w", agentID, mkErr)
 	}
 	return agentHome, nil
+}
+
+// --- Play-from-commit resume tree (D13/G-12, E.5) ---------------------------
+
+// resumeWorkDirOverrideCtxKey is the unexported ctx key backing
+// WithResumeWorkDirOverride/resumeWorkDirOverrideFromContext. Package-local for
+// the same reason the System Agent override keys are: one producer
+// (task_executor.go's dispatch path, when the member carries a
+// ResumeFromCommit) and one consumer (resolveTurnWorkDirOrRefuse above).
+type resumeWorkDirOverrideCtxKey struct{}
+
+// WithResumeWorkDirOverride carries the materialized Play-from-commit resume
+// tree into a plan member's turn ctx, so the resumed turn actually RUNS in the
+// restored tree instead of the workspace's shared work/ dir.
+//
+// This is the consumer half of D13/G-12 (E.5). PlanEngine.Play already resolves
+// the member's last boundary commit and materializes a checkout at
+// workspaces/<ws>/resume/<taskID> — but before this override existed nothing
+// read that path back, so the directory was created and then ignored: the
+// resumed member ran against the shared tree and the Judge diffed the wrong
+// baseline. The override is consumed inside resolveTurnWorkDirOrRefuse, the
+// gate BOTH the native and external-cli dispatch paths share, so neither can
+// silently diverge from the other again.
+//
+// An empty dir is a no-op — ctx is returned unmodified — matching
+// tools.WithTurnWorkspaceDir's own "empty is unset" contract. That is the
+// ordinary case: a member with no boundary commit resumes as a fresh attempt.
+func WithResumeWorkDirOverride(ctx context.Context, dir string) context.Context {
+	if strings.TrimSpace(dir) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, resumeWorkDirOverrideCtxKey{}, dir)
+}
+
+// resumeWorkDirOverrideFromContext reads back the value
+// WithResumeWorkDirOverride set, or "" if none was set.
+func resumeWorkDirOverrideFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(resumeWorkDirOverrideCtxKey{}).(string)
+	return v
 }
 
 // --- System Agent workspace selector (ADR-052 FR-011/012) -------------------

@@ -2347,6 +2347,27 @@ func setupAndStartServices(
 		// degrade on another. It resolves the workspace lazily from the task
 		// record at Play time, so no workspace needs to be open at boot.
 		planEngine.SetCommitResolver(agent.NewLastMemberCommitResolver(tStore, homePath))
+		// D13/G-12 PRODUCER half (E.4): the resolver above only READS boundary
+		// commits. Without a producer it resolves "" forever and Play silently
+		// degrades to a fresh attempt — indistinguishable from a successful
+		// resume, which is why the gap was invisible to every gate. Wire the
+		// committer onto the TaskExecutor so a terminal plan member snapshots
+		// its declared write set.
+		//
+		// The secret scanner is mandatory: gitevidence.Commit refuses to commit
+		// without one (MIN-5 fail-closed), so a construction failure here means
+		// no evidence would be recorded at all — logged loudly rather than left
+		// to look like "no commits happened to be needed".
+		// tExecutor is already non-nil here — the enclosing block is gated on it.
+		scanner, scanErr := audit.NewSecretScanner(cfg.SensitiveDataReplacer(), nil)
+		switch {
+		case scanErr != nil:
+			slog.Error("evidence committer: secret scanner construction failed — "+
+				"boundary commits disabled, Play will always take the fresh-attempt path",
+				"error", scanErr)
+		default:
+			tExecutor.SetEvidenceCommitter(agent.NewWorkspaceEvidenceCommitter(homePath, scanner))
+		}
 		if bsec := bootSweepCfg.EffectiveBootSweepBudgetSeconds(); bsec > 0 {
 			planEngine.SetBootSweepBudget(time.Duration(bsec) * time.Second)
 		}

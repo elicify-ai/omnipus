@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,14 @@ type TaskExecutor struct {
 
 	// parentFollowUp is a test seam ONLY — production leaves it nil.
 	parentFollowUp func(parentID string)
+
+	// evidence records the write-set-scoped boundary commit that Play later
+	// resumes a member from (D13/G-12). Wired at the gateway boot seam
+	// alongside PlanEngine.SetCommitResolver — the two are the producer and
+	// consumer of the same contract. Nil in test harnesses and on a degraded
+	// boot, in which case no evidence is recorded and Play takes its
+	// documented fresh-attempt path.
+	evidence evidenceCommitter
 
 	// goroutineCtxHook is a test seam ONLY — production leaves it nil.
 	// When non-nil, runTaskFromInProgress calls it with the goroutine's context
@@ -364,6 +373,9 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 	if t.WorkspaceID != "" {
 		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
 	}
+	// D13/G-12 (E.5): root a Play-resumed member's turn at its restored tree.
+	// No-op (ctx unchanged) for an ordinary attempt.
+	taskCtx = WithResumeWorkDirOverride(taskCtx, te.resumeWorkDirFor(t))
 	// Carry the task's delegation generation into the run. processTaskDirect reads
 	// it back to seed the root turnState depth (so the per-agent depth gate trips
 	// inside the run) and to stamp any nested task_create as generation + 1. This
@@ -1116,9 +1128,89 @@ func (te *TaskExecutor) completeTaskWithResult(
 				map[string]any{"task_id": t.ID, "error": setErr.Error()})
 		}
 	}
+	te.recordEvidenceBoundary(final)
 	te.onTaskComplete(final)
 	te.notifySourceChannel(final)
 	return true
+}
+
+// recordEvidenceBoundary takes the write-set-scoped boundary commit for a task
+// that has just reached a terminal state (D13/G-12, E.4). This is the PRODUCER
+// half of Play-from-commit: without it LastMemberCommit resolves "" forever and
+// Play silently degrades to a fresh attempt.
+//
+// Deliberately best-effort and non-fatal — the task has ALREADY been written
+// terminal by the caller, so a broken evidence repo must not retroactively fail
+// it. Every outcome is logged so an operator can tell "no evidence recorded"
+// from "evidence recorded", which is exactly the signal whose absence made the
+// unwired state invisible.
+func (te *TaskExecutor) recordEvidenceBoundary(t *task.Task) {
+	if te.evidence == nil || t == nil {
+		return
+	}
+	res, err := te.evidence.CommitTaskBoundary(t)
+	switch {
+	case err != nil:
+		logger.WarnCF("task_executor", "evidence boundary commit failed — Play will fall back to a fresh attempt",
+			map[string]any{"task_id": t.ID, "workspace_id": t.WorkspaceID, "error": err.Error()})
+	case res == nil:
+		// Nothing to record (no workspace, no write set, unmaterialized work
+		// dir). Normal for every non-plan-member task — stay quiet at debug.
+		logger.DebugCF("task_executor", "evidence boundary: nothing to record",
+			map[string]any{"task_id": t.ID})
+	case res.Skipped:
+		logger.InfoCF("task_executor", "evidence boundary skipped",
+			map[string]any{"task_id": t.ID, "reason": res.SkipReason})
+	default:
+		logger.InfoCF("task_executor", "evidence boundary commit recorded",
+			map[string]any{
+				"task_id": t.ID, "commit": res.Hash, "files": len(res.Committed),
+				"contention": len(res.Contention), "excluded_for_secret": len(res.ExcludedForSecret),
+			})
+	}
+}
+
+// resumeWorkDirFor returns the materialized Play-from-commit resume tree for t,
+// or "" when this run is an ordinary (non-resumed) attempt (D13/G-12, E.5).
+//
+// PlanEngine.Play persists t.ResumeFromCommit and materializes the checkout at
+// the deterministic workspaces/<ws>/resume/<taskID> path; this reads that same
+// path back. The directory is re-derived rather than threaded through a new
+// task field precisely BECAUSE it is deterministic — Play and this call site
+// cannot disagree about where the tree is.
+//
+// Returns "" for every degrade (no resume baseline, no workspace, unsafe id, or
+// a tree that is not actually on disk) so the turn falls through to the
+// workspace's shared work/ dir exactly as it did before Play-from-commit
+// existed.
+func (te *TaskExecutor) resumeWorkDirFor(t *task.Task) string {
+	if t == nil || t.ResumeFromCommit == "" || t.WorkspaceID == "" {
+		return ""
+	}
+	dir, err := memberResumeDir(omnipusHome(), t.WorkspaceID, t.ID)
+	if err != nil {
+		logger.WarnCF("task_executor", "resume tree: unsafe path — running in the shared work dir",
+			map[string]any{"task_id": t.ID, "error": err.Error()})
+		return ""
+	}
+	if _, statErr := os.Stat(dir); statErr != nil {
+		// Play recorded a baseline but the tree is gone (manual cleanup, or a
+		// materialization that failed and degraded). Fall back rather than
+		// refusing the run.
+		logger.WarnCF("task_executor", "resume tree missing — running in the shared work dir",
+			map[string]any{"task_id": t.ID, "dir": dir, "commit": t.ResumeFromCommit})
+		return ""
+	}
+	logger.InfoCF("task_executor", "resume tree: turn rooted at the restored checkout",
+		map[string]any{"task_id": t.ID, "dir": dir, "commit": t.ResumeFromCommit})
+	return dir
+}
+
+// SetEvidenceCommitter installs the boundary-commit producer (D13/G-12). Wired
+// at the gateway boot seam next to PlanEngine.SetCommitResolver; leaving it
+// unset disables evidence recording without affecting task execution.
+func (te *TaskExecutor) SetEvidenceCommitter(c evidenceCommitter) {
+	te.evidence = c
 }
 
 // notifySourceChannel sends a compact task result back to the originating
@@ -1656,6 +1748,10 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	if t.WorkspaceID != "" {
 		taskCtx = tools.WithWorkspaceID(taskCtx, t.WorkspaceID)
 	}
+	// D13/G-12 (E.5): root a Play-resumed member's turn at its restored tree.
+	// No-op (ctx unchanged) for an ordinary attempt. Both dispatch entry points
+	// set this — runTaskFromInProgress is the one Play itself re-enters through.
+	taskCtx = WithResumeWorkDirOverride(taskCtx, te.resumeWorkDirFor(t))
 	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
 	// review r2 Chunk 1: same in-run marker as runTask above — see
 	// tools.WithRunningTaskID's doc comment.

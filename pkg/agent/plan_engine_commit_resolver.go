@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/gitevidence"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -201,4 +203,88 @@ func (r *LastMemberCommitResolver) ResetMemberCheckout(planID, taskID, hash stri
 	logger.InfoCF("plan_engine", "member resume: checkout materialized at commit",
 		map[string]any{"plan_id": planID, "task_id": taskID, "commit": hash, "dir": ic.Dir, "rung": ic.Rung.String()})
 	return ic.Dir, nil
+}
+
+// --- Producer half (E.4 / D13 / G-12) ------------------------------------
+//
+// Everything above is the CONSUMER of boundary commits. Without a producer it
+// is inert: LastMemberCommit always resolves "" and Play silently degrades to
+// a fresh attempt, which looks identical to a successful resume. The two are
+// co-located deliberately so the pair cannot drift apart again.
+
+// evidenceCommitter records a write-set-scoped boundary commit for a task that
+// has just reached a terminal state. It is an interface so TaskExecutor can be
+// driven by a fake in tests, and so a nil committer degrades gracefully (no
+// evidence recorded) rather than nil-dereferencing.
+type evidenceCommitter interface {
+	// CommitTaskBoundary commits t's declared WriteSet into its workspace's
+	// evidence repo. A nil CommitResult with a nil error means "nothing to
+	// record" (not a failure) — see WorkspaceEvidenceCommitter for the cases.
+	CommitTaskBoundary(t *task.Task) (*gitevidence.CommitResult, error)
+}
+
+// WorkspaceEvidenceCommitter is the gitevidence-backed evidenceCommitter. It
+// mirrors LastMemberCommitResolver's resolution exactly — task -> WorkspaceID
+// -> workspace.WorkDir -> hidden evidence repo — so the commit it writes is the
+// one LastCommitForTask will later read back.
+//
+// The secret scanner is REQUIRED, not optional: gitevidence.Commit refuses a
+// commit when no secret guard is configured (MIN-5 fail-closed), so a committer
+// built without one would silently record nothing on every boundary. The
+// constructor takes it explicitly to make that dependency impossible to forget.
+type WorkspaceEvidenceCommitter struct {
+	home    string
+	scanner *audit.SecretScanner
+}
+
+// NewWorkspaceEvidenceCommitter constructs the boundary-commit producer. home
+// is the Omnipus home under which workspaces/<id>/work/ resolves; scanner is
+// the shared MIN-5 secret guard built once at the gateway boot seam.
+//
+// A nil scanner or empty home yields a committer whose CommitTaskBoundary is a
+// no-op, so a partially-wired test harness degrades to "no evidence" rather
+// than failing a task that otherwise succeeded.
+func NewWorkspaceEvidenceCommitter(home string, scanner *audit.SecretScanner) *WorkspaceEvidenceCommitter {
+	return &WorkspaceEvidenceCommitter{home: home, scanner: scanner}
+}
+
+// CommitTaskBoundary implements evidenceCommitter. It returns (nil, nil) for
+// every legitimate "nothing to record" case: nil receiver/task, unwired
+// home/scanner, a task with no workspace, a task that declared no write set
+// (the overwhelmingly common case — only plan MEMBERS carry one), or a
+// workspace whose work dir was never materialized. A nested-repo workspace
+// (FR-155/MIN-6) degrades the same way the resolver's read path does.
+//
+// Errors are returned, not swallowed: the caller logs them and continues, so a
+// broken evidence repo never fails an otherwise-successful task.
+func (c *WorkspaceEvidenceCommitter) CommitTaskBoundary(t *task.Task) (*gitevidence.CommitResult, error) {
+	if c == nil || c.home == "" || c.scanner == nil || t == nil {
+		return nil, nil
+	}
+	if t.WorkspaceID == "" || len(t.WriteSet) == 0 {
+		return nil, nil
+	}
+	dir := workspace.WorkDir(c.home, t.WorkspaceID)
+	if _, statErr := os.Stat(dir); statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			// Work dir never materialized — nothing to snapshot. Play will
+			// take the documented fresh-attempt path.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("evidence commit: stat work dir %s: %w", dir, statErr)
+	}
+	repo, err := gitevidence.Open(dir, gitevidence.WithSecretScanner(c.scanner))
+	if err != nil {
+		if errors.Is(err, gitevidence.ErrNestedRepo) {
+			logger.WarnCF("task_executor", "evidence commit: nested-repo degrade — no boundary commit",
+				map[string]any{"task_id": t.ID, "dir": dir})
+			return nil, nil
+		}
+		return nil, fmt.Errorf("evidence commit: open %s: %w", dir, err)
+	}
+	return repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{
+		TaskID:    t.ID,
+		AttemptID: strconv.Itoa(t.AttemptCount),
+		AgentID:   t.AgentID,
+	}, t.WriteSet)
 }

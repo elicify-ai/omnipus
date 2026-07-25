@@ -69,9 +69,10 @@ for full context.
   is the authoritative equivalent.
 - **Target date:** end of next sprint (Aug 8, 2026)
 
-## E.4 — D13 `#537` boundary commits are not created in production
+## E.4 — D13 `#537` boundary commits are not created in production — **RESOLVED**
 
-- **Severity:** BLOCKER (D13/Play-from-commit feature is broken in production)
+- **Status:** FIXED. Producer wired; round-trip regression test added.
+- **Severity:** was BLOCKER (D13/Play-from-commit feature was inert in production)
 - **Files:** `pkg/agent/plan_engine_commit_resolver.go:97` (consumer),
   no producer anywhere in `pkg/`
 - **Root cause:** `gitevidence.Repo.LastCommitForTask` always returns `""` in
@@ -101,9 +102,10 @@ for full context.
     proves the wiring end-to-end without an e2e shell.
 - **Target date:** end of next sprint (Aug 8, 2026)
 
-## E.5 — D13 `recordMemberResumePoint` return value is unused
+## E.5 — D13 `recordMemberResumePoint` return value is unused — **RESOLVED**
 
-- **Severity:** BLOCKER (D13/Play-from-commit feature's turn cwd is never set)
+- **Status:** FIXED. Resume tree now roots the turn via the shared work-dir gate.
+- **Severity:** was BLOCKER (D13/Play-from-commit feature's turn cwd was never set)
 - **Files:** `pkg/agent/plan_engine.go:2679` (return value of `recordMemberResumePoint`)
 - **Root cause:** The materialized checkout directory is logged but never
   consumed. The resumed member's first turn after Play runs in the agent home,
