@@ -181,6 +181,26 @@ type Config struct {
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.
 	UnknownFields map[string]json.RawMessage `json:"-" yaml:"-"`
 
+	// SkippedAgentIDs holds the IDs of agent entity records that exist on
+	// disk (entities/agents/<id>.json, ADR-054 D2) but failed to load —
+	// unparseable JSON, I/O error, etc. — during the most recent boot or
+	// reload. Populated by the agent registry after it loads the roster from
+	// the per-entity store (pkg/agentstore/pkg/agent), never by pkg/config
+	// itself: config loading has no knowledge of entities/, a sibling
+	// on-disk tree that is not part of config.json. Transient (json:"-",
+	// never persisted) — mirrors UnknownFields' non-serialization contract.
+	//
+	// Consumed by RouteResolver (pkg/routing/route.go) to distinguish "this
+	// binding names an ID that never existed" (WARN + fall back to the
+	// default agent — a config error, not a security concern) from "this
+	// binding names an ID whose record exists but failed to load" (ADR-054
+	// D7/§9: fail CLOSED — Drop the route — because re-routing an
+	// operator-configured, deliberately-restrictive binding target to the
+	// default agent on load failure is a privilege change, not availability
+	// graceful degradation). Empty/nil is always safe: it simply disables
+	// the fail-closed branch, identical to pre-ADR-054 behavior.
+	SkippedAgentIDs []string `json:"-" yaml:"-"`
+
 	// cache for sensitive values and compiled regex (computed once)
 	sensitiveCache *SensitiveDataCache
 
@@ -836,6 +856,16 @@ type AgentConfig struct {
 	// When non-nil, its settings are merged with the global ShellDenyPatterns
 	// at enforcement time.
 	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
+	// CreatedAt is the timestamp this agent record was created. Set once and
+	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
+	// ADR-054-entity-config-separation.md) — the per-entity store's List()
+	// ordering contract is "sort by (created_at, id)", deliberately NOT a
+	// persisted sort_index (that would require a read-all-then-write on every
+	// create, re-serializing exactly the operation the ADR exists to
+	// parallelize, and would be an unowned global invariant). Pointer so
+	// omitempty distinguishes a pre-ADR-054 record (nil, never set) from a
+	// genuinely-zero timestamp, mirroring UpdatedAt immediately below.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
 	// UpdatedAt is the timestamp of the last successful PUT /agents/{id} update.
 	// It is returned in list and detail responses and used for optimistic concurrency.
 	// Pointer so omitempty works; nil = never updated. A non-pointer time.Time
@@ -3427,16 +3457,42 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// the provider protocol set is consistent across model_list and agents.
 	migrateAgentPrimaryProvider(cfg)
 
-	// Enforce at-most-one Default=true invariant across cfg.Agents.List.
-	// Hand-edited configs may contain multiple defaults; repair them now so the
-	// registry's GetDefaultAgent sees a clean canonical state (F11).
-	RepairMultipleDefaults(cfg)
+	// ADR-054 D1/D2/§11 checklist item 8: agents are no longer entities inside
+	// config.json — drop any legacy agents.list content (loudly, in-memory AND
+	// best-effort on disk) so it never round-trips forward. Must run before
+	// RepairMultipleDefaults/RepairIncompleteToolPolicyCoverage below so those
+	// per-agent repairs operate on the post-cutover (now-empty, until the agent
+	// registry separately populates it from entities/agents/) list, never on
+	// stale legacy JSON content. See legacy_agents_list.go.
+	stripLegacyAgentsList(cfg, path, onSelfHeal)
+
+	// NOTE (ADR-054 D6.4): this used to call RepairMultipleDefaults(cfg) here
+	// to enforce an at-most-one AgentConfig.Default==true invariant (F11).
+	// That repair function — and the field's role in default-agent
+	// resolution — is retired: RepairMultipleDefaults and
+	// AgentInstance.IsRoutingDefault (which consumed it) are dead code and
+	// have been removed. Splitting agents into independent per-entity files
+	// means two concurrent writes to two different agents could each set
+	// Default=true with no shared lock to serialize them (each delta
+	// individually valid, the composition not). Rather than inventing a
+	// cross-entity lock for a single bool, "the one default" signal moved
+	// entirely to the settings singleton (Agents.Defaults.DefaultAgentID,
+	// which already existed) — a single string field the existing
+	// config-write lock already serializes, structurally incapable of having
+	// two winners. See pkg/agent.AgentRegistry.GetDefaultAgent and
+	// pkg/routing.RouteResolver.resolveDefaultAgentID for the current
+	// (settings-only) resolution ladder. AgentConfig.Default itself is left
+	// in place on the wire/struct (read/written by the REST agent
+	// create/PUT/list handlers) purely for backward display compatibility
+	// until those handlers are converted to the entity-store write path;
+	// it is no longer consulted by any resolution logic.
 
 	// ADR-029 FR-029/OBS-001: enforce the two-representation rule. A channel
 	// instance that carries BOTH a bound representation (WorkspaceID + Identity)
 	// AND a stale channel-wildcard AgentBinding in cfg.Bindings is inconsistent —
 	// the bound representation wins. Drop the stale wildcard binding so the
-	// on-disk state is self-consistent after this load (mirrors RepairMultipleDefaults).
+	// on-disk state is self-consistent after this load (mirrors the old
+	// RepairMultipleDefaults pattern this replaced).
 	RepairStaleChannelWildcardBindings(cfg)
 
 	// Apply schedules guardrail defaults (#264 FR-003/FR-007) so a loaded

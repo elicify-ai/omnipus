@@ -6,6 +6,7 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -14,9 +15,11 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -216,79 +219,75 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
 	}
 
-	var finalID string
-	err := t.deps.WithConfig(func(cfg *config.Config) error {
-		for _, a := range cfg.Agents.List {
-			if a.ID == id {
-				return fmt.Errorf("AGENT_ALREADY_EXISTS: an agent with ID %q already exists", id)
+	// ADR-054 D2/§11 checklist item 6: agents are per-entity records under
+	// entities/agents/<id>.json, not config.json's agents.list — persist via
+	// the agent store instead of appending to cfg.Agents.List inside
+	// t.deps.WithConfig. agentstore.Store.Create performs the existence
+	// check (ErrAlreadyExists) and the write atomically under its own
+	// per-entity lock, so there is no separate check-then-append TOCTOU
+	// window to close here.
+	newAgent := config.AgentConfig{
+		ID:          id,
+		Name:        name,
+		Description: description,
+		Color:       color,
+		Icon:        icon,
+		Model:       &config.AgentModelConfig{Primary: model},
+	}
+	// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
+	// subagent_3p additionally carries an external-CLI executor so dispatch
+	// runs it on the named CLI (claude-code / codex / opencode).
+	switch agentType {
+	case "Subagent":
+		newAgent.Type = config.AgentTypeWorker
+	case "subagent_3p":
+		// External CLI worker: Type=worker + an external-cli executor. The
+		// worker's own run model is the top-level Model.Primary (set above);
+		// SubagentsConfig.Model is for THIS agent's own sub-delegations, so we
+		// leave it unset to avoid a misleading duplicate.
+		newAgent.Type = config.AgentTypeWorker
+		newAgent.Subagents = &config.SubagentsConfig{
+			Executor: &config.ExecutorConfig{
+				Kind:    config.ExecutorKindExternalCLI,
+				CLI:     execCLI,
+				CLIPath: execCLIPath,
+			},
+		}
+	}
+	// Optional: model fallbacks.
+	if fb, ok := args["model_fallbacks"].([]any); ok && len(fb) > 0 {
+		for _, v := range fb {
+			if s, ok := v.(string); ok && s != "" {
+				newAgent.Model.Fallbacks = append(newAgent.Model.Fallbacks, s)
 			}
 		}
-		newAgent := config.AgentConfig{
-			ID:          id,
-			Name:        name,
-			Description: description,
-			Color:       color,
-			Icon:        icon,
-			Model:       &config.AgentModelConfig{Primary: model},
-		}
-		// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
-		// subagent_3p additionally carries an external-CLI executor so dispatch
-		// runs it on the named CLI (claude-code / codex / opencode).
-		switch agentType {
-		case "Subagent":
-			newAgent.Type = config.AgentTypeWorker
-		case "subagent_3p":
-			// External CLI worker: Type=worker + an external-cli executor. The
-			// worker's own run model is the top-level Model.Primary (set above);
-			// SubagentsConfig.Model is for THIS agent's own sub-delegations, so we
-			// leave it unset to avoid a misleading duplicate.
-			newAgent.Type = config.AgentTypeWorker
-			newAgent.Subagents = &config.SubagentsConfig{
-				Executor: &config.ExecutorConfig{
-					Kind:    config.ExecutorKindExternalCLI,
-					CLI:     execCLI,
-					CLIPath: execCLIPath,
-				},
-			}
-		}
-		// Optional: model fallbacks.
-		if fb, ok := args["model_fallbacks"].([]any); ok && len(fb) > 0 {
-			for _, v := range fb {
-				if s, ok := v.(string); ok && s != "" {
-					newAgent.Model.Fallbacks = append(newAgent.Model.Fallbacks, s)
-				}
-			}
-		}
-		// ADR-037: can_delegate_to is retired — it was write-only (its last real
-		// reader, config.ResolveDelegationTo, was deleted as part of the
-		// delegation-policy removal). Delegation trust is configured
-		// exclusively via the per-workspace Team tab now
-		// (PUT /api/v1/workspaces/{id}/delegation); this tool does not — and
-		// must not — pretend to grant it.
-		// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
-		// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
-		// parameter (see Parameters() above — there is no caller-supplied
-		// override for Tools), so newAgent.Tools is always nil here and the
-		// default seed IS the agent's entire tools config. Delegate to the
-		// single shared constructor — also used by the REST create path
-		// (pkg/gateway/rest.go's createAgent, via
-		// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
-		// paths cannot drift out of sync on this seed again.
-		newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
-		cfg.Agents.List = append(cfg.Agents.List, newAgent)
-		finalID = id
-		return nil
-	})
-	if err != nil {
-		msg := err.Error()
-		if strings.HasPrefix(msg, "AGENT_ALREADY_EXISTS:") {
+	}
+	// ADR-037: can_delegate_to is retired — it was write-only (its last real
+	// reader, config.ResolveDelegationTo, was deleted as part of the
+	// delegation-policy removal). Delegation trust is configured
+	// exclusively via the per-workspace Team tab now
+	// (PUT /api/v1/workspaces/{id}/delegation); this tool does not — and
+	// must not — pretend to grant it.
+	// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
+	// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
+	// parameter (see Parameters() above — there is no caller-supplied
+	// override for Tools), so newAgent.Tools is always nil here and the
+	// default seed IS the agent's entire tools config. Delegate to the
+	// single shared constructor — also used by the REST create path
+	// (pkg/gateway/rest.go's createAgent, via
+	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
+	// paths cannot drift out of sync on this seed again.
+	newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
+	finalID := id
+	if err := agentstore.New(t.deps.Home).Create(id, &newAgent); err != nil {
+		if errors.Is(err, entity.ErrAlreadyExists) {
 			return tools.ErrorResult(errorJSON(
 				"AGENT_ALREADY_EXISTS",
 				fmt.Sprintf("An agent with ID %q already exists", id),
 				"Use update_agent to modify the existing agent or choose a different name",
 			))
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", msg, "Check disk space and permissions"))
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "Check disk space and permissions"))
 	}
 
 	// Create agent workspace and write personality files.
@@ -456,69 +455,64 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 		}
 	}
 
+	// ADR-054 D2/§11 checklist item 6: agents are per-entity records under
+	// entities/agents/<id>.json, not config.json's agents.list — persist via
+	// the agent store's read-modify-write instead of t.deps.WithConfig +
+	// cfg.Agents.List splicing.
 	var updated []string
-	var found bool
-	err := t.deps.WithConfig(func(cfg *config.Config) error {
-		for i := range cfg.Agents.List {
-			if cfg.Agents.List[i].ID != id {
-				continue
-			}
-			found = true
-			a := &cfg.Agents.List[i]
-			if a.Locked {
-				return fmt.Errorf("agent %q is a locked core agent and cannot be modified", id)
-			}
-			if v, ok := args["name"].(string); ok && v != "" {
-				a.Name = v
-				updated = append(updated, "name")
-			}
-			if v, ok := args["description"].(string); ok && v != "" {
-				a.Description = v
-				updated = append(updated, "description")
-			}
-			if colorPresent && color != "" {
-				a.Color = color
-				updated = append(updated, "color")
-			}
-			if iconPresent && icon != "" {
-				a.Icon = icon
-				updated = append(updated, "icon")
-			}
-			// Model config.
-			if v, ok := args["model"].(string); ok && v != "" {
-				if a.Model == nil {
-					a.Model = &config.AgentModelConfig{}
-				}
-				a.Model.Primary = v
-				updated = append(updated, "model")
-			}
-			if fb, ok := args["model_fallbacks"].([]any); ok {
-				if a.Model == nil {
-					a.Model = &config.AgentModelConfig{}
-				}
-				a.Model.Fallbacks = nil
-				for _, v := range fb {
-					if s, ok := v.(string); ok && s != "" {
-						a.Model.Fallbacks = append(a.Model.Fallbacks, s)
-					}
-				}
-				updated = append(updated, "model_fallbacks")
-			}
-			// ADR-037: can_delegate_to is retired — see the matching comment in
-			// AgentCreateTool.Execute above. The workspace Team tab is the only
-			// place delegation trust is configured.
-			return nil
+	_, updateErr := agentstore.New(t.deps.Home).Update(id, func(a *config.AgentConfig) error {
+		if a.Locked {
+			return fmt.Errorf("agent %q is a locked core agent and cannot be modified", id)
 		}
+		if v, ok := args["name"].(string); ok && v != "" {
+			a.Name = v
+			updated = append(updated, "name")
+		}
+		if v, ok := args["description"].(string); ok && v != "" {
+			a.Description = v
+			updated = append(updated, "description")
+		}
+		if colorPresent && color != "" {
+			a.Color = color
+			updated = append(updated, "color")
+		}
+		if iconPresent && icon != "" {
+			a.Icon = icon
+			updated = append(updated, "icon")
+		}
+		// Model config.
+		if v, ok := args["model"].(string); ok && v != "" {
+			if a.Model == nil {
+				a.Model = &config.AgentModelConfig{}
+			}
+			a.Model.Primary = v
+			updated = append(updated, "model")
+		}
+		if fb, ok := args["model_fallbacks"].([]any); ok {
+			if a.Model == nil {
+				a.Model = &config.AgentModelConfig{}
+			}
+			a.Model.Fallbacks = nil
+			for _, v := range fb {
+				if s, ok := v.(string); ok && s != "" {
+					a.Model.Fallbacks = append(a.Model.Fallbacks, s)
+				}
+			}
+			updated = append(updated, "model_fallbacks")
+		}
+		// ADR-037: can_delegate_to is retired — see the matching comment in
+		// AgentCreateTool.Execute above. The workspace Team tab is the only
+		// place delegation trust is configured.
 		return nil
 	})
-	if err != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
-	}
-	if !found {
-		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
-			fmt.Sprintf("No agent with ID %q", id),
-			"Use list_agents to see available agents",
-		))
+	if updateErr != nil {
+		if errors.Is(updateErr, entity.ErrNotFound) {
+			return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
+				fmt.Sprintf("No agent with ID %q", id),
+				"Use list_agents to see available agents",
+			))
+		}
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", updateErr.Error(), ""))
 	}
 
 	// Write workspace files if provided. Use deps.Home as base.
@@ -590,30 +584,28 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 			"Set confirm=true to proceed with deletion",
 		))
 	}
-	var found bool
-	err := t.deps.WithConfig(func(cfg *config.Config) error {
-		newList := cfg.Agents.List[:0]
-		for _, a := range cfg.Agents.List {
-			if a.ID == id {
-				if a.Locked {
-					return fmt.Errorf("agent %q is a locked core agent and cannot be deleted", id)
-				}
-				found = true
-				continue
-			}
-			newList = append(newList, a)
+	// ADR-054 D2/D6 rule 5/§11 checklist item 6: agents are per-entity
+	// records under entities/agents/<id>.json, not config.json's
+	// agents.list — remove the entity record (via the agent store) FIRST,
+	// before the best-effort workspace-directory cleanup below, instead of
+	// splicing cfg.Agents.List inside t.deps.WithConfig.
+	store := agentstore.New(t.deps.Home)
+	existing, getErr := store.Get(id)
+	if getErr != nil {
+		if errors.Is(getErr, entity.ErrNotFound) {
+			return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
+				fmt.Sprintf("No agent with ID %q", id),
+				"Use list_agents to see available agents",
+			))
 		}
-		cfg.Agents.List = newList
-		return nil
-	})
-	if err != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", getErr.Error(), ""))
 	}
-	if !found {
-		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
-			fmt.Sprintf("No agent with ID %q", id),
-			"Use list_agents to see available agents",
-		))
+	if existing.Locked {
+		return tools.ErrorResult(errorJSON("SAVE_FAILED",
+			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", id), ""))
+	}
+	if err := store.Delete(id); err != nil {
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	// Remove workspace directory (best-effort; failure is non-fatal but logged).
 	wsPath := datamodel.AgentHomePath(t.deps.Home, id)

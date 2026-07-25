@@ -140,8 +140,31 @@ var knownConfigPrefixes = []string{
 	"heartbeat.", "devices.", "providers", "workspace_path",
 }
 
-// validateConfigKey returns an error if key does not start with a known config prefix.
+// blockedConfigKeyPrefixes are keys within an otherwise-known section that
+// must still be rejected by system.config.set. ADR-054 §11 checklist item 6:
+// agents.list (the retired agent-roster entity blob) must be rejected
+// specifically — NOT by removing the "agents." prefix from
+// knownConfigPrefixes, which gates the whole agents.* namespace and would
+// also break agents.defaults.* (including agents.defaults.default_agent_id,
+// D6.4). Agent CRUD now goes exclusively through the agent store / dedicated
+// create_agent, update_agent, delete_agent tools and the /api/v1/agents REST
+// endpoints, never through generic config mutation.
+var blockedConfigKeyPrefixes = []string{
+	"agents.list",
+}
+
+// validateConfigKey returns an error if key does not start with a known config
+// prefix, or if it falls under a key that is explicitly blocked even within a
+// known section (see blockedConfigKeyPrefixes).
 func validateConfigKey(key string) error {
+	for _, blocked := range blockedConfigKeyPrefixes {
+		if key == blocked || strings.HasPrefix(key, blocked+".") || strings.HasPrefix(key, blocked+"[") {
+			return fmt.Errorf(
+				"config key %q is managed by the agent store, not generic config — use create_agent/update_agent/delete_agent instead",
+				key,
+			)
+		}
+	}
 	for _, prefix := range knownConfigPrefixes {
 		if strings.HasPrefix(key, prefix) || key == strings.TrimSuffix(prefix, ".") {
 			return nil

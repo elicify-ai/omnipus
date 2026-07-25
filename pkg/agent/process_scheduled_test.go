@@ -155,6 +155,15 @@ func registerAgent(
 	al.registry.mu.Lock()
 	al.registry.agents[id] = ag
 	al.registry.mu.Unlock()
+	if isDefault {
+		// ADR-054 D6.4: AgentConfig.Default is no longer consulted by
+		// GetDefaultAgent — the per-entity flag set above (kept for realism)
+		// is now inert for resolution. SetDefaultAgentOverride is the
+		// settings-singleton equivalent every real caller goes through
+		// (config.Agents.Defaults.DefaultAgentID → AgentLoop wires it via
+		// this same method — see loop.go's ReloadProviderAndConfig).
+		al.registry.SetDefaultAgentOverride(id)
+	}
 	return ag
 }
 

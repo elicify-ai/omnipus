@@ -26,19 +26,39 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 )
 
 // buildExecutorTestAPI builds a minimal restAPI over a temp home with one mutable
 // custom agent already present, so create/update/get all operate on a real
 // config.json that safeUpdateConfigJSON can read-modify-write.
+//
+// ADR-054: agents are per-entity records under entities/agents/<id>.json, not
+// config.json's agents.list — config.LoadConfig unconditionally STRIPS any
+// agents.list content it finds on disk (pkg/config/legacy_agents_list.go),
+// and createAgent/updateAgent persist exclusively via agentstore now. Every
+// createAgent/updateAgent call also runs updateConfigJSONLocked, which
+// UNCONDITIONALLY calls refreshConfigAndRewireServices → populates
+// cfg.Agents.List by *replacing it wholesale* with agentstore.New(homePath).List()
+// (see populateAgentsListFromEntityStore, pkg/gateway/gateway.go). So after the
+// FIRST create/update in a test, any pre-seeded fixture agent that exists only
+// in the in-memory cfg.Agents.List literal (never a real entity record) simply
+// vanishes from the live config. "test-agent" is therefore seeded via BOTH the
+// in-memory cfg.Agents.List literal (needed for mustAgentLoop's initial
+// AgentRegistry construction / workspace-membership seeding, and for any
+// pre-first-write read) AND a real agentstore entity record (needed for it to
+// survive every subsequent write and for updateAgent's persist step, which
+// resolves the target via the entity store, to find it at all).
 func buildExecutorTestAPI(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -67,27 +87,26 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 	// what a real post-migration (or freshly-created) agent looks like via
 	// coreagent.NewCustomAgentToolsCfg(), the same seed createAgent itself
 	// uses for a caller that sends no tools_cfg.
-	testAgentPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	//
+	// config.json on disk carries only agents.defaults now — agents.list is
+	// never read from disk by any production code path (ADR-054), so seeding
+	// it here would only assert a stale, misleading shape.
 	cfgOnDisk := map[string]any{
 		"version": config.CurrentVersion,
 		"agents": map[string]any{
 			"defaults": map[string]any{"workspace": tmpDir, "model_name": "test-model", "max_tokens": 4096},
-			"list": []map[string]any{
-				{
-					"id":   "test-agent",
-					"name": "Test Agent",
-					"type": "custom",
-					"tools": map[string]any{
-						"builtin": map[string]any{"policies": testAgentPolicies},
-					},
-				},
-			},
 		},
 	}
 	cfgJSON, err := json.Marshal(cfgOnDisk)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
 
+	testAgent := config.AgentConfig{
+		ID:    "test-agent",
+		Name:  "Test Agent",
+		Type:  config.AgentTypeCustom,
+		Tools: coreagent.NewCustomAgentToolsCfg(),
+	}
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -96,17 +115,17 @@ func buildExecutorTestAPI(t *testing.T) *restAPI {
 				ModelName: "test-model",
 				MaxTokens: 4096,
 			},
-			List: []config.AgentConfig{
-				{
-					ID:    "test-agent",
-					Name:  "Test Agent",
-					Type:  config.AgentTypeCustom,
-					Tools: coreagent.NewCustomAgentToolsCfg(),
-				},
-			},
+			List: []config.AgentConfig{testAgent},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+
+	// ADR-054: persist a matching entity record so "test-agent" survives the
+	// first write-triggered refresh (see doc comment above) and so
+	// updateAgent's agentstore-backed persist step can find it.
+	testAgentForStore := testAgent
+	require.NoError(t, agentstore.New(tmpDir).Create("test-agent", &testAgentForStore))
+
 	return &restAPI{
 		agentLoop: al,
 		homePath:  tmpDir,
@@ -141,12 +160,10 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	created := decodeAgentResp(t, w.Body.Bytes())
 	assert.Nil(t, created.Executor, "Main agents never carry an executor")
 
-	// Not persisted to config.json — Main never gets a subagents.executor block.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, created.Id)
+	// Not persisted — Main never gets a subagents.executor block (ADR-054:
+	// agents are per-entity records under entities/agents/<id>.json now, not
+	// config.json's agents.list).
+	exec := agentExecutorFromStore(t, api.homePath, created.Id)
 	assert.Nil(t, exec, "Main agents must not persist an executor block")
 }
 
@@ -173,25 +190,14 @@ func TestCreateAgent_ShellPolicy_PersistAndEcho(t *testing.T) {
 	require.NotNil(t, created.ShellPolicy.CustomDenyPatterns)
 	assert.Equal(t, []string{"rm\\s+-rf"}, *created.ShellPolicy.CustomDenyPatterns)
 
-	// Persisted to config.json.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	agents, _ := m["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	var entry map[string]any
-	for _, item := range list {
-		e, _ := item.(map[string]any)
-		if e != nil && e["id"] == created.Id {
-			entry = e
-			break
-		}
-	}
-	require.NotNil(t, entry, "created agent must be persisted")
-	sp, _ := entry["shell_policy"].(map[string]any)
-	require.NotNil(t, sp, "shell_policy must be persisted to config.json")
-	assert.Equal(t, true, sp["enable_deny_patterns"])
+	// Persisted to the agent's entity record (ADR-054: agents are per-entity
+	// records under entities/agents/<id>.json now, not config.json's
+	// agents.list).
+	rec, err := agentstore.New(api.homePath).Get(created.Id)
+	require.NoError(t, err, "created agent must be persisted")
+	require.NotNil(t, rec.ShellPolicy, "shell_policy must be persisted to the entity record")
+	assert.True(t, rec.ShellPolicy.EnableDenyPatterns)
+	assert.Equal(t, []string{"rm\\s+-rf"}, rec.ShellPolicy.CustomDenyPatterns)
 
 	// GET /agents/{id} must independently reflect the persisted values (not
 	// just the create response, which could echo a value that never landed).
@@ -214,30 +220,25 @@ func TestCreateAgent_ShellPolicy_PersistAndEcho(t *testing.T) {
 // locked-agent identity check.
 func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
 	api := buildExecutorTestAPIWithWorker(t)
-	// Unlock the worker so an unrelated-field PUT is allowed.
+	// Unlock the worker so an unrelated-field PUT is allowed. ADR-054: the
+	// locked-agent identity check in updateAgent reads the LIVE in-memory
+	// cfg.Agents.List (mutating it in place here works exactly as before —
+	// GetConfig returns the same *config.Config the AgentLoop holds), but the
+	// worker's PERSISTED entity record must also be unlocked so a later
+	// write-triggered refresh (populateAgentsListFromEntityStore, which
+	// replaces cfg.Agents.List wholesale from the entity store) does not
+	// silently re-lock it.
 	cf := api.agentLoop.GetConfig()
 	for i := range cf.Agents.List {
 		if cf.Agents.List[i].ID == "test-worker" {
 			cf.Agents.List[i].Locked = false
 		}
 	}
-	// Also flip the locked flag on disk so safeUpdateConfigJSON does not
-	// see "lock mismatch" surprises.
-	raw, err := os.ReadFile(api.configPath())
+	_, err := agentstore.New(api.homePath).Update("test-worker", func(a *config.AgentConfig) error {
+		a.Locked = false
+		return nil
+	})
 	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	if agents, ok := m["agents"].(map[string]any); ok {
-		if list, ok := agents["list"].([]any); ok {
-			for _, item := range list {
-				if entry, ok := item.(map[string]any); ok && entry["id"] == "test-worker" {
-					delete(entry, "locked")
-				}
-			}
-		}
-	}
-	buf, _ := json.MarshalIndent(m, "", "  ")
-	require.NoError(t, os.WriteFile(api.configPath(), buf, 0o600))
 
 	// 1. PUT an external-cli executor on the worker.
 	put1 := `{"executor":{"kind":"external-cli","cli":"claude-code"}}`
@@ -247,14 +248,12 @@ func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
 	api.HandleAgents(pw1, pr1)
 	require.Equal(t, http.StatusOK, pw1.Code, "put body: %s", pw1.Body.String())
 
-	// 2. Persisted on disk.
-	raw, err = os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, "test-worker")
-	require.NotNil(t, exec, "executor not persisted: %s", string(raw))
-	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "claude-code", exec["cli"])
+	// 2. Persisted to the agent's entity record (ADR-054 — no longer
+	// config.json's agents.list).
+	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
+	require.NotNil(t, exec, "executor not persisted")
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "claude-code", exec.CLI)
 
 	// 3. PUT an UNRELATED field (description) — must NOT erase the executor.
 	put2 := `{"description":"a helpful worker"}`
@@ -264,14 +263,11 @@ func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
 	api.HandleAgents(pw2, pr2)
 	require.Equal(t, http.StatusOK, pw2.Code, "put body: %s", pw2.Body.String())
 
-	// And it is still persisted on disk.
-	raw, err = os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec = findExecutorInConfig(t, m, "test-worker")
-	require.NotNil(t, exec, "executor missing from config.json after unrelated PUT: %s", string(raw))
-	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "claude-code", exec["cli"])
+	// And it is still persisted.
+	exec = agentExecutorFromStore(t, api.homePath, "test-worker")
+	require.NotNil(t, exec, "executor missing from entity record after unrelated PUT")
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "claude-code", exec.CLI)
 }
 
 // TestUpdateAgent_ExecutorChanges proves the cli-lock rule on a worker:
@@ -303,15 +299,12 @@ func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 	assert.Contains(t, pw2.Body.String(), "executor.cli is locked",
 		"the rejection must reference the cli-lock rule")
 
-	// Persisted on disk — original cli is preserved, not overwritten.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, "test-worker")
-	require.NotNil(t, exec, "executor not persisted: %s", string(raw))
-	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "codex", exec["cli"],
+	// Persisted to the agent's entity record — original cli is preserved, not
+	// overwritten (ADR-054: no longer config.json's agents.list).
+	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
+	require.NotNil(t, exec, "executor not persisted")
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "codex", exec.CLI,
 		"original cli must survive the rejected PUT (cli-lock rule)")
 }
 
@@ -393,31 +386,23 @@ func TestExecutorConfigFromRequest_Validation(t *testing.T) {
 	})
 }
 
-// findExecutorInConfig digs agents.list[id].subagents.executor out of a parsed
-// config.json map. Returns nil when absent.
-func findExecutorInConfig(t *testing.T, m map[string]any, id string) map[string]any {
+// agentExecutorFromStore reads the persisted agent record via the agent store
+// (ADR-054 — agents are per-entity records under entities/agents/<id>.json,
+// not config.json's agents.list; createAgent/updateAgent persist exclusively
+// there now) and returns its Subagents.Executor. Returns nil when the record
+// is absent, has no Subagents block, or has no Executor — mirroring the old
+// findExecutorInConfig's "absent means nil" contract so every call site's
+// require.NotNil / assert.Nil assertions carry over unchanged.
+func agentExecutorFromStore(t *testing.T, homePath, id string) *config.ExecutorConfig {
 	t.Helper()
-	agents, _ := m["agents"].(map[string]any)
-	if agents == nil {
+	rec, err := agentstore.New(homePath).Get(id)
+	if err != nil {
 		return nil
 	}
-	list, _ := agents["list"].([]any)
-	for _, item := range list {
-		entry, _ := item.(map[string]any)
-		if entry == nil {
-			continue
-		}
-		if entry["id"] != id {
-			continue
-		}
-		sub, _ := entry["subagents"].(map[string]any)
-		if sub == nil {
-			return nil
-		}
-		exec, _ := sub["executor"].(map[string]any)
-		return exec
+	if rec.Subagents == nil {
+		return nil
 	}
-	return nil
+	return rec.Subagents.Executor
 }
 
 // ---------------------------------------------------------------------------
@@ -426,10 +411,13 @@ func findExecutorInConfig(t *testing.T, m map[string]any, id string) map[string]
 // ---------------------------------------------------------------------------
 
 // buildExecutorTestAPIWithWorker adds a worker agent to the test config so the
-// worker guards have a real agent to test against. The worker is added to BOTH
-// the live in-memory config and the on-disk config.json so the safeUpdateConfigJSON
-// writer (which reads config.json and looks for the matching agent by id) finds
-// the worker and can persist the field under test.
+// worker guards have a real agent to test against. ADR-054: the worker is
+// added to BOTH the live in-memory config (needed for the fast-path existence
+// check the REST handlers run against a.agentLoop.GetConfig() before any
+// write has happened) AND a real agentstore entity record (needed for it to
+// survive the wholesale cfg.Agents.List replacement every subsequent
+// create/update triggers — see buildExecutorTestAPI's doc comment — and for
+// updateAgent's agentstore-backed persist step to find it at all).
 func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
 	t.Helper()
 	api := buildExecutorTestAPI(t)
@@ -437,39 +425,20 @@ func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
 	// "test-agent" above (see buildExecutorTestAPI's doc comment) — a bare
 	// worker fixture would otherwise reintroduce the exact coverage gap
 	// buildExecutorTestAPI was just fixed to avoid.
-	workerPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
-	// Live config: append the worker.
-	cfg := api.agentLoop.GetConfig()
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+	testWorker := config.AgentConfig{
 		ID:     "test-worker",
 		Name:   "Worker",
 		Type:   config.AgentTypeWorker,
 		Locked: true,
 		Tools:  coreagent.NewCustomAgentToolsCfg(),
-	})
-	// Disk: append the worker entry to config.json so the writer sees it.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	agents, _ := m["agents"].(map[string]any)
-	if agents == nil {
-		agents = map[string]any{}
-		m["agents"] = agents
 	}
-	list, _ := agents["list"].([]any)
-	agents["list"] = append(list, map[string]any{
-		"id":     "test-worker",
-		"name":   "Worker",
-		"type":   "worker",
-		"locked": true,
-		"tools": map[string]any{
-			"builtin": map[string]any{"policies": workerPolicies},
-		},
-	})
-	buf, err := json.MarshalIndent(m, "", "  ")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(api.configPath(), buf, 0o600))
+	// Live config: append the worker.
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List, testWorker)
+
+	// Entity store: persist a matching record.
+	testWorkerForStore := testWorker
+	require.NoError(t, agentstore.New(api.homePath).Create("test-worker", &testWorkerForStore))
 	return api
 }
 
@@ -526,20 +495,15 @@ func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	// And it is persisted to config.json — the write-time guard is the
-	// regression we are guarding against, so the persistence is the
-	// load-bearing assertion. (The PUT response may not echo the executor
-	// because the response reads from the live in-memory config; the disk
-	// write is the source of truth.)
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, "test-worker")
-	require.NotNil(t, exec,
-		"worker executor must be persisted to config.json: %s", string(raw))
-	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "codex", exec["cli"])
+	// And it is persisted to the agent's entity record (ADR-054) — the
+	// write-time guard is the regression we are guarding against, so the
+	// persistence is the load-bearing assertion. (The PUT response may not
+	// echo the executor because the response reads from the live in-memory
+	// config; the entity record is the source of truth.)
+	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
+	require.NotNil(t, exec, "worker executor must be persisted to the entity record")
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "codex", exec.CLI)
 }
 
 // TestUpdateAgent_WorkerAllowsRemoteA2AExecutor is the positive control for
@@ -559,13 +523,9 @@ func TestUpdateAgent_WorkerAllowsRemoteA2AExecutor(t *testing.T) {
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, "test-worker")
-	require.NotNil(t, exec, "worker remote-a2a executor must be persisted: %s", string(raw))
-	assert.Equal(t, "remote-a2a", exec["kind"])
+	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
+	require.NotNil(t, exec, "worker remote-a2a executor must be persisted")
+	assert.Equal(t, config.ExecutorKindRemoteA2A, exec.Kind)
 }
 
 // TestCreateAgent_Subagent_Native_NoExecutor_201 verifies that a Subagent
@@ -584,13 +544,9 @@ func TestCreateAgent_Subagent_Native_NoExecutor_201(t *testing.T) {
 	assert.Equal(t, gen.AgentTypeSubagent, created.Type)
 
 	// Persisted executor should be native.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, created.Id)
-	require.NotNil(t, exec, "worker with no executor must derive native: %s", string(raw))
-	assert.Equal(t, "native", exec["kind"])
+	exec := agentExecutorFromStore(t, api.homePath, created.Id)
+	require.NotNil(t, exec, "worker with no executor must derive native")
+	assert.Equal(t, config.ExecutorKindNative, exec.Kind)
 }
 
 // TestCreateAgent_Main_ExecutorFieldRejected proves the unconditional
@@ -943,15 +899,11 @@ func TestUpdateAgent_ExecutorMutability(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, id)
+	exec := agentExecutorFromStore(t, api.homePath, id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "/opt/codex", exec["cli_path"])
-	assert.Equal(t, map[string]any{"FOO": "bar"}, exec["env_overrides"])
-	assert.Equal(t, "--verbose", exec["cli_args"])
+	assert.Equal(t, "/opt/codex", exec.CLIPath)
+	assert.Equal(t, map[string]string{"FOO": "bar"}, exec.EnvOverrides)
+	assert.Equal(t, "--verbose", exec.CLIArgs)
 }
 
 // TestUpdateAgent_ExecutorOMNIPUSPrefixRejected verifies that env_overrides
@@ -1038,29 +990,21 @@ func TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning(t *testing.T) {
 	assert.Contains(t, *resp.Warning, "model saved to config but could not be applied")
 }
 
-// agentUpdatedAtFromConfig reads config.json on disk and returns the persisted
-// updated_at RFC3339 string for the named agent. This is the authoritative
-// source the optimistic-concurrency check (safeUpdateConfigJSON mutate closure)
-// compares against, so tests capture it here rather than from the PUT response
-// (which may lag the on-disk value when no reload fires).
+// agentUpdatedAtFromConfig reads the persisted agent record via the agent
+// store (ADR-054 — agents are per-entity records under
+// entities/agents/<id>.json now, not config.json's agents.list) and returns
+// the persisted updated_at as an RFC3339 string. This is the authoritative
+// source the optimistic-concurrency check (updateAgent's agentstore.Update
+// mutate closure) compares against, so tests capture it here rather than from
+// the PUT response (which may lag the persisted value when no reload fires).
 func agentUpdatedAtFromConfig(t *testing.T, api *restAPI, id string) string {
 	t.Helper()
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	agents, _ := m["agents"].(map[string]any)
-	require.NotNil(t, agents, "agents section missing: %s", string(raw))
-	list, _ := agents["list"].([]any)
-	for _, item := range list {
-		entry, _ := item.(map[string]any)
-		if entry == nil || entry["id"] != id {
-			continue
-		}
-		ts, _ := entry["updated_at"].(string)
-		return ts
+	rec, err := agentstore.New(api.homePath).Get(id)
+	require.NoError(t, err, "agent entity record missing")
+	if rec.UpdatedAt == nil {
+		return ""
 	}
-	return ""
+	return rec.UpdatedAt.Format(time.RFC3339Nano)
 }
 
 // TestUpdateAgent_StaleUpdatedAt_Returns409 verifies the optimistic-concurrency
@@ -1148,22 +1092,18 @@ func TestUpdateAgent_ToolsCfg_PersistsUnderToolsKey(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	// Read the actual persisted config.json and assert the policies landed
-	// under the real "tools" key, never the dead "tools_cfg" key.
-	raw, err := os.ReadFile(api.configPath())
+	// Read the actual persisted agent entity record (ADR-054:
+	// entities/agents/<id>.json, not config.json's agents.list) and assert
+	// the policies landed under the real "tools" key, never the dead
+	// "tools_cfg" key. Read the raw JSON bytes directly (not via
+	// agentstore.Get, which would only ever populate the real Tools field) so
+	// a future regression that writes a stray "tools_cfg" key alongside it
+	// would still be caught.
+	entityPath := filepath.Join(api.homePath, "entities", "agents", "test-agent.json")
+	raw, err := os.ReadFile(entityPath)
 	require.NoError(t, err)
-	var disk map[string]any
-	require.NoError(t, json.Unmarshal(raw, &disk))
-	list, _ := disk["agents"].(map[string]any)["list"].([]any)
 	var agentMap map[string]any
-	for _, item := range list {
-		entry, _ := item.(map[string]any)
-		if entry["id"] == "test-agent" {
-			agentMap = entry
-			break
-		}
-	}
-	require.NotNil(t, agentMap, "test-agent must be present in persisted config")
+	require.NoError(t, json.Unmarshal(raw, &agentMap))
 
 	_, hasDeadKey := agentMap["tools_cfg"]
 	assert.False(t, hasDeadKey, "must never persist under the dead 'tools_cfg' key")
@@ -1183,25 +1123,26 @@ func TestUpdateAgent_ToolsCfg_PersistsUnderToolsKey(t *testing.T) {
 // top of updateAgent runs against the config snapshot fetched at the start
 // of the handler (a real, live gateway can have this go stale between fetch
 // and the locked critical section running — e.g. a concurrent
-// DELETE /agents/{id} that has already persisted to config.json but whose
-// TriggerReload hasn't yet swapped the in-memory registry this test's fixture
-// stands in for). The persist closure's fresh, ID-based lookup against the
-// ACTUAL on-disk config.json — not the stale pre-lock snapshot — must catch
-// this and return errAgentVanishedDuringUpdate (mapped to 404), never
-// silently return nil and report 200 for an update that touched nothing.
+// DELETE /agents/{id} that has already durably removed the agent's entity
+// record (ADR-054: entities/agents/<id>.json) but whose TriggerReload hasn't
+// yet swapped the in-memory registry this test's fixture stands in for). The
+// persist closure's fresh, ID-based lookup against the ACTUAL agent store —
+// not the stale pre-lock cfg.Agents.List snapshot — must catch this and
+// return errAgentVanishedDuringUpdate (mapped to 404), never silently return
+// nil and report 200 for an update that touched nothing.
 func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfgPath := filepath.Join(tmpDir, "config.json")
 
-	// On-disk config.json: "test-agent" is ALREADY GONE — simulating a
-	// concurrent DELETE that persisted to disk first.
+	// config.json carries no agent data at all (ADR-054) — deliberately NOT
+	// seeding an agentstore entity record for "test-agent" below is what
+	// simulates "a concurrent DELETE already removed the durable record".
 	cfgOnDisk := map[string]any{
 		"version": config.CurrentVersion,
 		"agents": map[string]any{
 			"defaults": map[string]any{"workspace": tmpDir, "model_name": "test-model", "max_tokens": 4096},
-			"list":     []map[string]any{},
 		},
 	}
 	cfgJSON, err := json.Marshal(cfgOnDisk)
@@ -1209,7 +1150,9 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
 
 	// In-memory live config: "test-agent" STILL present — the fast-path
-	// existence check reads this stale snapshot, not disk.
+	// existence check reads this stale snapshot, not the agent store. No
+	// matching agentstore.Create call follows, so the durable record is
+	// genuinely absent.
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -1235,10 +1178,11 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	require.Equal(t, http.StatusNotFound, w.Code,
 		"a concurrent-delete race must 404, not phantom-succeed with 200: body=%s", w.Body.String())
 
-	// Nothing must have been persisted for the vanished agent.
-	raw, err := os.ReadFile(cfgPath)
-	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "#123456", "a 404'd update must not persist any field")
+	// Nothing must have been persisted for the vanished agent: no phantom
+	// entity record was created by the 404'd update.
+	_, getErr := agentstore.New(tmpDir).Get("test-agent")
+	assert.True(t, errors.Is(getErr, entity.ErrNotFound),
+		"a 404'd update must not create a phantom agent entity record; got err=%v", getErr)
 }
 
 // TestUpdateAgent_ExecutorCliImmutable_Returns400 verifies that executor.cli is
@@ -1263,13 +1207,9 @@ func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
 		"error message must explain that cli is locked; body: %s", w.Body.String())
 
 	// Verify the persisted cli is still the original.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, id)
+	exec := agentExecutorFromStore(t, api.homePath, id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "codex", exec["cli"],
+	assert.Equal(t, "codex", exec.CLI,
 		"persisted executor.cli must be unchanged after a rejected mutation")
 }
 
@@ -1329,13 +1269,9 @@ func TestCreateAgent_Subagent3p_WithCliPath_Succeeds(t *testing.T) {
 	assert.Equal(t, "/usr/local/bin/claude", *created.Executor.CliPath)
 
 	// Verify persistence.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, created.Id)
+	exec := agentExecutorFromStore(t, api.homePath, created.Id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "/usr/local/bin/claude", exec["cli_path"])
+	assert.Equal(t, "/usr/local/bin/claude", exec.CLIPath)
 }
 
 // TestUpdateAgent_ExecutorCliPathMutable verifies that cli_path IS mutable on
@@ -1353,12 +1289,8 @@ func TestUpdateAgent_ExecutorCliPathMutable(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, id)
+	exec := agentExecutorFromStore(t, api.homePath, id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "/opt/codex-v2", exec["cli_path"],
+	assert.Equal(t, "/opt/codex-v2", exec.CLIPath,
 		"cli_path must be updated to the new value")
 }

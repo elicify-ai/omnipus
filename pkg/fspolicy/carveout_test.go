@@ -141,7 +141,7 @@ func TestIsCarveOut_WorkDirAtOmnipusHome_OwnTreeExceptionDoesNotApply(t *testing
 	})
 }
 
-func TestBuildCarveOuts_FourFixedRoots(t *testing.T) {
+func TestBuildCarveOuts_FiveFixedRoots(t *testing.T) {
 	home := filepath.FromSlash("/omnh")
 	got := buildCarveOuts(home)
 	want := []string{
@@ -149,6 +149,7 @@ func TestBuildCarveOuts_FourFixedRoots(t *testing.T) {
 		filepath.Join(home, "credentials.json"),
 		filepath.Join(home, "agents"),
 		filepath.Join(home, "workspaces"),
+		filepath.Join(home, "entities"),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("buildCarveOuts(%q) = %v, want %v", home, got, want)
@@ -158,6 +159,78 @@ func TestBuildCarveOuts_FourFixedRoots(t *testing.T) {
 			t.Errorf("buildCarveOuts(%q)[%d] = %q, want %q", home, i, got[i], w)
 		}
 	}
+}
+
+// TestEntitiesIsCarveOut is the ADR-054 D2/D4 regression: entities/ (where
+// pkg/entity persists per-entity records, starting with the AgentConfig
+// record split out of config.json) MUST be on the carve-out list under
+// BOTH FSScopeConfined and FSScopeUnrestricted. Before this fix,
+// buildCarveOuts returned only 4 roots and did not include entities/ at
+// all — under FSScopeUnrestricted an agent could rewrite ANY agent's
+// AgentConfig record (tool policy, Locked, Default), a strictly worse
+// escalation than the agents/-only carve-out this replaces (that at least
+// shielded other agents' home directories).
+func TestEntitiesIsCarveOut(t *testing.T) {
+	home := filepath.FromSlash("/omnh")
+	entitiesAgentRecord := filepath.Join(home, "entities", "agents", "some-other-agent.json")
+	entitiesRoot := filepath.Join(home, "entities")
+
+	t.Run("FSScopeConfined, WorkDir inside an agent's own home", func(t *testing.T) {
+		selfHome := filepath.Join(home, "agents", "self")
+		policy := FSPolicy{
+			WorkDir:   selfHome,
+			Scope:     FSScopeConfined,
+			CarveOuts: buildCarveOuts(home),
+		}
+		if !IsCarveOut(entitiesAgentRecord, policy) {
+			t.Errorf("IsCarveOut(%q) under FSScopeConfined = false, want true", entitiesAgentRecord)
+		}
+		if !IsCarveOut(entitiesRoot, policy) {
+			t.Errorf("IsCarveOut(%q) under FSScopeConfined = false, want true", entitiesRoot)
+		}
+	})
+
+	t.Run("FSScopeUnrestricted, WorkDir inside an agent's own home", func(t *testing.T) {
+		selfHome := filepath.Join(home, "agents", "self")
+		policy := FSPolicy{
+			WorkDir:   selfHome,
+			Scope:     FSScopeUnrestricted,
+			CarveOuts: buildCarveOuts(home),
+		}
+		if !IsCarveOut(entitiesAgentRecord, policy) {
+			t.Errorf("IsCarveOut(%q) under FSScopeUnrestricted = false, want true — "+
+				"an unrestricted agent must still be unable to rewrite another agent's entity record", entitiesAgentRecord)
+		}
+		if !IsCarveOut(entitiesRoot, policy) {
+			t.Errorf("IsCarveOut(%q) under FSScopeUnrestricted = false, want true", entitiesRoot)
+		}
+	})
+
+	t.Run("FSScopeUnrestricted, WorkDir a re-rooted workspace turn", func(t *testing.T) {
+		workDir := filepath.Join(home, "workspaces", "W", "work")
+		policy := FSPolicy{
+			WorkDir:   workDir,
+			Scope:     FSScopeUnrestricted,
+			CarveOuts: buildCarveOuts(home),
+		}
+		if !IsCarveOut(entitiesAgentRecord, policy) {
+			t.Errorf("IsCarveOut(%q) under a workspace-turn WorkDir = false, want true", entitiesAgentRecord)
+		}
+	})
+
+	t.Run("WorkDir == $OMNIPUS_HOME exempts nothing (mirrors the other four roots)", func(t *testing.T) {
+		policy := FSPolicy{
+			WorkDir:   home,
+			Scope:     FSScopeUnrestricted,
+			CarveOuts: buildCarveOuts(home),
+		}
+		if !IsCarveOut(entitiesRoot, policy) {
+			t.Errorf("IsCarveOut(%q) with WorkDir==home = false, want true", entitiesRoot)
+		}
+		if !IsCarveOut(entitiesAgentRecord, policy) {
+			t.Errorf("IsCarveOut(%q) with WorkDir==home = false, want true", entitiesAgentRecord)
+		}
+	})
 }
 
 func TestIsWithinOrEqual_TrailingSeparatorGuard(t *testing.T) {

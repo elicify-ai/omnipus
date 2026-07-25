@@ -37,6 +37,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -46,6 +47,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -2485,83 +2487,25 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 				len(gaps), joinCoverageGapMessages(gaps),
 			)
 		},
-		// Persist the new agent to config.json BEFORE mutating the live config.
-		// If persistence fails, the in-memory config stays consistent with disk.
+		// ADR-054 D2/§11 checklist item 1: agents are per-entity records under
+		// entities/agents/<id>.json, not config.json's agents.list — persist
+		// via the agent store instead of splicing the raw config map. `m` is
+		// deliberately left untouched (config.json no longer carries the
+		// roster); this closure still runs inside updateConfigJSONLocked's
+		// a.configMu-guarded critical section, so it composes with the
+		// tool-policy-coverage validation above exactly as before.
+		// agentstore.Store.Create (via entity.Store.Create) already performs
+		// write-then-verify (D6 corollary: it reads the just-written file back
+		// and confirms it parses with the expected ID) and stamps CreatedAt —
+		// a nil error here means ac is durably confirmed on disk before this
+		// handler ever reports success to the caller.
 		func(m map[string]any) error {
-			agents, _ := m["agents"].(map[string]any)
-			if agents == nil {
-				agents = map[string]any{}
-				m["agents"] = agents
+			if err := agentstore.New(a.homePath).Create(ac.ID, &ac); err != nil {
+				return fmt.Errorf("create agent entity record: %w", err)
 			}
-			list, _ := agents["list"].([]any)
-			newAgent := map[string]any{
-				"id":   ac.ID,
-				"name": ac.Name,
-				"type": string(ac.Type),
-			}
-			if ac.Description != "" {
-				newAgent["description"] = ac.Description
-			}
-			if ac.Color != "" {
-				newAgent["color"] = ac.Color
-			}
-			if ac.Icon != "" {
-				newAgent["icon"] = ac.Icon
-			}
-			if ac.Model != nil {
-				modelMap := map[string]any{"primary": ac.Model.Primary}
-				// O3 two-field model: persist the explicit primary provider so it
-				// round-trips through a config reload and drives resolution.
-				if ac.Model.Provider != "" {
-					modelMap["provider"] = ac.Model.Provider
-				}
-				newAgent["model"] = modelMap
-			}
-			if ac.Tools != nil {
-				builtinMap := map[string]any{}
-				if len(ac.Tools.Builtin.Policies) > 0 {
-					policies := make(map[string]string, len(ac.Tools.Builtin.Policies))
-					for k, v := range ac.Tools.Builtin.Policies {
-						policies[k] = string(v)
-					}
-					builtinMap["policies"] = policies
-				}
-				toolsCfg := map[string]any{"builtin": builtinMap}
-				if len(ac.Tools.MCP.Servers) > 0 {
-					servers := make([]map[string]any, 0, len(ac.Tools.MCP.Servers))
-					for _, s := range ac.Tools.MCP.Servers {
-						srv := map[string]any{"id": s.ID}
-						if len(s.Tools) > 0 {
-							srv["tools"] = s.Tools
-						}
-						servers = append(servers, srv)
-					}
-					toolsCfg["mcp"] = map[string]any{"servers": servers}
-				}
-				newAgent["tools"] = toolsCfg
-			}
-			if len(ac.Skills) > 0 {
-				newAgent["skills"] = ac.Skills
-			}
-			if ac.Subagents != nil && ac.Subagents.Executor != nil {
-				newAgent["subagents"] = map[string]any{
-					"executor": executorConfigToMap(ac.Subagents.Executor),
-				}
-			}
-			if ac.ShellPolicy != nil {
-				shellPolicyMap := map[string]any{}
-				if ac.ShellPolicy.EnableDenyPatterns {
-					shellPolicyMap["enable_deny_patterns"] = true
-				}
-				if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
-					shellPolicyMap["custom_deny_patterns"] = ac.ShellPolicy.CustomDenyPatterns
-				}
-				newAgent["shell_policy"] = shellPolicyMap
-			}
-			agents["list"] = append(list, newAgent)
 			return nil
 		},
-		"rest: save config for new agent",
+		"rest: save agent entity record for new agent",
 	); !ok {
 		return
 	}
@@ -2707,29 +2651,15 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	// runs before the reload returns.
 	deletedName := found.Name
 	deletedType := string(found.Type)
-	// Remove the agent from config.json.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		agents, _ := m["agents"].(map[string]any)
-		if agents == nil {
-			return nil
-		}
-		list, _ := agents["list"].([]any)
-		filtered := make([]any, 0, len(list))
-		for _, item := range list {
-			entry, _ := item.(map[string]any)
-			if entry == nil {
-				continue
-			}
-			if entryID, _ := entry["id"].(string); entryID == id {
-				continue // skip the deleted agent
-			}
-			filtered = append(filtered, item)
-		}
-		agents["list"] = filtered
-		return nil
-	}); err != nil {
-		slog.Error("rest: deleteAgent: save config failed", "agent_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to save config")
+	// ADR-054 D2/D6 rule 5/§11 checklist item 2: remove the agent's entity
+	// record (entities/agents/<id>.json) FIRST — via the agent store, not by
+	// splicing config.json's agents.list — before any best-effort directory
+	// cleanup below. Dangling referrers (bindings, mailboxes, workspace
+	// core_team) are surfaced for repair per D6 rule 2, never silently
+	// pruned here.
+	if err := agentstore.New(a.homePath).Delete(id); err != nil {
+		slog.Error("rest: deleteAgent: delete agent entity record failed", "agent_id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to delete agent")
 		return
 	}
 	// Reload the live config so the deleted agent is no longer in memory.
@@ -3204,305 +3134,229 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				id, len(gaps), joinCoverageGapMessages(gaps),
 			)
 		},
+		// ADR-054 D2/§11 checklist item 3: agents are per-entity records under
+		// entities/agents/<id>.json, not config.json's agents.list — persist
+		// via the agent store instead of splicing the raw config map. `m` is
+		// deliberately left untouched. entity.Store.Update (via
+		// agentstore.Store.Update) performs the read-modify-write under its
+		// own striped-mutex + sidecar-flock (ADR-054 D3), nested inside this
+		// closure's a.configMu hold — same lock-ordering rule as the
+		// tool-policy-coverage validation above (workspace/agent locks are
+		// never held across this call).
 		func(m map[string]any) error {
-			agents, _ := m["agents"].(map[string]any)
-			if agents == nil {
-				return fmt.Errorf("agents section not found in config")
-			}
-			// Per-agent fields: name, model, timeout_seconds, max_tool_iterations,
-			// tool_feedback — stored under agents.list[*].
-			list, _ := agents["list"].([]any)
-			agentFound := false
-			for _, entry := range list {
-				agentMap, ok := entry.(map[string]any)
-				if !ok {
-					continue
+			store := agentstore.New(a.homePath)
+			var conflictErr error
+			_, updateErr := store.Update(id, func(agentRec *config.AgentConfig) error {
+				// Optimistic concurrency check (runs INSIDE both a.configMu AND
+				// the entity's own sidecar lock, so two concurrent PUTs cannot
+				// both pass the version check and then both write). If the
+				// caller sent an updated_at value, it must match the persisted
+				// value exactly; otherwise another edit raced and we abort the
+				// mutate (nothing is written). The caller maps errConflict to
+				// HTTP 409.
+				if req.UpdatedAt != nil && agentRec.UpdatedAt != nil && !req.UpdatedAt.Equal(*agentRec.UpdatedAt) {
+					conflictErr = errConflict
+					return errConflict
 				}
-				if agentMap["id"] == id {
-					agentFound = true
-					// Optimistic concurrency check (runs INSIDE configMu so two
-					// concurrent PUTs cannot both pass the version check and then
-					// both write — closing the TOCTOU race that existed when this
-					// check ran against the in-memory cached config outside the
-					// lock). If the caller sent an updated_at value, it must match
-					// the persisted value exactly; otherwise another edit raced and
-					// we abort the mutate (nothing is written). The caller maps
-					// errConflict to HTTP 409.
-					if req.UpdatedAt != nil {
-						persistedStr, _ := agentMap["updated_at"].(string)
-						if persistedStr != "" {
-							persistedAt, parseErr := time.Parse(time.RFC3339, persistedStr)
-							if parseErr == nil && !req.UpdatedAt.Equal(persistedAt) {
-								return errConflict
-							}
-						}
-					}
-					if req.Name != nil {
-						agentMap["name"] = newName
-					}
-					if req.Description != nil {
-						trimmed := strings.TrimSpace(*req.Description)
-						if trimmed == "" {
-							delete(agentMap, "description")
-						} else {
-							agentMap["description"] = trimmed
-						}
-					}
-					if req.Model != nil {
-						modelMap, _ := agentMap["model"].(map[string]any)
-						if modelMap == nil {
-							modelMap = map[string]any{}
-							agentMap["model"] = modelMap
-						}
-						modelMap["primary"] = newModel
-					}
-					// O3 two-field model: persist (or clear) the explicit primary
-					// provider. A non-empty value pins the provider; an explicit empty
-					// string clears it (fall back to default-provider resolution).
-					if req.Provider != nil {
-						provider := strings.TrimSpace(*req.Provider)
-						modelMap, _ := agentMap["model"].(map[string]any)
-						if modelMap == nil {
-							modelMap = map[string]any{}
-							agentMap["model"] = modelMap
-						}
-						if provider == "" {
-							delete(modelMap, "provider")
-						} else {
-							modelMap["provider"] = provider
-						}
-					}
-					if req.TimeoutSeconds != nil {
-						agentMap["timeout_seconds"] = *req.TimeoutSeconds
-					}
-					if req.MaxToolIterations != nil {
-						agentMap["max_tool_iterations"] = *req.MaxToolIterations
-					}
-					// tool_feedback was removed from the wire in W1 (it's now per-channel
-					// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
-					// global config-level agents.defaults.tool_feedback stays.
-					if req.ShellPolicy != nil {
-						// Load existing shell_policy from the persisted map (if any) so
-						// that a partial PATCH (e.g. only custom_deny_patterns) does not
-						// clobber fields the caller did not send.
-						existing, _ := agentMap["shell_policy"].(map[string]any)
-						if existing == nil {
-							existing = map[string]any{}
-						}
-						// Only overwrite enable_deny_patterns when the caller explicitly
-						// sent it (non-nil pointer). Writing nil would persist JSON null
-						// and reset the flag to false on next decode.
-						if req.ShellPolicy.EnableDenyPatterns != nil {
-							existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
-						}
-						// An explicitly-sent array overwrites, INCLUDING the empty array —
-						// that is how the SPA clears all deny patterns. Only a nil (field
-						// absent from the request) leaves the persisted list untouched.
-						// The old `len(...) > 0` guard made pattern lists impossible to
-						// clear over the wire: the PUT succeeded but the delete was
-						// silently dropped (found live, 2026-07-03).
-						if req.ShellPolicy.CustomDenyPatterns != nil {
-							existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
-						}
-						agentMap["shell_policy"] = existing
-					}
-					if req.Color != nil {
-						agentMap["color"] = *req.Color
-					}
-					if req.Icon != nil {
-						agentMap["icon"] = *req.Icon
-					}
-					// memory_enabled (ADR-052 FR-039): "Allowed on all agents" per
-					// AgentUpdateRequest.yaml — including locked/system agents (the
-					// Judge), which is why this is not gated behind the
-					// foundAgent.Locked identity-mutation check above (that block
-					// only forbids name/description/soul/color/icon/skills).
-					if req.MemoryEnabled != nil {
-						agentMap["memory_enabled"] = *req.MemoryEnabled
-					}
-					if req.FallbackModels != nil {
-						agentMap["fallback_models"] = *req.FallbackModels
-					}
-					if req.ModelParams != nil {
-						mpMap := map[string]any{}
-						if req.ModelParams.Temperature != nil {
-							mpMap["temperature"] = *req.ModelParams.Temperature
-						}
-						if req.ModelParams.MaxTokens != nil {
-							mpMap["max_tokens"] = *req.ModelParams.MaxTokens
-						}
-						if req.ModelParams.TopP != nil {
-							mpMap["top_p"] = *req.ModelParams.TopP
-						}
-						agentMap["model_params"] = mpMap
-					}
-					if req.RateLimits != nil {
-						rlMap := map[string]any{}
-						if req.RateLimits.UseGlobalDefaults != nil {
-							rlMap["use_global_defaults"] = *req.RateLimits.UseGlobalDefaults
-						}
-						if req.RateLimits.MaxLlmCallsPerHour != nil {
-							rlMap["max_llm_calls_per_hour"] = *req.RateLimits.MaxLlmCallsPerHour
-						}
-						if req.RateLimits.MaxToolCallsPerMinute != nil {
-							rlMap["max_tool_calls_per_minute"] = *req.RateLimits.MaxToolCallsPerMinute
-						}
-						if req.RateLimits.MaxCostPerDay != nil {
-							rlMap["max_cost_per_day"] = *req.RateLimits.MaxCostPerDay
-						}
-						agentMap["rate_limits"] = rlMap
-					}
-					// Default flag: single-default invariant.
-					// If req.Default is set, handle two sub-cases:
-					//   true  → mark this agent as default; clear Default on all others.
-					//   false → clear Default on this agent only; leave others unchanged.
-					// If req.Default is nil (absent), leave all Default flags unchanged.
-					if req.Default != nil {
-						agentMap["default"] = *req.Default
-					}
-					if req.ToolsCfg != nil {
-						// NOTE ON THE KEY NAME: config.AgentConfig.Tools is tagged
-						// `json:"tools"` (pkg/config/config.go) — the SAME on-disk
-						// key createAgent and updateAgentTools both write
-						// (newAgent["tools"] / agentMap["tools"]). This branch used
-						// to write agentMap["tools_cfg"] — the WIRE request field
-						// name (gen.AgentUpdateRequest's `tools_cfg` JSON tag), not
-						// the on-disk config key — which config.LoadConfig's
-						// json.Unmarshal silently ignores (unknown field). Every
-						// tools_cfg update sent through this endpoint was therefore
-						// persisted to a dead, orphaned "tools_cfg" key that never
-						// round-tripped back into AgentConfig.Tools on the next
-						// load/reload, while the REAL "tools" key (and the
-						// validation block above assumed its builtin.policies
-						// survived) sat untouched. Fixed to write "tools".
-						existingTools, _ := agentMap["tools"].(map[string]any)
-						tcMap := map[string]any{}
-						if req.ToolsCfg.Builtin != nil {
-							builtinMap := map[string]any{}
-							if len(req.ToolsCfg.Builtin.Policies) > 0 {
-								policies := make(map[string]string, len(req.ToolsCfg.Builtin.Policies))
-								for k, v := range req.ToolsCfg.Builtin.Policies {
-									policies[k] = string(v)
-								}
-								builtinMap["policies"] = policies
-							}
-							tcMap["builtin"] = builtinMap
-						} else if existingTools != nil {
-							// req.ToolsCfg is present (e.g. it only touches mcp) but
-							// omitted builtin — the coverage-validation block above
-							// assumed the agent's EXISTING persisted builtin.policies
-							// survives untouched in this case. tcMap is about to
-							// unconditionally REPLACE the agent's whole persisted
-							// tools object below, so anything not explicitly carried
-							// forward here is silently wiped from disk. Splice in the
-							// existing builtin object read from THIS agent's current
-							// on-disk state (agentMap, read fresh under configMu at
-							// the top of this closure) rather than dropping it.
-							if existingBuiltin, ok := existingTools["builtin"]; ok {
-								tcMap["builtin"] = existingBuiltin
-							}
-						}
-						if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil {
-							servers := make([]map[string]any, 0, len(*req.ToolsCfg.Mcp.Servers))
-							for _, s := range *req.ToolsCfg.Mcp.Servers {
-								srv := map[string]any{"id": s.Id}
-								if s.Tools != nil {
-									srv["tools"] = *s.Tools
-								}
-								servers = append(servers, srv)
-							}
-							mcpMap := map[string]any{"servers": servers}
-							tcMap["mcp"] = mcpMap
-						} else if existingTools != nil {
-							// Symmetric preservation for mcp: req.ToolsCfg present but
-							// omitted mcp (e.g. a builtin-only policy update) must not
-							// silently drop the agent's existing MCP server bindings.
-							if existingMcp, ok := existingTools["mcp"]; ok {
-								tcMap["mcp"] = existingMcp
-							}
-						}
-						agentMap["tools"] = tcMap
-					}
-					// Executor: write the sub-agent executor under subagents.executor when
-					// the caller sends it. kind="native" with no cli clears any prior
-					// external-cli config (executorConfigFromRequest returns nil → delete).
-					if req.Executor != nil {
-						subMap, _ := agentMap["subagents"].(map[string]any)
-						if updatedExecutor == nil {
-							if subMap != nil {
-								delete(subMap, "executor")
-								if len(subMap) == 0 {
-									delete(agentMap, "subagents")
-								}
-							}
-						} else {
-							if subMap == nil {
-								subMap = map[string]any{}
-								agentMap["subagents"] = subMap
-							}
-							subMap["executor"] = executorConfigToMap(updatedExecutor)
-						}
-					}
-					// Skills: replace the agent's skill list when the caller sends the field.
-					// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
-					if req.Skills != nil {
-						if len(*req.Skills) > 0 {
-							agentMap["skills"] = *req.Skills
-						} else {
-							delete(agentMap, "skills")
-						}
-					}
-					// ADR-037: delegation_policy is retired — no longer written here.
-					// A pre-upgrade config.json's stray delegation_policy key (if any)
-					// is left as an unknown field on disk; the loader ignores it.
-					// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
-					// are ignored on PUT. Workspace handler manages member_configs.
-					// Optimistic concurrency timestamp: refresh on every successful save.
-					// RFC3339Nano (not RFC3339): the frontend uses this field as an
-					// ordinal "is this newer" comparator (lastIncorporatedUpdatedAtRef in
-					// AgentProfile.tsx). Whole-second RFC3339 precision let two distinct
-					// autosave writes within the same wall-clock second collide on an
-					// identical truncated timestamp, defeating the ordinal comparison and
-					// silently discarding a legitimate newer save (reopening the P-F2
-					// fallback_models data-loss class this fix wave closed). Sub-second
-					// precision is schema-safe: Agent.yaml/AgentUpdateRequest.yaml both
-					// declare updated_at as `format: date-time`, which permits RFC3339's
-					// optional fractional-second component, and time.Parse(time.RFC3339, ...)
-					// already parses fractional seconds correctly even though the RFC3339
-					// layout constant doesn't declare them (verified: Go's time.Parse
-					// special-cases a trailing fractional-second field regardless of
-					// layout) — so the read-back parse at persistedAt above, and
-					// config.AgentConfig.UpdatedAt's *time.Time JSON unmarshal, both keep
-					// working unmodified against the higher-precision value.
-					agentMap["updated_at"] = now.Format(time.RFC3339Nano)
-					break
+				if req.Name != nil {
+					agentRec.Name = newName
 				}
-			}
-			if !agentFound {
-				// The fast-path existence check at the top of updateAgent found
-				// this agent, but by the time this locked, fresh-disk lookup ran
-				// it was gone — e.g. a concurrent DELETE /agents/{id} raced this
-				// PUT. Returning nil here would be a phantom-200: a 200 response
-				// for an update that touched nothing. Mapped to 404 by
-				// withToolPolicyCoverageGuard (see errAgentVanishedDuringUpdate's
-				// doc comment).
-				return fmt.Errorf("%w: agent %q not found", errAgentVanishedDuringUpdate, id)
+				if req.Description != nil {
+					agentRec.Description = strings.TrimSpace(*req.Description)
+				}
+				if req.Model != nil {
+					if agentRec.Model == nil {
+						agentRec.Model = &config.AgentModelConfig{}
+					}
+					agentRec.Model.Primary = newModel
+				}
+				// O3 two-field model: persist (or clear) the explicit primary
+				// provider. A non-empty value pins the provider; an explicit empty
+				// string clears it (fall back to default-provider resolution).
+				if req.Provider != nil {
+					if agentRec.Model == nil {
+						agentRec.Model = &config.AgentModelConfig{}
+					}
+					agentRec.Model.Provider = strings.TrimSpace(*req.Provider)
+				}
+				// NOTE (discovered during ADR-054 conversion, pre-existing gap,
+				// out of scope here): req.TimeoutSeconds, req.ModelParams, and
+				// req.RateLimits have NO corresponding config.AgentConfig field
+				// — config.AgentConfig has no TimeoutSeconds/ModelParams/
+				// RateLimits at all (only agents.defaults.timeout_seconds, a
+				// global setting). The pre-conversion code wrote them to raw
+				// map keys with no Go struct field to read them back into, so
+				// they never survived a struct-based config reload even
+				// before this change — this conversion does not persist them
+				// either, matching (not worsening) that pre-existing behavior.
+				if req.MaxToolIterations != nil {
+					agentRec.MaxToolIterations = *req.MaxToolIterations
+				}
+				// tool_feedback was removed from the wire in W1 (it's now per-channel
+				// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
+				// global config-level agents.defaults.tool_feedback stays.
+				if req.ShellPolicy != nil {
+					// Load the existing shell_policy (if any) so a partial PATCH
+					// (e.g. only custom_deny_patterns) does not clobber fields the
+					// caller did not send.
+					existing := agentRec.ShellPolicy
+					if existing == nil {
+						existing = &config.AgentShellPolicy{}
+					}
+					// Only overwrite enable_deny_patterns when the caller explicitly
+					// sent it (non-nil pointer).
+					if req.ShellPolicy.EnableDenyPatterns != nil {
+						existing.EnableDenyPatterns = *req.ShellPolicy.EnableDenyPatterns
+					}
+					// An explicitly-sent array overwrites, INCLUDING the empty array —
+					// that is how the SPA clears all deny patterns. Only a nil (field
+					// absent from the request) leaves the persisted list untouched.
+					if req.ShellPolicy.CustomDenyPatterns != nil {
+						existing.CustomDenyPatterns = *req.ShellPolicy.CustomDenyPatterns
+					}
+					agentRec.ShellPolicy = existing
+				}
+				if req.Color != nil {
+					agentRec.Color = *req.Color
+				}
+				if req.Icon != nil {
+					agentRec.Icon = *req.Icon
+				}
+				// memory_enabled (ADR-052 FR-039): "Allowed on all agents" per
+				// AgentUpdateRequest.yaml — including locked/system agents (the
+				// Judge), which is why this is not gated behind the
+				// foundAgent.Locked identity-mutation check above (that block
+				// only forbids name/description/soul/color/icon/skills).
+				if req.MemoryEnabled != nil {
+					agentRec.MemoryEnabled = req.MemoryEnabled
+				}
+				if req.FallbackModels != nil {
+					fbs := make(config.FallbackModelSlice, 0, len(*req.FallbackModels))
+					for _, fm := range *req.FallbackModels {
+						provider := ""
+						if fm.Provider != nil {
+							provider = *fm.Provider
+						}
+						fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+					}
+					agentRec.FallbackModels = fbs
+				}
+				// Default flag: single-default invariant.
+				// If req.Default is set, handle two sub-cases:
+				//   true  → mark this agent as default; clear Default on all others
+				//           (handled below, after this record's own write succeeds).
+				//   false → clear Default on this agent only; leave others unchanged.
+				// If req.Default is nil (absent), leave the Default flag unchanged.
+				if req.Default != nil {
+					agentRec.Default = *req.Default
+				}
+				if req.ToolsCfg != nil {
+					newTools := &config.AgentToolsCfg{}
+					if req.ToolsCfg.Builtin != nil {
+						newTools.Builtin = config.AgentBuiltinToolsCfg{
+							Policies: agentToolPolicyMapFromWire(req.ToolsCfg.Builtin.Policies),
+						}
+					} else if agentRec.Tools != nil {
+						// req.ToolsCfg is present (e.g. it only touches mcp) but
+						// omitted builtin — the coverage-validation block above
+						// assumed the agent's EXISTING persisted builtin.policies
+						// survives untouched in this case.
+						newTools.Builtin = agentRec.Tools.Builtin
+					}
+					if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil {
+						servers := make([]config.AgentMCPServerBinding, 0, len(*req.ToolsCfg.Mcp.Servers))
+						for _, s := range *req.ToolsCfg.Mcp.Servers {
+							binding := config.AgentMCPServerBinding{ID: s.Id}
+							if s.Tools != nil {
+								binding.Tools = *s.Tools
+							}
+							servers = append(servers, binding)
+						}
+						newTools.MCP = config.AgentMCPToolsCfg{Servers: servers}
+					} else if agentRec.Tools != nil {
+						// Symmetric preservation for mcp: req.ToolsCfg present but
+						// omitted mcp (e.g. a builtin-only policy update) must not
+						// silently drop the agent's existing MCP server bindings.
+						newTools.MCP = agentRec.Tools.MCP
+					}
+					agentRec.Tools = newTools
+				}
+				// Executor: write the sub-agent executor under Subagents.Executor
+				// when the caller sends it. kind="native" with no cli clears any
+				// prior external-cli config (updatedExecutor == nil → clear).
+				if req.Executor != nil {
+					if updatedExecutor == nil {
+						if agentRec.Subagents != nil {
+							agentRec.Subagents.Executor = nil
+						}
+					} else {
+						if agentRec.Subagents == nil {
+							agentRec.Subagents = &config.SubagentsConfig{}
+						}
+						agentRec.Subagents.Executor = updatedExecutor
+					}
+				}
+				// Skills: replace the agent's skill list when the caller sends the field.
+				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
+				if req.Skills != nil {
+					if len(*req.Skills) > 0 {
+						agentRec.Skills = *req.Skills
+					} else {
+						agentRec.Skills = nil
+					}
+				}
+				// ADR-037: delegation_policy is retired — no longer written here.
+				// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
+				// are ignored on PUT. Workspace handler manages member_configs.
+				// Optimistic concurrency timestamp: refresh on every successful save.
+				// Sub-second precision (time.Time, not truncated) — the frontend uses
+				// this field as an ordinal "is this newer" comparator
+				// (lastIncorporatedUpdatedAtRef in AgentProfile.tsx); whole-second
+				// precision let two distinct autosave writes within the same
+				// wall-clock second collide on an identical truncated timestamp,
+				// defeating the ordinal comparison (reopening the P-F2
+				// fallback_models data-loss class this fix wave closed).
+				agentRec.UpdatedAt = &now
+				return nil
+			})
+			if updateErr != nil {
+				if conflictErr != nil {
+					return errConflict
+				}
+				if errors.Is(updateErr, entity.ErrNotFound) {
+					// The fast-path existence check at the top of updateAgent found
+					// this agent, but by the time this locked store update ran it
+					// was gone — e.g. a concurrent DELETE /agents/{id} raced this
+					// PUT. Mapped to 404 by withToolPolicyCoverageGuard (see
+					// errAgentVanishedDuringUpdate's doc comment).
+					return fmt.Errorf("%w: agent %q not found", errAgentVanishedDuringUpdate, id)
+				}
+				return fmt.Errorf("update agent entity record: %w", updateErr)
 			}
 			// Single-default invariant: when setting default=true on this agent,
-			// clear default on every OTHER agent in the list.
+			// clear default on every OTHER agent's entity record. Each is its own
+			// independently-locked write (ADR-054 D6 rule 4's resolution keeps
+			// routing authoritative via agents.defaults.default_agent_id, not
+			// this per-entity flag — but the flag itself, surfaced to the SPA's
+			// star toggle, still needs the single-default UX invariant).
 			if req.Default != nil && *req.Default {
-				for _, entry := range list {
-					agentMap, ok := entry.(map[string]any)
-					if !ok {
-						continue
+				others, _, listErr := store.List()
+				if listErr != nil {
+					slog.Warn("rest: updateAgent: could not list agents to clear stale default flags",
+						"agent_id", id, "error", listErr)
+				} else {
+					for _, other := range others {
+						if other.ID == id || !other.Default {
+							continue
+						}
+						if _, clearErr := store.Update(other.ID, func(a *config.AgentConfig) error {
+							a.Default = false
+							return nil
+						}); clearErr != nil {
+							slog.Warn("rest: updateAgent: could not clear stale default flag",
+								"agent_id", other.ID, "error", clearErr)
+						}
 					}
-					if agentMap["id"] == id {
-						continue // already set above
-					}
-					// Clear default on every other agent. Delete the key so config
-					// stays minimal (omitempty in Go struct); false and missing are
-					// equivalent to the router but missing is cleaner JSON.
-					delete(agentMap, "default")
 				}
 			}
 			// O6: heartbeat is now fully per-agent (written inside the agent-found
@@ -3510,7 +3364,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			// no cfg.Heartbeat mirror to maintain.
 			return nil
 		},
-		"rest: save config for agent update",
+		"rest: save agent entity record for agent update",
 	); !ok {
 		return
 	}
@@ -4046,6 +3900,15 @@ func ensureMap(m map[string]any, keys ...string) map[string]any {
 // take effect and must fix the credential before it applies.
 //
 // Called while a.configMu is held.
+// populateAgentsListFromStore is the ADR-054 D3/§5 "read through an
+// in-memory cache" bridge for the config-reload path — see
+// populateAgentsListFromEntityStore's doc comment (gateway.go) for the full
+// rationale. Thin per-restAPI wrapper so REST call sites don't have to thread
+// a.homePath through by hand.
+func (a *restAPI) populateAgentsListFromStore(cfg *config.Config) {
+	populateAgentsListFromEntityStore(cfg, a.homePath)
+}
+
 func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	if a.credStore == nil {
 		// No credential store wired — use the plain loader (no v0 migration, no
@@ -4055,6 +3918,7 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 		if err != nil {
 			return fmt.Errorf("load config (no store): %w", err)
 		}
+		a.populateAgentsListFromStore(newCfg)
 		a.agentLoop.SwapConfig(newCfg)
 		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 		// restart-gated), so a Settings save must take effect immediately
@@ -4066,6 +3930,7 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	a.populateAgentsListFromStore(newCfg)
 	// Build a ref→in-use map so a resolution failure on something actually
 	// enabled/in-use (fatal — surfaced as a failed request) can be
 	// distinguished from one on a disabled channel or unused feature
@@ -6960,45 +6825,36 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 				agentID, len(gaps), joinCoverageGapMessages(gaps),
 			)
 		},
-		// Persist to config.json.
+		// ADR-054 D2/§11 checklist item 4 ("tools/policies"): agents are
+		// per-entity records under entities/agents/<id>.json, not config.json's
+		// agents.list — persist via the agent store instead of splicing the
+		// raw config map. `m` is deliberately left untouched.
 		func(m map[string]any) error {
-			agents, _ := m["agents"].(map[string]any)
-			if agents == nil {
-				return fmt.Errorf("agents section not found in config")
-			}
-			list, _ := agents["list"].([]any)
-			for i, raw := range list {
-				agentMap, ok := raw.(map[string]any)
-				if !ok {
-					continue
+			_, updateErr := agentstore.New(a.homePath).Update(agentID, func(agentRec *config.AgentConfig) error {
+				builtinCfg := config.AgentBuiltinToolsCfg{}
+				if len(builtinPolicies) > 0 {
+					builtinCfg.Policies = agentToolPolicyMapFromWire(builtinPolicies)
 				}
-				if agentMap["id"] == agentID {
-					builtinCfg := map[string]any{}
-					if len(builtinPolicies) > 0 {
-						builtinCfg["policies"] = builtinPolicies
+				newTools := &config.AgentToolsCfg{Builtin: builtinCfg}
+				if len(mcpServers) > 0 {
+					servers := make([]config.AgentMCPServerBinding, 0, len(mcpServers))
+					for _, s := range mcpServers {
+						servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
 					}
-					toolsCfg := map[string]any{
-						"builtin": builtinCfg,
-					}
-					if len(mcpServers) > 0 {
-						servers := make([]map[string]any, 0, len(mcpServers))
-						for _, s := range mcpServers {
-							srv := map[string]any{"id": s.ID}
-							if len(s.Tools) > 0 {
-								srv["tools"] = s.Tools
-							}
-							servers = append(servers, srv)
-						}
-						toolsCfg["mcp"] = map[string]any{"servers": servers}
-					}
-					agentMap["tools"] = toolsCfg
-					list[i] = agentMap
-					return nil
+					newTools.MCP = config.AgentMCPToolsCfg{Servers: servers}
 				}
+				agentRec.Tools = newTools
+				return nil
+			})
+			if updateErr != nil {
+				if errors.Is(updateErr, entity.ErrNotFound) {
+					return fmt.Errorf("agent %q not found in agent store", agentID)
+				}
+				return fmt.Errorf("update agent tools entity record: %w", updateErr)
 			}
-			return fmt.Errorf("agent %q not found in config list", agentID)
+			return nil
 		},
-		fmt.Sprintf("rest: update agent tools config (agent_id=%s)", agentID),
+		fmt.Sprintf("rest: update agent tools entity record (agent_id=%s)", agentID),
 	); !ok {
 		return
 	}

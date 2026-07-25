@@ -147,53 +147,13 @@ func TestIsWorkerAndChatTarget(t *testing.T) {
 	}
 }
 
-// TestRepairMultipleDefaults_ClearsWorkerDefault verifies that a worker marked
-// Default=true is demoted UNCONDITIONALLY — even when it is the sole default —
-// because a worker can never be the routing default.
-func TestRepairMultipleDefaults_ClearsWorkerDefault(t *testing.T) {
-	cfg := &Config{
-		Agents: AgentsConfig{
-			List: []AgentConfig{
-				// Sole default, but a worker → must be cleared.
-				{ID: "worker", Type: AgentTypeWorker, Default: true},
-				{ID: "mia", Type: AgentTypeCore, Default: false},
-			},
-		},
-	}
-	RepairMultipleDefaults(cfg)
-
-	for _, a := range cfg.Agents.List {
-		if a.ID == "worker" && a.Default {
-			t.Fatal("RepairMultipleDefaults must clear Default on a worker even when it is the sole default")
-		}
-	}
-}
-
-// TestRepairMultipleDefaults_WorkerDemotedThenKeepFirstNonWorker verifies the
-// worker is demoted BEFORE the at-most-one repair, so a worker never "wins" the
-// keep-first slot over a real chat-target agent.
-func TestRepairMultipleDefaults_WorkerDemotedThenKeepFirstNonWorker(t *testing.T) {
-	cfg := &Config{
-		Agents: AgentsConfig{
-			List: []AgentConfig{
-				// Worker is first in list order and marked default.
-				{ID: "worker", Type: AgentTypeWorker, Default: true},
-				{ID: "mia", Type: AgentTypeCore, Default: true},
-			},
-		},
-	}
-	RepairMultipleDefaults(cfg)
-
-	var defaults []string
-	for _, a := range cfg.Agents.List {
-		if a.Default {
-			defaults = append(defaults, a.ID)
-		}
-	}
-	if len(defaults) != 1 {
-		t.Fatalf("expected exactly one default after repair, got %v", defaults)
-	}
-	if defaults[0] != "mia" {
-		t.Fatalf("expected the non-worker (mia) to keep default, got %q", defaults[0])
-	}
-}
+// NOTE (ADR-054 D6.4): TestRepairMultipleDefaults_ClearsWorkerDefault and
+// TestRepairMultipleDefaults_WorkerDemotedThenKeepFirstNonWorker used to live
+// here, covering RepairMultipleDefaults' worker-demotion behavior. Retired
+// along with the function — see validate.go's NOTE at
+// RepairMultipleDefaults' old location. A worker is still never resolved as
+// the routing default: AgentRegistry.GetDefaultAgent's and
+// RouteResolver.resolveDefaultAgentID's every priority already skips
+// IsWorker() agents directly (registry.go, route.go), so no repair pass is
+// needed to keep a hand-edited worker Default=true flag from mattering — it
+// was never consulted for resolution in the first place.

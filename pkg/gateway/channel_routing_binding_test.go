@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -44,32 +45,41 @@ func writeTestWorkspaceJSON(t *testing.T, api *restAPI, id, status string, coreT
 	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), data, 0o600))
 }
 
-// addAgentsToAPI persists agents to config.json so they survive safeUpdateConfigJSON
-// reload cycles. The restAPI handlers read cfg.Agents.List from GetConfig() to validate
-// agents for routing purposes; any in-memory-only mutation is lost on the next
-// safeUpdateConfigJSON → refreshConfigAndRewireServices call.
+// addAgentsToAPI seeds agents as REAL per-entity records under
+// entities/agents/<id>.json (ADR-054 D2) via agentstore, then forces an
+// immediate config reload so cfg.Agents.List — which setChannelRouting reads
+// directly off a.agentLoop.GetConfig() to validate FR-006/007/008 — reflects
+// the new roster right away.
+//
+// This USED TO splice agents.list directly into the raw config.json map via
+// safeUpdateConfigJSON. ADR-054 changed the ground truth out from under that
+// approach: config.LoadConfig unconditionally STRIPS any agents.list content
+// on every load (pkg/config/legacy_agents_list.go), and
+// refreshConfigAndRewireServices repopulates cfg.Agents.List exclusively from
+// the agent entity store (a.populateAgentsListFromStore ->
+// populateAgentsListFromEntityStore -> agentstore.Store.List(), see
+// gateway.go), never from whatever a raw config.json splice wrote. The old
+// helper therefore silently became a no-op: it wrote agents.list to disk, and
+// the very next reload (e.g. seedChannelInstance's own safeUpdateConfigJSON
+// call) discarded it and repopulated cfg.Agents.List from the (empty) entity
+// store instead. Every routing test that named an agent this way was
+// actually validating against an EMPTY roster — "agent %q not found" (422 in
+// the bound flow, 404 in the unbound flow) silently substituted for the
+// worker/team/system checks this file exists to exercise, and in the bound
+// flow both "not found" and "worker rejected" return the same 422 status, so
+// a naive status-code-only assertion could not tell the difference. Seeding
+// via the real entity store closes that gap for real.
 func addAgentsToAPI(t *testing.T, api *restAPI, agents []config.AgentConfig) {
 	t.Helper()
-	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
-		agentsMap, _ := m["agents"].(map[string]any)
-		if agentsMap == nil {
-			agentsMap = map[string]any{}
-		}
-		rawList, _ := agentsMap["list"].([]any)
-		for _, a := range agents {
-			entry := map[string]any{"id": a.ID}
-			if a.Default {
-				entry["default"] = true
-			}
-			if a.Type != "" {
-				entry["type"] = string(a.Type)
-			}
-			rawList = append(rawList, entry)
-		}
-		agentsMap["list"] = rawList
-		m["agents"] = agentsMap
-		return nil
-	}))
+	store := agentstore.New(api.homePath)
+	for i := range agents {
+		ac := agents[i]
+		require.NoError(t, store.Create(ac.ID, &ac), "seed agent entity record %q", ac.ID)
+	}
+	// Some callers (e.g. TestSetChannelRouting_Unbound_Worker_Returns422) issue
+	// the routing request with no other config write in between — force the
+	// reload here so a.agentLoop.GetConfig().Agents.List is never stale.
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
 }
 
 // seedChannelInstance writes a minimal channel instance entry into config.json
@@ -155,6 +165,12 @@ func TestSetChannelRouting_Bound_AgentNotInTeam(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"agent not in CoreTeam must be 422 (FR-006)")
+	// Content check (anti-shortcut): "agent not found" is ALSO a 422 in the
+	// bound flow — pin the actual rejection reason so a regression that
+	// silently drops "jim" from the roster (making it look "not found" instead
+	// of "not in team") is caught by this test, not masked by a shared status code.
+	assert.Contains(t, w.Body.String(), "not a member of workspace",
+		"rejection must be the team-membership check (FR-006), not a generic agent-not-found")
 }
 
 // TestSetChannelRouting_Bound_UnknownWorkspace verifies FR-007:
@@ -207,6 +223,12 @@ func TestSetChannelRouting_Bound_WorkerAgent(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"worker agent must be 422 (FR-008/MIN-002)")
+	// Content check (anti-shortcut): "agent not found" is ALSO a 422 in the
+	// bound flow — pin the actual rejection reason so a regression that
+	// silently drops "worker1" from the roster is caught here rather than
+	// masked by the shared status code.
+	assert.Contains(t, w.Body.String(), "workers are not chat targets",
+		"rejection must be the worker-type check (FR-008), not a generic agent-not-found")
 }
 
 // TestSetChannelRouting_Unbound_Worker_Returns422 verifies MIN-002 in the
@@ -224,6 +246,13 @@ func TestSetChannelRouting_Unbound_Worker_Returns422(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
 		"unbound worker must be 422 (MIN-002)")
+	// Content check (anti-shortcut): in the UNBOUND flow "agent not found" is
+	// a 404, not a 422 (see rest.go's unbound-flow lookup) — so this
+	// particular pair can't be confused by status code alone, but pin the
+	// message anyway so a future change collapsing the two status codes
+	// still gets caught here.
+	assert.Contains(t, w.Body.String(), "workers are not chat targets",
+		"rejection must be the worker-type check (MIN-002), not a generic agent-not-found")
 }
 
 // ── TDD #14: valid bound binding persists ─────────────────────────────────────

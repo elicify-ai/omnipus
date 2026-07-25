@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -60,6 +61,41 @@ func seedTestAgents(cfg *config.Config) {
 	}
 	// Seed base core agents (mia, jim, ava, ray; Spec-3: max retired) — idempotent.
 	coreagent.SeedConfig(cfg)
+}
+
+// seedAgentEntities persists each agent in agents as a REAL entity-store
+// record under homePath/entities/agents/<id>.json (ADR-054 D2/D6), in
+// addition to whatever the caller already put into cfg.Agents.List for
+// AgentLoop construction.
+//
+// A real entity file is required whenever a test drives a REST write path
+// that actually reaches persistence for an agent that must already exist —
+// PUT /api/v1/agents/{id}, PUT /api/v1/agents/{id}/tools, DELETE
+// /api/v1/agents/{id}: updateAgent/updateAgentTools/deleteAgent persist via
+// agentstore.Store (entities/agents/<id>.json), never config.json's
+// agents.list any more (ADR-054 D2/§11 checklist items 1/3/4/5) — a target
+// that exists only in the in-memory cfg.Agents.List (which is still what
+// a.agentLoop.GetConfig() returns, and is all the pre-persist "does this
+// agent exist / is it locked" checks read) fails the persist step itself
+// with "agent ... not found in agent store", turning an expected
+// 200/204 into a 500.
+//
+// Tests that are read-only (GET) or where the request is rejected BEFORE
+// the persist step (400/403/404) do not need this — a bare in-memory
+// cfg.Agents.List remains the correct, sanctioned way to seed AgentLoop for
+// those (see pkg/agent/roster_load.go's doc comment: NewAgentLoop does not
+// auto-populate the roster from the entity store; mirrors the pattern
+// already proven in pkg/gateway/rest_mailbox_test.go's newMailboxTestAPI and
+// pkg/sysagent/tools/agent_test.go).
+func seedAgentEntities(t *testing.T, homePath string, agents []config.AgentConfig) {
+	t.Helper()
+	store := agentstore.New(homePath)
+	for i := range agents {
+		ac := agents[i]
+		if err := store.Create(ac.ID, &ac); err != nil {
+			t.Fatalf("seedAgentEntities: create %q: %v", ac.ID, err)
+		}
+	}
 }
 
 // restMockProvider satisfies providers.LLMProvider with no-op responses.
@@ -809,6 +845,12 @@ func TestUpdateAgent_LockedRejectsIdentityChange(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 	cfgJSON, _ := json.Marshal(cfg)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+	// ADR-054: the allowed model-change PUT below reaches updateAgent's
+	// persist step, which resolves/updates "jim" via the agent store
+	// (entities/agents/jim.json), not config.json's agents.list — seed a
+	// real entity record for every core agent SeedConfig produced (mirrors
+	// them exactly, so jim's Locked flag and identity match production).
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
@@ -863,8 +905,10 @@ func TestUpdateAgentTools_InvalidPolicyValue(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
-	// Write a minimal config.json so safeUpdateConfigJSON can read it.
-	cfgJSON := `{"agents":{"list":[{"id":"test-agent","name":"Test"}]}}`
+	// Write a minimal config.json so safeUpdateConfigJSON can read it. The
+	// (now-inert) "agents.list" key is not read by any write path any more
+	// (ADR-054) — this is just a valid, parseable file for os.ReadFile.
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096}}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
@@ -880,6 +924,13 @@ func TestUpdateAgentTools_InvalidPolicyValue(t *testing.T) {
 			},
 		},
 	}
+	// This request is rejected (422) at the per-tool policy-value check,
+	// before updateAgentTools ever reaches its agent-store persist step, so a
+	// real entity record is not strictly required for THIS test to pass —
+	// seeded anyway so the fixture matches production shape (a "test-agent"
+	// that a caller could legitimately PUT against) rather than an
+	// in-memory-only agent that would 500 on any successful write.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -965,34 +1016,40 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	assert.Equal(t, "Main", resp.Type)
 	assert.NotEmpty(t, resp.ID)
 
-	// Verify the config.json was updated with the tools config (there is no
-	// default_policy field any more — CLAUDE.md hard constraint 6 — so the
-	// persisted builtin map carries only a complete "policies" map).
-	savedCfg, err := os.ReadFile(cfgPath)
-	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1)
-	agentMap, _ := list[0].(map[string]any)
-	assert.Equal(t, "#22C55E", agentMap["color"])
-	assert.Equal(t, "magnifying-glass", agentMap["icon"])
-	toolsMap, ok := agentMap["tools"].(map[string]any)
-	require.True(t, ok, "tools config must be persisted")
-	builtinMap, _ := toolsMap["builtin"].(map[string]any)
-	_, hasDefaultPolicy := builtinMap["default_policy"]
-	assert.False(t, hasDefaultPolicy, "default_policy no longer exists on the wire")
-	policies, _ := builtinMap["policies"].(map[string]any)
+	// Verify the agent entity record (entities/agents/<id>.json) was
+	// persisted with the tools config — createAgent persists via the agent
+	// store, not config.json's agents.list (ADR-054 D2). There is no
+	// default_policy field on config.AgentConfig any more (CLAUDE.md hard
+	// constraint 6 — the field was removed project-wide), so the persisted
+	// builtin map carries only a complete "policies" map by construction.
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get(resp.ID)
+	require.NoError(t, err, "created agent must exist as a real entity-store record")
+	assert.Equal(t, "#22C55E", savedAgent.Color)
+	assert.Equal(t, "magnifying-glass", savedAgent.Icon)
+	require.NotNil(t, savedAgent.Tools, "tools config must be persisted")
+	policies := savedAgent.Tools.Builtin.Policies
 	// The caller's sparse overrides win...
-	assert.Equal(t, "allow", policies["read_file"])
-	assert.Equal(t, "allow", policies["search_web"])
-	assert.Equal(t, "allow", policies["fetch_url"])
+	assert.Equal(t, config.ToolPolicyAllow, policies["read_file"])
+	assert.Equal(t, config.ToolPolicyAllow, policies["search_web"])
+	assert.Equal(t, config.ToolPolicyAllow, policies["fetch_url"])
 	// ...merged on top of the seeded deny-all baseline (coreagent.
 	// NewCustomAgentToolsCfg), so an unrelated tool the caller never
 	// mentioned is still explicitly covered (deny), and bash specifically
 	// stays denied (CRIT-001/FR-B12) since the caller did not override it.
-	assert.Equal(t, "deny", policies["bash"])
+	assert.Equal(t, config.ToolPolicyDeny, policies["bash"])
+
+	// config.json itself must carry no agents.list content — agents are
+	// per-entity records now, never config.json entries (ADR-054).
+	savedCfgRaw, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfgRaw, &savedMap))
+	if agentsSection, ok := savedMap["agents"].(map[string]any); ok {
+		if list, ok := agentsSection["list"].([]any); ok {
+			assert.Empty(t, list, "config.json agents.list must stay empty — agents persist only to entities/agents/")
+		}
+	}
 }
 
 // TestCreateAgent_WithSkills verifies POST /api/v1/agents with skills persists and
@@ -1055,19 +1112,14 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 	assert.Equal(t, "Skill Agent", resp.Name)
 	assert.Equal(t, []string{"daily-briefing", "summarize"}, resp.Skills)
 
-	// Verify config.json persisted the skill list.
-	savedCfg, err := os.ReadFile(cfgPath)
-	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1)
-	agentMap, _ := list[0].(map[string]any)
-	skillsList, _ := agentMap["skills"].([]any)
-	require.Len(t, skillsList, 2)
-	assert.Equal(t, "daily-briefing", skillsList[0])
-	assert.Equal(t, "summarize", skillsList[1])
+	// Verify the agent entity record persisted the skill list — createAgent
+	// persists via the agent store, not config.json's agents.list (ADR-054 D2).
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get(resp.ID)
+	require.NoError(t, err, "created agent must exist as a real entity-store record")
+	require.Len(t, savedAgent.Skills, 2)
+	assert.Equal(t, "daily-briefing", savedAgent.Skills[0])
+	assert.Equal(t, "summarize", savedAgent.Skills[1])
 }
 
 // TestCreateAgent_NoSkills verifies that a new agent with no skills field has
@@ -1115,18 +1167,16 @@ func TestCreateAgent_NoSkills(t *testing.T) {
 	if hasSkills {
 		assert.Nil(t, skills, "skills must be null or absent when not provided on create")
 	}
+	id, _ := raw["id"].(string)
+	require.NotEmpty(t, id, "create response must include an id")
 
-	// config.json must not have a skills key for the new agent.
-	savedCfg, err := os.ReadFile(cfgPath)
-	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1)
-	agentMap, _ := list[0].(map[string]any)
-	_, hasSkillsInConfig := agentMap["skills"]
-	assert.False(t, hasSkillsInConfig, "config.json must not have a skills key for a new agent with no skills")
+	// The agent entity record (entities/agents/<id>.json) must have no
+	// skills — createAgent persists via the agent store, not config.json's
+	// agents.list (ADR-054 D2).
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get(id)
+	require.NoError(t, err, "created agent must exist as a real entity-store record")
+	assert.Empty(t, savedAgent.Skills, "a new agent with no skills field must have no skills persisted")
 }
 
 // TestUpdateAgent_SkillsPersist verifies that PUT /api/v1/agents/{id} with a
@@ -1157,6 +1207,13 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054: updateAgent's persist step resolves/updates "agent-a" via the
+	// agent store (entities/agents/agent-a.json), not config.json's
+	// agents.list — seed BOTH agents as real entity records so (a) the PUT
+	// against agent-a succeeds and (b) agent-b can be read back afterward to
+	// prove it was left untouched.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1177,28 +1234,19 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 	assert.Equal(t, "agent-a", resp.ID)
 	assert.Equal(t, []string{"daily-briefing", "summarize"}, resp.Skills)
 
-	// Verify config.json: agent-a has skills, agent-b has none.
-	savedCfg, err := os.ReadFile(cfgPath)
+	// Verify the agent entity records: agent-a has skills, agent-b has none
+	// — updateAgent persists via the agent store, not config.json's
+	// agents.list (ADR-054 D2).
+	store := agentstore.New(tmpDir)
+	savedA, err := store.Get("agent-a")
 	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 2)
+	require.Len(t, savedA.Skills, 2, "agent-a must have 2 skills persisted")
+	assert.Equal(t, "daily-briefing", savedA.Skills[0])
+	assert.Equal(t, "summarize", savedA.Skills[1])
 
-	for _, item := range list {
-		agentMap, _ := item.(map[string]any)
-		agentID, _ := agentMap["id"].(string)
-		if agentID == "agent-a" {
-			skillsRaw, _ := agentMap["skills"].([]any)
-			require.Len(t, skillsRaw, 2, "agent-a must have 2 skills in config.json")
-			assert.Equal(t, "daily-briefing", skillsRaw[0])
-			assert.Equal(t, "summarize", skillsRaw[1])
-		} else if agentID == "agent-b" {
-			_, hasBSkills := agentMap["skills"]
-			assert.False(t, hasBSkills, "agent-b must have no skills — granting to A must not affect B")
-		}
-	}
+	savedB, err := store.Get("agent-b")
+	require.NoError(t, err)
+	assert.Empty(t, savedB.Skills, "agent-b must have no skills — granting to A must not affect B")
 }
 
 // TestUpdateAgent_SkillsClear verifies that sending an empty skills array
@@ -1230,6 +1278,11 @@ func TestUpdateAgent_SkillsClear(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054: updateAgent's persist step resolves/updates "skilled-agent"
+	// via the agent store (entities/agents/skilled-agent.json), not
+	// config.json's agents.list.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1242,17 +1295,13 @@ func TestUpdateAgent_SkillsClear(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
 
-	// config.json must have no skills key after clear.
-	savedCfg, err := os.ReadFile(cfgPath)
+	// The agent entity record must have no skills key after clear —
+	// updateAgent persists via the agent store, not config.json's
+	// agents.list (ADR-054 D2).
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get("skilled-agent")
 	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1)
-	agentMap, _ := list[0].(map[string]any)
-	_, hasSkills := agentMap["skills"]
-	assert.False(t, hasSkills, "skills key must be absent in config.json after clearing with empty array")
+	assert.Empty(t, savedAgent.Skills, "skills must be empty after clearing with an empty array")
 }
 
 // TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT proves the
@@ -1283,6 +1332,14 @@ func TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054: updateAgent's persist step resolves/updates "mem-agent" via
+	// the agent store (entities/agents/mem-agent.json), not config.json's
+	// agents.list. The subsequent GET (step 4 below) reads a.agentLoop's
+	// in-memory config AFTER updateConfigJSONLocked's refresh repopulates
+	// cfg.Agents.List from this same entity store, so the real record must
+	// exist here for the whole round trip to work.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1314,18 +1371,14 @@ func TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT(t *testing.T) {
 	require.NotNil(t, putResp.MemoryEnabled)
 	assert.False(t, *putResp.MemoryEnabled, "PUT response must echo the just-persisted memory_enabled:false")
 
-	// 3. config.json actually persisted memory_enabled:false.
-	savedCfg, err := os.ReadFile(cfgPath)
+	// 3. The agent entity record actually persisted memory_enabled:false —
+	// updateAgent persists via the agent store, not config.json's
+	// agents.list (ADR-054 D2).
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get("mem-agent")
 	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1)
-	agentMap, _ := list[0].(map[string]any)
-	persistedVal, hasKey := agentMap["memory_enabled"]
-	require.True(t, hasKey, "memory_enabled key must be persisted in config.json")
-	assert.Equal(t, false, persistedVal)
+	require.NotNil(t, savedAgent.MemoryEnabled, "memory_enabled must be persisted as an explicit override")
+	assert.False(t, *savedAgent.MemoryEnabled)
 
 	// 4. A subsequent GET (fresh read of the live/reloaded config) reflects false.
 	w = httptest.NewRecorder()
@@ -1555,6 +1608,11 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054: updateAgentTools' persist step resolves/updates
+	// "update-agent" via the agent store (entities/agents/update-agent.json),
+	// not config.json's agents.list.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1601,25 +1659,31 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinPoliciesAllow, genResp.Config.Builtin.Policies["search_web"])
 	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinPoliciesDeny, genResp.Config.Builtin.Policies["bash"])
 
-	// Then: config.json on disk was updated with the tools config
-	savedCfg, err := os.ReadFile(cfgPath)
+	// Then: the agent entity record (entities/agents/update-agent.json) was
+	// updated with the tools config — updateAgentTools persists via the
+	// agent store, not config.json's agents.list (ADR-054 D2). There is no
+	// default_policy field on config.AgentConfig any more (CLAUDE.md hard
+	// constraint 6 — the field was removed project-wide), so this is
+	// structurally guaranteed rather than needing its own assertion.
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get("update-agent")
+	require.NoError(t, err, "agent must exist as a real entity-store record")
+	require.NotNil(t, savedAgent.Tools, "tools config must be persisted")
+	persistedPolicies := savedAgent.Tools.Builtin.Policies
+	assert.Equal(t, config.ToolPolicyAllow, persistedPolicies["read_file"])
+	assert.Equal(t, config.ToolPolicyAllow, persistedPolicies["search_web"])
+	assert.Equal(t, config.ToolPolicyDeny, persistedPolicies["bash"])
+
+	// config.json itself must carry no agents.list content.
+	savedCfgRaw, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1, "config.json must contain exactly one agent")
-	agentMap, _ := list[0].(map[string]any)
-	toolsMap, ok := agentMap["tools"].(map[string]any)
-	require.True(t, ok, "tools config must be persisted to config.json")
-	persistedBuiltin, _ := toolsMap["builtin"].(map[string]any)
-	_, hasDefaultPolicy := persistedBuiltin["default_policy"]
-	assert.False(t, hasDefaultPolicy, "there is no default_policy field on the wire any more")
-	policiesRaw, ok := persistedBuiltin["policies"].(map[string]any)
-	require.True(t, ok, "config.json must persist policies map")
-	assert.Equal(t, "allow", policiesRaw["read_file"])
-	assert.Equal(t, "allow", policiesRaw["search_web"])
-	assert.Equal(t, "deny", policiesRaw["bash"])
+	require.NoError(t, json.Unmarshal(savedCfgRaw, &savedMap))
+	if agentsSection, ok := savedMap["agents"].(map[string]any); ok {
+		if list, ok := agentsSection["list"].([]any); ok {
+			assert.Empty(t, list, "config.json agents.list must stay empty — agents persist only to entities/agents/")
+		}
+	}
 }
 
 // TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected verifies that the
@@ -1701,6 +1765,11 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054: updateAgentTools' persist step resolves/updates
+	// "update-agent-both" via the agent store, not config.json's
+	// agents.list.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1731,22 +1800,18 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code,
 		"a real, complete policies map must win over mode/visible, not be discarded: body: %s", w.Body.String())
 
-	savedCfg, err := os.ReadFile(cfgPath)
+	// The agent entity record — not config.json's agents.list, which
+	// updateAgentTools no longer touches (ADR-054 D2) — must reflect the
+	// caller's real policies values.
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get("update-agent-both")
 	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1)
-	agentMap, _ := list[0].(map[string]any)
-	toolsMap, _ := agentMap["tools"].(map[string]any)
-	builtin, _ := toolsMap["builtin"].(map[string]any)
-	persisted, ok := builtin["policies"].(map[string]any)
-	require.True(t, ok, "policies must be persisted")
+	require.NotNil(t, savedAgent.Tools, "policies must be persisted")
+	persisted := savedAgent.Tools.Builtin.Policies
 
-	assert.Equal(t, "allow", persisted["read_file"], "the caller's real policies value must survive")
-	assert.Equal(t, "deny", persisted["bash"], "the caller's real policies value must survive")
-	assert.Equal(t, "deny", persisted["search_web"],
+	assert.Equal(t, config.ToolPolicyAllow, persisted["read_file"], "the caller's real policies value must survive")
+	assert.Equal(t, config.ToolPolicyDeny, persisted["bash"], "the caller's real policies value must survive")
+	assert.Equal(t, config.ToolPolicyDeny, persisted["search_web"],
 		"mode/visible must have NO effect when policies is present — search_web must keep its "+
 			"real 'deny' value from the policies map, not become 'allow' from visible[]")
 }
@@ -1785,6 +1850,12 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054: updateAgentTools' persist step (which runs BEFORE the
+	// separately-invoked TriggerReload this test forces to fail) resolves/
+	// updates "reload-test-agent" via the agent store, not config.json's
+	// agents.list.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	// Wire a reload function that always returns an error (simulates gateway
@@ -1830,17 +1901,14 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 	assert.Contains(t, errResp["error"], "in-memory reload failed",
 		"503 response must mention in-memory reload failure")
 
-	// Then: config.json was still updated (disk write happened before reload).
-	savedCfg, err := os.ReadFile(cfgPath)
-	require.NoError(t, err)
-	var savedMap map[string]any
-	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
-	agentsMap, _ := savedMap["agents"].(map[string]any)
-	list, _ := agentsMap["list"].([]any)
-	require.Len(t, list, 1, "config.json must contain exactly one agent after 503")
-	agentMap, _ := list[0].(map[string]any)
-	_, hasTools := agentMap["tools"]
-	assert.True(t, hasTools, "tools config must be persisted to config.json even on 503")
+	// Then: the agent entity record was still updated (the agent-store
+	// persist step runs BEFORE the handler's separate TriggerReload call —
+	// updateAgentTools persists via the agent store, not config.json's
+	// agents.list, ADR-054 D2).
+	store := agentstore.New(tmpDir)
+	savedAgent, err := store.Get("reload-test-agent")
+	require.NoError(t, err, "agent must exist as a real entity-store record even when the post-write reload fails")
+	assert.NotNil(t, savedAgent.Tools, "tools config must be persisted even on 503")
 }
 
 // TestHandleMCPTools_MethodNotAllowed verifies that POST to HandleMCPTools returns 405.

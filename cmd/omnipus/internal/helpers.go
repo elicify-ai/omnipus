@@ -1,10 +1,12 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
@@ -37,5 +39,21 @@ func LoadConfig() (*config.Config, error) {
 		return nil, err
 	}
 	logger.SetLevelFromString(cfg.Gateway.LogLevel)
+	// ADR-054 D2/D3: agents are per-entity records under entities/agents/
+	// now, not config.json's agents.list — config.LoadConfig strips any
+	// legacy agents.list content on every load (legacy_agents_list.go), so
+	// cfg.Agents.List is repopulated here from the agent store directly
+	// (GetOmnipusHome(), not a derivation from cfg — see loadConfigWithAgents
+	// in cmd/omnipus/main.go for why the derivation-based
+	// agent.LoadAgentRosterFromEntityStore helper was tried and reverted).
+	// Best-effort: a store-list failure only warns — callers still get every
+	// other config field.
+	agents, skipped, listErr := agentstore.New(GetOmnipusHome()).List()
+	if listErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not list agent entity records: %v\n", listErr)
+		return cfg, nil
+	}
+	cfg.Agents.List = agents
+	cfg.SkippedAgentIDs = skipped
 	return cfg, nil
 }

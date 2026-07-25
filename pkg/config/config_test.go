@@ -1598,21 +1598,20 @@ func TestLoadConfig_LegacySandboxProfileFields_Ignored(t *testing.T) {
 		t.Fatalf("LoadConfig must not error on legacy sandbox_profile fields, got: %v", err)
 	}
 
-	// The agent carrying the retired per-agent field must still load, with
-	// its other real fields intact.
-	if len(cfg.Agents.List) != 1 {
-		t.Fatalf("expected exactly one agent, got %d", len(cfg.Agents.List))
-	}
-	agent := cfg.Agents.List[0]
-	if agent.ID != "legacy-agent" {
-		t.Errorf("agent.ID = %q, want %q", agent.ID, "legacy-agent")
-	}
-	if agent.Name != "Legacy Agent" {
-		t.Errorf("agent.Name = %q, want %q — the unknown sandbox_profile key must not corrupt sibling fields",
-			agent.Name, "Legacy Agent")
-	}
-	if agent.Description != "carries a retired per-agent sandbox_profile key" {
-		t.Errorf("agent.Description = %q, unexpected", agent.Description)
+	// ADR-054 (entity/config separation) landed after this test was
+	// originally written: agents.list is no longer an entity inside
+	// config.json — stripLegacyAgentsList unconditionally drops any legacy
+	// agents.list content on load (loudly, via a WARN log), regardless of
+	// whether an individual agent also carries a retired key like
+	// sandbox_profile. So "legacy-agent" above no longer proves "an unknown
+	// per-agent key doesn't corrupt sibling fields" (agents.list is emptied
+	// either way now) — it still usefully proves LoadConfig doesn't error out
+	// on the retired key while parsing the now-to-be-dropped legacy roster.
+	// This pinning test's real remaining assertion is the sandbox section
+	// below.
+	if len(cfg.Agents.List) != 0 {
+		t.Fatalf("expected agents.list to be stripped by ADR-054's stripLegacyAgentsList, got %d agent(s): %+v",
+			len(cfg.Agents.List), cfg.Agents.List)
 	}
 
 	// The global sandbox section's retired default_profile key must not

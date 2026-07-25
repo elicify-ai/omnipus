@@ -855,14 +855,6 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
 	}
-	// review r1 major M4/Gap #6: reject an unregistered or System Agent id
-	// before any workspace/session side effects (mirrors handleWorkspacePost).
-	if req.CoreTeam != nil {
-		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), *req.CoreTeam); vErr != nil {
-			jsonErr(w, http.StatusBadRequest, vErr.Error())
-			return
-		}
-	}
 	if req.Status != nil && !req.Status.Valid() {
 		jsonErr(w, http.StatusBadRequest, `status must be "active" or "archived"`)
 		return
@@ -881,6 +873,42 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	ws, ok := a.loadWorkspace(w, id)
 	if !ok {
 		return
+	}
+
+	// review r1 major M4/Gap #6 (ADR-054 D6 rule 1: "validate the delta, not
+	// the world"): reject an unregistered or System Agent id — but only
+	// among members THIS WRITE INTRODUCES, not the whole incoming array.
+	//
+	// Why: core_team is a full-replacement field (a typical caller reads the
+	// current team, adds/removes one id, and PUTs the whole array back). The
+	// pre-fix version of this check ran validateCoreTeamMembers against the
+	// ENTIRE incoming *req.CoreTeam — so a workspace that already carried
+	// even one dangling member (e.g. an agent deleted after being added,
+	// which rule 2 says must be surfaced, never fatal) would have every
+	// future PUT rejected outright, because that same stale id keeps
+	// reappearing in every round-tripped array. This is the exact "permanently
+	// wedged workspace, no repair path" failure ADR-054 §1 documents. Diffing
+	// against the workspace's own pre-write ws.CoreTeam and validating only
+	// the introduced ids un-wedges it: a pre-existing dangling member is
+	// carried through untouched (still dangling, still reachable via
+	// RepairDanglingCoreTeamMembers below), while a genuinely new bad id is
+	// still rejected exactly as before.
+	if req.CoreTeam != nil {
+		newTeam := deduplicateStrings(*req.CoreTeam)
+		existingMembers := make(map[string]struct{}, len(ws.CoreTeam))
+		for _, memberID := range ws.CoreTeam {
+			existingMembers[memberID] = struct{}{}
+		}
+		var introduced []string
+		for _, memberID := range newTeam {
+			if _, alreadyMember := existingMembers[memberID]; !alreadyMember {
+				introduced = append(introduced, memberID)
+			}
+		}
+		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), introduced); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
 	}
 
 	// HIGH-2: sessionsCreated tracks heartbeat sessions minted this request so
@@ -1400,6 +1428,53 @@ func validateCoreTeamMembers(cfg *config.Config, coreTeam []string) error {
 		}
 	}
 	return nil
+}
+
+// RepairDanglingCoreTeamMembers is the first-class "drop dangling members"
+// repair operation ADR-054 D6 rule 3 requires: an explicit way to clean up a
+// core_team whose members no longer all resolve to a registered agent,
+// without hand-editing the workspace's JSON file. It is the counterpart to
+// validateCoreTeamMembers' reject-on-write behavior — where that function
+// stops a write from INTRODUCING a dangling reference, this function
+// removes ones that already got in (e.g. a workspace hand-edited outside the
+// API, or created before this write path existed).
+//
+// Only true dangling references — an id with no matching entry in
+// cfg.Agents.List at all — are dropped. A member id that resolves but is a
+// System Agent (which validateCoreTeamMembers separately rejects on write) is
+// NOT touched here: it is not "dangling" (the agent exists), so silently
+// removing it would be a different, unrelated correction this operation does
+// not claim to make. repaired preserves the original member order; dropped
+// lists exactly which ids were removed (also in original order) so the
+// caller can report/log/audit what changed. A nil/empty coreTeam, or a nil
+// cfg (nothing to resolve against), returns the input unchanged with a nil
+// dropped slice.
+//
+// Wiring a REST endpoint around this function (contract-first per
+// Constraint #8: a new wire shape needs an openapi.yaml schema + regenerated
+// types before any handler can use it) is left to the wave that owns the
+// REST conversion — this function is the tested, ready-to-call primitive
+// that endpoint would call.
+func RepairDanglingCoreTeamMembers(cfg *config.Config, coreTeam []string) (repaired []string, dropped []string) {
+	if len(coreTeam) == 0 {
+		return coreTeam, nil
+	}
+	if cfg == nil {
+		return nil, append([]string(nil), coreTeam...)
+	}
+	registered := make(map[string]struct{}, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		registered[cfg.Agents.List[i].ID] = struct{}{}
+	}
+	repaired = make([]string, 0, len(coreTeam))
+	for _, id := range coreTeam {
+		if _, ok := registered[id]; ok {
+			repaired = append(repaired, id)
+		} else {
+			dropped = append(dropped, id)
+		}
+	}
+	return repaired, dropped
 }
 
 // unbindChannelInstancesForWorkspace disables and unbinds every channel instance

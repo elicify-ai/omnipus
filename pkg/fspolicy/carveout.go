@@ -7,9 +7,21 @@ import (
 
 // buildCarveOuts returns the fixed, $OMNIPUS_HOME-anchored carve-out roots
 // that are always denied regardless of scope (FR-017): the master key file,
-// the encrypted credential store, and the whole agents/ and workspaces/
-// subtrees. These are whole-subtree roots — never enumerated per agent id or
-// workspace id.
+// the encrypted credential store, and the whole agents/, workspaces/, and
+// entities/ subtrees. These are whole-subtree roots — never enumerated per
+// agent id or workspace id.
+//
+// entities/ (ADR-054 D2/D4, added 2026-07-25) holds the per-entity JSON
+// records pkg/entity persists (starting with entities/agents/<id>.json — the
+// AgentConfig record split out of config.json). This carve-out is CRITICAL
+// and non-negotiable: an AgentConfig record carries the Constraint #6 tool-
+// policy map, Locked, and Default. Without entities/ on this list, an agent
+// running under FSScopeUnrestricted could rewrite EVERY agent's security
+// record directly — granting itself every tool, clearing Locked, or setting
+// Default:true to hijack routing — which is strictly worse than the
+// agents/-only carve-out this replaces (that at least shielded other
+// agents' directories). See ADR-054 §4 ("MANDATORY — entities must be added
+// to the carve-out list").
 //
 // omnipusHome MUST already be an absolute, realpath'd location; the caller,
 // EffectiveFSPolicy, resolves it before calling this.
@@ -19,6 +31,7 @@ func buildCarveOuts(omnipusHome string) []string {
 		filepath.Join(omnipusHome, "credentials.json"),
 		filepath.Join(omnipusHome, "agents"),
 		filepath.Join(omnipusHome, "workspaces"),
+		filepath.Join(omnipusHome, "entities"),
 	}
 }
 

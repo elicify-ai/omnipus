@@ -38,10 +38,41 @@ import (
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/run"
 	stopcmd "github.com/elicify-ai/omnipus/cmd/omnipus/internal/stop"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/version"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
 )
+
+// loadConfigWithAgents loads config.json AND repopulates cfg.Agents.List from
+// the agent store (ADR-054 D2/D3: agents are per-entity records under
+// entities/agents/<id>.json now, not config.json's agents.list — config.
+// LoadConfig strips any legacy agents.list content on every load,
+// legacy_agents_list.go — so every CLI call site that reads cfg.Agents.List
+// must go through this instead of a bare config.LoadConfig).
+//
+// homePath is threaded through explicitly rather than derived from cfg (e.g.
+// agent.LoadAgentRosterFromEntityStore's filepath.Dir(cfg.AgentHomeBasePath())
+// derivation) — that derivation assumes Agents.Defaults.Home is always
+// exactly <home>/workspace, which does not hold for every fixture/config
+// shape and was verified (2026-07-25) to silently point at the wrong
+// directory in several pkg/gateway test fixtures once swapped in. Best-effort:
+// a store-list failure only logs — an empty roster degrades to "no agents
+// configured" (an existing, already-handled CLI case) rather than aborting.
+func loadConfigWithAgents(configPath, homePath string) (*config.Config, error) {
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil, err
+	}
+	agents, skipped, listErr := agentstore.New(homePath).List()
+	if listErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not list agent entity records: %v\n", listErr)
+		return cfg, nil
+	}
+	cfg.Agents.List = agents
+	cfg.SkippedAgentIDs = skipped
+	return cfg, nil
+}
 
 // rosterLine describes a single chat-target agent for the no-args listing.
 type rosterLine struct {
@@ -415,7 +446,7 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 
 			// 0 args → print roster + usage (FR-008/US-6).
 			if len(args) == 0 {
-				cfg, loadErr := config.LoadConfig(configPath)
+				cfg, loadErr := loadConfigWithAgents(configPath, home)
 				if loadErr != nil {
 					fmt.Fprintln(os.Stderr, "error: failed to load config:", loadErr)
 					os.Exit(1)
@@ -459,7 +490,7 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 			}
 
 			// Load config to validate the agent.
-			cfg, loadErr := config.LoadConfig(configPath)
+			cfg, loadErr := loadConfigWithAgents(configPath, home)
 			if loadErr != nil {
 				fmt.Fprintln(os.Stderr, "error: failed to load config:", loadErr)
 				os.Exit(1)

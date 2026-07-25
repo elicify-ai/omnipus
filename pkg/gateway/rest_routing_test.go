@@ -23,10 +23,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
+
+// seedRoutingAgentEntities persists a matching agentstore entity record for
+// every agent in agents (ADR-054: agents are per-entity records under
+// entities/agents/<id>.json, not config.json's agents.list — config.LoadConfig
+// unconditionally strips any agents.list content it finds on disk,
+// pkg/config/legacy_agents_list.go). updateAgent and setChannelRouting persist
+// via updateConfigJSONLocked, which UNCONDITIONALLY calls
+// refreshConfigAndRewireServices after every successful write — this
+// *replaces cfg.Agents.List wholesale* with agentstore.New(homePath).List()
+// (populateAgentsListFromEntityStore, pkg/gateway/gateway.go). So after the
+// FIRST write in a test, any fixture agent that exists only in the in-memory
+// cfg.Agents.List literal — never a real entity record — vanishes from the
+// live config. Every fixture in this file therefore seeds a matching entity
+// record for each agent it registers, in addition to the in-memory
+// cfg.Agents.List literal passed to mustAgentLoop (still needed for the
+// AgentRegistry's initial construction and for any read that happens before
+// the first write).
+func seedRoutingAgentEntities(t *testing.T, homePath string, agents []config.AgentConfig) {
+	t.Helper()
+	store := agentstore.New(homePath)
+	for _, a := range agents {
+		rec := a
+		require.NoError(t, store.Create(rec.ID, &rec))
+	}
+}
+
+// marshalConfigForDisk marshals cfg to JSON with agents.list stripped out —
+// config.json on disk carries no agent data at all now (ADR-054); a raw JSON
+// round-trip avoids copying config.Config's embedded sync.RWMutex the way a
+// plain `diskCfg := *cfg` struct-copy would (correctly flagged by `go vet`
+// as "assignment copies lock value").
+func marshalConfigForDisk(t *testing.T, cfg *config.Config) []byte {
+	t.Helper()
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	if agents, ok := m["agents"].(map[string]any); ok {
+		delete(agents, "list")
+	}
+	out, err := json.Marshal(m)
+	require.NoError(t, err)
+	return out
+}
 
 // newRoutingTestAPI creates a restAPI with two custom agents and a minimal config.json
 // suitable for the routing/default-flag tests. agentA starts as default=true,
@@ -54,13 +99,16 @@ func newRoutingTestAPI(t *testing.T) (*restAPI, string) {
 		},
 	}
 
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+	// config.json on disk carries no agents.list content (ADR-054) — a
+	// stale, misleading shape would just be silently stripped on the next
+	// load anyway.
+	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 	return api, cfgPath
 }
 
@@ -187,13 +235,12 @@ func TestUpdateAgent_RejectsWorkerAsDefault(t *testing.T) {
 			},
 		},
 	}
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/worker", strings.NewReader(`{"default": true}`))
@@ -231,13 +278,12 @@ func newChannelRoutingTestAPI(t *testing.T) (*restAPI, string) {
 		},
 	}
 
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 	return api, cfgPath
 }
 
@@ -464,13 +510,12 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 			},
 		},
 	}
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	// Worker target → 400.
 	w := httptest.NewRecorder()
@@ -587,15 +632,18 @@ func TestChannelRouting_PutReplaceExistingBinding(t *testing.T) {
 // after PUT /api/v1/agents/{id} with {default:true}, re-reading config.json from disk
 // must show EXACTLY ONE agent with "default":true.
 //
-// BDD: Given agent-a is default=true and agent-b is default=false in config.json,
+// BDD: Given agent-a is default=true and agent-b is default=false persisted
+// as entity records,
 //
 //	When PUT /api/v1/agents/agent-b with {"default": true},
-//	Then re-reading config.json from disk shows exactly one agent has "default":true,
+//	Then re-reading the agent store shows exactly one agent has "default":true,
 //	And that agent is agent-b.
 //
-// Traces to: sprint/258-jun-2026 — updateAgent single-default invariant, disk-level.
+// Traces to: sprint/258-jun-2026 — updateAgent single-default invariant,
+// disk-level. ADR-054: the durable source is now each agent's own entity
+// record under entities/agents/<id>.json, not config.json's agents.list.
 func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
-	api, cfgPath := newRoutingTestAPI(t)
+	api, _ := newRoutingTestAPI(t)
 
 	body := `{"default": true}`
 	w := httptest.NewRecorder()
@@ -603,22 +651,19 @@ func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "PUT agent-b default=true must succeed")
 
-	// Re-read config.json from disk.
-	raw, err := os.ReadFile(cfgPath)
+	// Re-read the persisted entity records.
+	agents, _, err := agentstore.New(api.homePath).List()
 	require.NoError(t, err)
-
-	var diskCfg config.Config
-	require.NoError(t, json.Unmarshal(raw, &diskCfg))
 
 	defaultCount := 0
 	defaultAgentID := ""
-	for _, a := range diskCfg.Agents.List {
+	for _, a := range agents {
 		if a.Default {
 			defaultCount++
 			defaultAgentID = a.ID
 		}
 	}
-	assert.Equal(t, 1, defaultCount, "exactly one agent must have default=true on disk")
+	assert.Equal(t, 1, defaultCount, "exactly one agent must have default=true across entity records")
 	assert.Equal(t, "agent-b", defaultAgentID, "agent-b must be the default agent on disk")
 }
 
@@ -628,12 +673,16 @@ func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
 // BDD: Given agent-a is already default=true,
 //
 //	When PUT /api/v1/agents/agent-a with {"default": true} again,
-//	Then config.json on disk still has exactly one agent with default=true,
+//	Then the persisted entity records still show exactly one agent with
+//	default=true,
 //	And that agent is still agent-a (idempotent).
 //
-// Traces to: sprint/258-jun-2026 — updateAgent single-default invariant, idempotent case.
+// Traces to: sprint/258-jun-2026 — updateAgent single-default invariant,
+// idempotent case. ADR-054: the durable source is now each agent's own
+// entity record under entities/agents/<id>.json, not config.json's
+// agents.list.
 func TestUpdateAgent_IdempotentDefault(t *testing.T) {
-	api, cfgPath := newRoutingTestAPI(t)
+	api, _ := newRoutingTestAPI(t)
 
 	// agent-a is already default=true in newRoutingTestAPI.
 	body := `{"default": true}`
@@ -642,23 +691,20 @@ func TestUpdateAgent_IdempotentDefault(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "PUT agent-a default=true (already default) must succeed")
 
-	// Re-read config.json from disk.
-	raw, err := os.ReadFile(cfgPath)
+	// Re-read the persisted entity records.
+	agents, _, err := agentstore.New(api.homePath).List()
 	require.NoError(t, err)
-
-	var diskCfg config.Config
-	require.NoError(t, json.Unmarshal(raw, &diskCfg))
 
 	defaultCount := 0
 	defaultAgentID := ""
-	for _, a := range diskCfg.Agents.List {
+	for _, a := range agents {
 		if a.Default {
 			defaultCount++
 			defaultAgentID = a.ID
 		}
 	}
 	// Must still be exactly one default — not zero (cleared) and not two (doubled).
-	assert.Equal(t, 1, defaultCount, "idempotent PUT must keep exactly one default on disk")
+	assert.Equal(t, 1, defaultCount, "idempotent PUT must keep exactly one default across entity records")
 	assert.Equal(t, "agent-a", defaultAgentID, "agent-a must remain the default agent on disk")
 }
 
@@ -753,13 +799,12 @@ func TestChannelRouting_BindingWinsOverNoGlobalDefault(t *testing.T) {
 		},
 	}
 
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	// Create a channel binding.
 	body := `{"default_agent_id": "bot-agent"}`

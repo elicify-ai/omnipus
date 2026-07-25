@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -70,6 +71,32 @@ func newSeededJudgeAPI(t *testing.T) *restAPI {
 	// exact same production function here (not a re-implementation) is what
 	// lets TestSeedJudgeEagerSoul_* below prove the fresh-install fix works.
 	seedJudgeEagerSoul(cfg)
+
+	// ADR-054 D2: agents are per-entity records under entities/agents/<id>.json,
+	// not config.json's agents.list. coreagent.SeedConfig only populates the
+	// in-memory cfg.Agents.List (still needed as-is for agent.NewAgentLoop /
+	// AgentRegistry construction below) — it does NOT persist anything to the
+	// entity store. But updateAgent's write path (rest.go's
+	// withToolPolicyCoverageGuard persist closure) always does a real
+	// agentstore.Update(id, ...) read-modify-write, and any request touching
+	// req.Soul triggers a.agentLoop.TriggerReload(), which reloads config.json
+	// from disk (stripping any legacy agents.list per legacy_agents_list.go)
+	// and then repopulates cfg.Agents.List FROM THE ENTITY STORE
+	// (populateAgentsListFromEntityStore/populateAgentsListFromStore). Without
+	// a real on-disk entity record for every seeded agent, that Update call
+	// 404s ("agent no longer exists") and/or the post-reload roster comes back
+	// empty of every agent this fixture just seeded — reproduced live: prior
+	// to this fix, TestUpdateAgent_JudgeSoulEditable and
+	// TestUpdateAgent_JudgeSoulSurvivesReseed both failed with exactly that
+	// 404. Persist every seeded agent (mia/jim/ava/ray/judge/…) as a real
+	// entity file so both the Update and the post-reload re-population see
+	// the same roster this fixture built in memory.
+	store := agentstore.New(tmpDir)
+	for i := range cfg.Agents.List {
+		ac := cfg.Agents.List[i]
+		require.NoError(t, store.Create(ac.ID, &ac), "seed agentstore entity record for %q", ac.ID)
+	}
+
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))

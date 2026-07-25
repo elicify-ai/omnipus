@@ -310,62 +310,19 @@ func emitOrStderr(auditLog AuditEmitter, event, severity string, fields map[stri
 	fmt.Fprintln(os.Stderr, sb.String())
 }
 
-// RepairMultipleDefaults enforces the invariant that at most one agent in
-// cfg.Agents.List may carry Default==true. If more than one is found, all but
-// the first (in list order) have their Default flag cleared in-place, and a
-// structured warning is logged so operators can detect and fix their config.
-//
-// Called during load-time validation so that operator-edited configs are
-// repaired automatically rather than producing undefined GetDefaultAgent
-// behavior at runtime. The PUT path separately enforces at-most-one, but
-// configs written outside the API (hand-edited JSON) bypass that guard.
-//
-// This function mutates cfg.Agents.List in-place. It is idempotent: calling
-// it on an already-valid config is a no-op.
-func RepairMultipleDefaults(cfg *Config) {
-	if cfg == nil {
-		return
-	}
-	// Worker agents can never be the routing default — they are not chat targets
-	// (invoked only via delegation). Clear Default on any worker UNCONDITIONALLY,
-	// even when it is the sole default, before the at-most-one repair runs. A
-	// hand-edited config that marked a worker default would otherwise survive the
-	// len<=1 short-circuit below and brick routing.
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].IsWorker() && cfg.Agents.List[i].Default {
-			slog.Warn("config: worker agent marked Default=true; clearing (workers are never the routing default)",
-				"agent_id", cfg.Agents.List[i].ID)
-			cfg.Agents.List[i].Default = false
-		}
-	}
-	// Collect indices of agents marked as default, sorted by list position
-	// for deterministic "keep first" behavior.
-	var defaultIdxs []int
-	for i, a := range cfg.Agents.List {
-		if a.Default {
-			defaultIdxs = append(defaultIdxs, i)
-		}
-	}
-	if len(defaultIdxs) <= 1 {
-		return // zero or one default — invariant already satisfied
-	}
-	// Sort is redundant (we iterated in order) but makes the invariant
-	// explicit and safe against future refactors.
-	sort.Ints(defaultIdxs)
-
-	// Collect the IDs of agents being demoted for the warning message.
-	demotedIDs := make([]string, 0, len(defaultIdxs)-1)
-	for _, idx := range defaultIdxs[1:] {
-		demotedIDs = append(demotedIDs, cfg.Agents.List[idx].ID)
-		cfg.Agents.List[idx].Default = false
-	}
-
-	slog.Warn("config: multiple agents have Default=true; keeping first, clearing rest",
-		"kept_agent_id", cfg.Agents.List[defaultIdxs[0]].ID,
-		"cleared_agent_ids", demotedIDs,
-		"total_defaults_found", len(defaultIdxs),
-	)
-}
+// NOTE (ADR-054 D6.4): RepairMultipleDefaults used to live here — it enforced
+// an at-most-one AgentConfig.Default==true invariant across cfg.Agents.List,
+// called from loadConfigInternal (F11). It is retired, not merely renamed:
+// once agents split into independent per-entity files, "at most one
+// Default==true" is no longer an invariant anything needs enforced, because
+// nothing resolves the routing default from that per-entity field anymore —
+// AgentRegistry.GetDefaultAgent and RouteResolver.resolveDefaultAgentID both
+// consult only the settings singleton (Agents.Defaults.DefaultAgentID) now.
+// A per-entity bool could never be a sound at-most-one singleton once two
+// different agents' files can be written concurrently with no shared lock
+// (each write's delta is individually valid, the composition — two "the
+// defaults" — is not); moving the signal to a single settings string removes
+// the invariant instead of needing a new cross-entity lock to guard it.
 
 // RepairStaleChannelWildcardBindings enforces the ADR-029 FR-029 two-representation
 // rule: a channel instance persists routing EITHER as cfg.Channels[id].{WorkspaceID,

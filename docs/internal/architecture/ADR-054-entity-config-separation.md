@@ -1,6 +1,8 @@
 # ADR-054: Entity / config separation — per-entity files for agents
 
-- **Status:** Proposed — **v3**, after TWO adversarial reviews (v1: REVISE/4 CRITICAL; v2: REVISE/3 CRITICAL)
+- **Status:** **Accepted (v3)** — after two adversarial reviews (v1: REVISE/4
+  CRITICAL; v2: REVISE/3 CRITICAL). The three residual questions are decided in
+  §0 below; all three are reversible and scoped conservatively.
 - **Date:** 2026-07-25
 - **Deciders:** Operator (Daniel Piatkowski); Albert (architecture)
 - **Supersedes:** Nothing. This is a new decision.
@@ -9,6 +11,41 @@
   operator has locked the same posture here.
 - **Evidence level (highest used):** 1 (operator-locked constraints) +
   codebase `[FACT]` grounding gathered 2026-07-25.
+
+---
+
+## 0. The three residual decisions (closing v3)
+
+**R1 — SCOPE: agents only. `channels` and `providers` stay in `config.json`.**
+The operator's requirement is *"every agent should be its own file"*. `providers`
+has **no identity field** (`ModelConfig` has only the renameable `ModelName`,
+`config.go:2409-2450`) so `providers/<id>.json` is not implementable without
+inventing one; `channels` is a map, operator-written and cold. Neither is a hot
+parallel-write path — agents are. **Narrowing to agents removes two unimplementable
+sub-designs and shrinks the blast radius of a no-migration change.** If either
+later becomes hot, it follows the same pattern. Confidence: **High**.
+
+**R2 — `bindings`, `mailboxes`, `channel_policies` remain SETTINGS.**
+All three are keyed-by-agent *maps*, not independently-addressable records with
+their own lifecycle — they describe how the system routes to and provisions for
+agents. They are the agent foreign-key surface D6 governs (a dangling agent id in
+any of them is a dangling reference, repaired per D6 rules 1-3/5), but they are
+not themselves entities. `mailboxes` additionally carries `password_ref`
+credential keys, so moving it out of `Config` would silently shrink the
+`collectSensitive` redaction walk (`security.go:110-167`) — an argument to leave
+it in place. Confidence: **High**.
+
+**R3 — an unparseable DEFAULT agent record degrades, it does not black-hole
+traffic.** D7's fail-closed rule applies to a **binding naming a skipped agent**,
+because re-routing that to Mia is a *privilege change*. The global default is a
+different case: it is an availability floor, not a privilege grant. If the record
+named by `default_agent_id` is unparseable, resolution continues down the existing
+ladder (`registry.go:241-280`) and the system is marked **degraded** in `/health`
+with an ERROR log. Rationale: fail-closed here means one corrupt file drops ALL
+inbound traffic with no in-product repair — strictly worse than routing to a
+working agent and saying so loudly. Confidence: **Medium** — this is an
+availability-vs-strictness call and is the one an operator may wish to invert;
+it is a single branch to flip.
 
 ---
 

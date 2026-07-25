@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -58,6 +59,24 @@ func newJudgeRosterAPI(t *testing.T) *restAPI {
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+
+	// ADR-054 D2: agents are per-entity records under entities/agents/<id>.json,
+	// not config.json's agents.list. This fixture's cfg.Agents.List splice
+	// above is still the correct, legitimate way to seed the in-memory roster
+	// agent.NewAgentLoop/AgentRegistry read at construction time (mirrors
+	// rest_mailbox_test.go's newMailboxTestAPI) — but any handler write path
+	// that reaches rest.go's withToolPolicyCoverageGuard persist closure does
+	// a REAL agentstore.Update(id, ...) read-modify-write against
+	// entities/agents/<id>.json, which 404s ("agent no longer exists") if no
+	// entity record exists on disk. Reproduced live: TestAgents_JudgeRubricAbsent's
+	// "stray rubric field" sub-test (a PUT with no recognized fields at all,
+	// against "mia") failed with exactly that 404 before this fixture also
+	// persisted a matching entity record for every seeded agent.
+	store := agentstore.New(tmpDir)
+	for i := range cfg.Agents.List {
+		ac := cfg.Agents.List[i]
+		require.NoError(t, store.Create(ac.ID, &ac), "seed agentstore entity record for %q", ac.ID)
+	}
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	return &restAPI{

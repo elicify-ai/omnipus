@@ -18,6 +18,8 @@ package coreagent
 import (
 	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -1063,6 +1065,11 @@ func intPtr(v int) *int { return &v }
 // (nil, defaults to true) from an explicit false.
 func boolPtr(v bool) *bool { return &v }
 
+// timePtr returns a pointer to v. Used to set AgentConfig.CreatedAt in seeds
+// (ADR-054 D2) — a pointer is required to distinguish "never set" (nil, a
+// pre-ADR-054 record) from a genuinely-zero timestamp, mirroring UpdatedAt.
+func timePtr(v time.Time) *time.Time { return &v }
+
 // SeedDelegationEdges returns the seeded canonical delegation policy for a
 // core agent ID (ADR-037, Wave 2). AgentConfig.DelegationPolicy — the field
 // this used to be copied onto at boot — has been removed entirely; the
@@ -1078,6 +1085,22 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 	return coreAgentDelegation(id)
 }
 
+// seedMu owns SeedConfig's read-all-then-append sequence (ADR-054 D6 rule 4,
+// M-7). SeedConfig builds an `existing` set from the current roster, then
+// appends any missing core agent — with no lock, two concurrent callers (e.g.
+// a boot racing a hot-reload re-seed, or two goroutines in a test) can each
+// observe "Mia missing" and both append her, leaving two "mia" entries.
+// Today's only production call site (pkg/gateway's boot sequence) invokes
+// SeedConfig once, single-threaded, before serving traffic — so this is a
+// defense-in-depth close of the race the ADR named, not a fix for an observed
+// double-seed in production. This is an IN-PROCESS mutex only; it does not
+// protect against two separate OS processes racing the same config.json —
+// that is the cross-process pidfile/lockfile concern D3/D4 assign elsewhere
+// (pkg/entity, out of this package's scope).
+//
+//nolint:gochecknoglobals
+var seedMu sync.Mutex
+
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
 // and with the correct constructor-seeded tool policy (FR-010, FR-022).
 //
@@ -1088,6 +1111,9 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 //
 // Returns true if config was modified (caller should save).
 func SeedConfig(cfg *config.Config) bool {
+	seedMu.Lock()
+	defer seedMu.Unlock()
+
 	existing := make(map[string]bool, len(cfg.Agents.List))
 	for _, a := range cfg.Agents.List {
 		existing[a.ID] = true
@@ -1230,6 +1256,7 @@ func SeedConfig(cfg *config.Config) bool {
 			Type:        agentType,
 			Locked:      true,
 			Default:     isDefault,
+			CreatedAt:   timePtr(time.Now().UTC()),
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
 			Skills: coreAgentSkills(ca.ID),
@@ -1303,6 +1330,7 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				Type:        config.AgentTypeSystem,
 				Locked:      true,
 				Default:     false,
+				CreatedAt:   timePtr(time.Now().UTC()),
 				// ADR-052 FR-039: a verifier-role agent's evidence-in →
 				// verdict-out mapping must be reproducible and impartial —
 				// injected episodic memory would otherwise let the SAME

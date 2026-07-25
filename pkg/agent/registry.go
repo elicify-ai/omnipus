@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
@@ -24,6 +26,13 @@ type AgentRegistry struct {
 	resolver             *routing.RouteResolver
 	mu                   sync.RWMutex
 	defaultAgentOverride string // from config.Agents.Defaults.DefaultAgentID
+
+	// degraded/degradedReason back MarkDefaultAgentDegraded/DefaultAgentDegraded
+	// (ADR-054 R3): set when the configured default agent's entity record
+	// exists but failed to load. Never gates GetDefaultAgent's own fallback
+	// ladder — purely a health-surface signal.
+	degraded       bool
+	degradedReason string
 }
 
 // SetDefaultAgentOverride sets the agent ID to use as the default agent.
@@ -228,50 +237,47 @@ func (r *AgentRegistry) Close() {
 
 // GetDefaultAgent returns the default agent instance.
 //
-// Resolution order (canonical — matches channel routing's resolveDefaultAgentID):
-//  1. An agent whose config has Default==true (the per-agent routing-default
-//     flag set by SeedConfig / the Agents-screen "star"). Deterministic: if
-//     multiple agents somehow carry Default==true (operator error — F11 repairs
-//     this at boot), the one with the lexicographically smallest ID wins.
-//  2. The configurable override from config.Agents.Defaults.DefaultAgentID,
-//     when the named agent exists in the registry and is not a worker.
-//  3. The built-in "main" sentinel agent, when it is not a worker.
-//  4. The lexicographically first registered non-worker agent (deterministic
+// Resolution order (canonical — matches channel routing's resolveDefaultAgentID).
+// ADR-054 D6.4 removed the old Priority 1 ("an agent whose AgentConfig.Default
+// field is true"): splitting agents into independent per-entity files means two
+// concurrent writes to two DIFFERENT agents could each set Default=true with no
+// shared lock to serialize them — each write's delta is individually valid, but
+// the composition (two "the" defaults) is not. Rather than inventing a new
+// cross-entity lock for a single bool, the default pointer moved OUT of the
+// entity entirely and into the settings singleton below, which cannot have this
+// problem: there is exactly one string field, guarded by the existing
+// config-write lock, so "two winners" is structurally impossible. What remains:
+//  1. The configurable override from config.Agents.Defaults.DefaultAgentID
+//     (settings, not an entity field), when the named agent exists in the
+//     registry and is not a worker. R3: if the named agent does NOT exist here
+//     — because it was never configured, OR because its entity record failed
+//     to load (skipped at boot) — resolution falls through to priority 2/3
+//     rather than black-holing traffic; callers that also have the `skipped`
+//     set from agentstore.Store.List should call EvaluateDefaultAgentHealth so
+//     this case is surfaced as degraded rather than silently swallowed.
+//  2. The built-in "main" sentinel agent, when it is not a worker.
+//  3. The lexicographically first registered non-worker agent (deterministic
 //     fallback, M10). Workers are never chat targets, so every priority skips them.
 func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Priority 1: agent explicitly marked as the routing default.
-	// Collect all matching IDs and sort for deterministic selection when
-	// operator misconfiguration leaves multiple agents with Default==true.
-	var defaultIDs []string
-	for id, ag := range r.agents {
-		if ag.IsRoutingDefault {
-			defaultIDs = append(defaultIDs, id)
-		}
-	}
-	if len(defaultIDs) > 0 {
-		sort.Strings(defaultIDs)
-		return r.agents[defaultIDs[0]]
-	}
-
-	// Priority 2: explicit override from config.Agents.Defaults.DefaultAgentID.
+	// Priority 1: explicit override from config.Agents.Defaults.DefaultAgentID.
 	// A worker is never a chat target, so a hand-edited override pointing at one
-	// is skipped (defense in depth; consistent with the Priority-4 hardening).
+	// is skipped (defense in depth; consistent with the Priority-3 hardening).
 	if r.defaultAgentOverride != "" {
 		if agent, ok := r.agents[r.defaultAgentOverride]; ok && !agent.IsWorker() {
 			return agent
 		}
 	}
 
-	// Priority 3: the "main" built-in sentinel — unless it is somehow a worker
-	// (degenerate/tampered config), in which case fall through to Priority 4.
+	// Priority 2: the "main" built-in sentinel — unless it is somehow a worker
+	// (degenerate/tampered config), in which case fall through to Priority 3.
 	if agent, ok := r.agents[DefaultAgentID]; ok && !agent.IsWorker() {
 		return agent
 	}
 
-	// Priority 4: lexicographically first registered agent (M10) — but never a
+	// Priority 3: lexicographically first registered agent (M10) — but never a
 	// worker. Workers are not chat targets and must not be resolved as the
 	// default even in the last-resort fallback. Prefer the first non-worker; only
 	// if EVERY registered agent is a worker do we fall back to the first overall
@@ -291,4 +297,116 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		}
 	}
 	return r.agents[ids[0]]
+}
+
+// UpsertAgent inserts or replaces a single agent instance in the registry
+// in-place, without rebuilding the other N-1 agents (ADR-054 §5). Call this
+// after a pkg/agentstore write has been durably verified so routing/read
+// paths (GetAgent, ResolveRoute, GetDefaultAgent) observe the change on the
+// very next call — with zero additional disk I/O on the read side, since
+// they only ever consult this in-memory map under RLock.
+//
+// instance must already be fully constructed (NewAgentInstance plus any
+// shared-tool wiring the caller's environment requires) — this method only
+// performs the map swap under the registry's own write lock. It is the
+// caller's responsibility to keep shared-tool wiring (registerSharedTools,
+// tier1/3 deps, sysagent deps, delegation injectors, etc.) consistent for the
+// upserted instance; a full AgentLoop.ReloadProviderAndConfig remains the
+// correct choice whenever that broader re-wiring is required (e.g. a global
+// tool-policy change), and is unaffected by this method's existence.
+func (r *AgentRegistry) UpsertAgent(instance *AgentInstance) {
+	if instance == nil || instance.ID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id := routing.NormalizeAgentID(instance.ID)
+	r.agents[id] = instance
+}
+
+// RemoveAgent deletes a single agent instance from the registry (post
+// entity-delete, ADR-054 D6 rule 5). Reports whether an instance was present.
+// The DefaultAgentID ("main") sentinel is never removable through this path —
+// mirrors the reserved-ID protection NewAgentRegistry already applies to
+// custom/core agent registration.
+func (r *AgentRegistry) RemoveAgent(id string) bool {
+	normalized := routing.NormalizeAgentID(id)
+	if normalized == DefaultAgentID {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.agents[normalized]; !ok {
+		return false
+	}
+	delete(r.agents, normalized)
+	return true
+}
+
+// MarkDefaultAgentDegraded records that the configured default agent
+// (config.Agents.Defaults.DefaultAgentID) could not be resolved because its
+// backing entity record exists but failed to load (ADR-054 R3 / §0). This is
+// an AVAILABILITY signal, not a fail-closed gate: GetDefaultAgent has already
+// continued down the ladder (priority 2/3) by the time this is called, so
+// traffic is never black-holed by a single corrupt file — the degraded flag
+// exists purely so an operator can find out via /health (pkg/health.Server.
+// SetDegradedFunc expects exactly this method's signature) rather than
+// silently routing to a fallback agent forever. Idempotent; the most recent
+// reason wins. Call ClearDefaultAgentDegraded to reset after the record is
+// repaired and a reload has re-evaluated health.
+func (r *AgentRegistry) MarkDefaultAgentDegraded(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.degraded = true
+	r.degradedReason = reason
+	logger.ErrorCF("agent", "default agent entity record unparseable; system marked degraded (routing continues via fallback ladder, not black-holed)",
+		map[string]any{"reason": reason})
+}
+
+// ClearDefaultAgentDegraded resets the degraded flag set by
+// MarkDefaultAgentDegraded. Called after a reload confirms the configured
+// default agent now resolves cleanly.
+func (r *AgentRegistry) ClearDefaultAgentDegraded() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.degraded = false
+	r.degradedReason = ""
+}
+
+// DefaultAgentDegraded reports whether the default-agent resolution ladder is
+// currently degraded and why. Matches the func() (bool, string) shape
+// pkg/health.Server.SetDegradedFunc expects, so wiring this up at boot is a
+// one-line `healthServer.SetDegradedFunc(registry.DefaultAgentDegraded)`.
+func (r *AgentRegistry) DefaultAgentDegraded() (bool, string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.degraded, r.degradedReason
+}
+
+// EvaluateDefaultAgentHealth checks whether the configured default agent ID
+// (config.Agents.Defaults.DefaultAgentID) names an entity that was SKIPPED at
+// load time — i.e. its record exists on disk but failed to parse — as opposed
+// to simply being unconfigured or never created. Only the skipped case is
+// R3-degraded; an empty/unconfigured default or one that legitimately never
+// existed is ordinary, non-degraded operation (the ladder's priority 2/3
+// fallback handles it silently, by design).
+//
+// Callers should invoke this once after constructing/reloading a registry,
+// passing the `skipped` slice returned by agentstore.Store.List(), and wire
+// DefaultAgentDegraded to /health. Not calling this is safe (GetDefaultAgent's
+// behavior is unaffected either way) — it only affects whether the degraded
+// signal is ever raised.
+func (r *AgentRegistry) EvaluateDefaultAgentHealth(defaultAgentID string, skipped []string) {
+	defaultAgentID = strings.TrimSpace(defaultAgentID)
+	if defaultAgentID == "" {
+		return
+	}
+	normalizedDefault := routing.NormalizeAgentID(defaultAgentID)
+	for _, id := range skipped {
+		if routing.NormalizeAgentID(id) == normalizedDefault {
+			r.MarkDefaultAgentDegraded(fmt.Sprintf(
+				"configured default agent %q has an entity record that failed to load", defaultAgentID))
+			return
+		}
+	}
 }

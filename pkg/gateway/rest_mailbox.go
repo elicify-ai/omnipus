@@ -10,10 +10,12 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 )
 
 // buildMailboxes resolves the set of enabled, password-resolvable mailboxes from
@@ -381,7 +383,7 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// regression, the mirror image of the dead-mailbox bug this grant
 		// exists to fix (found live, silent-failure-hunter, 2026-07-06).
 		if req.Enabled && !wasEnabled {
-			grantEmailToolAllows(m, agentID)
+			grantEmailToolAllows(a.homePath, agentID)
 		}
 		return nil
 	}); err != nil {
@@ -613,8 +615,12 @@ var emailToolNames = []string{"read_inbox", "search_email", "read_message", "sen
 // grantEmailToolAllows fills in "allow" for the email tools in the agent's
 // builtin tool policy when a mailbox is enabled, treating a missing entry or
 // an explicit "deny" as fill-eligible, but never touching a tool already
-// "allow" or "ask". Operates on the raw config map inside a
-// safeUpdateConfigJSON write.
+// "allow" or "ask". ADR-054 D2/§11 checklist item 5: agents are per-entity
+// records under entities/agents/<id>.json, not config.json's agents.list —
+// this grants via the agent store instead of splicing the raw config map
+// that setAgentMailbox's safeUpdateConfigJSON closure operates on (that
+// closure's `m` is the MAILBOX config, a setting per ADR-054 R2 — this
+// function no longer touches it at all).
 //
 // Historical context: before the DefaultPolicy/default_policy fallback was
 // removed (CLAUDE.md hard constraint 6), an agent's builtin.policies map was
@@ -644,56 +650,46 @@ var emailToolNames = []string{"read_inbox", "search_email", "read_message", "sen
 // denyAllThenOverride baseline "deny" — so a persisted "ask" can only have
 // come from a deliberate operator action via the Tool Policies UI/API, which
 // this function must never override.
-func grantEmailToolAllows(m map[string]any, agentID string) {
-	agents, _ := m["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	for _, entry := range list {
-		ag, _ := entry.(map[string]any)
-		if ag == nil || ag["id"] != agentID {
-			continue
+func grantEmailToolAllows(homePath, agentID string) {
+	var granted []string
+	_, err := agentstore.New(homePath).Update(agentID, func(ag *config.AgentConfig) error {
+		if ag.Tools == nil {
+			ag.Tools = &config.AgentToolsCfg{}
 		}
-		toolsCfg, _ := ag["tools"].(map[string]any)
-		if toolsCfg == nil {
-			toolsCfg = map[string]any{}
-			ag["tools"] = toolsCfg
+		if ag.Tools.Builtin.Policies == nil {
+			ag.Tools.Builtin.Policies = map[string]config.ToolPolicy{}
 		}
-		builtin, _ := toolsCfg["builtin"].(map[string]any)
-		if builtin == nil {
-			builtin = map[string]any{}
-			toolsCfg["builtin"] = builtin
-		}
-		policies, _ := builtin["policies"].(map[string]any)
-		if policies == nil {
-			policies = map[string]any{}
-			builtin["policies"] = policies
-		}
-		granted := make([]string, 0, len(emailToolNames))
 		for _, name := range emailToolNames {
-			current, _ := policies[name].(string)
-			if current == "ask" || current == "allow" {
+			current := ag.Tools.Builtin.Policies[name]
+			if current == config.ToolPolicyAsk || current == config.ToolPolicyAllow {
 				continue // already permits, or a deliberate operator choice — leave it
 			}
-			policies[name] = "allow"
+			ag.Tools.Builtin.Policies[name] = config.ToolPolicyAllow
 			granted = append(granted, name)
 		}
-		if len(granted) > 0 {
-			slog.Info("mailbox: granted email tool allows (deny/missing email-tool policy, mailbox enabled)",
-				"agent_id", agentID, "tools", strings.Join(granted, ","))
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, entity.ErrNotFound) {
+			// The agentExists gate (called earlier in setAgentMailbox) already
+			// proved this agent is registered — reaching here means the agent
+			// store diverged from that check (e.g. concurrent delete). The
+			// mailbox will be saved Active but the email tools stay
+			// policy-hidden with no operator-visible signal, so this is an
+			// error, not a benign no-op.
+			slog.Error(
+				"mailbox: agent not found in agent store — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
+				"agent_id", agentID,
+			)
+			return
 		}
+		slog.Error("mailbox: could not grant email tool allows", "agent_id", agentID, "error", err)
 		return
 	}
-	// The agentExists gate (called earlier in setAgentMailbox) already proved
-	// this agent is registered — reaching here means agents.list in the raw
-	// config map diverged from that check (e.g. concurrent edit, or the
-	// registry/config-list fallback in agentExists found the agent somewhere
-	// this raw-map scan didn't). The mailbox will be saved Active but the
-	// email tools stay policy-hidden with no operator-visible signal, so this
-	// is an error, not a benign no-op.
-	slog.Error(
-		"mailbox: agent not found in agents.list — cannot grant email tool allows (mailbox will save Active but tools stay policy-hidden)",
-		"agent_id",
-		agentID,
-	)
+	if len(granted) > 0 {
+		slog.Info("mailbox: granted email tool allows (deny/missing email-tool policy, mailbox enabled)",
+			"agent_id", agentID, "tools", strings.Join(granted, ","))
+	}
 }
 
 // mailboxToWire converts a stored MailboxConfig to the Mailbox wire type. The

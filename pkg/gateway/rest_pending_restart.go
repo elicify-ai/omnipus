@@ -112,6 +112,12 @@ func (a *restAPI) HandlePendingRestart(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "failed to read persisted config")
 		return
 	}
+	// ADR-054 D2/D3: config.LoadConfig strips agents.list on every load
+	// (legacy_agents_list.go) — repopulate from the agent store so
+	// persistedCfg.Agents.List matches a.appliedConfig.Agents.List's shape
+	// (populated the same way at boot) and this diff never reports a phantom
+	// agents.list change on every single pending-restart check.
+	a.populateAgentsListFromStore(persistedCfg)
 	persistedCfg.Tools.ApplyWarmupTimeoutDefault()
 
 	persistedRaw, err := json.Marshal(persistedCfg)

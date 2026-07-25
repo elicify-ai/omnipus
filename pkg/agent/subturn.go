@@ -38,6 +38,12 @@ var (
 	ErrDepthLimitExceeded   = errors.New("sub-turn depth limit exceeded")
 	ErrInvalidSubTurnConfig = errors.New("invalid sub-turn config")
 	ErrConcurrencyTimeout   = errors.New("timeout waiting for concurrency slot")
+	// ErrDelegationTargetUnresolved is returned when SubTurnConfig.TargetAgentID
+	// names an agent that is not in the registry — deleted, renamed, or its
+	// entities/agents/<id>.json record failed to load (ADR-054 D7/§9). The
+	// sub-turn is aborted rather than silently falling back to the parent's
+	// own identity/tool policy (see spawnSubTurn's execSource resolution).
+	ErrDelegationTargetUnresolved = errors.New("subturn: delegation target agent not found")
 )
 
 // getSubTurnConfig returns the effective SubTurn configuration with defaults applied.
@@ -675,35 +681,32 @@ func spawnSubTurn(
 	// that delegating to this target was authorized (the workspace
 	// delegation-graph gate, enforced before spawnSubTurn is reached) — see
 	// the execSource construction below for the full field list this covers.
-	// Resolution is best-effort: an unresolvable target (deleted/renamed
-	// since delegation was configured, or self-delegation where
-	// TargetAgentID=="") falls back to baseAgent, so a sub-turn is never
-	// silently dropped — self-delegation trivially satisfies "inherit
-	// nothing from the parent" by being its own source.
+	//
+	// ADR-054 D7/§9 (REVISED — the earlier "best-effort fall back to
+	// baseAgent" posture is withdrawn): a named target that does not resolve
+	// — deleted, renamed since delegation was configured, or its
+	// entities/agents/<id>.json record failed to load — must ABORT the
+	// sub-turn, never substitute the parent's identity/tool policy. Falling
+	// back to baseAgent here was exactly the bug D7 named: execSource would
+	// then be the PARENT, and StoreToolPolicy(execSource.LoadToolPolicy())
+	// below would run the child with the PARENT's tool policy — inverting
+	// the entire reason to delegate to a distinct, possibly more-restricted
+	// worker. Self-delegation (cfg.TargetAgentID == "") is unaffected and
+	// still trivially uses baseAgent as its own source.
 	var targetAgent *AgentInstance
-	// FIX 3 (silent failure F1 / arch #5): when TargetAgentID is set but does
-	// not resolve (deleted/renamed delegate), the fallback below to the
-	// parent's own config must not be SILENT — the caller/LLM and the
-	// session/audit trail both need to learn a different agent ran than the
-	// one that was asked for. targetAgentUnresolved is only set in this
-	// branch, never for benign self-delegation (cfg.TargetAgentID == "").
-	var targetAgentUnresolved bool
-	var targetAgentFallbackWarning string
 	if cfg.TargetAgentID != "" {
 		if t, ok := al.registry.GetAgent(cfg.TargetAgentID); ok && t != nil {
 			targetAgent = t
 		} else {
-			targetAgentUnresolved = true
-			targetAgentFallbackWarning = fmt.Sprintf(
-				"[delegation warning: target agent %q was not found; ran with the parent's own configuration instead] ",
-				cfg.TargetAgentID)
 			slog.Warn(
-				"subturn: target agent not found in registry; dispatch falls back to parent's own executor config",
+				"subturn: target agent not found in registry; aborting sub-turn "+
+					"(ADR-054 D7 — never falls back to the parent's identity/tool policy)",
 				"target_agent_id",
 				cfg.TargetAgentID,
 				"parent_id",
 				parentTS.turnID,
 			)
+			return nil, fmt.Errorf("%w: %q", ErrDelegationTargetUnresolved, cfg.TargetAgentID)
 		}
 	}
 	execSource := baseAgent
@@ -796,7 +799,6 @@ func spawnSubTurn(
 		LightCandidates:           execSource.LightCandidates,
 		LightProvider:             execSource.LightProvider,
 		AgentType:                 execSource.AgentType,
-		IsRoutingDefault:          execSource.IsRoutingDefault,
 	}
 	// providerPool is tied to the SAME Candidates it was built for — now that
 	// Candidates is execSource's own (above), the pool must match, or
@@ -989,28 +991,6 @@ func spawnSubTurn(
 	// carry the parent spawn's ToolCall.ID as ParentSpawnCallID.
 	childTS.parentSpawnCallID = parentSpawnCallID
 
-	// FIX 3 (silent failure F1 / arch #5): surface the target-resolution
-	// fallback in the session/audit trail — not just the process-log
-	// slog.Warn above — using the same EventKindError + appendErrorTranscript
-	// pair the LLM-call-error and rate-limit paths already use (loop.go
-	// ~965-991, ~6188-6200), so a session replay after page reload still
-	// shows the anomaly. The ToolResult.ForLLM prefix (surfacing it to the
-	// delegating caller/LLM) is applied uniformly for every return path in
-	// the cleanup defer below.
-	if targetAgentUnresolved {
-		al.emitEvent(
-			EventKindError,
-			childTS.eventMeta("spawnSubTurn", "subturn.delegation_fallback"),
-			ErrorPayload{
-				Stage:   "subturn_delegation",
-				Message: strings.TrimSpace(targetAgentFallbackWarning),
-			},
-		)
-		childTS.appendErrorTranscript(
-			EventKindError.String(), "spawnSubTurn", strings.TrimSpace(targetAgentFallbackWarning),
-		)
-	}
-
 	// Token budget initialization/inheritance
 	// If InitialTokenBudget is explicitly provided (e.g., by team tool), use it.
 	// Otherwise, inherit from parent's tokenBudget (for nested SubTurns).
@@ -1093,14 +1073,6 @@ func spawnSubTurn(
 				"panic", fmt.Sprintf("%v", r),
 				"stack", string(debug.Stack()),
 			)
-		}
-
-		// FIX 3 (silent failure F1 / arch #5): prefix the delegation-fallback
-		// warning onto ForLLM for every return path (dispatch-reject, external-cli,
-		// native, and the async-delivered copy below) — one insertion point so the
-		// caller/LLM sees it regardless of which branch produced the result.
-		if targetAgentUnresolved && result != nil {
-			result.ForLLM = targetAgentFallbackWarning + result.ForLLM
 		}
 
 		// Result Delivery Strategy (Async vs Sync)

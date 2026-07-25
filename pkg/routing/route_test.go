@@ -261,7 +261,113 @@ func TestResolveRoute_InvalidAgentFallsToDefault(t *testing.T) {
 	}
 }
 
+// TestResolveRoute_SkippedAgentFailsClosed pins ADR-054 D7/§9: a binding
+// naming an agent whose entity record EXISTS but failed to load (recorded in
+// cfg.SkippedAgentIDs by the agent registry after agentstore.Store.List)
+// must fail closed — Drop the route — rather than falling back to the
+// default agent. Re-routing a binding that was deliberately pointed at a
+// specific, possibly more-restrictive agent to the default is a privilege
+// change, not availability graceful degradation (unlike
+// TestResolveRoute_InvalidAgentFallsToDefault's "never existed" case, which
+// keeps the pre-ADR-054 WARN + default-fallback behavior unchanged).
+func TestResolveRoute_SkippedAgentFailsClosed(t *testing.T) {
+	agents := []config.AgentConfig{
+		{ID: "main", Default: true},
+	}
+	bindings := []config.AgentBinding{
+		{
+			AgentID: "restricted-worker",
+			Match: config.BindingMatch{
+				Channel:   "telegram",
+				AccountID: "*",
+			},
+		},
+	}
+	cfg := testConfig(agents, bindings)
+	cfg.SkippedAgentIDs = []string{"restricted-worker"}
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "telegram",
+	})
+
+	if !route.Drop {
+		t.Fatalf("Drop = false, want true — a binding naming a skipped agent must fail closed, not re-route to %q", route.AgentID)
+	}
+	if route.AgentID != "" {
+		t.Errorf("AgentID = %q, want empty on a dropped route", route.AgentID)
+	}
+	if route.MatchedBy != "binding.channel" {
+		t.Errorf("MatchedBy = %q, want the binding rule that matched (binding.channel)", route.MatchedBy)
+	}
+}
+
+// TestResolveRoute_SkippedAgentDoesNotAffectUnrelatedBindings proves the
+// skipped-ID check is scoped to the specific requested agent, not a global
+// kill switch: a DIFFERENT binding naming a healthy, loaded agent must still
+// route normally even while some OTHER agent is recorded as skipped.
+func TestResolveRoute_SkippedAgentDoesNotAffectUnrelatedBindings(t *testing.T) {
+	agents := []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "healthy-worker"},
+	}
+	bindings := []config.AgentBinding{
+		{
+			AgentID: "healthy-worker",
+			Match: config.BindingMatch{
+				Channel:   "telegram",
+				AccountID: "*",
+			},
+		},
+	}
+	cfg := testConfig(agents, bindings)
+	cfg.SkippedAgentIDs = []string{"some-other-broken-agent"}
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "telegram",
+	})
+
+	if route.Drop {
+		t.Fatal("Drop = true, want false — an unrelated skipped agent must not affect this binding's own healthy target")
+	}
+	if route.AgentID != "healthy-worker" {
+		t.Errorf("AgentID = %q, want 'healthy-worker'", route.AgentID)
+	}
+}
+
+// TestResolveRoute_DefaultAgentSelection verifies the ADR-054 D6.4 ladder:
+// the settings singleton (Agents.Defaults.DefaultAgentID) selects the default
+// agent, NOT the per-entity AgentConfig.Default field (which "beta" sets here
+// deliberately, to prove it is now inert for resolution — see registry.go's
+// GetDefaultAgent and this file's resolveDefaultAgentID doc comments for why
+// the field was demoted: two concurrent per-entity writes could each set
+// Default=true with no shared lock, so the single "the default" pointer had
+// to move to a settings scalar that cannot have two winners).
 func TestResolveRoute_DefaultAgentSelection(t *testing.T) {
+	agents := []config.AgentConfig{
+		{ID: "alpha"},
+		{ID: "beta", Default: true},
+		{ID: "gamma"},
+	}
+	cfg := testConfig(agents, nil)
+	cfg.Agents.Defaults.DefaultAgentID = "beta"
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel: "cli",
+	})
+
+	if route.AgentID != "beta" {
+		t.Errorf("AgentID = %q, want 'beta' (config.Agents.Defaults.DefaultAgentID)", route.AgentID)
+	}
+}
+
+// TestResolveRoute_DefaultAgentSelection_EntityFlagIsInert is the negative
+// counterpart: AgentConfig.Default=true alone (no settings override) must NOT
+// select "beta" — the fallback ladder picks the first chat-target agent in
+// list order instead ("alpha"). Regression guard for D6.4's core invariant.
+func TestResolveRoute_DefaultAgentSelection_EntityFlagIsInert(t *testing.T) {
 	agents := []config.AgentConfig{
 		{ID: "alpha"},
 		{ID: "beta", Default: true},
@@ -274,8 +380,8 @@ func TestResolveRoute_DefaultAgentSelection(t *testing.T) {
 		Channel: "cli",
 	})
 
-	if route.AgentID != "beta" {
-		t.Errorf("AgentID = %q, want 'beta' (marked as default)", route.AgentID)
+	if route.AgentID != "alpha" {
+		t.Errorf("AgentID = %q, want 'alpha' (AgentConfig.Default must be inert without the settings override)", route.AgentID)
 	}
 }
 

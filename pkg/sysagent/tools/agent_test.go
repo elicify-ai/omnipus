@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -34,13 +36,28 @@ func testMutateConfig(mu *sync.Mutex, getCfg func() *config.Config) func(fn func
 // newTestDeps creates a minimal Deps for agent tool unit tests.
 // GetCfg returns the captured pointer; SaveConfig is a no-op so callers
 // can verify in-memory state without touching disk.
+//
+// ADR-054: create_agent/update_agent/delete_agent persist real entity files
+// under Home/entities/agents/ (agentstore) now — Home MUST be an
+// isolated-per-call directory. The historical shared fixed path
+// ("/tmp/omnipus-test") would leak entity files across test functions within
+// the same test binary run, causing order-dependent AGENT_ALREADY_EXISTS /
+// AGENT_NOT_FOUND failures. newTestDeps has no *testing.T (many call sites
+// predate this helper's use in agent-store-backed tests), so it cannot use
+// t.TempDir(); os.MkdirTemp gives each call its own unique directory instead
+// — never cleaned up automatically, but negligible (a handful of small JSON
+// files) for an ephemeral test run.
 func newTestDeps() (*systools.Deps, *config.Config) {
 	cfg := config.DefaultConfig()
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
+	home, err := os.MkdirTemp("", "omnipus-agent-test-*")
+	if err != nil {
+		home = "/tmp/omnipus-test"
+	}
 	deps := &systools.Deps{
-		Home:         "/tmp/omnipus-test",
-		ConfigPath:   "/tmp/omnipus-test/config.json",
+		Home:         home,
+		ConfigPath:   filepath.Join(home, "config.json"),
 		GetCfg:       getCfg,
 		MutateConfig: testMutateConfig(&mu, getCfg),
 		// SaveConfig is a no-op in unit tests — we inspect cfg directly.
@@ -133,7 +150,7 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create
 func TestAgentCreate_WithColorAndIcon(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, _ := newTestDeps()
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -149,11 +166,13 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
 
-	// Verify config in-memory state.
-	if len(cfg.Agents.List) != 1 {
-		t.Fatalf("expected 1 agent in list, got %d", len(cfg.Agents.List))
+	// ADR-054: verify the persisted entity record (entities/agents/<id>.json)
+	// via the agent store, not cfg.Agents.List — create_agent no longer
+	// touches the in-memory config's roster at all.
+	agent, err := agentstore.New(deps.Home).Get("research-bot")
+	if err != nil {
+		t.Fatalf("expected agent entity record to exist: %v", err)
 	}
-	agent := cfg.Agents.List[0]
 	if agent.ID != "research-bot" {
 		t.Errorf("ID = %q, want %q", agent.ID, "research-bot")
 	}
@@ -170,9 +189,13 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.delete
 func TestAgentDelete_RequiresConfirm(t *testing.T) {
-	deps, cfg := newTestDeps()
-	// Pre-populate the config with one agent.
-	cfg.Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent"}}
+	deps, _ := newTestDeps()
+	// ADR-054: pre-populate a REAL entity record (entities/agents/my-agent.json)
+	// — delete_agent now resolves against the agent store, not cfg.Agents.List.
+	store := agentstore.New(deps.Home)
+	if err := store.Create("my-agent", &config.AgentConfig{ID: "my-agent", Name: "My Agent"}); err != nil {
+		t.Fatalf("test setup: create agent entity record: %v", err)
+	}
 
 	tool := systools.NewAgentDeleteTool(deps)
 
@@ -185,8 +208,8 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 		t.Fatal("expected error when confirm=false, got success")
 	}
 	parseError(t, resultNoConfirm.ForLLM)
-	if len(cfg.Agents.List) != 1 {
-		t.Fatal("agent should not be deleted when confirm=false")
+	if _, err := store.Get("my-agent"); err != nil {
+		t.Fatalf("agent should not be deleted when confirm=false: Get failed: %v", err)
 	}
 
 	// With confirm=true — must succeed and remove agent.
@@ -198,8 +221,8 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 		t.Fatalf("expected success with confirm=true, got error: %s", resultConfirmed.ForLLM)
 	}
 	parseSuccess(t, resultConfirmed.ForLLM)
-	if len(cfg.Agents.List) != 0 {
-		t.Errorf("expected agent to be deleted from list, still have %d agents", len(cfg.Agents.List))
+	if _, err := store.Get("my-agent"); !errors.Is(err, entity.ErrNotFound) {
+		t.Errorf("expected agent entity record to be deleted, Get error = %v", err)
 	}
 }
 
@@ -208,14 +231,17 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.update
 func TestAgentUpdate_PartialFields(t *testing.T) {
-	deps, cfg := newTestDeps()
-	cfg.Agents.List = []config.AgentConfig{
-		{
-			ID:    "my-agent",
-			Name:  "Old Name",
-			Color: "#FF0000",
-			Icon:  "star",
-		},
+	deps, _ := newTestDeps()
+	// ADR-054: pre-populate a REAL entity record — update_agent now resolves
+	// against the agent store, not cfg.Agents.List.
+	store := agentstore.New(deps.Home)
+	if err := store.Create("my-agent", &config.AgentConfig{
+		ID:    "my-agent",
+		Name:  "Old Name",
+		Color: "#FF0000",
+		Icon:  "star",
+	}); err != nil {
+		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
 	tool := systools.NewAgentUpdateTool(deps)
@@ -228,7 +254,10 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 		t.Fatalf("update failed: %s", result.ForLLM)
 	}
 
-	agent := cfg.Agents.List[0]
+	agent, err := store.Get("my-agent")
+	if err != nil {
+		t.Fatalf("read back updated agent entity record: %v", err)
+	}
 	if agent.Name != "New Name" {
 		t.Errorf("Name = %q, want %q", agent.Name, "New Name")
 	}
@@ -241,8 +270,14 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 	}
 }
 
-// TestAgentCreate_PersistsToDisk verifies that create writes color and icon to disk.
-// Catches JSON-tag typos and pointer-marshaling regressions.
+// TestAgentCreate_PersistsToDisk verifies that create writes color and icon to
+// disk. Catches JSON-tag typos and pointer-marshaling regressions.
+//
+// ADR-054: agents are per-entity records under entities/agents/<id>.json now,
+// not config.json's agents.list — this pins the NEW on-disk location. A
+// sibling assertion (config.json itself carries no agents.list content after
+// the create) proves the ADR's headline benefit: creating an agent no longer
+// touches config.json at all.
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create (persistence)
 func TestAgentCreate_PersistsToDisk(t *testing.T) {
@@ -260,25 +295,35 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 		t.Fatalf("create failed: %s", result.ForLLM)
 	}
 
-	data, err := os.ReadFile(cfgPath)
+	entityPath := filepath.Join(deps.Home, "entities", "agents", "disk-bot.json")
+	data, err := os.ReadFile(entityPath)
 	if err != nil {
-		t.Fatalf("read config.json: %v", err)
+		t.Fatalf("read agent entity record %s: %v", entityPath, err)
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("unmarshal config.json: %v", err)
+	var entry map[string]any
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("unmarshal agent entity record: %v", err)
 	}
-	agentsSection, _ := raw["agents"].(map[string]any)
-	list, _ := agentsSection["list"].([]any)
-	if len(list) == 0 {
-		t.Fatal("agents.list is empty in persisted config.json")
-	}
-	entry, _ := list[0].(map[string]any)
 	if entry["color"] != "#22C55E" {
 		t.Errorf("disk color = %v, want #22C55E", entry["color"])
 	}
 	if entry["icon"] != "robot" {
 		t.Errorf("disk icon = %v, want robot", entry["icon"])
+	}
+
+	// config.json itself must carry no agents.list content.
+	cfgData, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(cfgData, &raw); err != nil {
+		t.Fatalf("unmarshal config.json: %v", err)
+	}
+	if agentsSection, ok := raw["agents"].(map[string]any); ok {
+		if list, ok := agentsSection["list"].([]any); ok && len(list) > 0 {
+			t.Errorf("config.json agents.list = %v, want empty — agents must persist only to entities/agents/", list)
+		}
 	}
 }
 
@@ -287,13 +332,18 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 //
 // Traces to: architect finding #3 — self-deactivation guard
 func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
-	deps, cfg := newTestDeps()
-	// Seed a locked core agent into config.
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+	deps, _ := newTestDeps()
+	// ADR-054: seed a locked core agent as a REAL entity record — delete_agent
+	// now resolves the Locked check against the agent store, not
+	// cfg.Agents.List.
+	store := agentstore.New(deps.Home)
+	if err := store.Create("locked-core", &config.AgentConfig{
 		ID:     "locked-core",
 		Name:   "Locked Core",
 		Locked: true,
-	})
+	}); err != nil {
+		t.Fatalf("test setup: create agent entity record: %v", err)
+	}
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
 		"id":      "locked-core",
 		"confirm": true,
@@ -303,9 +353,12 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 	}
 	m := parseError(t, result.ForLLM)
 	errBlock, _ := m["error"].(map[string]any)
-	// The Locked check inside WithConfig returns a SAVE_FAILED wrapper.
 	if errBlock["code"] == nil {
 		t.Errorf("expected error code in result, got nil")
+	}
+	// The agent must still exist — the locked check must run BEFORE delete.
+	if _, err := store.Get("locked-core"); err != nil {
+		t.Errorf("locked agent entity record must survive a rejected delete, Get error = %v", err)
 	}
 }
 
@@ -825,7 +878,7 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 // tool path (AgentCreateTool.Execute), with no explicit bash policy entry
 // supplied by the caller — resolves the tool to "deny" by default.
 func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, _ := newTestDeps()
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":        "Research Bot",
@@ -840,10 +893,13 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
-	if len(cfg.Agents.List) != 1 {
-		t.Fatalf("expected 1 agent in list, got %d", len(cfg.Agents.List))
+	// ADR-054: read back the persisted entity record via the agent store, not
+	// cfg.Agents.List — create_agent no longer touches the in-memory config's
+	// roster at all.
+	newAgent, err := agentstore.New(deps.Home).Get("research-bot")
+	if err != nil {
+		t.Fatalf("expected agent entity record to exist: %v", err)
 	}
-	newAgent := cfg.Agents.List[0]
 
 	// Sanity: the seed actually landed in the persisted policy map.
 	if got := newAgent.Tools.Builtin.Policies["bash"]; got != config.ToolPolicyDeny {

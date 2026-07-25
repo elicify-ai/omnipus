@@ -38,6 +38,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -882,6 +883,48 @@ func pluralSuffix(n int) string {
 // is a UX gap, not a boot-blocking condition, and ensureVerifierSoul
 // remains the lazy backstop for any path (e.g. pkg/agent's own test
 // harnesses) that never runs this boot sequence at all.
+// populateAgentsListFromEntityStore is the ADR-054 D3/§5 "read through an
+// in-memory cache" bridge between the per-entity agent store
+// (entities/agents/<id>.json, D2) and cfg.Agents.List — the in-memory field
+// the whole codebase's existing readers (pkg/gateway, pkg/agent, pkg/routing,
+// pkg/tools, cmd/omnipus: dozens of call sites) still consult directly.
+//
+// config.LoadConfig now strips any legacy agents.list content from config.json
+// on every load (legacy_agents_list.go) — agents are per-entity records now,
+// never config.json entries — so cfg.Agents.List is EMPTY immediately after
+// LoadConfig/LoadConfigWithStore returns, on every boot AND every subsequent
+// reload. Without this bridge, the entire in-memory agent roster would
+// silently vanish on the very next config reload (any config.json write via
+// safeUpdateConfigJSON/updateConfigJSONLocked, including a completely
+// unrelated settings change) — a severe regression, not just a test-fixture
+// inconvenience.
+//
+// NOTE: pkg/agent/roster_load.go ships an equivalent
+// agent.LoadAgentRosterFromEntityStore(cfg), which derives the entities/
+// root via filepath.Dir(cfg.AgentHomeBasePath()) (i.e.
+// filepath.Dir(cfg.Agents.Defaults.Home)). This function intentionally takes
+// homePath EXPLICITLY instead of using that derivation: empirically, against
+// this package's own test fixtures (many of which set Agents.Defaults.Home
+// directly to the harness temp dir, not <home>/workspace),
+// filepath.Dir(cfg.AgentHomeBasePath()) resolves ONE LEVEL ABOVE the actual
+// $OMNIPUS_HOME those fixtures use — pointing agentstore at a sibling
+// directory with no entities/agents/ tree and silently returning an empty
+// roster. Swapping to the shared helper regressed 9 gateway tests (verified
+// 2026-07-25); reverted. Threading the real homePath through explicitly
+// (already known correctly at every call site in this package) avoids the
+// derivation entirely rather than trying to fix it here.
+func populateAgentsListFromEntityStore(cfg *config.Config, homePath string) {
+	agents, skipped, err := agentstore.New(homePath).List()
+	if err != nil {
+		slog.Error("gateway: populateAgentsListFromEntityStore: could not list agent entity records — "+
+			"in-memory agent roster will be empty until the next successful reload",
+			"home", homePath, "error", err)
+		return
+	}
+	cfg.Agents.List = agents
+	cfg.SkippedAgentIDs = skipped
+}
+
 func seedJudgeEagerSoul(cfg *config.Config) {
 	for i := range cfg.Agents.List {
 		if cfg.Agents.List[i].ID != string(coreagent.IDJudge) {
@@ -1008,13 +1051,50 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		cfg.Agents.Defaults.ModelName = modelID
 	}
 
+	// ADR-054 D2/D3: bring in any agents already persisted as entity records
+	// (entities/agents/<id>.json) from a previous run BEFORE SeedConfig looks
+	// at cfg.Agents.List to decide which core agents are "already present" —
+	// otherwise every boot would look like a fresh install (cfg.Agents.List
+	// starts empty: config.LoadConfig strips config.json's legacy agents.list
+	// unconditionally, see legacy_agents_list.go) and SeedConfig would
+	// re-create core agents from their seed defaults on every restart,
+	// discarding any operator customization.
+	populateAgentsListFromEntityStore(cfg, homePath)
+
 	// Seed core agents into config on first boot. Core agents are stored in
 	// cfg.Agents.List with Locked=true so they appear alongside custom agents
 	// in the REST API with type "core". SeedConfig is idempotent — it only adds
 	// agents that are not already present (checked by ID).
 	if coreagent.SeedConfig(cfg) {
-		if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-			return fmt.Errorf("gateway: failed to persist seeded core agents: %w", saveErr)
+		// ADR-054 D2/§11: core agents now persist as entity records
+		// (entities/agents/<id>.json) — never back into config.json's
+		// agents.list. config.SaveConfig here would be a double violation:
+		// (a) it is the full-struct save CLAUDE.md forbids for exactly this
+		// reason ("corrupts API keys" via SecureString round-trip), and (b)
+		// anything it wrote to agents.list would be stripped again on the
+		// very next config.LoadConfig call, so it would not even survive.
+		// Persist every agent SeedConfig added-or-touched (its own "re-enforce
+		// identity fields on existing core agents" pass, and any brand-new
+		// core agent it appended) via the agent store: Create for one with no
+		// existing record, Update (full-record replace) for one that already
+		// has one — matching SeedConfig's existing "re-enforce" semantics,
+		// which already unconditionally overwrites identity fields on every
+		// boot for a real core agent ID, independent of this ADR.
+		store := agentstore.New(homePath)
+		for i := range cfg.Agents.List {
+			seeded := cfg.Agents.List[i]
+			if _, getErr := store.Get(seeded.ID); getErr != nil {
+				if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
+					return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
+				}
+				continue
+			}
+			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
+				*existing = seeded
+				return nil
+			}); updateErr != nil {
+				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
+			}
 		}
 	}
 
@@ -1636,6 +1716,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				runningServices.reloading.Store(false)
 				continue
 			}
+			// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent store —
+			// config.LoadConfig* strips agents.list on every load
+			// (legacy_agents_list.go), and this manual-reload path is a
+			// separate config-load call site from restAPI.
+			// refreshConfigAndRewireServices's own bridge.
+			populateAgentsListFromEntityStore(newCfg, homePath)
 			if err = newCfg.ValidateProviders(); err != nil {
 				logger.Errorf("Config validation failed: %v", err)
 				agentLoop.ClearReloadPending()
@@ -3182,6 +3268,14 @@ func setupConfigWatcherPolling(
 						logger.Warn("  Using previous valid config")
 						continue
 					}
+					// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent
+					// store — config.LoadConfig* strips agents.list on every
+					// load (legacy_agents_list.go), and this file-watcher
+					// poller is a separate config-load call site from
+					// restAPI.refreshConfigAndRewireServices's own bridge.
+					// configPath is always $OMNIPUS_HOME/config.json by
+					// convention (see agentstore.New's own doc comment).
+					populateAgentsListFromEntityStore(newCfg, filepath.Dir(configPath))
 
 					if err := newCfg.ValidateProviders(); err != nil {
 						logger.Errorf("  ⚠ New config validation failed: %v", err)

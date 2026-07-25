@@ -15,6 +15,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -543,6 +544,14 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 				Provider:  "mock",
 				Home:      parentWorkspace,
 				ModelName: "parent-model",
+				// ADR-054 D6.4: AgentConfig.Default (set below on
+				// parent-allow-policy, kept for realism) is no longer
+				// consulted by GetDefaultAgent — the settings singleton is
+				// the only resolution signal now. mustNewAgentLoop's
+				// construction path wires this into
+				// registry.SetDefaultAgentOverride exactly as production
+				// boot does (loop.go).
+				DefaultAgentID: "parent-allow-policy",
 			},
 			List: []config.AgentConfig{
 				{
@@ -1113,11 +1122,19 @@ func TestSpawnSubTurn_TargetIdentity_ConcurrentModelSwitchRace(t *testing.T) {
 	}
 }
 
-// TestSpawnSubTurn_TargetIdentity_UnresolvedTargetFallsBackToParent proves the
-// best-effort fallback: when TargetAgentID names an agent that is NOT in the
-// registry, dispatch falls back to the parent's own executor config (native,
-// since the default agent has none) rather than erroring the sub-turn.
-func TestSpawnSubTurn_TargetIdentity_UnresolvedTargetFallsBackToParent(t *testing.T) {
+// TestSpawnSubTurn_TargetIdentity_UnresolvedTargetAborts proves ADR-054
+// D7/§9's revised behavior: when TargetAgentID names an agent that is NOT in
+// the registry — deleted, renamed, or its entities/agents/<id>.json record
+// failed to load — spawnSubTurn ABORTS the sub-turn rather than silently
+// falling back to the parent's own identity/tool policy.
+//
+// This supersedes the earlier "best-effort fallback to baseAgent" posture
+// (FIX 3, TestSpawnSubTurn_TargetIdentity_UnresolvedTargetFallsBackToParent):
+// that fallback WAS the privilege-inversion bug D7 named — the child ran
+// with the PARENT's tool policy (execSource.StoreToolPolicy below), defeating
+// the entire purpose of delegating to a distinct, possibly more-restricted
+// worker.
+func TestSpawnSubTurn_TargetIdentity_UnresolvedTargetAborts(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
@@ -1137,8 +1154,6 @@ func TestSpawnSubTurn_TargetIdentity_UnresolvedTargetFallsBackToParent(t *testin
 		agent:          parent,
 	}
 
-	collector, collectCleanup := newEventCollector(t, al)
-
 	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-unresolved-target")
 	result, err := spawnSubTurn(spawnCtx, al, parentTS, SubTurnConfig{
 		Model:         "test-model",
@@ -1147,41 +1162,18 @@ func TestSpawnSubTurn_TargetIdentity_UnresolvedTargetFallsBackToParent(t *testin
 		Async:         false,
 		Timeout:       5 * time.Second,
 	})
-	collectCleanup()
-	// The unresolved target must NOT surface as a dispatch error — it degrades
-	// to the parent's own (native) executor config and runs the native path.
-	if err != nil {
-		t.Fatalf("spawnSubTurn error: %v (unresolved target must fall back to parent's config, not fail)", err)
-	}
-	if result == nil {
-		t.Fatal("expected a non-nil result from the native fallback path")
-	}
 
-	// FIX 3 (silent failure F1 / arch #5): the fallback must not be silent.
-	// (a) The caller/LLM must see a warning prefix on ForLLM.
-	if !strings.Contains(result.ForLLM, "delegation warning") ||
-		!strings.Contains(result.ForLLM, "does-not-exist-in-registry") {
-		t.Errorf(
-			"result.ForLLM = %q, want it prefixed with a delegation warning naming the unresolved target %q",
-			result.ForLLM, "does-not-exist-in-registry",
-		)
+	if err == nil {
+		t.Fatal("expected spawnSubTurn to abort with an error for an unresolved delegation target, got nil")
 	}
-	// (b) The session/audit trail must carry an EventKindError for the
-	// fallback (not just the process-log slog.Warn).
-	var sawFallbackError bool
-	for _, e := range collector.events {
-		if e.Kind != EventKindError {
-			continue
-		}
-		if p, ok := e.Payload.(ErrorPayload); ok && p.Stage == "subturn_delegation" {
-			sawFallbackError = true
-			if !strings.Contains(p.Message, "does-not-exist-in-registry") {
-				t.Errorf("ErrorPayload.Message = %q, want it to name the unresolved target", p.Message)
-			}
-		}
+	if !errors.Is(err, ErrDelegationTargetUnresolved) {
+		t.Errorf("err = %v, want errors.Is(err, ErrDelegationTargetUnresolved)", err)
 	}
-	if !sawFallbackError {
-		t.Error("expected an EventKindError (stage=subturn_delegation) audit event for the unresolved-target fallback")
+	if !strings.Contains(err.Error(), "does-not-exist-in-registry") {
+		t.Errorf("err = %v, want it to name the unresolved target %q", err, "does-not-exist-in-registry")
+	}
+	if result != nil {
+		t.Errorf("expected a nil result on abort, got %+v", result)
 	}
 }
 
