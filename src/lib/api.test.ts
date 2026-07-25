@@ -28,6 +28,7 @@ import {
   fetchConfig,
   getConfigCoercionCount,
   resetConfigCoercionCount,
+  fetchCommands,
 } from './api'
 import * as telemetry from './telemetry'
 
@@ -1942,6 +1943,85 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
 })
 
 // ── Skill marketplace: searchSkills / installSkillBySlug ─────────────────────
+
+describe('fetchCommands: dropped-item production telemetry (slash-palette silent-empty bugfix)', () => {
+  // Same static-top-level-import rationale as the castString/castNumber
+  // block above (comment there explains why): `fetchCommands` and the
+  // `telemetry` namespace must stay bound to the file's original module
+  // instances, or `vi.spyOn(telemetry, 'logError')` silently observes zero
+  // calls against a disconnected module graph.
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    sessionStorage.clear()
+  })
+
+  // Payload: one structurally valid SlashCommand + one missing the required
+  // `delivery` enum field — the exact shape of a backend/SPA contract drift
+  // that SlashCommandSchema.safeParse rejects per-item (fetchCommands must
+  // not let one bad item hide the whole list).
+  const payloadWithOneBadCommand = [
+    { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client' },
+    { name: 'broken', label: '/broken', description: 'Malformed backend entry' },
+  ]
+
+  it('DEV builds keep the console.warn-only behaviour — no logError call (production/DEV split preserved)', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse(payloadWithOneBadCommand))
+    vi.stubEnv('DEV', true)
+    vi.stubEnv('MODE', 'development')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchCommands('web')
+
+    expect(result.map((c) => c.name)).toEqual(['new'])
+    expect(logErrorSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('production builds call logError with the dropped-count diagnostic — bugfix: previously silent in production (DEV-only console.warn gate)', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse(payloadWithOneBadCommand))
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchCommands('web')
+
+    // Safe fallback preserved: the good command survives, the bad one drops.
+    expect(result.map((c) => c.name)).toEqual(['new'])
+    // The bug: this used to have NO production-visible signal at all.
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'commandSchemaDrop',
+        surface: 'web',
+        droppedCount: 1,
+        totalCount: 2,
+      }),
+    )
+  })
+
+  it('does not call logError when every command validates', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse([payloadWithOneBadCommand[0]]))
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('MODE', 'production')
+    const logErrorSpy = vi.spyOn(telemetry, 'logError')
+
+    const result = await fetchCommands('web')
+
+    expect(result).toHaveLength(1)
+    expect(logErrorSpy).not.toHaveBeenCalled()
+  })
+})
 
 describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   let fetchSpy: ReturnType<typeof vi.fn>

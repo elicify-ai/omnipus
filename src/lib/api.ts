@@ -2468,9 +2468,24 @@ export async function fetchCommands(surface: 'web' | 'cli' | 'channel' = 'web'):
     if (parsed.success) out.push(parsed.data)
     else dropped++
   }
-  if (dropped > 0 && import.meta.env?.DEV) {
-    // eslint-disable-next-line no-console
-    console.warn(`fetchCommands: dropped ${dropped} command(s) that failed schema validation`)
+  if (dropped > 0) {
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(`fetchCommands: dropped ${dropped} command(s) that failed schema validation`)
+    } else if (import.meta.env?.MODE !== 'test') {
+      // Bugfix (slash-palette silent-empty): this warning used to be DEV-only,
+      // so a production build that dropped a command for failing
+      // SlashCommandSchema had ZERO observable trace — the palette just
+      // looked short with no signal anywhere. Mirrors recordCoercion /
+      // _recordApiSchemaError's established DEV-console.warn-vs-production-
+      // logError split (this file, above).
+      logError({
+        event: 'commandSchemaDrop',
+        surface,
+        droppedCount: dropped,
+        totalCount: raw.length,
+      })
+    }
   }
   return out
 }

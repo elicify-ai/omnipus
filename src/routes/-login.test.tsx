@@ -7,6 +7,7 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { queryClient } from '@/lib/queryClient'
 
 // --- Router mock ---
 const mockNavigate = vi.fn()
@@ -148,6 +149,58 @@ describe('#26 — not-onboarded admin is redirected to /onboarding after login',
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Slash-palette silent-empty bugfix: a successful login must invalidate the
+// ['commands'] query cache. GET /api/v1/commands is behind withAuth
+// (pkg/gateway/gateway.go) and may have 401'd — going permanently errored,
+// per useSlashMenu.ts's `commandsError` — before this session's cookie
+// existed (e.g. a composer mounted mid-race on a fresh install). Nothing
+// else ever refetches that query, so a successful login is the one point we
+// KNOW the session just became valid.
+// ---------------------------------------------------------------------------
+describe('Bugfix: successful login invalidates the commands cache (slash palette recovery)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLogin.mockResolvedValue({ token: 'tok-1', role: 'admin', username: 'admin' })
+    mockFetchAppState.mockResolvedValue({ onboarding_complete: true })
+  })
+
+  it('calls queryClient.invalidateQueries({ queryKey: ["commands"] }) after a successful login', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    renderLogin()
+
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
+    fireEvent.change(document.getElementById('login-password')!, { target: { value: 'secret' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    })
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['commands'] }),
+    )
+  })
+
+  it('does NOT invalidate the commands cache when login fails (invalid credentials)', async () => {
+    mockLogin.mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { status: 401 }))
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    renderLogin()
+
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
+    fireEvent.change(document.getElementById('login-password')!, { target: { value: 'wrong' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('login-error')).toBeInTheDocument()
+    })
+
+    expect(invalidateSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['commands'] }),
+    )
   })
 })
 
