@@ -1090,5 +1090,16 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id s
 	}
 
 	a.auditPlan("plan.restart", id, "new_generation", playRes.NewGeneration)
-	jsonOK(w, a.toWirePlan(*p))
+	// Re-read for the response body: PlayPlan mutated the plan (state
+	// failed -> approved, new generation, resume baselines). The pre-restart
+	// `p` snapshot is stale by now, and returning it would report the OLD
+	// state to the caller. Mirrors handlePlanPut/Approve/Stop, which all
+	// respond from a post-mutation re-read.
+	updated, uerr := a.planStore.Get(id)
+	if uerr != nil {
+		slog.Error("rest: plan restart: re-read after PlayPlan", "id", id, "error", uerr)
+		jsonErr(w, http.StatusInternalServerError, "plan restarted but could not be re-read")
+		return
+	}
+	jsonOK(w, a.toWirePlan(*updated))
 }
