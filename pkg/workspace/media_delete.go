@@ -106,6 +106,20 @@ func WorkspaceDeleteHook(home, workspaceID, actor string, auditor *audit.Logger)
 // rolls the manifest back): in both cases nothing was actually committed,
 // so the caller must treat it as a genuine failure where media may still
 // remain.
+//
+// A hard-failure cascadeErr may now additionally wrap library.ErrEntryStranded
+// when a COMPOUND rollback-of-rollback happens mid-cascade — a rollback
+// restores an entry's manifest presence AND the compensating rename-back of
+// its already-quarantined file also fails (see library.go's ErrEntryStranded
+// doc). CascadeDelete's own contract keeps `deleted` empty on that path
+// specifically so this function's classification here is unaffected: the
+// caller (rest_workspaces.go's delete-workspace handler) still sees an
+// unwrapped hard failure, not ErrCascadeStraggler. That is intentional and
+// safe for this specific caller regardless: every quarantine path an
+// ErrEntryStranded id could refer to still lives under wsDir/media/, which
+// the handler's own subsequent os.RemoveAll(wsDir) always wipes moments
+// later — the same reasoning ErrCascadeStraggler's own doc already gives for
+// the final-unlink-only case, just for a different underlying failure shape.
 func wrapCascadeError(deleted []gen.MediaLibraryEntry, cascadeErr error) error {
 	if cascadeErr != nil && len(deleted) > 0 {
 		return fmt.Errorf("%w: %w", ErrCascadeStraggler, cascadeErr)

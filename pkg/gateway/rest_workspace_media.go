@@ -113,6 +113,16 @@ func (a *restAPI) handleWorkspaceMediaGet(w http.ResponseWriter, r *http.Request
 	}
 	entry, err := lib.Get(mediaID)
 	if err != nil {
+		if errors.Is(err, library.ErrEntryStranded) {
+			// See handleWorkspaceMediaDelete's identical branch for the
+			// full HTTP-mapping rationale: this is a server-side manifest/
+			// disk inconsistency, not a routine absent id, so it must not
+			// collapse into the same 404 an ordinary ErrNotFound gets.
+			logger.ErrorCF("rest", "workspace media: get: entry stranded (manifest/disk diverged)",
+				map[string]any{"workspace_id": workspaceID, "media_id": mediaID, "error": err.Error()})
+			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
+			return
+		}
 		if errors.Is(err, library.ErrNotFound) || errors.Is(err, library.ErrInvalidMediaID) {
 			jsonErr(w, http.StatusNotFound, "media entry not found")
 			return
@@ -139,6 +149,12 @@ func (a *restAPI) handleWorkspaceMediaAttach(w http.ResponseWriter, r *http.Requ
 	// Verify the entry exists and increment its refcount.
 	_, err := lib.Get(mediaID)
 	if err != nil {
+		if errors.Is(err, library.ErrEntryStranded) {
+			logger.ErrorCF("rest", "workspace media: attach: entry stranded (manifest/disk diverged)",
+				map[string]any{"workspace_id": workspaceID, "media_id": mediaID, "error": err.Error()})
+			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
+			return
+		}
 		if errors.Is(err, library.ErrNotFound) || errors.Is(err, library.ErrInvalidMediaID) {
 			jsonErr(w, http.StatusNotFound, "media entry not found")
 			return
@@ -184,6 +200,18 @@ const (
 	// success, never a 500, and its audit event must not claim bytes_freed
 	// for bytes that are not actually free yet.
 	mediaDeleteOutcomeStraggler
+	// mediaDeleteOutcomeStranded: library.ErrEntryStranded — the id is
+	// already known to be in a manifest/disk-diverged state (a PRIOR
+	// compound rollback failure left it that way; see library.go's
+	// ErrEntryStranded doc) or a compound rollback-of-rollback failure
+	// happened during THIS very call. This is a server-side inconsistency,
+	// distinct from both mediaDeleteOutcomeNotFound (never a manifest/disk
+	// mismatch, just a routine absent id) and mediaDeleteOutcomeStraggler
+	// (a benign disk-cleanup lag with the manifest correctly already
+	// reflecting the delete) — nothing was deleted here, and the manifest
+	// itself cannot be trusted for this id until OrphanGC's straggler
+	// reconciliation runs.
+	mediaDeleteOutcomeStranded
 	// mediaDeleteOutcomeHardFailure: nothing was deleted; a genuine failure.
 	mediaDeleteOutcomeHardFailure
 )
@@ -204,6 +232,9 @@ const (
 func classifyMediaDeleteOutcome(entry gen.MediaLibraryEntry, err error) mediaDeleteOutcome {
 	if err == nil {
 		return mediaDeleteOutcomeSuccess
+	}
+	if errors.Is(err, library.ErrEntryStranded) {
+		return mediaDeleteOutcomeStranded
 	}
 	if errors.Is(err, library.ErrNotFound) || errors.Is(err, library.ErrInvalidMediaID) {
 		return mediaDeleteOutcomeNotFound
@@ -272,6 +303,20 @@ func (a *restAPI) handleWorkspaceMediaDelete(w http.ResponseWriter, r *http.Requ
 	switch classifyMediaDeleteOutcome(entry, err) {
 	case mediaDeleteOutcomeNotFound:
 		jsonErr(w, http.StatusNotFound, "media entry not found")
+		return
+
+	case mediaDeleteOutcomeStranded:
+		// See handleWorkspaceMediaGet's identical branch: a 404 here would
+		// be a lie (this is not a routine absent id — the manifest and
+		// disk have diverged for a reason internal to this server), and a
+		// bare "internal server error" would bury the distinction the rest
+		// of this fix exists to surface. 500 is still the right status
+		// family (server-side inconsistency, not a client error), just
+		// with an attributable message and its own log line.
+		logger.ErrorCF("rest", "workspace media: delete: entry stranded (manifest/disk diverged)",
+			map[string]any{"workspace_id": workspaceID, "media_id": mediaID, "error": err.Error()})
+		a.logMediaDeleteAudit(workspaceID, mediaID, actor, entry, audit.DecisionError, false, err)
+		jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
 		return
 
 	case mediaDeleteOutcomeHardFailure:

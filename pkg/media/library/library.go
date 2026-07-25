@@ -102,7 +102,50 @@ var (
 	ErrSourceNotAllowed         = errors.New("media library: source is not allowed in persistent storage")
 	ErrWorkspaceContextRequired = errors.New("media library: caller workspace context is required")
 	ErrWorkspaceMismatch        = errors.New("media library: caller workspace does not own ref")
+
+	// ErrEntryStranded marks a media id whose manifest entry still claims to
+	// exist at its normal on-disk location (l.rawPath(id)), but a prior
+	// COMPOUND rollback failure has left the actual bytes stranded at an
+	// internal quarantine path instead. It is reached only when BOTH of the
+	// following happen in the same operation: (1) a persist (or, for
+	// CascadeDelete/OrphanGC's phase-1 quarantine loop, a hard mid-loop
+	// failure) triggers a rollback that restores the manifest entry to
+	// "present", AND (2) the compensating rename-back of the
+	// already-quarantined file to its original path ALSO fails. Before this
+	// type existed, that second failure was only logger.WarnCF'd — the
+	// manifest was left claiming the file lives at its original path while
+	// the bytes actually sit at an undiscoverable ".delete-<id>-<uuid>" /
+	// ".cascade-<id>-<uuid>" / ".gc-<id>-<uuid>" path, and every later read
+	// got a generic ErrNotFound, indistinguishable from a routine
+	// not-found.
+	//
+	// ErrEntryStranded is DISTINCT from both siblings it could otherwise be
+	// confused with: ErrNotFound means no entry exists at all (a routine
+	// absent id); ErrIntegrityCheckFailed means bytes are present at the
+	// right path but fail sha256 verification. ErrEntryStranded means the
+	// bytes exist somewhere on disk, just not where the manifest says.
+	//
+	// Read, Get, ResolvePathWithCaller, Refcount, IncrementRefcount,
+	// DecrementRefcount, and Delete all check the in-memory stranded
+	// registry (Library.stranded) BEFORE trusting the manifest for a given
+	// id, and report this sentinel instead. The registry is rebuilt from a
+	// directory scan on every Load (rebuildStrandedLocked) so the
+	// corruption survives a process restart, and is cleared only by
+	// OrphanGC's straggler reconciliation (reconcileStragglersLocked) —
+	// see that function's doc for how the state is resolved.
+	ErrEntryStranded = errors.New("media library: entry is stranded (manifest present, bytes quarantined)")
 )
+
+// stragglerPrefixes are the quarantine-dotfile prefixes Delete,
+// CascadeDelete, and OrphanGC each use for their own quarantinePath
+// construction (see their rawPath/quarantinePath pairs below). A file
+// under l.path matching one of these prefixes is, by construction, always
+// a LEFTOVER: every one of these operations holds l.mu for its entire
+// quarantine -> mutate -> persist -> final-unlink critical section, so no
+// legitimate quarantine file can be "in flight" at the moment a fresh
+// caller (rebuildStrandedLocked at Load, or reconcileStragglersLocked from
+// OrphanGC/CascadeDelete) takes the lock and scans the directory.
+var stragglerPrefixes = []string{".delete-", ".cascade-", ".gc-"}
 
 // refcount is the invariant-bearing non-negative integer refcount for a
 // manifest entry. The package-private constructor newRefcount validates
@@ -277,6 +320,25 @@ type Library struct {
 	// always resolves to the real os.Remove/os.Rename.
 	removeFile func(path string) error
 	renameFile func(oldpath, newpath string) error
+	// writeManifest is the persisted-manifest write primitive used by
+	// persistLocked. Defaults to fileutil.WriteFileAtomic in New(); test-only
+	// override via WithManifestWriter. Added for the same reason as
+	// removeFile/renameFile above: it is the one remaining un-injectable step
+	// needed to deterministically provoke the "persist failed AND the
+	// compensating rename-back also failed" compound rollback scenario (see
+	// ErrEntryStranded) without an OS-level permission trick.
+	writeManifest func(path string, data []byte, perm os.FileMode) error
+	// stranded is the in-memory registry of ids known to be in the
+	// ErrEntryStranded state (manifest present, bytes quarantined) — see
+	// ErrEntryStranded's doc for how an id lands here and
+	// reconcileStragglersLocked for how it leaves. Read, Get,
+	// ResolvePathWithCaller, Refcount, IncrementRefcount, DecrementRefcount,
+	// and Delete all consult this before trusting l.manifest for a given id.
+	// Rebuilt from a directory scan on every load() (rebuildStrandedLocked)
+	// so the corruption is not forgotten across a process restart — the map
+	// itself is not persisted (there is no wire schema field for it; the
+	// manifest is defined to contain accurate entries only).
+	stranded map[string]string
 }
 
 type Option func(*Library)
@@ -319,18 +381,31 @@ func WithFileRenamer(rename func(oldpath, newpath string) error) Option {
 	}
 }
 
+// WithManifestWriter overrides the manifest-file write step of
+// persistLocked. Test-only — see the Library.writeManifest field doc.
+// Production code never calls this; New() defaults to
+// fileutil.WriteFileAtomic.
+func WithManifestWriter(write func(path string, data []byte, perm os.FileMode) error) Option {
+	return func(library *Library) {
+		if write != nil {
+			library.writeManifest = write
+		}
+	}
+}
+
 func New(home, workspaceID string, options ...Option) (*Library, error) {
 	workspaceDir, err := safeWorkspaceDir(home, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	library := &Library{
-		path:        filepath.Join(workspaceDir, "media"),
-		workspaceID: workspaceID,
-		manifest:    make(map[string]manifestEntry),
-		now:         time.Now,
-		removeFile:  os.Remove,
-		renameFile:  os.Rename,
+		path:          filepath.Join(workspaceDir, "media"),
+		workspaceID:   workspaceID,
+		manifest:      make(map[string]manifestEntry),
+		now:           time.Now,
+		removeFile:    os.Remove,
+		renameFile:    os.Rename,
+		writeManifest: fileutil.WriteFileAtomic,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -374,13 +449,21 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 
 // Get returns the metadata for a single entry by id, or an error if the
 // entry does not exist. Unlike Read, it does not read or verify the raw
-// file bytes — it returns only the in-memory manifest projection.
+// file bytes — it returns only the in-memory manifest projection. A
+// stranded id (see ErrEntryStranded) is reported as ErrEntryStranded
+// rather than a routine manifest lookup, even though Get itself never
+// touches the raw bytes — presenting a stranded entry's metadata as if it
+// were normal would let a caller believe the entry is usable when it
+// factually is not.
 func (l *Library) Get(id string) (gen.MediaLibraryEntry, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
 	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if _, stranded := l.stranded[id]; stranded {
+		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrEntryStranded, id)
+	}
 	entry, exists := l.manifest[id]
 	if !exists {
 		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -572,7 +655,18 @@ func (l *Library) Read(id string) ([]byte, gen.MediaLibraryEntry, error) {
 	}
 	l.mu.RLock()
 	entry, exists := l.manifest[id]
+	_, stranded := l.stranded[id]
 	l.mu.RUnlock()
+	if stranded {
+		// Deliberately checked BEFORE the os.Open below (and before the
+		// !exists check — a stranded id is always still present in
+		// l.manifest by construction, see ErrEntryStranded's doc): without
+		// this, os.Open(l.rawPath(id)) would hit os.ErrNotExist (the bytes
+		// are at the quarantine path, not rawPath) and this would silently
+		// fall through to the ErrNotFound branch below, exactly the
+		// masking bug ErrEntryStranded exists to close.
+		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrEntryStranded, id)
+	}
 	if !exists {
 		return nil, gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
@@ -640,7 +734,17 @@ func (l *Library) ResolvePathWithCaller(
 	}
 	l.mu.RLock()
 	entry, exists := l.manifest[mediaID]
+	_, stranded := l.stranded[mediaID]
 	l.mu.RUnlock()
+	if stranded {
+		// See Read's identical guard — ResolvePathWithCaller is the
+		// path-only counterpart consumed by transport callers (send_file,
+		// channel attachment delivery); without this check it would hand
+		// back a rawPath that does not exist, surfacing as a bare OS-level
+		// "file not found" several layers away instead of a clear,
+		// attributable ErrEntryStranded here.
+		return "", media.MediaMeta{}, fmt.Errorf("%w: %s", ErrEntryStranded, mediaID)
+	}
 	if !exists {
 		return "", media.MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, mediaID)
 	}
@@ -694,6 +798,9 @@ func (l *Library) Refcount(id string) (int, error) {
 	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if _, stranded := l.stranded[id]; stranded {
+		return 0, fmt.Errorf("%w: %s", ErrEntryStranded, id)
+	}
 	entry, exists := l.manifest[id]
 	if !exists {
 		return 0, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -717,12 +824,25 @@ func (l *Library) Refcount(id string) (int, error) {
 // case would be false. The projection is still returned on that error path
 // so a caller that wants to log a degraded/partial event can do so
 // deliberately, but it must not claim success.
+//
+// ErrEntryStranded (see its own doc) is returned in two situations: the id
+// was ALREADY stranded from a prior compound rollback failure (checked up
+// front, before any quarantine attempt — retrying Delete on a stranded id
+// must not be allowed to silently "fix" the manifest by accident while
+// leaking the old quarantine file forever; only OrphanGC's straggler
+// reconciliation resolves this state), or this very call's own persist
+// rolled back AND the compensating rename-back also failed, newly landing
+// the id in that state.
 func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if quarantinePath, stranded := l.stranded[id]; stranded {
+		return gen.MediaLibraryEntry{},
+			fmt.Errorf("%w: %s (bytes stranded at %s)", ErrEntryStranded, id, quarantinePath)
+	}
 	entry, exists := l.manifest[id]
 	if !exists {
 		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -750,6 +870,16 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 					"media_id":     id,
 					"error":        renameErr.Error(),
 				})
+				// Compound rollback-of-rollback (ErrEntryStranded): the
+				// manifest mutation was just reverted above to claim id is
+				// present at rawPath, but the bytes are still at
+				// quarantinePath because THIS rename-back also failed.
+				// Escalate — do not let this be a WarnCF-only event. Join
+				// all three: the original persist failure, the rollback
+				// failure itself, and the sentinel.
+				l.markStrandedLocked(id, quarantinePath)
+				return gen.MediaLibraryEntry{}, errors.Join(
+					err, renameErr, fmt.Errorf("%w: %s", ErrEntryStranded, id))
 			}
 		}
 		return gen.MediaLibraryEntry{}, err
@@ -802,16 +932,36 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 // them) and restoreCascadeQuarantined only reverses file renames, never
 // l.manifest — the in-memory state silently drifted from disk. The two-phase
 // split matches the pattern OrphanGC already used correctly.
+//
+// Phase 0 (ErrEntryStranded): before either phase runs, any id already
+// stranded from a prior compound rollback failure is reconciled via
+// reconcileStragglersLocked rather than run through the normal quarantine
+// dance — that dance assumes rawPath still holds the bytes, which is false
+// for a stranded id (they are at an old quarantine path instead). Unlike
+// Delete (which refuses outright on a stranded id so a single targeted
+// delete request gets an explicit, attributable error), CascadeDelete's
+// "remove everything, best-effort" semantics make self-healing the right
+// choice here: one already-broken entry must not block deleting every
+// other entry in the library.
 func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed int64, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	reconciled, reconciledBytes, manifestChanged := l.reconcileStragglersLocked()
+	if manifestChanged {
+		if persistErr := l.persistLocked(); persistErr != nil {
+			return reconciled, reconciledBytes,
+				fmt.Errorf("media library: persist after straggler reconcile: %w", persistErr)
+		}
+	}
+
 	ids := make([]string, 0, len(l.manifest))
 	for id := range l.manifest {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	if len(ids) == 0 {
-		return nil, 0, nil
+		return reconciled, reconciledBytes, nil
 	}
 
 	// Phase 1: quarantine every entry's raw file. l.manifest is untouched
@@ -828,8 +978,28 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 			if errors.Is(renameErr, os.ErrNotExist) {
 				item.quarantined = false
 			} else {
-				l.restoreCascadeQuarantined(deleted)
-				return nil, 0, fmt.Errorf("media library: quarantine cascade %s: %w", id, renameErr)
+				failed := l.restoreCascadeQuarantined(deleted)
+				combined := fmt.Errorf("media library: quarantine cascade %s: %w", id, renameErr)
+				if len(failed) > 0 {
+					for _, f := range failed {
+						l.markStrandedLocked(f.id, f.quarantinePath)
+					}
+					combined = errors.Join(combined,
+						fmt.Errorf("%w: %d entries stranded after rollback failure", ErrEntryStranded, len(failed)))
+				}
+				// Deliberately nil/0 here, NOT reconciled/reconciledBytes:
+				// wrapCascadeError (pkg/workspace/media_delete.go) treats a
+				// non-empty first return value together with a non-nil error
+				// as "manifest committed cleanly, only a final-unlink
+				// straggler remains" and downgrades it to a non-fatal
+				// ErrCascadeStraggler. This IS a genuine hard failure (the
+				// main cascade never got past phase 1) — reporting the
+				// phase-0 reconcile's unrelated entries here would
+				// misclassify it as the harmless case. The reconcile itself
+				// already persisted successfully above if it ran, so no
+				// data is lost — only this particular call's summary omits
+				// it.
+				return nil, 0, combined
 			}
 		} else {
 			item.quarantined = true
@@ -848,8 +1018,18 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		for _, item := range deleted {
 			l.manifest[item.id] = item.entry
 		}
-		l.restoreCascadeQuarantined(deleted)
-		return nil, 0, persistErr
+		failed := l.restoreCascadeQuarantined(deleted)
+		combined := persistErr
+		if len(failed) > 0 {
+			for _, f := range failed {
+				l.markStrandedLocked(f.id, f.quarantinePath)
+			}
+			combined = errors.Join(persistErr,
+				fmt.Errorf("%w: %d entries stranded after rollback failure", ErrEntryStranded, len(failed)))
+		}
+		// See the phase-1 hard-failure return above for why this is nil/0
+		// rather than reconciled/reconciledBytes.
+		return nil, 0, combined
 	}
 
 	// FIX 3 (review): final-unlink failures used to be logged and then
@@ -876,8 +1056,9 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		}
 	}
 
-	out := make([]gen.MediaLibraryEntry, 0, len(deleted))
-	var totalBytes int64
+	out := make([]gen.MediaLibraryEntry, 0, len(reconciled)+len(deleted))
+	totalBytes := reconciledBytes
+	out = append(out, reconciled...)
 	for _, item := range deleted {
 		out = append(out, item.entry.projection())
 		totalBytes += item.entry.size
@@ -888,6 +1069,14 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 	return out, totalBytes, nil
 }
 
+// OrphanGC deletes every entry whose refcount is zero and whose
+// last-referenced timestamp is older than config.MaxAge. It also always
+// runs reconcileStragglersLocked first (see that function's doc) —
+// independent of the age-based sweep below and of whether any entry is
+// currently old enough to age out — because a stranded entry (see
+// ErrEntryStranded) blocks Read/Get/ResolvePathWithCaller/Delete the
+// moment it happens, not after MaxAge elapses, so its cleanup must not
+// wait for the age gate.
 func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, error) {
 	if !config.Enabled {
 		return nil, nil
@@ -900,6 +1089,14 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	reconciled, _, manifestChanged := l.reconcileStragglersLocked()
+	if manifestChanged {
+		if persistErr := l.persistLocked(); persistErr != nil {
+			return reconciled, fmt.Errorf("media library: persist after straggler reconcile: %w", persistErr)
+		}
+	}
+
 	ids := make([]string, 0)
 	for id, entry := range l.manifest {
 		if entry.refcount != 0 {
@@ -912,7 +1109,7 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return nil, nil
+		return reconciled, nil
 	}
 	sort.Strings(ids)
 
@@ -923,8 +1120,20 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 		quarantinePath := filepath.Join(l.path, ".gc-"+id+"-"+uuid.NewString())
 		if err := l.renameFile(rawPath, quarantinePath); err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
-				l.restoreQuarantined(quarantined)
-				return nil, fmt.Errorf("media library: quarantine orphan %s: %w", id, err)
+				failed := l.restoreQuarantined(quarantined)
+				combined := fmt.Errorf("media library: quarantine orphan %s: %w", id, err)
+				if len(failed) > 0 {
+					for failedID, failedPath := range failed {
+						l.markStrandedLocked(failedID, failedPath)
+					}
+					combined = errors.Join(combined,
+						fmt.Errorf("%w: %d entries stranded after rollback failure", ErrEntryStranded, len(failed)))
+				}
+				// See CascadeDelete's identical note: reconciled is
+				// deliberately omitted from a hard-failure return so this
+				// unrelated phase-0 cleanup doesn't get folded into what is
+				// otherwise a genuine age-sweep failure.
+				return nil, combined
 			}
 		} else {
 			quarantined[id] = quarantinePath
@@ -941,8 +1150,16 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 	}
 	if err := l.persistLocked(); err != nil {
 		l.manifest = snapshot
-		l.restoreQuarantined(quarantined)
-		return nil, err
+		failed := l.restoreQuarantined(quarantined)
+		combined := err
+		if len(failed) > 0 {
+			for failedID, failedPath := range failed {
+				l.markStrandedLocked(failedID, failedPath)
+			}
+			combined = errors.Join(err,
+				fmt.Errorf("%w: %d entries stranded after rollback failure", ErrEntryStranded, len(failed)))
+		}
+		return nil, combined
 	}
 
 	var removeErrors []error
@@ -951,10 +1168,13 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 			removeErrors = append(removeErrors, fmt.Errorf("media library: remove orphan %s: %w", id, err))
 		}
 	}
+	out := make([]gen.MediaLibraryEntry, 0, len(reconciled)+len(deleted))
+	out = append(out, reconciled...)
+	out = append(out, deleted...)
 	if len(removeErrors) > 0 {
-		return deleted, errors.Join(removeErrors...)
+		return out, errors.Join(removeErrors...)
 	}
-	return deleted, nil
+	return out, nil
 }
 
 // load (package-private) reads the manifest from disk and validates
@@ -1017,6 +1237,7 @@ func (l *Library) loadLocked() error {
 		manifest[id] = constructed
 	}
 	l.manifest = manifest
+	l.rebuildStrandedLocked()
 	return nil
 }
 
@@ -1077,6 +1298,9 @@ func (l *Library) changeRefcount(id string, delta int) (int, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if _, stranded := l.stranded[id]; stranded {
+		return 0, fmt.Errorf("%w: %s", ErrEntryStranded, id)
+	}
 	entry, exists := l.manifest[id]
 	if !exists {
 		return 0, fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -1123,7 +1347,7 @@ func (l *Library) persistLocked() error {
 	if err != nil {
 		return fmt.Errorf("media library: encode manifest: %w", err)
 	}
-	if err := fileutil.WriteFileAtomic(l.manifestPath(), data, 0o600); err != nil {
+	if err := l.writeManifest(l.manifestPath(), data, 0o600); err != nil {
 		return fmt.Errorf("media library: persist manifest: %w", err)
 	}
 	return nil
@@ -1136,7 +1360,18 @@ type cascadePending struct {
 	quarantined    bool
 }
 
-func (l *Library) restoreQuarantined(quarantined map[string]string) {
+// restoreQuarantined reverses OrphanGC's forward quarantine rename
+// (rawPath -> quarantinePath) for every id in the given map, best-effort.
+// It returns the subset that FAILED to roll back — every id in the
+// returned map still has its bytes sitting at quarantinePath, not
+// rawPath, even though (in every caller so far) the manifest mutation for
+// that id has just been reverted to claim the entry is present at
+// rawPath. The caller MUST feed the returned ids into markStrandedLocked
+// (see ErrEntryStranded) rather than only logging the rollback failure —
+// that used to be the entirety of the handling here, which is exactly the
+// TD this type closes.
+func (l *Library) restoreQuarantined(quarantined map[string]string) map[string]string {
+	failed := make(map[string]string)
 	for id, quarantinePath := range quarantined {
 		if err := l.renameFile(quarantinePath, l.rawPath(id)); err != nil {
 			logger.WarnCF("media-library", "orphan rollback failed", map[string]any{
@@ -1144,11 +1379,17 @@ func (l *Library) restoreQuarantined(quarantined map[string]string) {
 				"media_id":     id,
 				"error":        err.Error(),
 			})
+			failed[id] = quarantinePath
 		}
 	}
+	return failed
 }
 
-func (l *Library) restoreCascadeQuarantined(deleted []cascadePending) {
+// restoreCascadeQuarantined is CascadeDelete's counterpart to
+// restoreQuarantined — same contract, same reason for returning (rather
+// than only logging) the subset that failed to roll back.
+func (l *Library) restoreCascadeQuarantined(deleted []cascadePending) []cascadePending {
+	var failed []cascadePending
 	for _, item := range deleted {
 		if !item.quarantined {
 			continue
@@ -1159,8 +1400,174 @@ func (l *Library) restoreCascadeQuarantined(deleted []cascadePending) {
 				"media_id":     item.id,
 				"error":        err.Error(),
 			})
+			failed = append(failed, item)
 		}
 	}
+	return failed
+}
+
+// markStrandedLocked records that id's raw bytes are stranded at
+// quarantinePath because a compensating rename-back failed after a
+// manifest mutation was rolled back to (once again, factually incorrectly)
+// claim the entry is present at its normal rawPath. Must be called with
+// l.mu held for writing. See ErrEntryStranded's doc for the full
+// contract; reconcileStragglersLocked is the only path that clears an
+// entry from this registry.
+func (l *Library) markStrandedLocked(id, quarantinePath string) {
+	if l.stranded == nil {
+		l.stranded = make(map[string]string)
+	}
+	l.stranded[id] = quarantinePath
+}
+
+// rebuildStrandedLocked scans l.path for quarantine dotfiles left behind
+// by an interrupted compound rollback failure (see ErrEntryStranded)
+// whose id still appears in the just-loaded manifest, and repopulates
+// l.stranded from what it finds. Called at the end of loadLocked so the
+// corruption stays discoverable across a process restart — l.stranded is
+// otherwise purely in-memory and would silently forget the corruption if
+// the process restarted before OrphanGC's straggler reconciliation ran.
+// Read-only: unlike reconcileStragglersLocked (OrphanGC's remediation
+// half), this never removes a file or mutates l.manifest — Load has no
+// license to delete anything, only to report state accurately.
+func (l *Library) rebuildStrandedLocked() {
+	l.stranded = nil
+	dirEntries, err := os.ReadDir(l.path)
+	if err != nil {
+		// No directory yet (never-uploaded-to workspace) or unreadable —
+		// either way there is nothing to detect; loadLocked's own
+		// os.ReadFile(l.manifestPath()) call already handled (or will
+		// separately surface) the missing/unreadable-directory case for
+		// the manifest itself.
+		return
+	}
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() {
+			continue
+		}
+		id, ok := parseStragglerID(dirEntry.Name())
+		if !ok {
+			continue
+		}
+		if _, exists := l.manifest[id]; !exists {
+			// A stray quarantine file whose id is NOT in the manifest is a
+			// "clean leak" (a final-unlink failure whose manifest mutation
+			// already committed correctly, see Delete/CascadeDelete/OrphanGC's
+			// own FIX 3 notes) — not a manifest/disk divergence. Leave it for
+			// reconcileStragglersLocked to sweep on the next OrphanGC run;
+			// it is a disk-space leak, not a correctness lie.
+			continue
+		}
+		l.markStrandedLocked(id, filepath.Join(l.path, dirEntry.Name()))
+	}
+}
+
+// reconcileStragglersLocked is OrphanGC's (and CascadeDelete's) directory
+// scan for quarantine dotfiles that a prior Delete / CascadeDelete /
+// OrphanGC call left behind — the "OrphanGC only walks manifest entries,
+// so it never notices these" gap. Must be called with l.mu held for
+// writing; every caller that can produce one of these files (Delete,
+// CascadeDelete, OrphanGC) holds l.mu.Lock() for its entire quarantine ->
+// mutate -> persist -> final-unlink critical section, so any quarantine
+// file this scan observes is guaranteed to be a genuine leftover, never a
+// concurrent in-flight operation's file.
+//
+// Two shapes are reconciled by attempting l.removeFile on each:
+//   - Stranded (ErrEntryStranded): the id is STILL in l.manifest (a
+//     rollback restored the manifest mutation) and typically also in
+//     l.stranded already. Successfully removing the stray file completes
+//     the originally-failed delete: the (now provably byte-less) manifest
+//     entry is removed, l.stranded is cleared for it, and it is reported
+//     in the returned reclaimed slice so the caller's summary reflects it.
+//   - Clean leak: the id is NOT in l.manifest (a final-unlink step failed
+//     AFTER a manifest mutation that itself committed cleanly). Nothing to
+//     reconcile in the manifest; only the disk leak is cleaned, and its
+//     size is folded into bytesFreed without a synthesized manifest entry
+//     (there is no real entry left to report).
+//
+// A file that still cannot be removed is left in place (and, for the
+// stranded shape, l.stranded keeps pointing at it) — this function never
+// gives up permanently, it just makes no progress on that one file until
+// a future call succeeds.
+func (l *Library) reconcileStragglersLocked() (reclaimed []gen.MediaLibraryEntry, bytesFreed int64, manifestChanged bool) {
+	dirEntries, err := os.ReadDir(l.path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF("media-library", "straggler reconcile: list directory failed", map[string]any{
+				"workspace_id": l.workspaceID,
+				"error":        err.Error(),
+			})
+		}
+		return nil, 0, false
+	}
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() {
+			continue
+		}
+		name := dirEntry.Name()
+		id, ok := parseStragglerID(name)
+		if !ok {
+			continue
+		}
+		fullPath := filepath.Join(l.path, name)
+		var strayBytes int64
+		if info, statErr := dirEntry.Info(); statErr == nil {
+			strayBytes = info.Size()
+		}
+		if removeErr := l.removeFile(fullPath); removeErr != nil {
+			if !errors.Is(removeErr, os.ErrNotExist) {
+				logger.WarnCF("media-library", "straggler reconcile: remove failed", map[string]any{
+					"workspace_id": l.workspaceID,
+					"media_id":     id,
+					"path":         fullPath,
+					"error":        removeErr.Error(),
+				})
+				continue
+			}
+			// Already gone (e.g. a previous reconcile call raced ahead of
+			// this one's directory listing) — fall through and still clear
+			// the bookkeeping below.
+		}
+		delete(l.stranded, id)
+		if entry, exists := l.manifest[id]; exists {
+			reclaimed = append(reclaimed, entry.projection())
+			bytesFreed += entry.size
+			delete(l.manifest, id)
+			manifestChanged = true
+			continue
+		}
+		bytesFreed += strayBytes
+	}
+	return reclaimed, bytesFreed, manifestChanged
+}
+
+// parseStragglerID extracts the media id from a quarantine dotfile name
+// (".delete-<id>-<uuid>", ".cascade-<id>-<uuid>", ".gc-<id>-<uuid>" — see
+// Delete / CascadeDelete / OrphanGC's own quarantinePath construction).
+// Returns ok=false for anything else, including a live ".upload-*" temp
+// file — a different, unrelated leak category (see uploadInternal's own
+// defer-based cleanup) that this function deliberately does not touch:
+// unlike the quarantine dotfiles above, ".upload-*" files are created
+// OUTSIDE l.mu (uploadInternal writes the upload body before taking the
+// lock), so a directory scan under l.mu cannot safely assume one it finds
+// is not a concurrent in-flight upload.
+func parseStragglerID(name string) (string, bool) {
+	for _, prefix := range stragglerPrefixes {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(name, prefix)
+		const uuidLen = 36
+		if len(rest) < uuidLen+1 || rest[uuidLen] != '-' {
+			continue
+		}
+		id := rest[:uuidLen]
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		return id, true
+	}
+	return "", false
 }
 
 func (l *Library) manifestPath() string {

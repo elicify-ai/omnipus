@@ -1371,19 +1371,83 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 	})
 }
 
+// listAgentSessions returns the union of an agent's sessions from both
+// session stores, deduplicated by session ID. Ordinary chat sessions moved
+// to the shared store (AgentLoop.GetSessionStore — "the shared store for new
+// sessions") some time ago; AgentLoop.GetAgentStore's own doc marks it "kept
+// for legacy per-agent session access". This endpoint used to read
+// GetAgentStore exclusively, so it silently omitted every session minted
+// after that move.
+//
+// This does not call AgentLoop.ListAllSessions: that helper merges the
+// shared store with EVERY registered agent's legacy store to build a
+// cross-agent list, which would mean opening and reading every OTHER
+// agent's session directory off disk just to filter the result back down to
+// this one agent — needless I/O for a single-agent-scoped endpoint. Instead
+// this inlines the same shared-primary/per-agent-secondary merge idiom
+// ListAllSessions and createSessionHTTP already use, scoped to just the two
+// stores that can hold this agent's sessions.
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// agentID is already validated by HandleAgents before reaching here.
-	store := a.agentLoop.GetAgentStore(agentID)
-	if store == nil {
-		jsonOK(w, []gen.Session{})
+	seen := make(map[string]bool)
+	var metas []*session.UnifiedMeta
+	var errs []error
+
+	if shared := a.agentLoop.GetSessionStore(); shared != nil {
+		sharedMetas, err := shared.ListSessions()
+		if err != nil {
+			// Logged and collected, not fatal by itself: a shared-store read
+			// failure should not hide sessions the legacy per-agent store can
+			// still serve — same partial-failure posture AgentLoop.ListAllSessions
+			// takes across its own store scan. Escalated to a 500 below only if
+			// NO store yields any data at all (see the errs check after both
+			// scans) — otherwise a real backend failure would silently present
+			// as "this agent has zero sessions", which is fake data.
+			slog.Warn("rest: list agent sessions: shared store", "agent_id", agentID, "error", err)
+			errs = append(errs, fmt.Errorf("shared: %w", err))
+		}
+		for _, m := range sharedMetas {
+			// The shared store holds sessions for every agent; membership is
+			// AgentIDs (PostLoad-backfilled from the legacy single AgentID
+			// field on every read, so this is never empty for a real session).
+			if slices.Contains(m.AgentIDs, agentID) {
+				metas = append(metas, m)
+				seen[m.ID] = true
+			}
+		}
+	}
+
+	if legacy := a.agentLoop.GetAgentStore(agentID); legacy != nil {
+		legacyMetas, err := legacy.ListSessions()
+		if err != nil {
+			slog.Warn("rest: list agent sessions: legacy store", "agent_id", agentID, "error", err)
+			errs = append(errs, fmt.Errorf("legacy: %w", err))
+		}
+		for _, m := range legacyMetas {
+			// A session can exist in both stores (a pre-fix duplicate-mint bug
+			// produced exactly that) — the shared-store copy wins.
+			if !seen[m.ID] {
+				metas = append(metas, m)
+				seen[m.ID] = true
+			}
+		}
+	}
+
+	// A store error alongside data from the OTHER store is a partial result,
+	// worth a 200 with whatever real data is available (logged above). Only
+	// when every consulted store errored AND none produced anything is this a
+	// genuine failure — reporting 200+[] in that case would tell the caller
+	// "this agent has no sessions" when the true answer is "unknown".
+	if len(metas) == 0 && len(errs) > 0 {
+		slog.Error("rest: list agent sessions: all stores failed", "agent_id", agentID, "errors", errs)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
 		return
 	}
-	metas, err := store.ListSessions()
-	if err != nil {
-		slog.Error("rest: list agent sessions", "agent_id", agentID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", err))
-		return
-	}
+
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
+	})
+
 	// Route every session through unifiedMetaToGenSession so required arrays
 	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
 	genSessions := make([]gen.Session, 0, len(metas))
@@ -9219,11 +9283,37 @@ func (a *restAPI) serveMedia(
 
 	localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
 	if err != nil {
-		slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
 		if errors.Is(err, media.ErrCrossWorkspaceRef) || errors.Is(err, library.ErrWorkspaceMismatch) {
+			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
 			jsonErr(w, http.StatusForbidden, "media access denied")
 			return
 		}
+		if errors.Is(err, library.ErrEntryStranded) {
+			// See rest_workspace_media.go's handleWorkspaceMediaGet/Delete for
+			// the identical branch and its full rationale: ErrEntryStranded
+			// means the manifest still claims the entry is present while its
+			// bytes are actually quarantined at an internal path — a
+			// server-side data-integrity failure, not a routine absent ref.
+			// Folding it into the catch-all below would report it as 404
+			// ("this ref never existed"), which is a lie; 500 with an
+			// attributable message keeps this path coherent with the
+			// workspace-media handlers' mapping for the same sentinel.
+			//
+			// library.ErrIntegrityCheckFailed (sha256 mismatch) deliberately
+			// gets no analogous branch here: it is only ever returned by
+			// Library.Read/ResolveWithWorkspace (the bytes-returning,
+			// integrity-checked path), never by ResolvePathWithCaller (the
+			// path-only resolver this handler's workspace-ref route reaches
+			// through FileMediaStore.resolveWorkspaceRef) or by the legacy
+			// registry lookup the non-workspace route uses — so it cannot
+			// reach this catch in practice. Should the resolution path ever
+			// change to route through the integrity-checked reader, this
+			// error deserves the same non-404 treatment as ErrEntryStranded.
+			slog.Error("rest: media: entry stranded (manifest/disk diverged)", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
+			return
+		}
+		slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
 		jsonErr(w, http.StatusNotFound, "media not found")
 		return
 	}

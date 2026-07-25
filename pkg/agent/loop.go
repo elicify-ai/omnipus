@@ -5213,12 +5213,19 @@ func (al *AgentLoop) ProcessScheduled(
 	// Telegram, ...) whose SendMedia does honor it. The concrete session this
 	// run writes into (sessionID) is the one genuine source available here —
 	// same lookup processMessage (loop.go, ~line 5332) uses for the
-	// interactive path. Nothing currently stamps WorkspaceID onto a scheduled
-	// session's meta (pkg/gateway/schedules.go has no workspace-binding
-	// concept yet), so this resolves to "" today for every existing schedule
-	// — that is the correct, non-invented answer, not a workaround: it stays
-	// forward-compatible with zero further changes here the day a schedule
-	// (or its session) does carry a workspace binding.
+	// interactive path.
+	//
+	// GAP CLOSED: pkg/gateway/schedules.go's scheduledRunner.pickSession now
+	// resolves the schedule's workspace (from a heartbeat job's deterministic
+	// name, or from the channel instance a plain schedule's payload.Channel
+	// names — see resolveScheduleWorkspaceID's doc there) and stamps it onto
+	// the session's meta via stampScheduledSessionWorkspace BEFORE this
+	// function runs, using the exact GetSessionStore()/GetMeta/SetMeta
+	// surface this read below already relies on. This function needed no
+	// logic change to pick that up — it was already forward-compatible by
+	// design, as this comment previously promised. A schedule with no
+	// resolvable workspace (no heartbeat identity, no channel binding) still
+	// correctly resolves to "" here — never fabricated.
 	workspaceID := ""
 	if meta, mErr := transcriptStore.GetMeta(sessionID); mErr == nil && meta != nil {
 		workspaceID = meta.WorkspaceID

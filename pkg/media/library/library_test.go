@@ -1039,3 +1039,261 @@ func TestWorkspaceLibrary_CascadeDelete_PartialRenameFailure_ManifestSurvives(t 
 		t.Fatalf("CascadeDelete() on retry deleted = %d entries, want 2", len(deleted))
 	}
 }
+
+// ── ErrEntryStranded regression tests: a "compound rollback-of-rollback"
+// failure — a persist rolls the manifest mutation back AND the compensating
+// rename-back of the already-quarantined file ALSO fails — used to be only
+// logger.WarnCF'd. The manifest was left claiming the file lives at its
+// original path while the bytes actually sit at an undiscoverable quarantine
+// path, and every later Read/Get/ResolvePathWithCaller got a generic
+// ErrNotFound, indistinguishable from a routine not-found. These tests
+// build the compound failure with the WithFileRenamer/WithManifestWriter
+// seams (real disk failures cannot be provoked deterministically, and
+// permission tricks don't isolate one step from a sibling using the same
+// directory — see the Library.removeFile field doc) and prove:
+//   - Delete itself escalates ErrEntryStranded instead of only logging it.
+//   - Read/Get/ResolvePathWithCaller/Refcount all report ErrEntryStranded,
+//     not ErrNotFound, once an id is stranded.
+//   - The stranded state survives a process restart (rebuildStrandedLocked).
+//   - OrphanGC's straggler reconciliation is the only thing that clears it,
+//     after which the id is a genuine, routine ErrNotFound again.
+//   - CascadeDelete self-heals a pre-existing stranded entry rather than
+//     letting it block deletion of everything else in the library. ─────────
+
+// newCompoundFailureLibrary builds a Library whose manifest-persist step can
+// be toggled to fail (via failPersist) and whose file-rename step can be
+// toggled to fail ONLY for the rollback direction (quarantine -> original
+// path, identified by the ".delete-"/".cascade-"/".gc-" prefix on oldpath;
+// the forward quarantine rename always succeeds via the real os.Rename).
+// Both toggles default to false so setup uploads succeed normally.
+func newCompoundFailureLibrary(t *testing.T, home, workspaceID string, now time.Time) (
+	lib *library.Library,
+	failPersist *bool,
+	failRollback *bool,
+	persistErr, rollbackErr error,
+) {
+	t.Helper()
+	failPersist = new(bool)
+	failRollback = new(bool)
+	persistErr = errors.New("simulated persist failure")
+	rollbackErr = errors.New("simulated rollback rename failure")
+
+	var err error
+	lib, err = library.New(home, workspaceID,
+		library.WithClock(func() time.Time { return now }),
+		library.WithManifestWriter(func(path string, data []byte, perm os.FileMode) error {
+			if *failPersist {
+				return persistErr
+			}
+			return os.WriteFile(path, data, perm)
+		}),
+		library.WithFileRenamer(func(oldpath, newpath string) error {
+			base := filepath.Base(oldpath)
+			isRollback := strings.HasPrefix(base, ".delete-") ||
+				strings.HasPrefix(base, ".cascade-") ||
+				strings.HasPrefix(base, ".gc-")
+			if isRollback && *failRollback {
+				return rollbackErr
+			}
+			return os.Rename(oldpath, newpath)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return lib, failPersist, failRollback, persistErr, rollbackErr
+}
+
+func TestWorkspaceLibrary_Delete_CompoundRollbackFailure_ReportsErrEntryStranded(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	lib, failPersist, failRollback, persistErr, rollbackErr := newCompoundFailureLibrary(t, home, workspaceID, now)
+
+	_, entry := uploadFixture(t, lib, "doc.txt", []byte("hello"))
+	id := mediaID(t, entry)
+
+	*failPersist = true
+	*failRollback = true
+	_, delErr := lib.Delete(id)
+	if delErr == nil {
+		t.Fatal("Delete() error = nil, want an error when both the persist and its rollback fail")
+	}
+	if !errors.Is(delErr, persistErr) {
+		t.Fatalf("Delete() error = %v, want it to wrap the persist failure", delErr)
+	}
+	if !errors.Is(delErr, library.ErrEntryStranded) {
+		t.Fatalf("Delete() error = %v, want it to also wrap ErrEntryStranded (escalated, not just logged)", delErr)
+	}
+	if !errors.Is(delErr, rollbackErr) {
+		t.Fatalf("Delete() error = %v, want it to also wrap the rollback-rename failure", delErr)
+	}
+
+	// Every read surface must now report ErrEntryStranded — NOT ErrNotFound,
+	// which is exactly the masking bug this type closes.
+	if _, getErr := lib.Get(id); !errors.Is(getErr, library.ErrEntryStranded) {
+		t.Fatalf("Get(%q) = %v, want ErrEntryStranded", id, getErr)
+	}
+	if _, _, readErr := lib.Read(id); !errors.Is(readErr, library.ErrEntryStranded) {
+		t.Fatalf("Read(%q) = %v, want ErrEntryStranded", id, readErr)
+	}
+	ref := "media://workspace/" + workspaceID + "/" + id
+	_, _, resolveErr := lib.ResolvePathWithCaller(ref, &workspaceID)
+	if !errors.Is(resolveErr, library.ErrEntryStranded) {
+		t.Fatalf("ResolvePathWithCaller(%q) = %v, want ErrEntryStranded", ref, resolveErr)
+	}
+	if _, rcErr := lib.Refcount(id); !errors.Is(rcErr, library.ErrEntryStranded) {
+		t.Fatalf("Refcount(%q) = %v, want ErrEntryStranded", id, rcErr)
+	}
+	if _, incErr := lib.IncrementRefcount(id); !errors.Is(incErr, library.ErrEntryStranded) {
+		t.Fatalf("IncrementRefcount(%q) = %v, want ErrEntryStranded", id, incErr)
+	}
+
+	// Retrying Delete on an already-stranded id must refuse outright — not
+	// silently "fix" the manifest via a lucky ErrNotExist-tolerant rename
+	// while leaking the original quarantine file forever.
+	*failPersist, *failRollback = false, false
+	if _, delErr2 := lib.Delete(id); !errors.Is(delErr2, library.ErrEntryStranded) {
+		t.Fatalf("Delete(%q) retry = %v, want ErrEntryStranded (must refuse, not self-heal silently)", id, delErr2)
+	}
+
+	// List() still shows the entry (it genuinely is still in the manifest) —
+	// only the byte-serving/mutation surfaces refuse it.
+	if got := len(lib.List()); got != 1 {
+		t.Fatalf("List() length = %d, want 1 (the stranded entry is still cataloged)", got)
+	}
+}
+
+func TestWorkspaceLibrary_Stranded_SurvivesReload(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	lib, failPersist, failRollback, _, _ := newCompoundFailureLibrary(t, home, workspaceID, now)
+
+	_, entry := uploadFixture(t, lib, "doc.txt", []byte("hello"))
+	id := mediaID(t, entry)
+	*failPersist, *failRollback = true, true
+	if _, delErr := lib.Delete(id); delErr == nil {
+		t.Fatal("Delete() error = nil, want the compound failure to be provoked")
+	}
+
+	// l.stranded is in-memory only; a process restart must not forget the
+	// corruption — rebuildStrandedLocked reconstructs it from a directory
+	// scan on every Load. Re-open with a PLAIN library.New (no fault
+	// injection at all) to prove this works through the real production
+	// load path, not just inside the fault-injected instance.
+	reopened, err := library.New(home, workspaceID, library.WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("re-open library: %v", err)
+	}
+	if _, getErr := reopened.Get(id); !errors.Is(getErr, library.ErrEntryStranded) {
+		t.Fatalf("re-opened Get(%q) = %v, want ErrEntryStranded (corruption must survive restart)", id, getErr)
+	}
+}
+
+func TestWorkspaceLibrary_OrphanGC_ReconcilesStrandedEntry(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	lib, failPersist, failRollback, _, _ := newCompoundFailureLibrary(t, home, workspaceID, now)
+
+	_, entry := uploadFixture(t, lib, "doc.txt", []byte("hello"))
+	id := mediaID(t, entry)
+	*failPersist, *failRollback = true, true
+	if _, delErr := lib.Delete(id); delErr == nil {
+		t.Fatal("Delete() error = nil, want the compound failure to be provoked")
+	}
+	*failPersist, *failRollback = false, false
+
+	// OrphanGC must find and clean the stray quarantine file even though the
+	// entry's refcount/lastRefcountSeenAt would never satisfy the normal
+	// age-based sweep (MaxAge defaults to 30 days; "now" hasn't moved) —
+	// straggler reconciliation is unconditional, not age-gated.
+	deleted, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+	if gcErr != nil {
+		t.Fatalf("OrphanGC() error = %v, want nil", gcErr)
+	}
+	found := false
+	for _, e := range deleted {
+		if e.Id != nil && e.Id.String() == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("OrphanGC() deleted = %+v, want it to include the reconciled stranded entry %s", deleted, id)
+	}
+
+	// The id is now a genuine, routine absent entry — ErrNotFound, not
+	// ErrEntryStranded.
+	if _, getErr := lib.Get(id); !errors.Is(getErr, library.ErrNotFound) {
+		t.Fatalf("Get(%q) after reconcile = %v, want ErrNotFound (reconciliation must fully resolve it)", id, getErr)
+	}
+	if got := len(lib.List()); got != 0 {
+		t.Fatalf("List() length after reconcile = %d, want 0", got)
+	}
+
+	// The stray quarantine file must actually be gone from disk.
+	dirEntries, err := os.ReadDir(lib.Path())
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", lib.Path(), err)
+	}
+	for _, de := range dirEntries {
+		if strings.HasPrefix(de.Name(), ".delete-") {
+			t.Fatalf("stray quarantine file %q still present after OrphanGC reconcile", de.Name())
+		}
+	}
+}
+
+func TestWorkspaceLibrary_CascadeDelete_SelfHealsStrandedEntry(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	lib, failPersist, failRollback, _, _ := newCompoundFailureLibrary(t, home, workspaceID, now)
+
+	_, strandedEntry := uploadFixture(t, lib, "stranded.txt", []byte("aaa"))
+	strandedID := mediaID(t, strandedEntry)
+	*failPersist, *failRollback = true, true
+	if _, delErr := lib.Delete(strandedID); delErr == nil {
+		t.Fatal("Delete() error = nil, want the compound failure to be provoked")
+	}
+	*failPersist, *failRollback = false, false
+
+	_, normalEntry := uploadFixture(t, lib, "normal.txt", []byte("bbbbb"))
+	normalID := mediaID(t, normalEntry)
+
+	// CascadeDelete must not let the one already-broken entry block removal
+	// of everything else — it self-heals the stranded id via phase-0
+	// reconciliation and still cascades the normal one.
+	deleted, bytesFreed, cascadeErr := lib.CascadeDelete()
+	if cascadeErr != nil {
+		t.Fatalf("CascadeDelete() error = %v, want nil (self-heal + normal cascade both succeed)", cascadeErr)
+	}
+	if len(deleted) != 2 {
+		t.Fatalf("CascadeDelete() deleted = %d entries, want 2 (1 reconciled + 1 normal): %+v", len(deleted), deleted)
+	}
+	var sawStranded, sawNormal bool
+	for _, e := range deleted {
+		if e.Id == nil {
+			continue
+		}
+		switch e.Id.String() {
+		case strandedID:
+			sawStranded = true
+		case normalID:
+			sawNormal = true
+		}
+	}
+	if !sawStranded {
+		t.Fatalf("CascadeDelete() deleted = %+v, want the reconciled stranded entry included", deleted)
+	}
+	if !sawNormal {
+		t.Fatalf("CascadeDelete() deleted = %+v, want the normal entry included", deleted)
+	}
+	wantBytes := int64(len("aaa") + len("bbbbb"))
+	if bytesFreed != wantBytes {
+		t.Fatalf("CascadeDelete() bytesFreed = %d, want %d", bytesFreed, wantBytes)
+	}
+	if got := len(lib.List()); got != 0 {
+		t.Fatalf("List() length after CascadeDelete = %d, want 0", got)
+	}
+}

@@ -530,6 +530,15 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 	// during the run (SEC-2/#406, Rule-2). Distinct from owner (agentID).
 	userOwner := job.CreatedBy
 
+	// workspaceID is the schedule's resolved workspace (see
+	// resolveScheduleWorkspaceID's doc for the two sources and why a plain
+	// CronJob.AgentID lookup was rejected). Resolved once per fire and
+	// stamped onto whichever session this run picks below, so
+	// ProcessScheduled's existing transcriptStore.GetMeta(sessionID).WorkspaceID
+	// read (loop.go, the FIX-1 comment there) resolves to a real value
+	// instead of always "" — this is the write side that closes that gap.
+	workspaceID := resolveScheduleWorkspaceID(r.getConfig(), *job)
+
 	switch mode {
 	case cron.SessionModeContinue:
 		id := job.SessionID
@@ -542,6 +551,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			}
 			job.SessionID = fresh.ID
 			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+			r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
 			return fresh.ID, nil
 		}
 		meta, err := store.GetOrCreateScheduledSession(id, owner)
@@ -554,9 +564,11 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 				return "", fmt.Errorf("continue fallback create: %w", ferr)
 			}
 			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+			r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
 			return fresh.ID, nil
 		}
 		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 
 	case cron.SessionModeMain:
@@ -566,6 +578,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			return "", fmt.Errorf("main session create: %w", err)
 		}
 		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 
 	default: // isolated
@@ -574,7 +587,129 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			return "", fmt.Errorf("isolated session create: %w", err)
 		}
 		r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
+		r.stampScheduledSessionWorkspace(store, fresh.ID, workspaceID)
 		return fresh.ID, nil
+	}
+}
+
+// resolveScheduleWorkspaceID resolves the workspace a fired schedule's agent
+// turn should be scoped to, so pickSession can stamp it onto the session
+// meta BEFORE ProcessScheduled runs. loop.go's ProcessScheduled already
+// reads transcriptStore.GetMeta(sessionID).WorkspaceID (see its FIX-1
+// comment) — that read was always "" because nothing upstream ever wrote
+// it; this is the write side that makes it meaningful, for both
+// operator-created schedules and workspace-scoped heartbeats (ADR-027).
+//
+// Two sources, tried in order:
+//
+//  1. Heartbeat jobs are workspace-scoped BY CONSTRUCTION: the reconciler
+//     (heartbeat_schedule.go) names each job
+//     "heartbeat:<workspaceID>:<agentID>" and that (workspace, agent) pairing
+//     never changes for the job's lifetime (a workspace/interval/message
+//     change re-stamps the same job; enabling elsewhere creates a distinct
+//     job with a distinct name). workspaceIDFromHeartbeatJobName parses it
+//     back out.
+//
+//  2. An operator-created schedule's payload.Channel, when set, names a
+//     channel INSTANCE — the same key space processMessage resolves a
+//     session's workspace from (cfg.Channels[instanceID].WorkspaceID; see
+//     loop.go's resolveOrCreateChannelSession / resolveWorkspaceIDForContinuation).
+//     A channel instance is bound to at most one workspace (ADR-029), so
+//     this is a direct config lookup — no ResolveRoute/peer-binding pass is
+//     needed or even possible here: a fired schedule carries no
+//     peer/guild/team match context, only a channel + chat id.
+//
+// Rejected as a general-purpose source: CronJob.AgentID (the owning agent)
+// alone. An agent can sit on multiple workspaces with different rosters —
+// that is the explicit rationale ADR-037 gives for removing the global
+// delegation graph in favor of workspace-scoped trust — so "the owner's
+// workspace" is ambiguous for a plain schedule. It is NOT ambiguous for a
+// heartbeat job specifically, because a heartbeat job already IS one
+// (workspace, agent) pair by construction; case 1 above relies on that,
+// not on AgentID being globally unique to one workspace.
+//
+// Rejected as a schema change: adding an explicit WorkspaceID field to
+// CronJob/CronPayload (option (c) in the investigation). Schedules are a
+// REST entity (Constraint #8), so a new field would need a contracts/
+// change, codegen, AND a migration story for every job already on disk.
+// Both sources above are derivable from data the job already carries, so no
+// wire change is needed.
+//
+// A schedule with neither a heartbeat name nor a channel (e.g.
+// deliver=true's own send-path, which never reaches pickSession, or an
+// operator schedule that fires no channel context at all) has no
+// resolvable workspace. "" is returned deliberately in that case — never
+// fabricated — and stampScheduledSessionWorkspace treats "" as "nothing to
+// stamp", leaving the session's existing (possibly still-empty) tag alone.
+func resolveScheduleWorkspaceID(cfg *config.Config, job cron.CronJob) string {
+	if wsID := workspaceIDFromHeartbeatJobName(job); wsID != "" {
+		return wsID
+	}
+	channel := strings.ToLower(strings.TrimSpace(job.Payload.Channel))
+	if channel == "" || cfg == nil {
+		return ""
+	}
+	if inst, ok := cfg.Channels[channel]; ok {
+		return inst.WorkspaceID
+	}
+	return ""
+}
+
+// workspaceIDFromHeartbeatJobName extracts the workspace id encoded in a
+// workspace-scoped heartbeat job's deterministic name
+// ("heartbeat:<workspaceID>:<agentID>", built by heartbeatJobName in
+// heartbeat_schedule.go — same package, reused here rather than
+// re-implemented). job.AgentID is already known and trusted (it is exactly
+// the string the reconciler appended when it built the name), so trimming
+// that exact ":"+AgentID suffix from the name yields exactly the workspace
+// id, regardless of what characters the workspace id itself contains —
+// robust even if a workspace id were ever allowed to include a colon,
+// unlike a positional split on ":". Returns "" for a non-heartbeat job or a
+// name that does not match the expected shape (e.g. hand-edited store data
+// or a stale AgentID after a heartbeat reassignment mid-flight).
+func workspaceIDFromHeartbeatJobName(job cron.CronJob) string {
+	if job.Payload.Kind != heartbeatJobKind || job.AgentID == "" {
+		return ""
+	}
+	rest := strings.TrimPrefix(job.Name, heartbeatJobNamePrefix)
+	if rest == job.Name {
+		return "" // name doesn't carry the expected "heartbeat:" prefix at all
+	}
+	suffix := ":" + job.AgentID
+	if !strings.HasSuffix(rest, suffix) {
+		return ""
+	}
+	return strings.TrimSuffix(rest, suffix)
+}
+
+// stampScheduledSessionWorkspace sets WorkspaceID on a scheduled session from
+// the resolved schedule workspace (resolveScheduleWorkspaceID). Mirrors
+// stampScheduledSessionOwner's posture in every respect: only stamps when
+// the session has no workspace yet (a later change to the schedule's channel
+// binding does not retroactively move an already-anchored continue/main
+// session — same non-clobber policy the owner stamp uses; for isolated mode
+// every session is fresh so this always fires), a resolved-empty
+// workspaceID is a legitimate "no context" outcome and is never forced onto
+// an existing meta, and errors are non-fatal and logged as warnings
+// (SEC-2/#406 posture) — a missing workspace tag degrades gracefully to the
+// private/global room for media resolution rather than aborting the run.
+func (r *scheduledRunner) stampScheduledSessionWorkspace(store *session.UnifiedStore, sessionID, workspaceID string) {
+	if workspaceID == "" {
+		return
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil {
+		logger.WarnCF("gateway", "scheduled run: could not read session meta for workspace stamp",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	if meta.WorkspaceID != "" {
+		return
+	}
+	wsCopy := workspaceID
+	if setErr := store.SetMeta(sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
+		logger.WarnCF("gateway", "scheduled run: could not stamp session workspace",
+			map[string]any{"session_id": sessionID, "workspace_id": workspaceID, "error": setErr.Error()})
 	}
 }
 
