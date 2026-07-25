@@ -836,8 +836,8 @@ func spawnSubTurn(
 		// FIX 1 (re-review): WorkspaceID inherits from the PARENT turn, not
 		// execSource (the resolved delegate). This is deliberately NOT covered
 		// by ADR-032's "no inheritance from the parent" rule (see that ADR's
-		// note in CLAUDE.md): the "Workspace" ADR-032 protects is
-		// AgentInstance.Workspace/Home — the per-agent directory-path identity
+		// note in CLAUDE.md): the "Workspace" ADR-032 protects is the
+		// AgentInstance Home field — the per-agent directory-path identity
 		// field (renamed "agent home" by ADR-046) — sourced from execSource a
 		// few lines above via CloneExcept/the execSource-snapshot copy, and
 		// via the SEPARATE, identity-keyed CoreTeam reroot in runTurn

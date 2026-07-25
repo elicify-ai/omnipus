@@ -111,11 +111,15 @@ func TestListAgentSessions_UnknownAgent_ReturnsEmpty(t *testing.T) {
 
 // TestListAgentSessions_AllStoresFail_Returns500 proves a real backend
 // failure is still surfaced as 500, not silently presented as "this agent
-// has zero sessions". Both ListSessions calls are made to fail (permission
-// denied on each store's base directory — this test runs unprivileged, so
-// chmod 0 genuinely blocks os.ReadDir, unlike under root's CAP_DAC_OVERRIDE);
-// with no data recovered from either store, listAgentSessions must not
-// collapse that into a lying 200+[].
+// has zero sessions". With no data recovered from either store,
+// listAgentSessions must not collapse that into a lying 200+[].
+//
+// The failure is injected by replacing each store's base directory with a
+// REGULAR FILE, so os.ReadDir fails with ENOTDIR. Do not switch this back to
+// chmod 0o000: root holds CAP_DAC_OVERRIDE and walks straight through the
+// permission bits, so the chmod form passes locally (unprivileged dev pod)
+// and silently returns 200+[] under CI, which runs as root. ENOTDIR is
+// privilege-independent and fails identically for both.
 func TestListAgentSessions_AllStoresFail_Returns500(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -126,8 +130,9 @@ func TestListAgentSessions_AllStoresFail_Returns500(t *testing.T) {
 	require.NotNil(t, legacy)
 
 	for _, dir := range []string{shared.BaseDir(), legacy.BaseDir()} {
-		require.NoError(t, os.Chmod(dir, 0o000))
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		require.NoError(t, os.RemoveAll(dir))
+		require.NoError(t, os.WriteFile(dir, []byte("not a directory"), 0o600))
+		t.Cleanup(func() { _ = os.Remove(dir) })
 	}
 
 	w := httptest.NewRecorder()
