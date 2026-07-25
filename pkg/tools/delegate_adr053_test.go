@@ -72,6 +72,15 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 	tool.SetMessageInbox(inbox)
 	tool.SetSteeringSink(steer)
 
+	// Drain in-flight async delegation goroutines before the t.TempDir()
+	// cleanups run. Registered AFTER the two t.TempDir() calls above so LIFO
+	// cleanup ordering puts this FIRST — the goroutines finish writing before
+	// RemoveAll deletes the directories they are writing into. Without this,
+	// any test that reaches the async path (e.g. the 3P respond corrective
+	// re-dispatch) races its own teardown and fails under -p contention with
+	// "TempDir RemoveAll cleanup: directory not empty".
+	t.Cleanup(tool.WaitForAsyncTasks)
+
 	return tool, lc, inbox, steer
 }
 

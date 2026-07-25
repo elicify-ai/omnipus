@@ -273,6 +273,14 @@ type DelegateTool struct {
 	maxTokens    int
 	temperature  float64
 
+	// asyncWG tracks the detached goroutines executeAsync launches. Background
+	// delegation is deliberately fire-and-forget for the CALLER (the parent
+	// turn moves on immediately — see executeAsync's Critical:true comment),
+	// but the goroutine keeps writing to the lifecycle store after the caller
+	// returns. Anything that tears down the stores those writes target must be
+	// able to wait for them first; WaitForAsyncTasks is that seam.
+	asyncWG sync.WaitGroup
+
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
 	// task-creation time (W2). Called at task-creation time (not
@@ -519,6 +527,23 @@ type DelegateSteeringSink interface {
 // RequestCancel backstop fires when SetCancelGrace is never called
 // (session_messaging.cancel_grace default, FR-195).
 const defaultCancelGrace = 5 * time.Second
+
+// WaitForAsyncTasks blocks until every in-flight background (async=true)
+// delegation goroutine has finished writing its terminal lifecycle state.
+//
+// Background delegation is fire-and-forget for the CALLER by design, so the
+// goroutine outlives the Execute call that started it and keeps writing to the
+// lifecycle store afterwards. Any caller that is about to tear down the
+// storage those writes target MUST wait here first, or the writes race the
+// teardown. Tests rooted at t.TempDir() are the primary case (the temp dir is
+// removed the moment the test body returns); a graceful-shutdown path that
+// swaps stores would be another.
+//
+// This does NOT cancel anything — it only waits. Cancellation is the caller's
+// ctx, which the goroutine already honors.
+func (t *DelegateTool) WaitForAsyncTasks() {
+	t.asyncWG.Wait()
+}
 
 // SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
@@ -1068,7 +1093,9 @@ func (t *DelegateTool) executeAsync(
 	// REAL delivery path, this same cb -> AsyncNotifier.Notify chain, is
 	// unaffected by parent lifecycle and fires correctly once the child
 	// actually finishes). See SubTurnConfig.Critical's doc comment.
+	t.asyncWG.Add(1)
 	go func() {
+		defer t.asyncWG.Done()
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 			Model:             t.defaultModel,
 			Tools:             nil, // Will inherit from parent via context
