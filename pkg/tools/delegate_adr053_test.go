@@ -60,6 +60,10 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 	tool.SetSpawner(&mockDelegateSpawner{})
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	tool.SetDelegationDenyCheckerAwait(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
+	// B.5 fix (FR-196 kill switch fails-closed when unwired): tests that exercise
+	// the session-messaging plane must explicitly enable it. The default
+	// kill-switch posture is fail-closed (production behavior).
+	tool.SetSessionMessagingEnabled(func() bool { return true })
 
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())

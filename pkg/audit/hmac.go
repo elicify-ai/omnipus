@@ -59,10 +59,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
-	"os"
 	"sort"
 	"sync"
+	"testing"
 
 	"golang.org/x/crypto/hkdf"
 )
@@ -103,17 +102,14 @@ func GenesisSeed() []byte {
 // the agent loop construct its audit logger without threading a key through
 // the agent.NewAgentLoop signature.
 //
-// In test contexts where neither LoggerConfig.HMACKey nor processChainKey is
-// set, the dev-only fallback fires ONLY when an explicit test-mode opt-in
-// is set (env var OMNIPUS_AUDIT_DEV_KEY=1) — production deploys must fail
-// closed (NewLogger returns a fatal boot error) so a missing master key
-// never silently degrades tamper-evidence integrity.
-const auditDevKeyEnvVar = "OMNIPUS_AUDIT_DEV_KEY"
+// In test binaries where neither LoggerConfig.HMACKey nor processChainKey is
+// set, a deterministic dev-only fallback is available automatically via
+// testing.Testing(). Production binaries never take that path and fail closed
+// when the process chain key is missing.
 
 var (
-	processChainKeyMu   sync.RWMutex
-	processChainKey     []byte
-	devChainKeyWarnOnce sync.Once
+	processChainKeyMu sync.RWMutex
+	processChainKey   []byte
 )
 
 // SetProcessChainKey installs a process-wide audit-chain key. Idempotent;
@@ -166,13 +162,10 @@ func DeriveAuditKey(masterKey []byte) ([]byte, error) {
 }
 
 // resolveChainKey picks the chain key for a Logger in the documented
-// precedence order: LoggerConfig.HMACKey → processChainKey → dev fallback.
-// The dev fallback is deterministic (sha256("omnipus-audit-dev-only-key"))
-// and only fires when the explicit test-mode opt-in is set
-// (OMNIPUS_AUDIT_DEV_KEY=1) so a misconfigured production deploy fails
-// closed with a non-nil error rather than silently losing tamper-evidence
-// integrity to a public dev key. A sticky slog.Warn fires the first time
-// the dev fallback is used, so even an opted-in test boot is loud.
+// precedence order: LoggerConfig.HMACKey → processChainKey → test fallback.
+// The test fallback is deterministic (sha256("omnipus-audit-dev-only-key"))
+// and only fires under go test; production binaries fail closed when no
+// configured chain key is available.
 func resolveChainKey(cfgKey []byte) ([]byte, error) {
 	if len(cfgKey) > 0 {
 		out := make([]byte, len(cfgKey))
@@ -182,18 +175,15 @@ func resolveChainKey(cfgKey []byte) ([]byte, error) {
 	if k := getProcessChainKey(); k != nil {
 		return k, nil
 	}
-	if os.Getenv(auditDevKeyEnvVar) == "1" {
-		devChainKeyWarnOnce.Do(func() {
-			slog.Warn("audit: HMAC chain key not configured, using insecure dev-only fallback "+
-				"(set LoggerConfig.HMACKey or call audit.SetProcessChainKey at boot)",
-				"info_tag", AuditChainKeyInfo)
-		})
+	// Test fallback: when running under `go test`, automatically fall back
+	// to a deterministic dev-only key. Production binaries NEVER hit this
+	// path (testing.Testing() returns false there). The dev key is
+	// documented in the test code that uses it.
+	if testing.Testing() {
 		h := sha256.Sum256([]byte("omnipus-audit-dev-only-key"))
 		return h[:], nil
 	}
-	return nil, fmt.Errorf("audit: HMAC chain key not configured and %s=1 is not set "+
-		"(set LoggerConfig.HMACKey or call audit.SetProcessChainKey at boot)",
-		auditDevKeyEnvVar)
+	return nil, fmt.Errorf("audit: HMAC chain key not configured; call audit.SetProcessChainKey at boot")
 }
 
 // computeEntryHMAC computes the chain HMAC for a single entry given the

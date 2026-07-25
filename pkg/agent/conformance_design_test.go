@@ -211,6 +211,7 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	inbox.ChildSendRatePerMinute = 100000 // isolate the per-type CEILING from the unrelated rate cap
 	tool := tools.NewMessageParentTool(inbox, lc)
+	tool.SetSessionMessagingEnabled(func() bool { return true })
 
 	// Two sibling children of the same parent, distinct SessionIDs.
 	for _, sid := range []string{"child-noisy", "child-quiet"} {
