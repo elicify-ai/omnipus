@@ -1633,6 +1633,16 @@ func registerSharedTools(
 		{
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
 			delegateTool.SetSpawner(NewSubTurnSpawner(al))
+			// FR-196 kill switch — wire it HERE, at construction, not only in
+			// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
+			// DelegateTool: the session_messaging_wire.go re-wire walks the
+			// shared registry, so an agent-scoped instance built here would
+			// otherwise never be wired at all. An unwired tool fails CLOSED
+			// (delegate.go sessionMessagingPlaneEnabled), which would deny the
+			// whole gated action set — cancel/steer/respond/inbox/inbox_ack/
+			// follow_up/peek — for every agent. The closure re-reads config per
+			// call, so a live kill-switch flip is still honored.
+			delegateTool.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
 			// W2: action:"status" live-progress snapshot for a running native
 			// task. sharedStore mirrors the exact store wiring
 			// NewHandoffTool already uses just above (line ~1469) — the same
