@@ -626,6 +626,22 @@ var errArchiveDecompressionLimit = errors.New("archive decompression limit excee
 
 type archiveReadBudget struct {
 	remaining int64
+	// exceeded latches true the moment a read is actually rejected by the
+	// budget (errArchiveDecompressionLimit returned because more data was
+	// available beyond the cap). This is a reliable, explicit truncation
+	// signal independent of how an intermediate consumer (e.g.
+	// encoding/xml's Decoder, which may wrap or reinterpret a reader
+	// error) reports it, and independent of remaining merely reaching
+	// zero — remaining can land at exactly zero on a legitimate exact-fit
+	// read (the archive's real content ends exactly as the budget runs
+	// out), which is NOT truncation. Callers that swallow per-entry parse
+	// errors so one corrupt/oversized slide or sheet doesn't abort the
+	// whole document (extractPptx, extractXlsx) check this flag to
+	// distinguish "budget exhausted, remaining content is missing" from
+	// "this one entry happened to be malformed" and append the file's
+	// established "[truncated: ...]" notice instead of silently returning
+	// ok=true with content that looks complete (review FIX 2).
+	exceeded bool
 }
 
 type archiveBudgetReader struct {
@@ -638,6 +654,7 @@ func (r *archiveBudgetReader) Read(p []byte) (int, error) {
 		var probe [1]byte
 		n, err := r.r.Read(probe[:])
 		if n > 0 {
+			r.budget.exceeded = true
 			return 0, errArchiveDecompressionLimit
 		}
 		return 0, err
@@ -755,6 +772,14 @@ func parseDocxXML(r io.Reader) (string, bool, string) {
 }
 
 // extractPptx extracts text from a .pptx file by reading all slide XML files.
+//
+// The shared archive-decompression budget (25 MiB, zip-bomb defense) is
+// checked per-slide via budget.exceeded (review FIX 2): a slide whose read
+// hits the exhausted budget is skipped like any other per-slide parse
+// failure (one bad slide must not abort the whole presentation), but unlike
+// a genuine per-slide error, hitting the budget means every remaining slide
+// is unreadable too — so the result carries the file's standard
+// "[truncated: ...]" notice instead of silently looking complete.
 func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, string) {
 	var sb strings.Builder
 	runeCount := 0
@@ -766,13 +791,20 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 			continue
 		}
 		slideCount++
+		if budget.exceeded {
+			// The shared budget was already exhausted by an earlier slide;
+			// every remaining slide would fail identically. Keep counting
+			// slideCount (used only for the "no slide files found" check
+			// above) without re-opening entries that can only fail.
+			continue
+		}
 		rc, err := f.Open()
 		if err != nil {
 			continue
 		}
-		text, err := parsePptxSlide(budget.reader(rc), maxExtractRunes-runeCount)
+		text, parseErr := parsePptxSlide(budget.reader(rc), maxExtractRunes-runeCount)
 		rc.Close()
-		if err != nil {
+		if parseErr != nil {
 			continue
 		}
 		if text != "" {
@@ -790,9 +822,16 @@ func extractPptx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 		return "", false, "pptx: no slide files found"
 	}
 	if sb.Len() == 0 {
+		if budget.exceeded {
+			return "", false, "pptx: archive exceeds 25 MiB decompression budget before any slide text could be read"
+		}
 		return "", false, "pptx: no text content found"
 	}
-	return strings.TrimSpace(sb.String()), true, ""
+	result := strings.TrimSpace(sb.String())
+	if budget.exceeded {
+		result += "\n[truncated: archive exceeds 25 MiB decompression budget]"
+	}
+	return result, true, ""
 }
 
 // parsePptxSlide extracts <a:t> text runs from a single slide XML.
@@ -837,6 +876,12 @@ func parsePptxSlide(r io.Reader, runeLimit int) (string, error) {
 
 // extractXlsx extracts cell values from an .xlsx file.
 // It reads xl/sharedStrings.xml (string pool) and xl/worksheets/sheet*.xml (cells).
+//
+// Per-sheet budget handling mirrors extractPptx (review FIX 2): a sheet
+// whose read hits the exhausted shared decompression budget is skipped like
+// any other per-sheet parse failure, but the result is marked with the
+// file's standard "[truncated: ...]" notice rather than silently returning
+// ok=true as if every sheet had been read in full.
 func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, string) {
 	// Step 1: load shared strings pool.
 	sharedStrings, err := loadXlsxSharedStrings(zr, budget)
@@ -854,13 +899,19 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 			continue
 		}
 		sheetCount++
+		if budget.exceeded {
+			// The shared budget was already exhausted by an earlier sheet
+			// (or by the shared-strings load); every remaining sheet would
+			// fail identically.
+			continue
+		}
 		rc, err := f.Open()
 		if err != nil {
 			continue
 		}
-		text, err := parseXlsxSheet(budget.reader(rc), sharedStrings, maxExtractRunes-runeCount)
+		text, parseErr := parseXlsxSheet(budget.reader(rc), sharedStrings, maxExtractRunes-runeCount)
 		rc.Close()
-		if err != nil {
+		if parseErr != nil {
 			continue
 		}
 		if text != "" {
@@ -878,9 +929,16 @@ func extractXlsx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 		return "", false, "xlsx: no sheet files found"
 	}
 	if sb.Len() == 0 {
+		if budget.exceeded {
+			return "", false, "xlsx: archive exceeds 25 MiB decompression budget before any sheet text could be read"
+		}
 		return "", false, "xlsx: no text content found"
 	}
-	return strings.TrimSpace(sb.String()), true, ""
+	result := strings.TrimSpace(sb.String())
+	if budget.exceeded {
+		result += "\n[truncated: archive exceeds 25 MiB decompression budget]"
+	}
+	return result, true, ""
 }
 
 // loadXlsxSharedStrings reads the xl/sharedStrings.xml string table from the zip.

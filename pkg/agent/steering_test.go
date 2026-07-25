@@ -298,7 +298,7 @@ func TestAgentLoop_Continue_NoMessages(t *testing.T) {
 		t.Fatal("expected provider to be initialized")
 	}
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1")
+	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 
 	al.Steer(providers.Message{Role: "user", Content: "new direction"})
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1")
+	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1097,7 +1097,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		t.Fatalf("Steer failed: %v", err)
 	}
 
-	resp, err := al.Continue(context.Background(), sessionKey, "test", "chat1")
+	resp, err := al.Continue(context.Background(), sessionKey, "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("Continue failed: %v", err)
 	}

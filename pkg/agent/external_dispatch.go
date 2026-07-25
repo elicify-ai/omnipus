@@ -910,7 +910,20 @@ func emitExternalCLIErrorEvent(
 		EventKindError,
 		ts.eventMeta("runTurn", "turn.error"),
 		ErrorPayload{
-			Stage:   "external_cli",
+			Stage: "external_cli",
+			// FIX 4: ChatID was never set here, unlike every other
+			// ErrorPayload construction site (ts.opts.ChatID) — the WS
+			// forwarder's matchesChatID gate (pkg/gateway/websocket.go)
+			// never matches an empty ChatID, so this event was silently
+			// dropped for every live subscriber. External-CLI errors
+			// (claude-code/codex/opencode sub-turns) were invisible live,
+			// appearing only after a page reload replayed the transcript.
+			ChatID: ts.opts.ChatID,
+			// FIX 3: SanitizeRunnerError already computed the classifier
+			// code (sanitized.Code) alongside sanitized.AssistantText —
+			// thread it through so the WS forwarder (FIX 2) can use the
+			// already-computed code/message pair instead of re-translating.
+			Code:    string(sanitized.Code),
 			Message: sanitized.AssistantText,
 		},
 	)

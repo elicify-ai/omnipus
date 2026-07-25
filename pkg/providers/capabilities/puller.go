@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -63,6 +64,15 @@ type GHReleasePuller struct {
 	// rejects tokenless requests with no User-Agent. Defaults to
 	// "omnipus-capabilities/1.0" when empty.
 	UserAgent string
+
+	// transportMu guards lastDegraded/lastReleaseErr below. The Puller
+	// interface's doc comment (catalog.go) requires implementations to be
+	// safe for concurrent Pull calls; a single GHReleasePuller is
+	// constructed once per Catalog today, but the mutex keeps the
+	// contract honest regardless of caller topology.
+	transportMu    sync.Mutex
+	lastDegraded   bool
+	lastReleaseErr error
 }
 
 // releaseAsset is the minimal GitHub Releases API shape we depend on.
@@ -115,6 +125,7 @@ func (p *GHReleasePuller) Pull(ctx context.Context) ([]byte, error) {
 		if verifyErr := p.verify(ctx, data, assetURL); verifyErr != nil {
 			return nil, fmt.Errorf("capabilities: pull release: %w", verifyErr)
 		}
+		p.recordTransport(false, nil)
 		return data, nil
 	}
 	// Step 2: raw fallback. The GitHub Releases API may rate-limit, return
@@ -127,7 +138,41 @@ func (p *GHReleasePuller) Pull(ctx context.Context) ([]byte, error) {
 	if verifyErr := p.verify(ctx, rawData, p.rawURL(p.Ref, p.Asset)); verifyErr != nil {
 		return nil, fmt.Errorf("capabilities: pull raw: %w", verifyErr)
 	}
+	// The GitHub Release transport failed (fetchErr) but the raw fallback
+	// succeeded: this is the silent-degradation risk documented on the
+	// GHReleasePuller type above — a deleted/renamed release or a
+	// rate-limited unauthenticated API leaves every subsequent pull quietly
+	// served by the unpinned, non-release-verified transport. Record it so
+	// Catalog.refreshLocked (which type-asserts for LastPullDegraded after a
+	// successful Pull) can log a WARN and surface the degraded provenance on
+	// the catalog state instead of treating this as an indistinguishable
+	// clean success (review fix: fetchErr used to be discarded here).
+	p.recordTransport(true, fetchErr)
 	return rawData, nil
+}
+
+// recordTransport stores the outcome of the most recently completed Pull's
+// transport selection so LastPullDegraded can report it.
+func (p *GHReleasePuller) recordTransport(degraded bool, releaseErr error) {
+	p.transportMu.Lock()
+	defer p.transportMu.Unlock()
+	p.lastDegraded = degraded
+	p.lastReleaseErr = releaseErr
+}
+
+// LastPullDegraded reports whether the most recently completed successful
+// Pull call fell back to the unverified raw.githubusercontent.com transport
+// after the GitHub Release path failed. releaseErr is the release-path
+// failure that triggered the fallback (nil when the last Pull used the
+// release path, or when Pull has never succeeded).
+//
+// This is an optional interface — Catalog.refreshLocked type-asserts for it
+// after a successful Pull rather than widening the Puller interface itself,
+// so other Puller implementations (tests, future transports) are unaffected.
+func (p *GHReleasePuller) LastPullDegraded() (degraded bool, releaseErr error) {
+	p.transportMu.Lock()
+	defer p.transportMu.Unlock()
+	return p.lastDegraded, p.lastReleaseErr
 }
 
 // fetchReleaseAsset hits the GitHub Releases API for the latest release, finds

@@ -848,3 +848,194 @@ func sortStrings(s []string) {
 		}
 	}
 }
+
+// ── FIX 3 review regression tests: final-unlink failures must not report
+// success (Delete/CascadeDelete used to always return a nil error even when
+// the on-disk quarantine file failed to unlink, so a caller building an
+// audit event saw cascadeErr==nil / err==nil and reported bytes_freed that
+// included bytes still sitting at an orphaned .delete-*/.cascade-* path
+// nothing scans for). WithFileRemover/WithFileRenamer are test-only Option
+// injections (library.go) added specifically because directory-permission
+// tricks cannot isolate "the rename succeeded but the final unlink failed"
+// from "the rename itself failed" — both need identical directory
+// permissions — and don't work at all when tests run as root. ──────────────
+
+// TestWorkspaceLibrary_Delete_FinalUnlinkFailure_ReturnsError is the
+// regression test for FIX 3 on the single-entry Delete path.
+func TestWorkspaceLibrary_Delete_FinalUnlinkFailure_ReturnsError(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	injectedErr := errors.New("simulated unlink failure")
+	lib, err := library.New(home, workspaceID,
+		library.WithClock(func() time.Time { return now }),
+		library.WithFileRemover(func(string) error { return injectedErr }),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, entry := uploadFixture(t, lib, "doc.txt", []byte("hello"))
+	id := mediaID(t, entry)
+
+	deletedEntry, delErr := lib.Delete(id)
+	if delErr == nil {
+		t.Fatal("Delete() error = nil, want an error when the final unlink fails (FIX 3)")
+	}
+	if !errors.Is(delErr, injectedErr) {
+		t.Fatalf("Delete() error = %v, want it to wrap the injected unlink failure", delErr)
+	}
+	if deletedEntry.Filename != "doc.txt" {
+		t.Fatalf("Delete() entry = %+v, want the deleted entry's metadata still returned "+
+			"(the manifest removal genuinely succeeded — only disk cleanup failed)", deletedEntry)
+	}
+
+	// The manifest entry must actually be gone — persistLocked already
+	// committed that before the final-unlink step ran. A second Get must
+	// report ErrNotFound, proving this isn't a rolled-back no-op.
+	if _, getErr := lib.Get(id); !errors.Is(getErr, library.ErrNotFound) {
+		t.Fatalf("Get(%q) after Delete error = %v, want ErrNotFound", id, getErr)
+	}
+	if got := len(lib.List()); got != 0 {
+		t.Fatalf("List() length after Delete = %d, want 0", got)
+	}
+}
+
+// TestWorkspaceLibrary_CascadeDelete_FinalUnlinkFailure_ReturnsError is the
+// regression test for FIX 3 on CascadeDelete: WorkspaceDeleteHook
+// (pkg/workspace/media_delete.go) reads cascadeErr to decide whether the
+// media.cascade_delete audit event's bytes_freed claim is trustworthy: this
+// asserts CascadeDelete no longer reports cascadeErr==nil when a final
+// unlink actually failed.
+func TestWorkspaceLibrary_CascadeDelete_FinalUnlinkFailure_ReturnsError(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	injectedErr := errors.New("simulated unlink failure")
+	lib, err := library.New(home, workspaceID,
+		library.WithClock(func() time.Time { return now }),
+		library.WithFileRemover(func(string) error { return injectedErr }),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	uploadFixture(t, lib, "a.txt", []byte("aaa"))
+	uploadFixture(t, lib, "b.txt", []byte("bbb"))
+
+	deleted, bytesFreed, cascadeErr := lib.CascadeDelete()
+	if cascadeErr == nil {
+		t.Fatal("CascadeDelete() error = nil, want an error when a final unlink fails (FIX 3)")
+	}
+	if !errors.Is(cascadeErr, injectedErr) {
+		t.Fatalf("CascadeDelete() error = %v, want it to wrap the injected unlink failure", cascadeErr)
+	}
+	if len(deleted) != 2 {
+		t.Fatalf("CascadeDelete() deleted = %d entries, want 2 (both reported despite the unlink failure)",
+			len(deleted))
+	}
+	wantBytes := int64(len("aaa") + len("bbb"))
+	if bytesFreed != wantBytes {
+		t.Fatalf("CascadeDelete() bytesFreed = %d, want %d", bytesFreed, wantBytes)
+	}
+	if got := len(lib.List()); got != 0 {
+		t.Fatalf("List() length after CascadeDelete = %d, want 0 (manifest removal committed)", got)
+	}
+}
+
+// ── FIX 4 review regression test: manifest must not drift from disk on a
+// partial (hard-rename-failure) cascade. Before the fix, CascadeDelete's
+// per-id loop called delete(l.manifest, id) inside the SAME loop that did
+// the quarantine rename; a hard rename failure at id k returned immediately
+// from inside the loop (after restoreCascadeQuarantined reversed the FILE
+// renames for ids 1..k-1, but before persistLocked ever ran) — leaving
+// l.manifest missing ids 1..k-1 even though on-disk manifest.json still had
+// them (persistLocked never committed the change). ─────────────────────────
+
+// TestWorkspaceLibrary_CascadeDelete_PartialRenameFailure_ManifestSurvives
+// is the FIX 4 regression test: a hard mid-cascade rename failure must
+// leave the in-memory manifest with EVERY entry still present and
+// listable — not just the files rolled back on disk.
+func TestWorkspaceLibrary_CascadeDelete_PartialRenameFailure_ManifestSurvives(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+
+	var failID string
+	injectedErr := errors.New("simulated rename failure")
+	lib, err := library.New(home, workspaceID,
+		library.WithClock(func() time.Time { return now }),
+		library.WithFileRenamer(func(oldpath, newpath string) error {
+			if failID != "" && filepath.Base(oldpath) == failID {
+				return injectedErr
+			}
+			return os.Rename(oldpath, newpath)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, e1 := uploadFixture(t, lib, "a.txt", []byte("aaa"))
+	_, e2 := uploadFixture(t, lib, "b.txt", []byte("bbb"))
+	id1, id2 := mediaID(t, e1), mediaID(t, e2)
+
+	// CascadeDelete processes ids in ascending sorted order; fail whichever
+	// id sorts SECOND so the first has already been (correctly) renamed
+	// by the time the hard failure hits — the exact "ids 1..k-1 already
+	// processed" scenario the fix addresses.
+	ids := []string{id1, id2}
+	sortStrings(ids)
+	failID = ids[1]
+
+	_, _, cascadeErr := lib.CascadeDelete()
+	if cascadeErr == nil {
+		t.Fatal("CascadeDelete() error = nil, want an error when a mid-cascade rename hard-fails")
+	}
+	if !errors.Is(cascadeErr, injectedErr) {
+		t.Fatalf("CascadeDelete() error = %v, want it to wrap the injected rename failure", cascadeErr)
+	}
+
+	// The fix under test: the in-memory manifest must still list BOTH
+	// entries. Before the fix, ids[0] would have already been deleted from
+	// l.manifest inside the same loop iteration that succeeded, and would
+	// stay deleted (drifted from the untouched on-disk manifest.json)
+	// because the function returns before persistLocked/restore ever runs
+	// for the manifest.
+	list := lib.List()
+	if len(list) != 2 {
+		t.Fatalf("List() length after aborted cascade = %d, want 2 (manifest must not drift from disk): %+v",
+			len(list), list)
+	}
+
+	// Both raw files must still be present on disk — the successfully
+	// quarantined id was rolled back by restoreCascadeQuarantined.
+	for _, id := range ids {
+		if _, statErr := os.Stat(filepath.Join(lib.Path(), id)); statErr != nil {
+			t.Fatalf("raw file for %s missing after aborted cascade: %v", id, statErr)
+		}
+	}
+
+	// Prove the manifest is genuinely intact (not just a stale in-memory
+	// count that would fail to persist): re-open the library from disk and
+	// confirm both entries round-trip.
+	reopened, err := library.New(home, workspaceID, library.WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("re-open library: %v", err)
+	}
+	if got := len(reopened.List()); got != 2 {
+		t.Fatalf("re-opened library List() length = %d, want 2 (on-disk manifest.json must still have both)", got)
+	}
+
+	// A subsequent successful CascadeDelete (failure injection disabled)
+	// must be able to remove both entries — final proof the manifest
+	// wasn't left in some other corrupted state.
+	failID = ""
+	deleted, _, err2 := lib.CascadeDelete()
+	if err2 != nil {
+		t.Fatalf("CascadeDelete() after clearing the injected failure: unexpected error %v", err2)
+	}
+	if len(deleted) != 2 {
+		t.Fatalf("CascadeDelete() on retry deleted = %d entries, want 2", len(deleted))
+	}
+}

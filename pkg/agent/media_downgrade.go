@@ -103,8 +103,18 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 	// unchanged.
 	if code == CodeMediaUnsupported {
 		result, mc := ts.applyMediaDowngrade(callMessages)
-		result.Trigger = TriggerClassifierPrimary
-		result.MediaClass = mc
+		// MEDIUM fix: only stamp Trigger/MediaClass when a downgrade was
+		// actually applied — applyMediaDowngrade can return the zero-value
+		// result (both per-class guards already consumed, or nothing
+		// strippable) even on this path, and the documented postcondition
+		// for that case is Applied=false, Trigger=TriggerNone,
+		// MediaClass=MediaClassNone. Stamping a non-"none" Trigger on a
+		// no-op result contradicted that contract for any caller reading
+		// the typed result directly (rather than just the Applied bool).
+		if result.Applied {
+			result.Trigger = TriggerClassifierPrimary
+			result.MediaClass = mc
+		}
 		return result
 	}
 
@@ -124,8 +134,13 @@ func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *Prov
 		return MediaDowngradeResult{}
 	}
 	result, mc := ts.applyMediaDowngrade(callMessages)
-	result.Trigger = TriggerOutcomeFallback
-	result.MediaClass = mc
+	// MEDIUM fix: same Applied guard as the classifier-primary path above —
+	// preserve the documented zero-value postcondition when nothing was
+	// actually downgraded.
+	if result.Applied {
+		result.Trigger = TriggerOutcomeFallback
+		result.MediaClass = mc
+	}
 	return result
 }
 

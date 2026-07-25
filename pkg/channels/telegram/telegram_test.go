@@ -221,6 +221,50 @@ func TestSendMedia_ImageNonDimensionErrorDoesNotFallback(t *testing.T) {
 	assert.NotContains(t, caller.calls[0].URL, "sendDocument")
 }
 
+// TestSendMedia_PartialFailureReturnsError is the FIX-2 review regression
+// test proving the actual defect end-to-end: 2 of 3 parts genuinely succeed
+// (real SendPhoto calls against a stubbed Bot API caller) and 1 fails to
+// resolve locally. Before the fix, sentCount(2) > 0 made the original
+// `if sentCount == 0` guard silently return nil — the 2 delivered parts left
+// the tool's pre-baked success text untouched and neither the user nor the
+// LLM ever learned the third part was dropped.
+func TestSendMedia_PartialFailureReturnsError(t *testing.T) {
+	constructor := &multipartRecordingConstructor{}
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			require.Contains(t, url, "sendPhoto", "only the 2 resolvable parts should ever reach the Bot API")
+			return successResponse(t), nil
+		},
+	}
+	ch := newTestChannelWithConstructor(t, caller, constructor)
+
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	tmpDir := t.TempDir()
+	parts := make([]bus.MediaPart, 0, 3)
+	for _, name := range []string{"a.png", "b.png"} {
+		localPath := filepath.Join(tmpDir, name)
+		require.NoError(t, os.WriteFile(localPath, []byte("fake-png-content"), 0o644))
+		ref, err := store.Store(localPath, media.MediaMeta{Filename: name, ContentType: "image/png"}, "scope-1")
+		require.NoError(t, err)
+		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
+	}
+	// Third part deliberately unresolvable.
+	parts = append(parts, bus.MediaPart{Type: "image", Ref: "media://does-not-exist"})
+
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "12345",
+		Parts:  parts,
+	})
+
+	require.Error(t, err, "SendMedia must report failure even though 2 of 3 parts genuinely succeeded")
+	assert.Contains(t, err.Error(), "1 of 3 media parts failed to send")
+	assert.ErrorIs(t, err, channels.ErrSendFailed,
+		"must be classified permanent so sendMediaWithRetry does not re-deliver the 2 already-successful parts")
+	assert.Len(t, caller.calls, 2, "the 2 resolvable parts must still have been sent")
+}
+
 func TestSend_EmptyContent(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {

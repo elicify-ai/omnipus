@@ -17,6 +17,12 @@ import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useOmnipusRuntime } from './omnipus-runtime'
+import {
+  addLibraryAttachment,
+  buildWorkspaceMediaRef,
+  clearLibraryAttachments,
+  getLibraryAttachments,
+} from './library-attachment'
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
@@ -31,6 +37,7 @@ describe('useOmnipusRuntime — native attachment flow', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    clearLibraryAttachments()
     useSessionStore.setState({ activeSessionId: 'sess1', activeAgentId: 'jim', activeAgentType: null })
     sendSpy = vi.fn()
     useChatStore.setState({
@@ -123,5 +130,118 @@ describe('useOmnipusRuntime — native attachment flow', () => {
     expect(addToast).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining('was not sent'), variant: 'error' }),
     )
+  })
+
+  /**
+   * Regression coverage for the BLOCK finding: takeLibraryAttachments()
+   * (composer "Attach from library" picker, ADR-051 Rev 4 Slice H) had ZERO
+   * coverage of onNew's drain loop before this — the ref (wire-correct) was
+   * asserted elsewhere, but the local preview `url` it builds was never
+   * checked, so the regression (a legacy /api/v1/media/{id} URL that 404s
+   * for workspace-scoped entries) shipped unnoticed. These tests exercise
+   * the REAL onNew path (no File, no attachment-adapter involved — library
+   * attachments bypass upload entirely) and assert the constructed preview
+   * URL is the workspace-scoped form.
+   */
+  describe('library-attachment drain (composer "Attach from library" picker)', () => {
+    it('drains a staged workspace-library attachment with the workspace-scoped preview URL', async () => {
+      addLibraryAttachment({
+        mediaId: 'm-1',
+        ref: buildWorkspaceMediaRef('ws-1', 'm-1'),
+        filename: 'diagram.png',
+        contentType: 'image/png',
+      })
+
+      const { result } = renderHook(() => useOmnipusRuntime())
+      const composer = result.current.thread.composer
+
+      await act(async () => {
+        composer.setText('see attached')
+        await composer.send()
+      })
+
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+      const [text, opts] = sendSpy.mock.calls[0]
+      expect(text).toContain('see attached')
+      expect(opts?.mediaRefs).toEqual(['media://workspace/ws-1/m-1'])
+      expect(opts?.attachments).toEqual([
+        expect.objectContaining({
+          type: 'image',
+          // The regression: this used to be `/api/v1/media/m-1` (legacy
+          // route, 404s for workspace-scoped entries — HandleMedia rejects
+          // any id containing "/"). The correct route is HandleMediaByRef.
+          url: '/api/v1/media/workspace/ws-1/m-1',
+          filename: 'diagram.png',
+          contentType: 'image/png',
+        }),
+      ])
+
+      // Drain semantics preserved: a single send can't re-thread the ref.
+      expect(getLibraryAttachments()).toHaveLength(0)
+    })
+
+    it('builds the legacy (non-workspace-scoped) preview URL from the ref, not from mediaId', async () => {
+      // `mediaId` deliberately differs from the ref's id-tail so this test
+      // actually discriminates the fix: the old buggy code built the URL from
+      // `lib.mediaId` (`/api/v1/media/${lib.mediaId}`); the correct code
+      // (mediaRefURL(lib.ref)) derives it from the ref instead. With
+      // mediaId === ref-tail (as a prior version of this test had it) both
+      // implementations produce the identical string by coincidence and the
+      // test passes either way — see mediaRefURL's doc comment in
+      // library-attachment.ts for why the ref, not mediaId, is authoritative.
+      addLibraryAttachment({
+        mediaId: 'stale-manifest-id',
+        ref: 'media://legacy-1',
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+      })
+
+      const { result } = renderHook(() => useOmnipusRuntime())
+      const composer = result.current.thread.composer
+
+      await act(async () => {
+        composer.setText('legacy file')
+        await composer.send()
+      })
+
+      const [, opts] = sendSpy.mock.calls[0]
+      expect(opts?.mediaRefs).toEqual(['media://legacy-1'])
+      // Built from the ref ('media://legacy-1' -> '/api/v1/media/legacy-1'),
+      // NOT from mediaId ('stale-manifest-id' -> would be
+      // '/api/v1/media/stale-manifest-id' under the old buggy code).
+      expect(opts?.attachments?.[0]).toEqual(
+        expect.objectContaining({ type: 'file', url: '/api/v1/media/legacy-1' }),
+      )
+    })
+
+    it('threads both a freshly-uploaded file and a staged library attachment in one send', async () => {
+      vi.mocked(api.uploadFiles).mockResolvedValue({
+        files: [{ name: 'report.docx', path: 'uploads/sess1/report.docx', size: 10, content_type: DOCX, ref: 'media://abc' }],
+      } as never)
+      addLibraryAttachment({
+        mediaId: 'm-2',
+        ref: buildWorkspaceMediaRef('ws-1', 'm-2'),
+        filename: 'diagram.png',
+        contentType: 'image/png',
+      })
+
+      const { result } = renderHook(() => useOmnipusRuntime())
+      const composer = result.current.thread.composer
+
+      await act(async () => {
+        await composer.addAttachment(new File(['x'], 'report.docx', { type: DOCX }))
+      })
+      await act(async () => {
+        composer.setText('two attachments')
+        await composer.send()
+      })
+
+      const [, opts] = sendSpy.mock.calls[0]
+      expect(opts?.mediaRefs).toEqual(['media://abc', 'media://workspace/ws-1/m-2'])
+      expect(opts?.attachments).toEqual([
+        expect.objectContaining({ filename: 'report.docx', url: '/api/v1/uploads/sess1/report.docx' }),
+        expect.objectContaining({ filename: 'diagram.png', url: '/api/v1/media/workspace/ws-1/m-2' }),
+      ])
+    })
   })
 })

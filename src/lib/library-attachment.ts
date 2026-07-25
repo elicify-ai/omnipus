@@ -52,6 +52,10 @@ function getSnapshot(): LibraryAttachment[] {
 
 let counter = 0
 
+/** Discriminator prefix for workspace-library media refs — mirrors the Go
+ * side's `media.WorkspaceRefPrefix` (pkg/media/resolve.go). */
+const WORKSPACE_REF_PREFIX = 'media://workspace/'
+
 /**
  * Build the canonical workspace-library ref shape. Centralised so the composer
  * picker, the runtime, and any future caller agree on the exact string the
@@ -59,7 +63,27 @@ let counter = 0
  * entry's workspace_id).
  */
 export function buildWorkspaceMediaRef(workspaceId: string, mediaId: string): string {
-  return `media://workspace/${workspaceId}/${mediaId}`
+  return `${WORKSPACE_REF_PREFIX}${workspaceId}/${mediaId}`
+}
+
+/**
+ * Convert a `media://` ref into its GET preview URL. Mirrors
+ * pkg/gateway/webchat_channel.go::mediaRefURL exactly (see the Go-side
+ * TestWebchatChannel_MediaRefURL / TestReplay_MediaRefURL cases) — a
+ * workspace-scoped ref (`media://workspace/<ws>/<id>`) resolves through
+ * `/api/v1/media/workspace/<ws>/<id>` (HandleMediaByRef, rest.go:9148);
+ * every other `media://<id>` ref resolves through the legacy
+ * `/api/v1/media/<id>` (HandleMedia, rest.go:9131). HandleMedia does a bare
+ * map lookup keyed by the FULL ref and rejects any id containing "/", so a
+ * workspace-scoped ref can only ever resolve via the `/workspace/` route —
+ * do not invent a different shape, and keep this in lockstep with the Go
+ * implementation if it changes.
+ */
+export function mediaRefURL(ref: string): string {
+  if (ref.startsWith(WORKSPACE_REF_PREFIX)) {
+    return `/api/v1/media/workspace/${ref.slice(WORKSPACE_REF_PREFIX.length)}`
+  }
+  return `/api/v1/media/${ref.replace(/^media:\/\//, '')}`
 }
 
 /** Add a pending library attachment. Returns the new attachment's id. */

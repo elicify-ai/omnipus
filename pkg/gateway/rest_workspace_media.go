@@ -14,6 +14,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
 )
 
@@ -163,50 +164,156 @@ func (a *restAPI) handleWorkspaceMediaAttach(w http.ResponseWriter, r *http.Requ
 	jsonOK(w, entry)
 }
 
+// mediaDeleteOutcome enumerates the four outcomes
+// library.Library.Delete's (entry, error) return can represent, per its
+// own doc comment — see classifyMediaDeleteOutcome.
+type mediaDeleteOutcome int
+
+const (
+	// mediaDeleteOutcomeSuccess: err == nil, entry is the deleted entry.
+	mediaDeleteOutcomeSuccess mediaDeleteOutcome = iota
+	// mediaDeleteOutcomeNotFound: ErrNotFound / ErrInvalidMediaID — nothing
+	// was deleted.
+	mediaDeleteOutcomeNotFound
+	// mediaDeleteOutcomeStraggler (re-review FIX 3): the manifest entry was
+	// committed-removed (entry.Id != nil, the real previousEntry.projection()
+	// — every other error path returns the zero-value gen.MediaLibraryEntry{}),
+	// but the final on-disk unlink of the already-quarantined file failed.
+	// From the client's perspective the item IS gone (a follow-up GET
+	// 404s); per Delete's own doc, this must be reported as a degraded
+	// success, never a 500, and its audit event must not claim bytes_freed
+	// for bytes that are not actually free yet.
+	mediaDeleteOutcomeStraggler
+	// mediaDeleteOutcomeHardFailure: nothing was deleted; a genuine failure.
+	mediaDeleteOutcomeHardFailure
+)
+
+// classifyMediaDeleteOutcome maps a library.Library.Delete result to a
+// mediaDeleteOutcome. It is a pure function (no I/O) taking only Delete's
+// own return values, specifically so the discriminator is unit-testable
+// with synthetic gen.MediaLibraryEntry values — forcing a REAL
+// *library.Library into the "committed, final-unlink straggler" state
+// requires library.go's package-private removeFile injection seam
+// (library.WithFileRemover), which neither of this handler's
+// library-acquisition paths (agentLoop.GetWorkspaceLibrary, or the
+// library.New(home, id) fallback in openLibraryForWorkspace) expose — see
+// rest_workspace_media_delete_test.go for both this function's unit
+// coverage and a separate integration test proving library.go's real
+// Delete does return exactly this shape under a genuine final-unlink
+// failure.
+func classifyMediaDeleteOutcome(entry gen.MediaLibraryEntry, err error) mediaDeleteOutcome {
+	if err == nil {
+		return mediaDeleteOutcomeSuccess
+	}
+	if errors.Is(err, library.ErrNotFound) || errors.Is(err, library.ErrInvalidMediaID) {
+		return mediaDeleteOutcomeNotFound
+	}
+	if entry.Id != nil {
+		return mediaDeleteOutcomeStraggler
+	}
+	return mediaDeleteOutcomeHardFailure
+}
+
+// logMediaDeleteAudit emits the FR-033 media.delete audit event (re-review
+// FIX 4: previously only emitted on a clean success, leaving a failed
+// delete with NO audit trail — the same repudiation gap FR-009 closed for
+// the cascade-delete case). decision/claimBytesFreed are chosen by the
+// caller per outcome: a straggler must not claim bytes_freed for bytes
+// that are not actually free yet (library.Library.Delete's own doc), so it
+// passes DecisionError + claimBytesFreed=false despite being a
+// client-visible success. Audit write failures are logged, never surfaced
+// to the HTTP caller — an audit gap must not block an otherwise-successful
+// delete response.
+func (a *restAPI) logMediaDeleteAudit(
+	workspaceID, mediaID, actor string,
+	entry gen.MediaLibraryEntry,
+	decision string,
+	claimBytesFreed bool,
+	opErr error,
+) {
+	if a.auditor == nil {
+		return
+	}
+	bytesFreed := int64(0)
+	if claimBytesFreed && entry.Size != nil {
+		bytesFreed = *entry.Size
+	}
+	details := map[string]any{
+		"actor":        actor,
+		"workspace_id": workspaceID,
+		"media_id":     mediaID,
+		"filename":     entry.Filename,
+		"bytes_freed":  bytesFreed,
+	}
+	if opErr != nil {
+		details["error"] = opErr.Error()
+	}
+	if auditErr := a.auditor.Log(&audit.Entry{
+		Event:    audit.EventMediaDelete,
+		Decision: decision,
+		Details:  details,
+	}); auditErr != nil {
+		logger.WarnCF("rest", "workspace media: audit write failed", map[string]any{
+			"event": string(
+				audit.EventMediaDelete,
+			), "workspace_id": workspaceID, "media_id": mediaID, "error": auditErr.Error(),
+		})
+	}
+}
+
 func (a *restAPI) handleWorkspaceMediaDelete(w http.ResponseWriter, r *http.Request, workspaceID, mediaID string) {
 	lib, ok := a.openLibraryForWorkspace(w, workspaceID)
 	if !ok {
 		return
 	}
+	actor := a.callerIdentity(r).Username
 	entry, err := lib.Delete(mediaID)
-	if err != nil {
-		if errors.Is(err, library.ErrNotFound) || errors.Is(err, library.ErrInvalidMediaID) {
-			jsonErr(w, http.StatusNotFound, "media entry not found")
-			return
-		}
-		slog.Error("rest: workspace media: delete", "workspace_id", workspaceID, "media_id", mediaID, "error", err)
+
+	switch classifyMediaDeleteOutcome(entry, err) {
+	case mediaDeleteOutcomeNotFound:
+		jsonErr(w, http.StatusNotFound, "media entry not found")
+		return
+
+	case mediaDeleteOutcomeHardFailure:
+		logger.ErrorCF("rest", "workspace media: delete",
+			map[string]any{"workspace_id": workspaceID, "media_id": mediaID, "error": err.Error()})
+		a.logMediaDeleteAudit(workspaceID, mediaID, actor, entry, audit.DecisionError, false, err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
-	}
 
-	// FR-033 / EventMediaDelete: emit audit event with bytes_freed, media_id, filename, workspace_id, actor.
-	actor := a.callerIdentity(r).Username
-	bytesFreed := int64(0)
-	if entry.Size != nil {
-		bytesFreed = *entry.Size
-	}
-	filename := entry.Filename
-	if a.auditor != nil {
-		if auditErr := a.auditor.Log(&audit.Entry{
-			Event:    audit.EventMediaDelete,
-			Decision: audit.DecisionAllow,
-			Details: map[string]any{
-				"actor":        actor,
+	case mediaDeleteOutcomeStraggler:
+		// Re-review FIX 3: library.Delete's final-unlink step can fail AFTER
+		// the manifest entry is already committed-removed. Reporting 500
+		// here (the prior blanket behavior for any non-404 error) would be
+		// wrong — the delete fully succeeded from the manifest's and the
+		// client's point of view — but the disk-cleanup anomaly (a
+		// quarantined raw file leaked permanently; unlike the cascade-delete
+		// case, nothing later cleans it up) is still worth an operator-
+		// visible signal.
+		logger.WarnCF(
+			"rest",
+			"workspace media: delete succeeded but disk cleanup incomplete (quarantined file leaked)",
+			map[string]any{
 				"workspace_id": workspaceID,
 				"media_id":     mediaID,
-				"filename":     filename,
-				"bytes_freed":  bytesFreed,
+				"filename":     entry.Filename,
+				"error":        err.Error(),
 			},
-		}); auditErr != nil {
-			slog.Warn("rest: workspace media: audit write failed",
-				"event", audit.EventMediaDelete, "workspace_id", workspaceID, "media_id", mediaID, "error", auditErr)
-		}
-	}
-	slog.Info("rest: workspace media: deleted",
-		"workspace_id", workspaceID, "media_id", mediaID,
-		"filename", filename, "bytes_freed", bytesFreed, "actor", actor,
-	)
+		)
+		a.logMediaDeleteAudit(workspaceID, mediaID, actor, entry, audit.DecisionError, false, err)
+		jsonOK(w, entry)
+		return
 
-	// Return the deleted entry as confirmation.
-	jsonOK(w, entry)
+	default: // mediaDeleteOutcomeSuccess
+		a.logMediaDeleteAudit(workspaceID, mediaID, actor, entry, audit.DecisionAllow, true, nil)
+		bytesFreed := int64(0)
+		if entry.Size != nil {
+			bytesFreed = *entry.Size
+		}
+		logger.InfoCF("rest", "workspace media: deleted", map[string]any{
+			"workspace_id": workspaceID, "media_id": mediaID,
+			"filename": entry.Filename, "bytes_freed": bytesFreed, "actor": actor,
+		})
+		jsonOK(w, entry)
+	}
 }

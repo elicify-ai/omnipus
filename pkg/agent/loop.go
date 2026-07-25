@@ -528,6 +528,9 @@ type continuationTarget struct {
 	SessionKey string
 	Channel    string
 	ChatID     string
+	// WorkspaceID is the workspace this continuation's turn should run inside
+	// — see buildContinuationTarget's resolution comment (FIX 1 re-review).
+	WorkspaceID string
 }
 
 const (
@@ -3076,10 +3079,62 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 	}
 
 	return &continuationTarget{
-		SessionKey: resolveScopeKey(route, msg.SessionKey),
-		Channel:    msg.Channel,
-		ChatID:     msg.ChatID,
+		SessionKey:  resolveScopeKey(route, msg.SessionKey),
+		Channel:     msg.Channel,
+		ChatID:      msg.ChatID,
+		WorkspaceID: al.resolveWorkspaceIDForContinuation(msg),
 	}, nil
+}
+
+// resolveWorkspaceIDForContinuation resolves the workspace a steering
+// continuation (Continue/continueWithSteeringMessages) should run inside
+// (FIX 1 re-review). continueWithSteeringMessages previously left
+// processOptions.WorkspaceID unset entirely, so a steering-continued turn's
+// tool media silently degraded to the private/global room exactly like the
+// other four gap sites this fix pass covers.
+//
+// buildContinuationTarget is called AFTER the triggering turn's own
+// processMessage call has already returned (session_worker.go's runLoop) —
+// msg here is session_worker's own copy of the inbound message, not the one
+// processMessage mutated internally (Go passes bus.InboundMessage by value),
+// so msg.SessionID reflects only what was already on the message BEFORE that
+// turn ran. Two mechanisms cover this, both lifted directly from
+// processMessage's own resolution (loop.go's "M4" comment, ~line 5350) rather
+// than invented fresh:
+//
+//  1. msg.SessionID already set (always true for webchat — the gateway
+//     websocket handler stamps it on the message before publish, so no
+//     mutation-visibility gap applies) — resolve the session's own meta,
+//     the authoritative source once a session exists.
+//  2. msg.SessionID empty (the common case for a channel message that had
+//     no session yet when session_worker dispatched it — processMessage
+//     lazily creates one internally via resolveOrCreateChannelSession, but
+//     that mutation is invisible here) — fall back to the bound channel
+//     instance's own configured WorkspaceID, the exact same value
+//     resolveOrCreateChannelSession itself would have seeded the new
+//     session's meta with, so this independently recomputes the identical
+//     answer rather than guessing.
+//
+// Falls back to the inbound metadata key last, matching processMessage's own
+// final fallback. Returns "" (never guessed) when none of the above apply —
+// e.g. an unbound channel with no session, the "system" and unrouted-message
+// cases buildContinuationTarget already short-circuits above.
+func (al *AgentLoop) resolveWorkspaceIDForContinuation(msg bus.InboundMessage) string {
+	if msg.SessionID != "" {
+		if store := al.ResolveSessionStore(msg.SessionID); store != nil {
+			if meta, mErr := store.GetMeta(msg.SessionID); mErr == nil && meta != nil && meta.WorkspaceID != "" {
+				return meta.WorkspaceID
+			}
+		}
+	}
+	if instanceID := inboundInstanceID(msg); instanceID != "" {
+		if cfg := al.GetConfig(); cfg != nil {
+			if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
+				return inst.WorkspaceID
+			}
+		}
+	}
+	return inboundMetadata(msg, "workspace_id")
 }
 
 // WaitForActiveRequests blocks until all in-flight LLM calls tracked by
@@ -3542,12 +3597,19 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 	}
 
 	err := fmt.Errorf("hook aborted turn during %s: %s", stage, reason)
+	// FIX 3: compute the classifier code once and thread it onto the live
+	// ErrorPayload so the WS forwarder (FIX 2) does not have to re-translate
+	// this curated message from scratch — mirroring appendErrorTranscript's
+	// own llm.Code computation for the SAME message below. providerErr is
+	// nil (hook aborts are never provider-originated); the classifier falls
+	// back to substring matching on err.Error().
+	llm := TranslateLLMError(nil, err.Error())
 	al.emitEvent(
 		EventKindError,
 		ts.eventMeta("hooks", "turn.error"),
 		ErrorPayload{
 			Stage: "hook." + stage, ChatID: ts.opts.ChatID,
-			Message: err.Error(),
+			Code: string(llm.Code), Message: err.Error(),
 		},
 	)
 	// US-1: persist the hook abort to the JSONL transcript so the
@@ -4417,6 +4479,20 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
+		// FIX 1 (re-review): the same genuine source processTaskDirectExternalCLI
+		// already reads a few lines below (see that function's own comment) — the
+		// task executor (task_executor.go) seeds tools.WithWorkspaceID(ctx,
+		// task.WorkspaceID) on `ctx` BEFORE calling processTaskDirect, and taskCtx
+		// is derived from that same ctx, so tools.ToolWorkspaceID(taskCtx) reads it
+		// straight back. Currently inert end-to-end for THIS dispatch branch only
+		// because webchatChannel.SendMedia (pkg/gateway/webchat_channel.go)
+		// ignores OutboundMediaMessage.WorkspaceID — Channel is hardcoded to
+		// "webchat" a few lines up — but it is not moot for every consumer of
+		// ts.opts.WorkspaceID (e.g. the memory-routing injection in runTurn), and
+		// stays correct with zero further changes here if webchatChannel is ever
+		// updated to honor it. Set for consistency with the external-CLI sibling
+		// dispatch branch, not invented.
+		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
 	})
 }
 
@@ -5130,6 +5206,24 @@ func (al *AgentLoop) ProcessScheduled(
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
 
+	// FIX 1 (re-review): WorkspaceID was never threaded here, so any tool
+	// media a scheduled/heartbeat-fired run produces silently degraded to the
+	// private/global room (bus.OutboundMediaMessage.WorkspaceID stays "")
+	// even when `channel` is an operator-configured EXTERNAL channel (Slack,
+	// Telegram, ...) whose SendMedia does honor it. The concrete session this
+	// run writes into (sessionID) is the one genuine source available here —
+	// same lookup processMessage (loop.go, ~line 5332) uses for the
+	// interactive path. Nothing currently stamps WorkspaceID onto a scheduled
+	// session's meta (pkg/gateway/schedules.go has no workspace-binding
+	// concept yet), so this resolves to "" today for every existing schedule
+	// — that is the correct, non-invented answer, not a workaround: it stays
+	// forward-compatible with zero further changes here the day a schedule
+	// (or its session) does carry a workspace binding.
+	workspaceID := ""
+	if meta, mErr := transcriptStore.GetMeta(sessionID); mErr == nil && meta != nil {
+		workspaceID = meta.WorkspaceID
+	}
+
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             channel,
@@ -5140,6 +5234,7 @@ func (al *AgentLoop) ProcessScheduled(
 		SendResponse:        false,
 		TranscriptSessionID: sessionID,
 		TranscriptStore:     transcriptStore,
+		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
@@ -5808,6 +5903,30 @@ func (al *AgentLoop) processSystemMessage(
 		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
+	// FIX 1 (re-review): mirror processMessage's WorkspaceID resolution
+	// (loop.go, "M4" comment ~line 5332) so a delegate-completion / async-
+	// notify turn reconstructed here also stamps bus.OutboundMediaMessage
+	// with the real workspace instead of silently falling back to the
+	// private/global room. originChannel is parsed straight from msg.ChatID
+	// above and can be ANY external channel the producing turn was bound to
+	// — the same class of gap ProcessScheduled has. The session this turn
+	// persists into (transcriptSessionID, already resolved above by FIX 5d)
+	// is the authoritative source: it is the SAME session the producing turn
+	// wrote to, so its meta.WorkspaceID (stamped at session-creation time via
+	// resolveOrCreateChannelSession's channel-binding lookup) is exactly the
+	// workspace this reconstructed turn should inherit. Falls back to the
+	// inbound metadata key, matching processMessage's own final fallback, for
+	// callers that stamp workspace_id directly on the system message instead.
+	workspaceID := ""
+	if transcriptStore != nil && transcriptSessionID != "" {
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr == nil && meta != nil {
+			workspaceID = meta.WorkspaceID
+		}
+	}
+	if workspaceID == "" {
+		workspaceID = inboundMetadata(msg, "workspace_id")
+	}
+
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             originChannel,
@@ -5818,6 +5937,7 @@ func (al *AgentLoop) processSystemMessage(
 		SendResponse:        true,
 		TranscriptSessionID: transcriptSessionID,
 		TranscriptStore:     transcriptStore,
+		WorkspaceID:         workspaceID,
 	})
 }
 
@@ -6071,12 +6191,26 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// to a workspace can route to an agent stale-removed from that
 	// workspace's CoreTeam. Keying off agent identity instead of the
 	// turn-carried value is also what makes this correctly cover DELEGATED
-	// sub-agent turns: spawnSubTurn (pkg/agent/subturn.go) never threads
-	// WorkspaceID into a child's processOptions, so the old ts.opts.WorkspaceID
-	// gate could never have re-rooted a delegated child's filesystem regardless
-	// of any flag — this identity-keyed lookup applies uniformly to top-level
-	// turns and delegated children alike, since both resolve ts.agent.ID the
-	// same way.
+	// sub-agent turns regardless of whether ts.opts.WorkspaceID happens to be
+	// set on the child: this identity-keyed lookup applies uniformly to
+	// top-level turns and delegated children alike, since both resolve
+	// ts.agent.ID the same way.
+	//
+	// STALE-COMMENT CORRECTION (FIX 1 re-review): this used to say
+	// spawnSubTurn never threads WorkspaceID into a child's processOptions,
+	// making ts.opts.WorkspaceID structurally always "" for a delegated
+	// child. That is no longer true — spawnSubTurn (pkg/agent/subturn.go)
+	// now inherits WorkspaceID from the PARENT turn (session/room context,
+	// same as Channel/ChatID; see that struct literal's own comment for why
+	// this is deliberately NOT covered by ADR-032's target-identity
+	// inheritance rule). A delegated child's ts.opts.WorkspaceID can
+	// therefore be non-empty today, which is exactly what lets it
+	// participate in FindForAgentPreferring's tie-break below when the
+	// child agent belongs to more than one workspace's CoreTeam — it does
+	// NOT change the identity-primacy described above: a child with no
+	// CoreTeam membership at all still gets no re-root regardless of
+	// ts.opts.WorkspaceID, and a child whose membership is unambiguous
+	// (one workspace) resolves the same way with or without it.
 	//
 	// FindForAgentPreferring (not FindForAgent) is used here so that when the
 	// SAME agent belongs to MORE than one workspace's CoreTeam — a real,
@@ -6085,9 +6219,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// memberships) breaks the tie, instead of FindForAgent's arbitrary
 	// sorted-first pick. This narrows an already-ambiguous choice using a
 	// signal that is trustworthy exactly when it is present; it never widens
-	// or overrides the identity-based membership check, so the
-	// unbound-channel and delegated-child cases above are unaffected (an
-	// empty ts.opts.WorkspaceID falls straight through to FindForAgent).
+	// or overrides the identity-based membership check, so an unbound-channel
+	// turn (ts.opts.WorkspaceID == "") is unaffected — it falls straight
+	// through to FindForAgent.
 	//
 	// Security: workspaces/<id>/ lives under $OMNIPUS_HOME, which the boot
 	// Landlock policy already grants RWX — this changes only the working
@@ -6260,7 +6394,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				al.emitEvent(
 					EventKindError,
 					ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "model_switch", Message: switchLLM.Message, ChatID: ts.opts.ChatID},
+					ErrorPayload{
+						Stage: "model_switch", Code: string(switchLLM.Code),
+						Message: switchLLM.Message, ChatID: ts.opts.ChatID,
+					},
 				)
 				ts.appendErrorTranscript(EventKindError.String(), "model_switch", switchLLM.Message)
 				// NB: no notification frame here — `model_switch_failed` is not a
@@ -6912,7 +7049,17 @@ turnLoop:
 		// stripping the image and retrying would silently answer a different prompt.
 		// PDF or mixed-media requests continue through TryMediaDowngrade below.
 		synthesizeImageRejection := func(pe *ProviderError, rejectionErr error) bool {
-			if ts.mediaRetryDone.Load() || rejectionErr == nil {
+			// FIX 5: this is the IMAGE-only friendly-rejection path — it must
+			// consult ts.imageRetryDone, the image-class guard, NOT
+			// ts.mediaRetryDone (the PDF-class guard). turn.go's design
+			// comment on the two fields is explicit that the guard was split
+			// per-class precisely so a PDF-class downgrade earlier in the
+			// SAME turn can never consume the image-class budget (or vice
+			// versa). Reading the wrong guard here meant a PDF downgrade
+			// earlier in the turn silently blocked this friendly synthesis
+			// for a LATER, unrelated image rejection — it fell through to
+			// the generic classifier-driven strip-retry instead.
+			if ts.imageRetryDone.Load() || rejectionErr == nil {
 				return false
 			}
 
@@ -6945,7 +7092,7 @@ turnLoop:
 				),
 			}
 			err = nil
-			ts.mediaRetryDone.Store(true)
+			ts.imageRetryDone.Store(true)
 			ts.setLastProducedModel(ModelSyntheticImageRejection)
 			logger.DebugCF("agent", "image-rejection synthesis stamped; llmModel retained in error log only",
 				map[string]any{"agent_id": ts.agent.ID, "model": llmModel})
@@ -6984,7 +7131,15 @@ turnLoop:
 				// adds DowngradeTrigger + MediaClass so the warn-log and
 				// the FR-017a relabel are both data-derived from the
 				// helper, not from a re-classification at the call site).
-				helperCode := classifyByProviderError(pe, "")
+				// The message fallback is err.Error() (not ""): pe is never
+				// actually nil on this path (errorToProviderError only
+				// returns nil for a nil err, and this call site is inside
+				// the `err != nil` retry branch), but classifyByProviderError
+				// falls back to the message when pe is nil — passing the
+				// real error text keeps this call correct if that
+				// invariant is ever loosened, instead of being a latent
+				// no-op that silently classifies "" today.
+				helperCode := classifyByProviderError(pe, err.Error())
 				logger.WarnCF("agent",
 					"provider rejected media input — retrying with downgraded media block",
 					map[string]any{
@@ -7430,6 +7585,7 @@ turnLoop:
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
 					Stage: "llm", ChatID: ts.opts.ChatID,
+					Code:          string(llm.Code),
 					Message:       llm.Message,
 					ProviderError: pe,
 				},
@@ -8222,10 +8378,27 @@ turnLoop:
 					parts = append(parts, part)
 				}
 				outboundMedia := bus.OutboundMediaMessage{
-					Channel:   ts.channel,
-					ChatID:    ts.chatID,
-					SessionID: ts.transcriptSessionID,
-					Parts:     parts,
+					Channel: ts.channel,
+					ChatID:  ts.chatID,
+					// FIX 1: workspace-scoped media resolution (channels'
+					// store.ResolveWithCallerWorkspace) was silently degrading
+					// to the private/global room for every channel send
+					// because WorkspaceID was never set here. ts.opts.WorkspaceID
+					// is the authoritative source — it is what turnCtx itself
+					// was populated with via tools.WithWorkspaceID above (see
+					// "Inject the workspace ID" a few hundred lines up in this
+					// function). Deliberately read directly from ts.opts rather
+					// than tools.ToolWorkspaceID(ctx): `ctx` here is runTurn's
+					// ORIGINAL parameter, not turnCtx — WithWorkspaceID was
+					// only ever applied to the derived turnCtx (and its
+					// children, e.g. execCtx), never back-propagated onto the
+					// `ctx` variable, so tools.ToolWorkspaceID(ctx) would
+					// always read back "". ts.opts.WorkspaceID carries the
+					// exact same value turnCtx was stamped with and needs no
+					// context-plumbing assumptions to stay correct.
+					WorkspaceID: ts.opts.WorkspaceID,
+					SessionID:   ts.transcriptSessionID,
+					Parts:       parts,
 				}
 				if turnChannelManager != nil && ts.channel != "" && !constants.IsInternalChannel(ts.channel) {
 					if err := turnChannelManager.SendMedia(ctx, outboundMedia); err != nil {
@@ -8573,7 +8746,7 @@ turnLoop:
 				ts.eventMeta("runTurn", "turn.error"),
 				ErrorPayload{
 					Stage: "session_save", ChatID: ts.opts.ChatID,
-					Message: saveLLM.Message,
+					Code: string(saveLLM.Code), Message: saveLLM.Message,
 				},
 			)
 			// US-1: persist the session-save failure to the JSONL
@@ -8675,6 +8848,7 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 				ts.eventMeta("abortTurn", "turn.error"),
 				ErrorPayload{
 					Stage:   "session_restore",
+					Code:    string(restoreLLM.Code),
 					Message: restoreLLM.Message,
 					ChatID:  ts.opts.ChatID,
 				},
@@ -8716,6 +8890,7 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 		ts.eventMeta("abortTurn", "turn.error"),
 		ErrorPayload{
 			Stage:   stage,
+			Code:    string(abortLLM.Code),
 			Message: presented,
 			ChatID:  ts.opts.ChatID,
 		},

@@ -320,7 +320,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 			})
 
-		continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID)
+		continued, continueErr := al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
 		if continueErr != nil {
 			logger.WarnCF("agent.worker", "Failed to continue queued steering",
 				map[string]any{

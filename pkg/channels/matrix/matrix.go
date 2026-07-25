@@ -452,6 +452,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 		return fmt.Errorf("no media store available: %w", channels.ErrSendFailed)
 	}
 
+	sentCount := 0
 	for _, part := range msg.Parts {
 		if err := sendCtx.Err(); err != nil {
 			return err
@@ -540,6 +541,27 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			})
 			return fmt.Errorf("matrix send media: %w", channels.ErrTemporary)
 		}
+		sentCount++
+	}
+
+	// sentCount < len(msg.Parts) means at least one part failed to
+	// resolve/stat/open locally (the loop above only `continue`s past those
+	// failures; a genuine upload/send API failure returns immediately
+	// above, never reaching here).
+	//
+	// Review re-fix: the original guard only caught sentCount==0 (total
+	// loss), so a PARTIAL failure — e.g. 2 of 3 parts delivered — returned
+	// nil and left the caller's (pkg/agent/loop.go) pre-baked success text
+	// untouched; neither the user nor the LLM learned a part never arrived.
+	// Reporting any shortfall closes that gap. Wrapping in
+	// channels.ErrSendFailed additionally marks it permanent: a local
+	// resolve/stat/open failure will not succeed on a bare retry with the
+	// same ref, so pkg/channels/manager.go's sendMediaWithRetry must not
+	// re-attempt it — retrying would also re-deliver the parts that already
+	// succeeded, duplicating them for the user.
+	if sentCount < len(msg.Parts) {
+		return fmt.Errorf("matrix: %d of %d media parts failed to send: %w",
+			len(msg.Parts)-sentCount, len(msg.Parts), channels.ErrSendFailed)
 	}
 
 	return nil

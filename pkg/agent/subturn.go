@@ -833,6 +833,33 @@ func spawnSubTurn(
 		SkipInitialSteeringPoll: true,
 		TranscriptSessionID:     parentTS.transcriptSessionID,
 		TranscriptStore:         parentTS.transcriptStore,
+		// FIX 1 (re-review): WorkspaceID inherits from the PARENT turn, not
+		// execSource (the resolved delegate). This is deliberately NOT covered
+		// by ADR-032's "no inheritance from the parent" rule (see that ADR's
+		// note in CLAUDE.md): the "Workspace" ADR-032 protects is
+		// AgentInstance.Workspace/Home — the per-agent directory-path identity
+		// field (renamed "agent home" by ADR-046) — sourced from execSource a
+		// few lines above via CloneExcept/the execSource-snapshot copy, and
+		// via the SEPARATE, identity-keyed CoreTeam reroot in runTurn
+		// (resolveTurnWorkDirOrRefuse, keyed off ts.agent.ID == execSource.ID
+		// for the child). processOptions.WorkspaceID is a different concept
+		// entirely — the Spec-1 multi-agent Workspace *room* a turn is
+		// running inside (FR-7.1 memory routing / bus.OutboundMediaMessage
+		// delivery) — and it is turn/session-scoped, not agent-scoped: every
+		// other field in this same struct literal that carries that same
+		// kind of context (Channel, ChatID, SenderID, SenderDisplayName,
+		// TranscriptSessionID, TranscriptStore) is already sourced from
+		// parentTS, not execSource, because a delegated child is still
+		// answering within the PARENT's conversation/room, just running as a
+		// different agent identity. Leaving WorkspaceID as the sole
+		// session-context field NOT inherited was the actual bug: it silently
+		// degraded bus.OutboundMediaMessage.WorkspaceID (loop.go's tool-media
+		// delivery block) to the private/global room for every delegated
+		// child that produces media inside a workspace-bound session, and
+		// (via FindForAgentPreferring's tie-break, loop.go's "Filesystem
+		// re-rooting" comment) removed a genuine tie-breaking signal for a
+		// child agent that belongs to more than one workspace's CoreTeam.
+		WorkspaceID: parentTS.opts.WorkspaceID,
 	}
 
 	// Create event scope for the child turn
@@ -864,16 +891,30 @@ func spawnSubTurn(
 	// delegating caller/LLM) is applied uniformly for every return path in
 	// the cleanup defer below.
 	if targetAgentUnresolved {
+		fallbackMsg := strings.TrimSpace(targetAgentFallbackWarning)
+		// Review-pass fix (ErrorPayload.Code was write-only at every site but
+		// one — populate it here too so the WS forwarder can use the
+		// already-computed code instead of re-translating this curated
+		// message from scratch). providerErr is nil (this is an internal
+		// delegation-resolution fallback, never a provider error).
+		fallbackLLM := TranslateLLMError(nil, fallbackMsg)
 		al.emitEvent(
 			EventKindError,
 			childTS.eventMeta("spawnSubTurn", "subturn.delegation_fallback"),
 			ErrorPayload{
-				Stage:   "subturn_delegation",
-				Message: strings.TrimSpace(targetAgentFallbackWarning),
+				Stage: "subturn_delegation",
+				Code:  string(fallbackLLM.Code),
+				// Also stamp ChatID (childTS.opts.ChatID, inherited from
+				// parentTS.chatID at construction above) — every other
+				// ErrorPayload site sets it, and the WS forwarder's
+				// matchesChatID gate never matches an empty ChatID, so this
+				// event was silently dropped for every live subscriber.
+				ChatID:  childTS.opts.ChatID,
+				Message: fallbackMsg,
 			},
 		)
 		childTS.appendErrorTranscript(
-			EventKindError.String(), "spawnSubTurn", strings.TrimSpace(targetAgentFallbackWarning),
+			EventKindError.String(), "spawnSubTurn", fallbackMsg,
 		)
 	}
 

@@ -315,7 +315,7 @@ func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {
 func (al *AgentLoop) continueWithSteeringMessages(
 	ctx context.Context,
 	agent *AgentInstance,
-	sessionKey, channel, chatID string,
+	sessionKey, channel, chatID, workspaceID string,
 	steeringMsgs []providers.Message,
 ) (string, error) {
 	return al.runAgentLoop(ctx, agent, processOptions{
@@ -327,6 +327,11 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		SendResponse:            false,
 		InitialSteeringMessages: steeringMsgs,
 		SkipInitialSteeringPoll: true,
+		// FIX 1 (re-review): see AgentLoop.resolveWorkspaceIDForContinuation
+		// (loop.go) for the resolution this value is sourced from — this
+		// function previously left WorkspaceID unset entirely, degrading a
+		// steering-continued turn's tool media to the private/global room.
+		WorkspaceID: workspaceID,
 	})
 }
 
@@ -351,7 +356,14 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 // user has since enqueued steering messages.
 //
 // If no steering messages are pending, it returns an empty string.
-func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID string) (string, error) {
+//
+// workspaceID (FIX 1 re-review) is the workspace this continuation should run
+// inside — the caller (session_worker.go) resolves it once via
+// AgentLoop.resolveWorkspaceIDForContinuation from the ORIGINAL triggering
+// message and threads it straight through; Continue has no message of its
+// own to resolve it from (only the already-collapsed sessionKey/channel/
+// chatID), so it cannot recompute this value itself.
+func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
 	if active := al.GetActiveTurn(); active != nil {
 		return "", fmt.Errorf("turn %s is still active", active.TurnID)
 	}
@@ -378,7 +390,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID s
 		}
 	}
 
-	return al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, steeringMsgs)
+	return al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs)
 }
 
 func (al *AgentLoop) InterruptGraceful(hint string) error {

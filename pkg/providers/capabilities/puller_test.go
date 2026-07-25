@@ -18,6 +18,12 @@ package capabilities
 //	#8  TestGHReleasePuller_RawURL              — ref + asset path construction
 //	#9  TestGHReleasePuller_NewDefaults         — fields are populated
 //	#10 TestChecksumURLFor                       — derived URL is correct / empty on bad input
+//
+// FIX-1 review regression tests (sendfile-fix, silent-degradation-to-raw-fallback):
+//
+//	#11 TestGHReleasePuller_Pull_RawFallback_RecordsDegraded    — release fails, raw succeeds → LastPullDegraded reports true + the release error
+//	#12 TestGHReleasePuller_Pull_SuccessPath_RecordsNotDegraded — release succeeds → LastPullDegraded reports false + nil
+//	#13 TestGHReleasePuller_Pull_BothFail_LeavesPriorDegradedState — a totally-failed Pull (Pull returns an error) does not overwrite the last recorded transport state
 
 import (
 	"context"
@@ -395,4 +401,162 @@ func TestChecksumURLFor(t *testing.T) {
 			assert.Equal(t, tc.want, checksumURLFor(tc.in))
 		})
 	}
+}
+
+// ── Test #11 (FIX-1 review) ─────────────────────────────────────────────────
+
+// TestGHReleasePuller_Pull_RawFallback_RecordsDegraded is the regression test
+// for the review finding: Pull() used to discard fetchErr silently once the
+// raw fallback succeeded, so a deleted/renamed release or a rate-limited
+// GitHub API left every subsequent pull degraded to the unpinned raw
+// transport with zero operator visibility. This asserts that after a
+// release-fails/raw-succeeds Pull, LastPullDegraded reports degraded=true
+// and returns the original release-path error (not silently dropped).
+func TestGHReleasePuller_Pull_RawFallback_RecordsDegraded(t *testing.T) {
+	body := validCatalog()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/elicify-ai/omnipus/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	})
+	mux.HandleFunc(
+		"/elicify-ai/omnipus/main/providers_capabilities.json",
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(body)
+		},
+	)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := &GHReleasePuller{
+		Owner:      "elicify-ai",
+		Repo:       "omnipus",
+		Asset:      "providers_capabilities.json",
+		Ref:        "main",
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		RawBaseURL: srv.URL,
+		UserAgent:  "test",
+	}
+
+	// Before any Pull, the zero value must report not-degraded (never a
+	// stale/uninitialized "degraded" claim).
+	degraded, releaseErr := p.LastPullDegraded()
+	assert.False(t, degraded, "no Pull has run yet")
+	assert.NoError(t, releaseErr)
+
+	got, err := p.Pull(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+
+	degraded, releaseErr = p.LastPullDegraded()
+	assert.True(t, degraded, "release failed + raw succeeded must be recorded as degraded")
+	require.Error(t, releaseErr, "the release-path failure must be preserved, not discarded")
+	assert.Contains(t, releaseErr.Error(), "release status: 429")
+}
+
+// ── Test #12 (FIX-1 review) ──────────────────────────────────────────────────
+
+// TestGHReleasePuller_Pull_SuccessPath_RecordsNotDegraded asserts the
+// converse: when the GitHub Release path itself succeeds, LastPullDegraded
+// reports degraded=false with a nil releaseErr — the common case is not
+// mislabeled as degraded.
+func TestGHReleasePuller_Pull_SuccessPath_RecordsNotDegraded(t *testing.T) {
+	body := validCatalog()
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/elicify-ai/omnipus/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, `{
+			"tag_name": "v1.2.3",
+			"assets": [{"name":"providers_capabilities.json","browser_download_url":"%s/asset","state":"uploaded"}]
+		}`, srv.URL)
+	})
+	mux.HandleFunc("/asset", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := &GHReleasePuller{
+		Owner:      "elicify-ai",
+		Repo:       "omnipus",
+		Asset:      "providers_capabilities.json",
+		Ref:        "main",
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		RawBaseURL: srv.URL,
+		UserAgent:  "test",
+	}
+	_, err := p.Pull(context.Background())
+	require.NoError(t, err)
+
+	degraded, releaseErr := p.LastPullDegraded()
+	assert.False(t, degraded, "release path succeeded — must not be reported degraded")
+	assert.NoError(t, releaseErr)
+}
+
+// ── Test #13 (FIX-1 review) ──────────────────────────────────────────────────
+
+// TestGHReleasePuller_Pull_BothFail_LeavesPriorDegradedState asserts that a
+// Pull call which fails entirely (both transports fail, Pull returns a
+// non-nil error and no bytes) does NOT overwrite the previously recorded
+// transport state — recordTransport is only called on the two successful
+// return paths inside Pull, so a wholly failed Pull leaves LastPullDegraded
+// reporting whatever the last successful Pull actually used. This matters
+// for Catalog.refreshLocked (catalog.go), which only reads LastPullDegraded
+// after a successful Pull — a failed Pull already logs via the existing
+// "pull failed; retaining last-known-good" WARN path and must not also
+// silently flip the degraded flag to a value that doesn't describe the data
+// actually in use.
+func TestGHReleasePuller_Pull_BothFail_LeavesPriorDegradedState(t *testing.T) {
+	body := validCatalog()
+	releaseUp := true
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/elicify-ai/omnipus/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		if !releaseUp {
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{
+			"tag_name": "v1.2.3",
+			"assets": [{"name":"providers_capabilities.json","browser_download_url":"%s/asset","state":"uploaded"}]
+		}`, srv.URL)
+	})
+	mux.HandleFunc("/asset", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	})
+	mux.HandleFunc(
+		"/elicify-ai/omnipus/main/providers_capabilities.json",
+		func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "not found", http.StatusNotFound)
+		},
+	)
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	p := &GHReleasePuller{
+		Owner:      "elicify-ai",
+		Repo:       "omnipus",
+		Asset:      "providers_capabilities.json",
+		Ref:        "main",
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		RawBaseURL: srv.URL,
+		UserAgent:  "test",
+	}
+
+	// First Pull succeeds cleanly via the release path.
+	_, err := p.Pull(context.Background())
+	require.NoError(t, err)
+	degraded, _ := p.LastPullDegraded()
+	require.False(t, degraded, "precondition: first pull used the release path")
+
+	// Second Pull: both transports fail.
+	releaseUp = false
+	_, err = p.Pull(context.Background())
+	require.Error(t, err, "both transports failing must return an error")
+
+	degradedAfter, releaseErrAfter := p.LastPullDegraded()
+	assert.False(t, degradedAfter, "a wholly-failed Pull must not overwrite the prior (not-degraded) state")
+	assert.NoError(t, releaseErrAfter)
 }

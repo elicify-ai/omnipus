@@ -752,6 +752,27 @@ func TestHandleErrorResponse_BodyTruncatedFlag(t *testing.T) {
 		"the read body must carry the full body up to the cap")
 }
 
+// TestProviderError_Error_ReflectsBodyTruncated is the LOW-item review
+// regression test: BodyTruncated used to be written in three places
+// (HandleErrorResponse x2, WrapHTMLResponseError) but never read anywhere —
+// a dead field carrying no observable effect. Error() now surfaces it in
+// the message text so a truncated body is distinguishable from a
+// genuinely-short one in logs/output, without altering the existing
+// status=/content-type=/body= prefix any substring-matching caller scans.
+func TestProviderError_Error_ReflectsBodyTruncated(t *testing.T) {
+	truncated := &ProviderError{Status: 502, ContentType: "text/plain", Body: "abc", BodyTruncated: true}
+	assert.Contains(t, truncated.Error(), "status=502")
+	assert.Contains(t, truncated.Error(), `body="abc"`)
+	assert.Contains(t, truncated.Error(), "truncated",
+		"BodyTruncated=true must be visible in Error(), not silently dropped")
+
+	notTruncated := &ProviderError{Status: 502, ContentType: "text/plain", Body: "abc", BodyTruncated: false}
+	assert.NotContains(t, notTruncated.Error(), "truncated",
+		"BodyTruncated=false must not claim truncation")
+	assert.Equal(t, `provider error: status=502 content-type=text/plain body="abc"`, notTruncated.Error(),
+		"the untruncated message format must be unchanged from before this fix")
+}
+
 // TestWrapHTMLResponseError_ReturnsProviderError locks the wave-2 choke
 // point unification: WrapHTMLResponseError must return a *ProviderError
 // (not a plain error) so the agent-loop classifier sees status/body

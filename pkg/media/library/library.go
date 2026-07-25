@@ -263,6 +263,20 @@ type Library struct {
 	workspaceID string
 	manifest    map[string]manifestEntry
 	now         func() time.Time
+	// removeFile and renameFile are the quarantine-pattern's final-unlink
+	// and rename primitives (Delete, CascadeDelete, OrphanGC and their
+	// rollback paths). They default to os.Remove/os.Rename in New() and
+	// exist as instance-scoped indirections — not hardcoded os.* calls —
+	// purely so tests can deterministically inject a failure at an exact
+	// step (e.g. "the rename succeeded but the final unlink failed", or
+	// "id k's rename hard-fails mid-cascade while 1..k-1 already
+	// succeeded"). Directory-permission tricks can't isolate either
+	// scenario: rename and unlink need the same directory permissions, so
+	// a permission change can't fail one without the other, and permission
+	// bits aren't enforced at all when tests run as root. Production
+	// always resolves to the real os.Remove/os.Rename.
+	removeFile func(path string) error
+	renameFile func(oldpath, newpath string) error
 }
 
 type Option func(*Library)
@@ -280,6 +294,31 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
+// WithFileRemover overrides the final on-disk unlink step used by Delete,
+// CascadeDelete, and OrphanGC's quarantine cleanup. Test-only — see the
+// Library.removeFile field doc for why this exists instead of OS-level
+// permission tricks. Production code never calls this; New() defaults to
+// os.Remove.
+func WithFileRemover(remove func(path string) error) Option {
+	return func(library *Library) {
+		if remove != nil {
+			library.removeFile = remove
+		}
+	}
+}
+
+// WithFileRenamer overrides the os.Rename call used by the quarantine step
+// of Delete, CascadeDelete, and OrphanGC (and their rollback paths).
+// Test-only — see the Library.renameFile field doc. Production code never
+// calls this; New() defaults to os.Rename.
+func WithFileRenamer(rename func(oldpath, newpath string) error) Option {
+	return func(library *Library) {
+		if rename != nil {
+			library.renameFile = rename
+		}
+	}
+}
+
 func New(home, workspaceID string, options ...Option) (*Library, error) {
 	workspaceDir, err := safeWorkspaceDir(home, workspaceID)
 	if err != nil {
@@ -290,6 +329,8 @@ func New(home, workspaceID string, options ...Option) (*Library, error) {
 		workspaceID: workspaceID,
 		manifest:    make(map[string]manifestEntry),
 		now:         time.Now,
+		removeFile:  os.Remove,
+		renameFile:  os.Rename,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -387,8 +428,25 @@ func (l *Library) uploadInternal(
 	keepTemporary := true
 	defer func() {
 		if keepTemporary {
-			_ = temporary.Close()
-			_ = os.Remove(temporaryPath)
+			// LOW item (review): both errors used to be discarded with no
+			// logging at all — every sibling rollback in this file at least
+			// WarnCFs. A leaked ".upload-*" file is undiscoverable
+			// afterward (OrphanGC only walks manifest entries, never scans
+			// the directory for stray temp files).
+			if closeErr := temporary.Close(); closeErr != nil {
+				logger.WarnCF("media-library", "upload temp file close failed", map[string]any{
+					"workspace_id": l.workspaceID,
+					"path":         temporaryPath,
+					"error":        closeErr.Error(),
+				})
+			}
+			if removeErr := os.Remove(temporaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				logger.WarnCF("media-library", "upload temp file cleanup failed", map[string]any{
+					"workspace_id": l.workspaceID,
+					"path":         temporaryPath,
+					"error":        removeErr.Error(),
+				})
+			}
 		}
 	}()
 	if chmodErr := temporary.Chmod(0o600); chmodErr != nil {
@@ -422,14 +480,31 @@ func (l *Library) uploadInternal(
 		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: commit upload: %w", err)
 	}
 	keepTemporary = false
-	if directory, openErr := os.Open(l.path); openErr == nil {
+	// LOW item (review): openErr used to be checked only via `== nil` — an
+	// open failure silently skipped the fsync entirely with no log at all,
+	// while the Sync() failure two lines below WAS logged. That asymmetry
+	// is a durability gap: an operator has no way to know the post-rename
+	// directory-entry fsync (the step that makes the rename durable across
+	// a crash) never ran. directory.Close()'s error was also discarded.
+	directory, openErr := os.Open(l.path)
+	if openErr != nil {
+		logger.WarnCF("media-library", "upload directory open for fsync failed", map[string]any{
+			"workspace_id": l.workspaceID,
+			"error":        openErr.Error(),
+		})
+	} else {
 		if syncErr := directory.Sync(); syncErr != nil {
 			logger.WarnCF("media-library", "upload directory sync failed", map[string]any{
 				"workspace_id": l.workspaceID,
 				"error":        syncErr.Error(),
 			})
 		}
-		_ = directory.Close()
+		if closeErr := directory.Close(); closeErr != nil {
+			logger.WarnCF("media-library", "upload directory close failed", map[string]any{
+				"workspace_id": l.workspaceID,
+				"error":        closeErr.Error(),
+			})
+		}
 	}
 
 	uploadedAt := l.now().UTC()
@@ -635,7 +710,13 @@ func (l *Library) Refcount(id string) (int, error) {
 // ill-formed id and ErrNotFound for an id that is well-formed but absent.
 //
 // FR-008: callers MUST log a media.delete audit event with the returned
-// entry's filename + bytes_freed.
+// entry's filename + bytes_freed — but only when err is nil. A non-nil
+// error from a manifest-committed Delete (the final-unlink step below)
+// means the disk bytes were NOT actually freed yet (they are sitting at an
+// orphaned quarantine path); an audit event claiming bytes_freed in that
+// case would be false. The projection is still returned on that error path
+// so a caller that wants to log a degraded/partial event can do so
+// deliberately, but it must not claim success.
 func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrInvalidMediaID, id)
@@ -650,7 +731,7 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 	rawPath := l.rawPath(id)
 	quarantinePath := filepath.Join(l.path, ".delete-"+id+"-"+uuid.NewString())
 	quarantined := false
-	if err := os.Rename(rawPath, quarantinePath); err != nil {
+	if err := l.renameFile(rawPath, quarantinePath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return gen.MediaLibraryEntry{}, fmt.Errorf("media library: quarantine delete %s: %w", id, err)
 		}
@@ -663,7 +744,7 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 	if err := l.persistLocked(); err != nil {
 		l.manifest[id] = previousEntry
 		if quarantined {
-			if renameErr := os.Rename(quarantinePath, rawPath); renameErr != nil {
+			if renameErr := l.renameFile(quarantinePath, rawPath); renameErr != nil {
 				logger.WarnCF("media-library", "delete rollback rename failed", map[string]any{
 					"workspace_id": l.workspaceID,
 					"media_id":     id,
@@ -674,12 +755,24 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 		return gen.MediaLibraryEntry{}, err
 	}
 	if quarantined {
-		if removeErr := os.Remove(quarantinePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		// FIX 3 (review): a final-unlink failure used to be logged and then
+		// swallowed — Delete returned nil regardless, so a caller (e.g. the
+		// FR-008 audit-log emitter) saw success and reported bytes_freed for
+		// bytes that are still on disk at quarantinePath. Nothing scans for
+		// those paths (OrphanGC only walks manifest entries), so they leaked
+		// permanently. Follow the sibling OrphanGC's established pattern:
+		// return the error instead of discarding it. The manifest change
+		// itself is correct and is NOT rolled back — the entry is genuinely
+		// gone from the manifest (persistLocked already committed that);
+		// this error means disk cleanup is incomplete, not that the delete
+		// didn't happen.
+		if removeErr := l.removeFile(quarantinePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			logger.WarnCF("media-library", "delete final unlink failed", map[string]any{
 				"workspace_id": l.workspaceID,
 				"media_id":     id,
 				"error":        removeErr.Error(),
 			})
+			return previousEntry.projection(), fmt.Errorf("media library: delete final unlink %s: %w", id, removeErr)
 		}
 	}
 	return previousEntry.projection(), nil
@@ -696,7 +789,19 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 // Returns ([], 0, nil) for an empty library — a successful no-op cascade.
 //
 // FR-009: callers MUST log a media.cascade_delete audit event with the
-// returned summary.
+// returned summary — but only when err is nil (see the final-unlink note
+// below; the same "don't claim bytes that aren't actually free" rule as
+// Delete applies here).
+//
+// Two-phase structure (FIX 4, review): phase 1 quarantines every entry's raw
+// file WITHOUT touching l.manifest; phase 2 (reached only once phase 1
+// commits cleanly for every id) mutates l.manifest and persists. Before this
+// fix, delete(l.manifest, id) was interleaved into phase 1's own loop, so a
+// hard rename failure at id k left ids 1..k-1 already removed from memory
+// even though persistLocked never ran (on-disk manifest.json still had
+// them) and restoreCascadeQuarantined only reverses file renames, never
+// l.manifest — the in-memory state silently drifted from disk. The two-phase
+// split matches the pattern OrphanGC already used correctly.
 func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed int64, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -709,15 +814,17 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		return nil, 0, nil
 	}
 
+	// Phase 1: quarantine every entry's raw file. l.manifest is untouched
+	// here — a hard rename failure partway through unwinds cleanly via
+	// restoreCascadeQuarantined without the manifest having drifted from
+	// what (still correctly) remains on disk.
 	deleted := make([]cascadePending, 0, len(ids))
-	previousManifest := make(map[string]manifestEntry, len(l.manifest))
-
 	for _, id := range ids {
 		entry := l.manifest[id]
 		rawPath := l.rawPath(id)
 		quarantinePath := filepath.Join(l.path, ".cascade-"+id+"-"+uuid.NewString())
 		item := cascadePending{id: id, entry: entry.clone(), quarantinePath: quarantinePath}
-		if renameErr := os.Rename(rawPath, quarantinePath); renameErr != nil {
+		if renameErr := l.renameFile(rawPath, quarantinePath); renameErr != nil {
 			if errors.Is(renameErr, os.ErrNotExist) {
 				item.quarantined = false
 			} else {
@@ -727,25 +834,44 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		} else {
 			item.quarantined = true
 		}
-		previousManifest[id] = entry.clone()
-		delete(l.manifest, id)
 		deleted = append(deleted, item)
 	}
 
+	// Phase 2: the rename phase committed cleanly for every id — now mutate
+	// the in-memory manifest and persist. A persist failure at this point
+	// restores both memory (from the entry values captured in `deleted`,
+	// each a clone taken before deletion) and the renamed files.
+	for _, item := range deleted {
+		delete(l.manifest, item.id)
+	}
 	if persistErr := l.persistLocked(); persistErr != nil {
-		l.manifest = previousManifest
+		for _, item := range deleted {
+			l.manifest[item.id] = item.entry
+		}
 		l.restoreCascadeQuarantined(deleted)
 		return nil, 0, persistErr
 	}
 
+	// FIX 3 (review): final-unlink failures used to be logged and then
+	// swallowed (CascadeDelete always returned a nil error), so
+	// WorkspaceDeleteHook saw cascadeErr == nil and emitted a
+	// media.cascade_delete audit event claiming bytes_freed that included
+	// bytes still on disk at a permanently orphaned quarantine path (nothing
+	// scans for those — OrphanGC only walks manifest entries). Follow the
+	// sibling OrphanGC's established errors.Join pattern instead of
+	// discarding the failure.
+	var removeErrors []error
 	for _, item := range deleted {
 		if item.quarantined {
-			if removeErr := os.Remove(item.quarantinePath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			removeErr := l.removeFile(item.quarantinePath)
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				logger.WarnCF("media-library", "cascade final unlink failed", map[string]any{
 					"workspace_id": l.workspaceID,
 					"media_id":     item.id,
 					"error":        removeErr.Error(),
 				})
+				removeErrors = append(removeErrors,
+					fmt.Errorf("media library: cascade final unlink %s: %w", item.id, removeErr))
 			}
 		}
 	}
@@ -755,6 +881,9 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 	for _, item := range deleted {
 		out = append(out, item.entry.projection())
 		totalBytes += item.entry.size
+	}
+	if len(removeErrors) > 0 {
+		return out, totalBytes, errors.Join(removeErrors...)
 	}
 	return out, totalBytes, nil
 }
@@ -792,7 +921,7 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 	for _, id := range ids {
 		rawPath := l.rawPath(id)
 		quarantinePath := filepath.Join(l.path, ".gc-"+id+"-"+uuid.NewString())
-		if err := os.Rename(rawPath, quarantinePath); err != nil {
+		if err := l.renameFile(rawPath, quarantinePath); err != nil {
 			if !errors.Is(err, os.ErrNotExist) {
 				l.restoreQuarantined(quarantined)
 				return nil, fmt.Errorf("media library: quarantine orphan %s: %w", id, err)
@@ -818,7 +947,7 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 
 	var removeErrors []error
 	for id, quarantinePath := range quarantined {
-		if err := os.Remove(quarantinePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := l.removeFile(quarantinePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			removeErrors = append(removeErrors, fmt.Errorf("media library: remove orphan %s: %w", id, err))
 		}
 	}
@@ -1009,7 +1138,7 @@ type cascadePending struct {
 
 func (l *Library) restoreQuarantined(quarantined map[string]string) {
 	for id, quarantinePath := range quarantined {
-		if err := os.Rename(quarantinePath, l.rawPath(id)); err != nil {
+		if err := l.renameFile(quarantinePath, l.rawPath(id)); err != nil {
 			logger.WarnCF("media-library", "orphan rollback failed", map[string]any{
 				"workspace_id": l.workspaceID,
 				"media_id":     id,
@@ -1024,7 +1153,7 @@ func (l *Library) restoreCascadeQuarantined(deleted []cascadePending) {
 		if !item.quarantined {
 			continue
 		}
-		if err := os.Rename(item.quarantinePath, l.rawPath(item.id)); err != nil {
+		if err := l.renameFile(item.quarantinePath, l.rawPath(item.id)); err != nil {
 			logger.WarnCF("media-library", "cascade rollback failed", map[string]any{
 				"workspace_id": l.workspaceID,
 				"media_id":     item.id,

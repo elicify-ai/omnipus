@@ -548,8 +548,25 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 		sentCount++
 	}
 
-	if sentCount == 0 {
-		return fmt.Errorf("telegram: all %d media parts failed", len(msg.Parts))
+	// sentCount < len(msg.Parts) means at least one part failed to resolve
+	// or open locally (the loop above only `continue`s past those
+	// failures; a genuine send API failure returns immediately above,
+	// never reaching here).
+	//
+	// Review fix (parity with Feishu/Matrix/Slack, which shared this same
+	// convention): the original guard only caught sentCount==0 (total
+	// loss), so a PARTIAL failure — e.g. 2 of 3 parts delivered — returned
+	// nil and left the caller's (pkg/agent/loop.go) pre-baked success text
+	// untouched; neither the user nor the LLM learned a part never arrived.
+	// Reporting any shortfall closes that gap. Wrapping in
+	// channels.ErrSendFailed additionally marks it permanent: a local
+	// resolve/open failure will not succeed on a bare retry with the same
+	// ref, so pkg/channels/manager.go's sendMediaWithRetry must not
+	// re-attempt it — retrying would also re-send the parts that already
+	// succeeded, duplicating them for the user.
+	if sentCount < len(msg.Parts) {
+		return fmt.Errorf("telegram: %d of %d media parts failed to send: %w",
+			len(msg.Parts)-sentCount, len(msg.Parts), channels.ErrSendFailed)
 	}
 	return nil
 }

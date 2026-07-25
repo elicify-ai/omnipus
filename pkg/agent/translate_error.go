@@ -16,9 +16,9 @@ package agent
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
@@ -167,7 +167,13 @@ func defaultUserMessage(code LLMErrorCode) string {
 	// slipping through without a user-facing message (SFH-W1-02). This is
 	// NOT a silent fallback; the warning provides observability for any
 	// code added in the future without a matching userMessages entry.
-	log.Printf("[agent] WARN: unrecognized LLM error code %q — using generic fallback", code)
+	//
+	// logger.WarnCF (not stdlib log.Printf): nothing in this project
+	// redirects stdlib log output, so a bare log.Printf call writes to raw
+	// stderr and never reaches gateway.log — every other WARN in this
+	// package goes through the project's structured logger.
+	logger.WarnCF("agent", "unrecognized LLM error code — using generic fallback",
+		map[string]any{"code": string(code)})
 	return userMessages[CodeUnknown]
 }
 
@@ -177,6 +183,30 @@ func defaultUserMessage(code LLMErrorCode) string {
 // CodeUnknown copy when code is unrecognized.
 func UserMessageForCode(code LLMErrorCode) string {
 	return defaultUserMessage(code)
+}
+
+// IsRetryableCode reports whether code's user-facing condition is one the
+// caller can safely retry without changing inputs. Thin exported wrapper
+// around isRetryable (mirrors the UserMessageForCode/defaultUserMessage
+// pattern above) for callers outside this package that already have an
+// LLMErrorCode in hand — e.g. the WS forwarder (pkg/gateway/websocket.go)
+// deriving Retryable from an ErrorPayload.Code it is using verbatim,
+// without re-running the full TranslateLLMError classification.
+func IsRetryableCode(code LLMErrorCode) bool {
+	return isRetryable(code)
+}
+
+// BuildDetail composes the Verbose-Chat-only detail string for a (possibly
+// curated) ProviderError/message pair. Thin exported wrapper around
+// buildDetail (mirrors IsRetryableCode's existing pattern) for callers
+// outside this package — specifically the WS forwarder
+// (pkg/gateway/websocket.go), which must recompute Detail alongside
+// Code/Message/Retryable when a curated ErrorPayload.Code overrides a fresh
+// TranslateLLMError classification (FIX 2, re-review), rather than reusing
+// the Detail from that fresh classification's own (pe, p.Message) pair by
+// coincidence.
+func BuildDetail(pe *ProviderError, message string) string {
+	return buildDetail(pe, message)
 }
 
 // pdfRejectionSubstrings are the body substrings that identify a 4xx
@@ -373,8 +403,12 @@ func isSchemaMessage(body string) bool {
 //
 // PRECEDENCE — DOCUMENTED. Status code is consulted FIRST. No body
 // substring wins against an explicit status code except in two narrow cases:
-//   - 400 with no body (truly empty) → provider_rejected (not rate_limited,
-//     which requires an explicit 429).
+//   - 400 with no body (truly empty) → unknown (NOT provider_rejected, and
+//     NOT rate_limited — rate_limited requires an explicit 429). CodeUnknown
+//     is deliberate here: it is the residual/inconclusive verdict the
+//     outcome-based strip-retry fallback gate needs (FR-017 strict
+//     reading) — see the "Generic 4xx + body absent → CodeUnknown" branch
+//     below and TestTranslateLLMError_Generic400_NoBody.
 //   - 4xx with body matching a pinned media or capability-absence phrase →
 //     CodeMediaUnsupported, regardless of the 4xx status code (the xAI
 //     incident: 400 with "valid JPG, PNG, WebP, or ICO image" body).

@@ -14,6 +14,21 @@
 // Both read the active workspace from the workspaces store; the library is a
 // workspace-scoped concept, so the picker is only meaningful inside a
 // workspace chat.
+//
+// Intentional divergence from the direct-upload path: this picker does NOT
+// filter entries against attachment-adapter.ts's ACCEPT_LIST. That list gates
+// *new* uploads through the SPA's file input/drag-drop; the workspace media
+// library aggregates entries from every ingestion path — SPA uploads, channel
+// deliveries (WhatsApp/Discord/etc.), agent-generated artifacts, sendfile —
+// most of which never passed through ACCEPT_LIST to begin with. Reattaching
+// an existing entry doesn't re-upload it, and the backend's per-turn media
+// resolution (pkg/agent/loop_media.go::resolveMediaRefsWithOffload →
+// buildDocumentInjection → docextract.Extract) already degrades ANY
+// unextractable MIME type to an honest "content could not be extracted"
+// notice rather than failing — the same graceful path non-SPA-origin entries
+// already go through. Filtering this picker would just hide legitimately
+// reusable library content the SPA itself never gated. If ACCEPT_LIST is ever
+// promoted to a hard backend/provider constraint, revisit this.
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'

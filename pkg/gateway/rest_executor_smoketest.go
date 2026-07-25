@@ -113,6 +113,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -519,7 +520,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		runner.ConsentDispatcher(runCtx, evCh, driver, runID, "", nil, out)
 	}()
 
-	responseText, ok, errMsg := drainSmokeTestRun(runCtx, out)
+	responseText, ok, errMsg := drainSmokeTestRun(runCtx, runID, out)
 
 	// If runCtx ended (client disconnect, or this handler's own
 	// smokeTestDrainGrace backstop — NOT the normal "the run finished"
@@ -548,8 +549,19 @@ func (a *restAPI) runExecutorSmokeTest(
 		resp = smokeTestFail(errMsg, durationMs(), usedAgentWorkspace)
 	}
 
-	slog.Info("executor-smoke-test: run finished",
-		"run_id", runID, "cli", cli, "ok", ok, "duration_ms", resp.DurationMs)
+	// The response body's Error field is already sanitized (never raw
+	// provider/CLI text — see sanitizeSmokeTestErrorMessage's doc), so it is
+	// safe to fold into this log line even though gateway.log can end up in
+	// operator hands more broadly than the HTTP response. It is what lets
+	// "see gateway.log for details" (the sanitized copy told to the caller)
+	// actually resolve to something here; the RAW message (when it differs)
+	// is logged separately, tied to the same run_id, inside
+	// drainSmokeTestRun's EventKindError case below.
+	finishArgs := []any{"run_id", runID, "cli", cli, "ok", ok, "duration_ms", resp.DurationMs}
+	if !ok && resp.Error != nil {
+		finishArgs = append(finishArgs, "error", *resp.Error)
+	}
+	slog.Info("executor-smoke-test: run finished", finishArgs...)
 
 	return resp, resolvedBinary
 }
@@ -630,7 +642,11 @@ func sanitizeSmokeTestErrorMessage(rawMessage string) string {
 //   - ctx.Done() fires before any of the above: ok=false with a
 //     timeout-shaped error (the backstop path — see smokeTestDrainGrace's
 //     doc).
-func drainSmokeTestRun(ctx context.Context, ch <-chan runner.RunEvent) (responseText string, ok bool, errMsg string) {
+func drainSmokeTestRun(
+	ctx context.Context,
+	runID string,
+	ch <-chan runner.RunEvent,
+) (responseText string, ok bool, errMsg string) {
 	var sb strings.Builder
 	for {
 		select {
@@ -656,7 +672,30 @@ func drainSmokeTestRun(ctx context.Context, ch <-chan runner.RunEvent) (response
 				if ev.Err != nil && ev.Err.Message != "" {
 					msg = ev.Err.Message
 				}
-				return strings.TrimSpace(sb.String()), false, sanitizeSmokeTestErrorMessage(msg)
+				sanitized := sanitizeSmokeTestErrorMessage(msg)
+				if sanitized != msg {
+					// The response body is sanitized on purpose (Wave 1 /
+					// ADR-051 §RD5 MAJ-005 — never leak raw provider/CLI text
+					// to the operator-visible response), but that sanitizer's
+					// whole job is throwing the raw text away — if it is
+					// thrown away here too, "See gateway.log for details"
+					// (the sanitized copy the caller is told) is a dead end:
+					// there is nothing in gateway.log to find. Log the raw
+					// message server-side only, tied to run_id so it
+					// correlates with the "run finished" completion log line
+					// in runExecutorSmokeTest.
+					//
+					// Re-review FIX 1: this was a bare slog.Warn — self-
+					// defeating, since slog.SetDefault is never called
+					// anywhere in this repo, so log/slog.Default() never
+					// reaches $OMNIPUS_HOME/logs/gateway.log on a
+					// backgrounded gateway. The response's "See gateway.log
+					// for details" pointed nowhere. Route through pkg/logger
+					// instead — see rest_executor_smoketest_rawlog_test.go.
+					logger.WarnCF("executor-smoketest", "run failed (raw error, server-side only)",
+						map[string]any{"run_id": runID, "cli_error_raw": msg})
+				}
+				return strings.TrimSpace(sb.String()), false, sanitized
 			case runner.EventKindPermissionRequest:
 				return strings.TrimSpace(sb.String()), false, smokeTestPermissionDeniedErr
 			}

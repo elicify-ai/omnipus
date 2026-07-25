@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -524,7 +525,12 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// /api/v1/workspaces/{id}/media[/{media_id}] — per-workspace media library (ADR-051 Rev 4).
-	if strings.Contains(rest, "/media") {
+	// Segment-based, not strings.Contains: workspace IDs are server-generated
+	// uppercase ULIDs today, so a substring match on "/media" cannot
+	// currently collide with an ID — but Contains is fragile hardening debt
+	// (a hypothetical id containing "media" as a substring would misroute
+	// here), so this checks the actual second path segment instead.
+	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) >= 2 && segs[1] == "media" {
 		a.HandleWorkspaceMedia(w, r)
 		return
 	}
@@ -1242,12 +1248,61 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// media.cascade_delete audit event with the full deleted-entry summary
 	// (media_ids, filenames, bytes_freed). The actor is the authenticated
 	// principal that triggered DELETE — empty string when no principal is
-	// resolved (e.g. unauthenticated dev-mode bypass). The hook opens a
-	// fresh library instance because the original lib (if any) was held by
-	// the request scope, not the delete handler's scope.
-	if hookErr := workspace.WorkspaceDeleteHook(a.homePath, id, "", a.auditor); hookErr != nil {
-		slog.Warn("rest: delete workspace: media cascade-delete", "id", id, "error", hookErr)
+	// resolved (e.g. unauthenticated dev-mode bypass) — sourced from the
+	// same r.Context() lookup the sibling media-delete handler
+	// (rest_workspace_media.go's handleWorkspaceMediaDelete) already uses,
+	// rather than a hardcoded "" that made every bulk cascade-delete
+	// unattributable regardless of who was actually authenticated. The hook
+	// opens a fresh library instance because the original lib (if any) was
+	// held by the request scope, not the delete handler's scope.
+	actor := a.callerIdentity(r).Username
+	mediaCascadeFailed := false
+	if hookErr := workspace.WorkspaceDeleteHook(a.homePath, id, actor, a.auditor); hookErr != nil {
+		if errors.Is(hookErr, workspace.ErrCascadeStraggler) {
+			// Re-review FIX 2: library.CascadeDelete's two-phase commit only
+			// returns a non-nil error together with a fully-populated
+			// deleted/bytesFreed summary when the manifest was already
+			// committed and the sole remaining failure is a final on-disk
+			// unlink of an already-quarantined file. WorkspaceDeleteHook
+			// (pkg/workspace/media_delete.go) detects exactly that and wraps
+			// it in workspace.ErrCascadeStraggler. Every quarantine path
+			// lives under wsDir/media/, and the unconditional
+			// os.RemoveAll(wsDir) below always cleans it up moments later
+			// regardless of this branch — so it must NOT be reported to the
+			// client as a failed delete (that used to 500 a delete that
+			// fully succeeded). Logged at Warn for operator visibility only;
+			// the media.cascade_delete audit event WorkspaceDeleteHook
+			// already emitted still records Decision=error for this moment
+			// in time (see logCascadeAuditEvent's doc).
+			logger.WarnCF("rest", "delete workspace: media cascade-delete straggler (self-healed by directory wipe)",
+				map[string]any{"id": id, "actor": actor, "error": hookErr.Error()})
+		} else {
+			mediaCascadeFailed = true
+			// Re-review FIX 1: was a bare slog.Error, invisible on a
+			// backgrounded gateway (slog.SetDefault is never called anywhere
+			// in this repo). Route through pkg/logger instead.
+			logger.ErrorCF("rest", "delete workspace: media cascade-delete",
+				map[string]any{"id": id, "actor": actor, "error": hookErr.Error()})
+		}
 	}
+
+	// The directory wipe below runs UNCONDITIONALLY even when the cascade
+	// above failed. This is safe, not merely convenient: CascadeDelete's own
+	// atomicity (library.CascadeDelete's doc) means a mid-cascade failure
+	// rolls back the in-memory manifest AND best-effort-restores any
+	// already-quarantined files back to their original names; even in the
+	// worst case where that best-effort restore itself also fails and
+	// leaves stray quarantine files behind, those files are still inside
+	// wsDir/media/, which this RemoveAll deletes wholesale regardless of
+	// the library's internal bookkeeping. There is no code path where a
+	// cascade failure leaves workspace media bytes OUTSIDE wsDir, so
+	// proceeding here cannot orphan a file onto disk — skipping RemoveAll
+	// on cascade failure would only leave MORE behind, not less. The real
+	// gap a failed cascade used to leave was an audit one (a cascade that
+	// failed before deleting anything produced zero audit trail), which
+	// WorkspaceDeleteHook now closes by always emitting a
+	// media.cascade_delete event (DecisionError on failure) regardless of
+	// how many entries were actually removed.
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
 	if err := os.RemoveAll(wsDir); err != nil {
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
@@ -1258,11 +1313,35 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 			&audit.Entry{
 				Event:    "workspace.delete",
 				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": id},
+				Details: map[string]any{
+					"id":                   id,
+					"actor":                actor,
+					"media_cascade_failed": mediaCascadeFailed,
+				},
 			},
 		); err != nil {
 			slog.Warn("audit write failed", "event", "workspace.delete", "id", id, "error", err)
 		}
+	}
+
+	// The workspace record itself IS gone at this point (the authoritative
+	// delete happened earlier, under the lock, and already released it) —
+	// a 404/409 here would misrepresent that. But a failed media cascade is
+	// a genuine partial failure the caller must be able to see, not a blank
+	// 204 implying total success (FIX-4: a silent 204 here is exactly what
+	// let every media-cascade failure go unnoticed). 500 is consistent with
+	// the two HARD cascade steps earlier in this same handler (task scan,
+	// channel unbind), which already return this status for cascade
+	// failures on this endpoint. The caller can confirm the workspace
+	// itself is gone via a follow-up GET (404) and inspect whatever
+	// survives in the media library via GET /workspaces/{id}/media.
+	if mediaCascadeFailed {
+		jsonErr(
+			w,
+			http.StatusInternalServerError,
+			"workspace deleted, but media library cleanup failed; see server logs",
+		)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

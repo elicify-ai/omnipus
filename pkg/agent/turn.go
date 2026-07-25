@@ -1223,6 +1223,35 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	{"llm_retry_backoff", "error"}:     {},
 	{"turn_loop", "error"}:             {},
 	{"synthetic_error_floor", "error"}: {},
+	// FIX 6: hookAbortError (loop.go) is the SOLE producer of hook-abort
+	// transcript entries, and it ALWAYS calls appendErrorTranscript with the
+	// literal stage "hooks" — regardless of which HookInterceptor stage
+	// (before_llm/after_llm/before_tool/after_tool) actually triggered the
+	// abort; that more specific stage name only flows into the error
+	// MESSAGE text and the live EventPayload.Stage ("hook."+stage), never
+	// into this appendErrorTranscript call. So "hooks" is the one entry
+	// that actually matters here: without it, hookAbortError's
+	// decision.Reason (caller-curated text from a HookInterceptor — before_
+	// tool/after_tool share the exact same ToolInterceptor/HookManager
+	// plumbing and provenance as before_llm/after_llm, already trusted
+	// above) gets re-run through the classifier, and any hook reason that
+	// happens to contain a pinned substring (e.g. "safety", "rate limit")
+	// is silently replaced with generic boilerplate — even though the SAME
+	// reason survives byte-for-byte in the CodeUnknown/no-providerErr
+	// fallback below for reasons that don't happen to match a substring.
+	// "before_tool"/"after_tool" are added too — unlike "hooks" above, these
+	// ARE reachable today, via a DIFFERENT call site than hookAbortError:
+	// abortTurn (loop.go) passes its `stage` argument straight through to
+	// appendErrorTranscript verbatim (no hardcoded "hooks" collapse), and is
+	// itself called as al.abortTurn(ts, "before_tool", decision.Reason) /
+	// al.abortTurn(ts, "after_tool", decision.Reason) on a HookActionHardAbort
+	// decision (loop.go's before_tool and after_tool HookInterceptor call
+	// sites). decision.Reason is the same caller-curated
+	// HookInterceptor/HookManager text as before_llm/after_llm/"hooks" above,
+	// so it needs the identical trusted-stage protection from re-classification.
+	{"hooks", "error"}:       {},
+	{"before_tool", "error"}: {},
+	{"after_tool", "error"}:  {},
 }
 
 func isTrustedInternalStage(stage, kind string) bool {

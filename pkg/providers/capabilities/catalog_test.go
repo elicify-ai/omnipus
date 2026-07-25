@@ -33,10 +33,13 @@ package capabilities
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -326,6 +329,78 @@ func TestParseSeed_RejectsMissingSource(t *testing.T) {
 	_, err := ParseSeed([]byte(body))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "source")
+}
+
+// TestParseSeed_RejectsMissingVersion (FIX 5, review) asserts the version
+// invariant: an empty/missing "version" must be rejected outright, not
+// silently accepted. Before this fix, ParseVersion("") never errors (by
+// design — see its doc comment) and produced a Version with raw == "",
+// which defeated refreshLocked's anti-downgrade regression check: that
+// check is gated on `s.Version.raw != ""`, so a version-less catalog was
+// applied unconditionally with zero log, even if it was semantically older
+// than the version already running.
+func TestParseSeed_RejectsMissingVersion(t *testing.T) {
+	body := `{"schema_version":"1.0.0","updated_at":"2026-07-23T00:00:00Z","source":"test",` +
+		`"models":[{"id":"x","provider":"p","input_modalities":["text"]}],` +
+		`"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`
+	_, err := ParseSeed([]byte(body))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version")
+
+	// Explicit empty string (as opposed to the field being entirely absent
+	// from the JSON) must be rejected identically.
+	bodyExplicitEmpty := `{"version":"","schema_version":"1.0.0","updated_at":"2026-07-23T00:00:00Z","source":"test",` +
+		`"models":[{"id":"x","provider":"p","input_modalities":["text"]}],` +
+		`"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`
+	_, err = ParseSeed([]byte(bodyExplicitEmpty))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "version")
+}
+
+// TestCatalog_Refresh_EmptyVersionRejected_AntiDowngradeGuardHolds is the
+// end-to-end regression test proving the guard the empty-version rejection
+// protects: without FIX 5, a pulled catalog with no version would sail past
+// ParseSeed and then bypass refreshLocked's regression check entirely
+// (`s.Version.raw != ""` gate), applying unconditionally regardless of
+// whether it was older than the running catalog. With the fix, ParseSeed
+// itself rejects the version-less pull before refreshLocked can apply it —
+// last-known-good is retained exactly like any other invalid-pull case.
+func TestCatalog_Refresh_EmptyVersionRejected_AntiDowngradeGuardHolds(t *testing.T) {
+	store := &memStore{
+		data: []byte(completeSeedJSON(
+			`"version": "v10.0.0","models": [{"id":"current","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		)),
+	}
+	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
+	require.NoError(t, err)
+	require.Equal(t, "v10.0.0", c.Version().String())
+
+	// A pulled catalog with NO version field at all — the exact shape a
+	// misconfigured/degraded seed source could produce.
+	versionless := `{"schema_version":"1.0.0","updated_at":"2026-07-23T00:00:00Z","source":"attacker-or-bug",` +
+		`"models":[{"id":"snuck-in","provider":"p","input_modalities":["text"]}],` +
+		`"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`
+	puller := &fakePuller{data: []byte(versionless)}
+	c.puller = puller
+
+	refreshErr := c.Refresh(context.Background())
+	require.Error(t, refreshErr, "a version-less pulled catalog must be rejected, not silently applied")
+	assert.Contains(t, refreshErr.Error(), "version")
+
+	// last-known-good must be untouched.
+	assert.Equal(t, "v10.0.0", c.Version().String())
+	models := c.Models()
+	hasCurrent, hasSnuckIn := false, false
+	for _, m := range models {
+		if m.ID == "current" {
+			hasCurrent = true
+		}
+		if m.ID == "snuck-in" {
+			hasSnuckIn = true
+		}
+	}
+	assert.True(t, hasCurrent, "current model must still be present")
+	assert.False(t, hasSnuckIn, "version-less catalog must NOT have been applied")
 }
 
 // ── TD-M5 Version semver comparison (Wave 1 r1) ──────────────────────────────
@@ -1066,4 +1141,347 @@ func (c *concurrencyTrackingPuller) Pull(context.Context) ([]byte, error) {
 	time.Sleep(time.Millisecond) // widen the overlap window
 	c.inFlight.Add(-1)
 	return c.data, nil
+}
+
+// ── FIX-1 review regression tests (silent degradation to raw fallback) ──────
+//
+// recordingLogger captures Warn/Info calls so a test can assert a specific
+// WARN fired (testLogger() above discards everything, which is right for
+// tests that don't care about log content — these do).
+type recordingLogger struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (l *recordingLogger) Warn(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, msg)
+}
+
+func (l *recordingLogger) Info(string, ...any) {}
+
+func (l *recordingLogger) warnCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.warns)
+}
+
+func (l *recordingLogger) hasWarnContaining(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, w := range l.warns {
+		if strings.Contains(w, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// degradedFakePuller is a fakePuller that also implements
+// degradedTransportReporter (the optional interface refreshLocked
+// type-asserts for), so tests can control exactly what LastPullDegraded
+// reports without going through the real GHReleasePuller/HTTP stack.
+type degradedFakePuller struct {
+	fakePuller
+	degraded   bool
+	releaseErr error
+}
+
+func (d *degradedFakePuller) LastPullDegraded() (bool, error) {
+	return d.degraded, d.releaseErr
+}
+
+// TestCatalog_Refresh_DegradedTransport_LogsWarnAndSetsState is the
+// Catalog-level half of the FIX-1 review fix: when the configured Puller
+// reports (via the optional degradedTransportReporter interface) that its
+// most recent successful Pull fell back to an unverified transport,
+// refreshLocked must both (a) log a WARN naming the release-path failure and
+// (b) record the degraded state on the catalog so Degraded() surfaces it —
+// not silently apply the pulled data as an indistinguishable clean success.
+func TestCatalog_Refresh_DegradedTransport_LogsWarnAndSetsState(t *testing.T) {
+	pulled := []byte(completeSeedJSON(
+		`"version": "z-2026-07-25","models": [{"id": "from-raw-fallback","provider":"p","input_modalities":["text"]}],"default_resize_budget": {"long_edge_px": 1, "max_bytes": 1}}`,
+	))
+	releaseErr := fmt.Errorf("release status: 429")
+	puller := &degradedFakePuller{
+		fakePuller: fakePuller{data: pulled},
+		degraded:   true,
+		releaseErr: releaseErr,
+	}
+	log := &recordingLogger{}
+	c, err := NewCatalog(minimalSeedJSON(), puller, &memStore{}, log)
+	require.NoError(t, err)
+
+	// Precondition: a freshly hydrated catalog (seed only, no live pull yet)
+	// must not claim degraded.
+	degraded, err0 := c.Degraded()
+	assert.False(t, degraded, "no Refresh has run yet")
+	assert.NoError(t, err0)
+
+	refreshErr := c.Refresh(context.Background())
+	require.NoError(t, refreshErr)
+
+	degraded, gotReleaseErr := c.Degraded()
+	assert.True(t, degraded, "catalog state must surface the degraded transport")
+	require.Error(t, gotReleaseErr)
+	assert.Contains(t, gotReleaseErr.Error(), "429")
+
+	assert.True(t, log.hasWarnContaining("degraded fallback transport"),
+		"expected a WARN naming the degraded transport, got: %v", log.warns)
+
+	// The pulled data itself is still applied — degraded is a provenance
+	// signal, not a rejection (that's what checksum mismatch is for).
+	models := c.Models()
+	found := false
+	for _, m := range models {
+		if m.ID == "from-raw-fallback" {
+			found = true
+		}
+	}
+	assert.True(t, found, "degraded-but-otherwise-valid catalog data is still applied")
+}
+
+// TestCatalog_Refresh_NonDegradedTransport_ClearsPriorDegradedState asserts
+// the degraded flag is self-healing: a later successful Refresh whose Puller
+// reports NOT degraded (the release path recovered) clears the previously
+// recorded degraded state — Degraded() always reflects the MOST RECENT
+// Refresh, not a sticky-forever flag.
+func TestCatalog_Refresh_NonDegradedTransport_ClearsPriorDegradedState(t *testing.T) {
+	store := &memStore{}
+	first := &degradedFakePuller{
+		fakePuller: fakePuller{data: []byte(completeSeedJSON(
+			`"version": "v1","models": [{"id":"a","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		))},
+		degraded:   true,
+		releaseErr: fmt.Errorf("release status: 500"),
+	}
+	c, err := NewCatalog(minimalSeedJSON(), first, store, testLogger())
+	require.NoError(t, err)
+	require.NoError(t, c.Refresh(context.Background()))
+	degraded, _ := c.Degraded()
+	require.True(t, degraded, "precondition: first refresh recorded as degraded")
+
+	second := &degradedFakePuller{
+		fakePuller: fakePuller{data: []byte(completeSeedJSON(
+			`"version": "v2","models": [{"id":"b","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		))},
+		degraded:   false,
+		releaseErr: nil,
+	}
+	c.puller = second
+	require.NoError(t, c.Refresh(context.Background()))
+
+	degraded, releaseErr := c.Degraded()
+	assert.False(t, degraded, "a subsequent non-degraded refresh must clear the prior degraded state")
+	assert.NoError(t, releaseErr)
+}
+
+// TestCatalog_Refresh_PullerWithoutDegradedReporter_NeverDegraded asserts
+// that a Puller which does NOT implement degradedTransportReporter (the
+// plain fakePuller used throughout the rest of this file, and any future
+// third-party Puller) never causes a panic and is always reported
+// not-degraded — the optional-interface check is purely additive.
+func TestCatalog_Refresh_PullerWithoutDegradedReporter_NeverDegraded(t *testing.T) {
+	puller := &fakePuller{data: []byte(completeSeedJSON(
+		`"version": "v1","models": [{"id":"a","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))}
+	c, err := NewCatalog(minimalSeedJSON(), puller, &memStore{}, testLogger())
+	require.NoError(t, err)
+	require.NoError(t, c.Refresh(context.Background()))
+
+	degraded, releaseErr := c.Degraded()
+	assert.False(t, degraded)
+	assert.NoError(t, releaseErr)
+}
+
+// ── catalog.go LOW-item fix: fs.ErrNotExist first-boot WARN false alarm ─────
+
+// notExistStore is a Store whose Read always fails with a wrapped
+// fs.ErrNotExist — simulating the real capFileStore (pkg/gateway/gateway.go)
+// on a fresh install where the catalog persistence file has never been
+// written yet.
+type notExistStore struct{}
+
+func (notExistStore) Read(context.Context) ([]byte, error) {
+	return nil, &fs.PathError{Op: "open", Path: "capabilities.json", Err: fs.ErrNotExist}
+}
+func (notExistStore) Write(context.Context, []byte) error { return nil }
+
+// TestNewCatalog_FreshInstall_NoWarnOnStoreNotExist is the regression test
+// for the LOW-item fix: NewCatalog must NOT log a WARN when the Store read
+// fails with fs.ErrNotExist — that is the expected, routine state on every
+// single fresh install (no catalog persisted yet), not a fault. The catalog
+// must still hydrate correctly from the embedded seed.
+func TestNewCatalog_FreshInstall_NoWarnOnStoreNotExist(t *testing.T) {
+	log := &recordingLogger{}
+	c, err := NewCatalog(minimalSeedJSON(), nil, notExistStore{}, log)
+	require.NoError(t, err)
+	assert.Equal(t, 0, log.warnCount(), "fs.ErrNotExist on first boot must not log a WARN, got: %v", log.warns)
+	models := c.Models()
+	assert.Len(t, models, 2, "embedded seed must still hydrate")
+}
+
+// erroringStore is a Store whose Read always fails with a non-ErrNotExist
+// error (a real fault: permissions, corruption, disk error).
+type erroringStore struct{}
+
+func (erroringStore) Read(context.Context) ([]byte, error) {
+	return nil, fmt.Errorf("simulated disk I/O error")
+}
+func (erroringStore) Write(context.Context, []byte) error { return nil }
+
+// TestNewCatalog_StoreReadRealError_StillLogsWarn is the companion
+// regression guard: suppressing the fs.ErrNotExist false alarm must NOT
+// suppress WARNs for actual Store read failures — an operator still needs
+// to see a real fault (permissions, corruption, disk error).
+func TestNewCatalog_StoreReadRealError_StillLogsWarn(t *testing.T) {
+	log := &recordingLogger{}
+	c, err := NewCatalog(minimalSeedJSON(), nil, erroringStore{}, log)
+	require.NoError(t, err)
+	assert.Equal(t, 1, log.warnCount(), "a real Store read failure must still log a WARN, got: %v", log.warns)
+	assert.True(t, log.hasWarnContaining("last-known-good read failed"))
+	models := c.Models()
+	assert.Len(t, models, 2, "embedded seed must still hydrate on a real Store failure")
+}
+
+// ── FIX-1 RE-REVIEW: Degraded() is no longer write-only (persistence) ───────
+//
+// The first FIX-1 pass added Catalog.Degraded() but nothing in production
+// ever called it — the accessor was reachable only from a test, and the
+// accompanying WARN went to stderr. This second pass makes the degraded
+// state genuinely observable by persisting it through the Store envelope
+// (encodePersistedState/decodePersistedState) so it (a) survives a restart
+// and (b) is directly inspectable in the persisted file without any code
+// needing to call Degraded() at all.
+
+// TestCatalog_DegradedState_PersistsAcrossRestart is the end-to-end
+// regression test for the persistence half of the re-review fix: a Refresh
+// that records degraded=true must survive a full process restart — i.e. a
+// FRESH Catalog constructed from the same Store's persisted bytes (no live
+// pull has run on the new process yet) must report Degraded()==true
+// immediately, not just after the 7-day ticker's next pull.
+func TestCatalog_DegradedState_PersistsAcrossRestart(t *testing.T) {
+	store := &memStore{}
+	releaseErr := fmt.Errorf("release status: 503")
+	puller := &degradedFakePuller{
+		fakePuller: fakePuller{data: []byte(completeSeedJSON(
+			`"version": "v1","models": [{"id":"a","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+		))},
+		degraded:   true,
+		releaseErr: releaseErr,
+	}
+	c1, err := NewCatalog(minimalSeedJSON(), puller, store, testLogger())
+	require.NoError(t, err)
+	require.NoError(t, c1.Refresh(context.Background()))
+
+	degraded, gotErr := c1.Degraded()
+	require.True(t, degraded, "precondition: first process recorded degraded state")
+	require.Error(t, gotErr)
+
+	// The persisted bytes must be readable as valid JSON with a top-level
+	// "degraded" key an operator could inspect directly (e.g. `jq .degraded
+	// capabilities_catalog.json`) without running any Omnipus code.
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(store.data, &onDisk), "persisted state must be valid JSON")
+	assert.Equal(t, true, onDisk["degraded"], "persisted file must carry a directly-readable top-level degraded flag")
+	assert.Contains(t, onDisk["degraded_release_error"], "503")
+	require.Contains(t, onDisk, "catalog", "persisted envelope must retain the catalog payload under its own key")
+
+	// Simulate a restart: construct a brand-new Catalog against the SAME
+	// Store, no puller wired up yet (mirrors NewCatalog being called before
+	// runCapabilityCatalogRefreshLoop's first pull).
+	c2, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
+	require.NoError(t, err)
+
+	degraded2, gotErr2 := c2.Degraded()
+	assert.True(t, degraded2,
+		"a fresh process must restore degraded=true from the persisted envelope, "+
+			"not report false until the next live pull")
+	require.Error(t, gotErr2)
+	assert.Contains(t, gotErr2.Error(), "503")
+
+	// The catalog data itself must also have hydrated correctly from the
+	// unwrapped envelope.
+	models := c2.Models()
+	found := false
+	for _, m := range models {
+		if m.ID == "a" {
+			found = true
+		}
+	}
+	assert.True(t, found, "catalog payload must unwrap correctly from the persisted envelope")
+}
+
+// TestCatalog_DegradedState_ClearsAcrossRestartWhenNotDegraded is the
+// negative-case companion: a clean (non-degraded) Refresh persists
+// degraded=false, and a subsequent restart must not spuriously report
+// degraded=true.
+func TestCatalog_DegradedState_ClearsAcrossRestartWhenNotDegraded(t *testing.T) {
+	store := &memStore{}
+	puller := &fakePuller{data: []byte(completeSeedJSON(
+		`"version": "v1","models": [{"id":"a","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))}
+	c1, err := NewCatalog(minimalSeedJSON(), puller, store, testLogger())
+	require.NoError(t, err)
+	require.NoError(t, c1.Refresh(context.Background()))
+
+	c2, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
+	require.NoError(t, err)
+	degraded, releaseErr := c2.Degraded()
+	assert.False(t, degraded)
+	assert.NoError(t, releaseErr)
+}
+
+// TestDecodePersistedState_LegacyBareCatalogFallback asserts backward
+// compatibility with a Store file written before this fix — bare catalog
+// JSON with no "catalog"/"degraded" wrapper keys. decodePersistedState must
+// treat the whole payload as the catalog and report not-degraded, rather
+// than failing to hydrate (which would force every existing install back to
+// the embedded seed on first upgrade).
+func TestDecodePersistedState_LegacyBareCatalogFallback(t *testing.T) {
+	legacy := []byte(completeSeedJSON(
+		`"version": "legacy-1","models": [{"id":"legacy-model","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))
+	catalogJSON, degraded, releaseErr := decodePersistedState(legacy)
+	assert.Equal(t, legacy, catalogJSON, "legacy bare catalog JSON must pass through unmodified")
+	assert.False(t, degraded)
+	assert.NoError(t, releaseErr)
+
+	// And it must actually hydrate through NewCatalog end-to-end.
+	store := &memStore{data: legacy}
+	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
+	require.NoError(t, err)
+	assert.Equal(t, "legacy-1", c.Version().String())
+	d, _ := c.Degraded()
+	assert.False(t, d)
+}
+
+// TestEncodeDecodePersistedState_RoundTrip is a direct unit test of the two
+// helper functions (independent of Catalog/Store plumbing): encode then
+// decode must reproduce the same catalog bytes, degraded flag, and error
+// message.
+func TestEncodeDecodePersistedState_RoundTrip(t *testing.T) {
+	catalogJSON := []byte(completeSeedJSON(
+		`"version": "v9","models": [{"id":"x","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
+	))
+
+	t.Run("degraded with release error", func(t *testing.T) {
+		encoded, err := encodePersistedState(catalogJSON, true, fmt.Errorf("release status: 404"))
+		require.NoError(t, err)
+		gotCatalog, gotDegraded, gotErr := decodePersistedState(encoded)
+		assert.JSONEq(t, string(catalogJSON), string(gotCatalog))
+		assert.True(t, gotDegraded)
+		require.Error(t, gotErr)
+		assert.Contains(t, gotErr.Error(), "404")
+	})
+
+	t.Run("not degraded, nil release error", func(t *testing.T) {
+		encoded, err := encodePersistedState(catalogJSON, false, nil)
+		require.NoError(t, err)
+		gotCatalog, gotDegraded, gotErr := decodePersistedState(encoded)
+		assert.JSONEq(t, string(catalogJSON), string(gotCatalog))
+		assert.False(t, gotDegraded)
+		assert.NoError(t, gotErr)
+	})
 }

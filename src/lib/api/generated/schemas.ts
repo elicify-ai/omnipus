@@ -6986,6 +6986,8 @@ Returns HTTP 201 on success.
     method: "delete",
     path: "/workspaces/:id",
     alias: "deleteWorkspace",
+    description: `The workspace record itself is removed atomically under a per-ID lock. Task-scan and channel-unbind cascade failures abort the whole delete (500) before that removal happens. A media-library cascade failure is detected AFTER the workspace record is already gone (best-effort cleanup step) — a genuine cascade failure (the media library could not be opened, or the manifest itself could not be updated) also returns 500, but unlike the two HARD steps above, the workspace itself has already been deleted by the time it is reported; a follow-up GET on the same id returns 404. A cascade outcome where the manifest was fully and correctly updated but a final on-disk cleanup step for an already-removed entry failed is NOT reported as a failure (204): every such leftover lives under the workspace&#x27;s own directory, which this same delete unconditionally removes immediately afterward, so it never survives the request.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -7009,6 +7011,11 @@ Returns HTTP 201 on success.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],

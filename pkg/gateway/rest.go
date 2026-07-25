@@ -8816,6 +8816,41 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			if workspaceLib == nil && a.agentLoop != nil {
 				workspaceLib = a.agentLoop.GetWorkspaceLibrary(workspaceID)
+				if workspaceLib == nil {
+					// GetWorkspaceLibrary (pkg/agent/media_present.go) collapses
+					// two very different conditions into the same nil signal:
+					// "workspace library genuinely not configured" and "library
+					// exists but failed to load" (corrupt manifest, permission
+					// error, disk I/O). Silently falling back to the legacy
+					// session-scoped path here would mask a real failure behind
+					// a plausible 201 — the file would never appear in
+					// GET /workspaces/{id}/media, get no refcount/orphan-GC/
+					// cascade-delete coverage, and never resolve via
+					// media://workspace/... . Re-derive the real cause the same
+					// way rest_workspace_media.go's openLibraryForWorkspace
+					// does: call library.New directly. It NEVER returns
+					// (nil, nil) — every call either succeeds with a valid
+					// *Library or fails with a concrete error (verified by
+					// reading library.New's full body) — so this
+					// deterministically separates the two cases without
+					// needing to change GetWorkspaceLibrary's signature (out
+					// of scope here: pkg/agent/).
+					lib, libErr := library.New(a.homePath, workspaceID)
+					if libErr != nil {
+						part.Close()
+						// Re-review FIX 1: was a bare slog.Error, invisible on a
+						// backgrounded gateway (slog.SetDefault is never called
+						// anywhere in this repo, so log/slog.Default() never
+						// reaches $OMNIPUS_HOME/logs/gateway.log). Route through
+						// pkg/logger instead.
+						logger.ErrorCF("rest", "upload: workspace library load failed",
+							map[string]any{"workspace_id": workspaceID, "error": libErr})
+						jsonErr(w, http.StatusInternalServerError,
+							fmt.Sprintf("workspace media library unavailable: %v", libErr))
+						return
+					}
+					workspaceLib = lib
+				}
 			}
 			if workspaceLib != nil {
 				ref, projection, uploadErr := workspaceLib.Upload(fileName, gen.UserUpload, part)

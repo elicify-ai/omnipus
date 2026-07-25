@@ -17,7 +17,11 @@
 //     repo on gateway startup and every 7 days. The default implementation is
 //     GHReleasePuller (GitHub Release asset, semver-tagged, checksum-verified,
 //     with raw.githubusercontent.com fallback). Pull failure is non-fatal —
-//     last-known-good is retained (FR-025, SC-009).
+//     last-known-good is retained (FR-025, SC-009). A successful pull that
+//     fell back to the unverified raw transport is recorded on the catalog
+//     (Catalog.Degraded) and persisted through the Store (see the Store bullet
+//     below) so the degraded provenance survives a restart and is directly
+//     inspectable, not just an in-memory value nothing reads.
 //   - Resolver: Resolve(modelID) returns the resolved model, or an optimistic
 //     default (image-capable) for unknown models (FR-026). The optimistic
 //     default bounds blast radius: a wrong guess costs one outcome-based
@@ -64,7 +68,9 @@ package capabilities
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sync"
 	"time"
 )
@@ -189,13 +195,89 @@ type Puller interface {
 	Pull(ctx context.Context) ([]byte, error)
 }
 
-// Store persists the last-known-good catalog JSON across restarts. Read is
+// degradedTransportReporter is an optional interface a Puller may implement
+// to report whether its most recently completed successful Pull fell back to
+// an unverified transport (GHReleasePuller implements this for its
+// raw.githubusercontent.com fallback path). refreshLocked type-asserts for
+// it after every successful Pull; a Puller that doesn't implement it is
+// treated as never-degraded (the pre-fix behavior), so this is purely
+// additive and never required.
+type degradedTransportReporter interface {
+	LastPullDegraded() (degraded bool, releaseErr error)
+}
+
+// Store persists the last-known-good catalog state across restarts. Read is
 // called on Catalog construction (before the first pull) so the catalog boots
 // with prior data even when the network is unreachable. Write is called after
 // a successful Refresh so the next boot has the latest data.
+//
+// The bytes exchanged with Store are an opaque envelope owned entirely by
+// this package (see persistedCatalogState, encodePersistedState,
+// decodePersistedState) — a Store implementation MUST treat them as opaque
+// and round-trip them unmodified (capFileStore in pkg/gateway/gateway.go
+// does exactly this: os.ReadFile / fileutil.WriteFileAtomic with no
+// parsing). Since FIX 1 (review), the envelope carries the degraded-
+// transport flag alongside the raw catalog JSON so an operator can inspect
+// it directly from the persisted file — see Degraded's doc comment.
 type Store interface {
 	Read(ctx context.Context) ([]byte, error)
 	Write(ctx context.Context, data []byte) error
+}
+
+// persistedCatalogState is the on-disk envelope written by encodePersistedState
+// and read back by decodePersistedState. It wraps the raw catalog JSON
+// (unchanged shape — Catalog is independently parseable via ParseSeed) with
+// the FIX-1 degraded-transport flag, so the flag survives a restart and is
+// directly inspectable in the persisted file instead of existing only as an
+// in-memory field nothing reads (the review finding this closes: Degraded()
+// was write-only, called only from a test).
+//
+// Back-compat: a Store file written before this change is bare catalog JSON
+// with no "catalog"/"degraded" keys at the top level. decodePersistedState
+// detects that shape (Catalog is empty after unmarshal — the catalog schema
+// has no field named "catalog") and falls back to treating the whole payload
+// as the raw catalog, with degraded defaulting to false: a legacy file
+// predates degraded-transport tracking entirely, so "not recorded" is
+// represented honestly as "not degraded" rather than guessed.
+type persistedCatalogState struct {
+	Degraded             bool            `json:"degraded"`
+	DegradedReleaseError string          `json:"degraded_release_error,omitempty"`
+	Catalog              json.RawMessage `json:"catalog"`
+}
+
+// encodePersistedState wraps catalogJSON with the degraded-transport
+// metadata for Store.Write. releaseErr is flattened to its message string
+// (the envelope is JSON; error identity is not needed on the read side,
+// only the diagnostic text).
+func encodePersistedState(catalogJSON []byte, degraded bool, releaseErr error) ([]byte, error) {
+	state := persistedCatalogState{
+		Degraded: degraded,
+		Catalog:  catalogJSON,
+	}
+	if releaseErr != nil {
+		state.DegradedReleaseError = releaseErr.Error()
+	}
+	out, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("capabilities: encode persisted state: %w", err)
+	}
+	return out, nil
+}
+
+// decodePersistedState unwraps data written by encodePersistedState. When
+// data does not carry the envelope's "catalog" key (the legacy pre-FIX-1
+// shape, or any payload decodePersistedState cannot confidently unwrap), it
+// falls back to treating data as the bare catalog JSON directly, reporting
+// not-degraded — see persistedCatalogState's doc comment for the rationale.
+func decodePersistedState(data []byte) (catalogJSON []byte, degraded bool, releaseErr error) {
+	var state persistedCatalogState
+	if err := json.Unmarshal(data, &state); err == nil && len(state.Catalog) > 0 {
+		if state.DegradedReleaseError != "" {
+			releaseErr = errors.New(state.DegradedReleaseError)
+		}
+		return state.Catalog, state.Degraded, releaseErr
+	}
+	return data, false, nil
 }
 
 // Seed is the validated, invariant-bearing domain catalog. Constructed
@@ -277,6 +359,20 @@ func (f seedFile) validate() (Seed, error) {
 	}
 	if f.Source == "" {
 		return Seed{}, fmt.Errorf("source must be non-empty")
+	}
+	// FIX 5 (review): an empty/missing version must be rejected outright.
+	// ParseVersion("") does not error (it never errors today — see its doc
+	// comment) and produces a Version with raw == "", and refreshLocked's
+	// anti-downgrade regression check is deliberately gated on
+	// `s.Version.raw != ""` (a version-less pulled/stored catalog can't be
+	// compared, so the check is skipped for it rather than panicking or
+	// false-rejecting). Without this validation, that skip becomes a hole:
+	// a version-less catalog is applied UNCONDITIONALLY — even when it is
+	// semantically older than what's running — with zero log. Rejecting it
+	// here, before it can ever reach refreshLocked's apply step, is what
+	// makes that guard's "" -> "skip" behavior actually safe.
+	if f.Version == "" {
+		return Seed{}, fmt.Errorf("version must be non-empty")
 	}
 
 	parsedVersion, err := ParseVersion(f.Version)
@@ -385,13 +481,23 @@ func (f seedFile) validate() (Seed, error) {
 // its prior values and the error is returned to the caller for logging
 // (FR-025, SC-009).
 type Catalog struct {
-	// stateMu guards models, defaultBudget, version, updatedAt, source.
+	// stateMu guards models, defaultBudget, version, updatedAt, source,
+	// degraded, degradedReleaseErr.
 	stateMu       sync.RWMutex
 	models        map[string]model
 	defaultBudget ResizeBudget
 	version       Version
 	updatedAt     time.Time
 	source        string
+	// degraded and degradedReleaseErr record whether the most recently
+	// applied Refresh's catalog came from a Puller reporting a fallback to
+	// an unverified transport (e.g. GHReleasePuller's raw.githubusercontent.com
+	// path after the GitHub Release path failed) — see refreshLocked and
+	// Degraded(). Zero value (false, nil) means either the seed/last-known-
+	// good hydration path (no live pull has run yet) or the most recent
+	// live pull used the fully-verified transport.
+	degraded           bool
+	degradedReleaseErr error
 
 	// refreshMu serializes the WHOLE Refresh transaction (pull → parse
 	// → version-check → apply → store). Two concurrent Refresh calls
@@ -453,12 +559,33 @@ func NewCatalog(seed []byte, puller Puller, store Store, log logger) (*Catalog, 
 	if store != nil {
 		prior, err := store.Read(context.Background())
 		if err != nil {
-			log.Warn("capabilities: last-known-good read failed; falling back to embedded seed", "error", err)
+			// A fresh install has no persisted catalog yet — fs.ErrNotExist
+			// (however the Store implementation surfaces it, e.g. an
+			// unwrapped *fs.PathError from os.ReadFile) is the expected,
+			// routine first-boot case, not a fault. Warning on it every
+			// single fresh install is a false alarm that trains operators to
+			// ignore this log line, masking the case that actually matters
+			// (a real read failure — permissions, corruption, disk error).
+			if !errors.Is(err, fs.ErrNotExist) {
+				log.Warn("capabilities: last-known-good read failed; falling back to embedded seed", "error", err)
+			}
 		} else if len(prior) > 0 {
-			if err := c.applySeedJSON(prior); err != nil {
+			catalogJSON, degraded, releaseErr := decodePersistedState(prior)
+			if err := c.applySeedJSON(catalogJSON); err != nil {
 				log.Warn("capabilities: last-known-good parse failed; falling back to embedded seed", "error", err)
 			} else {
 				hydrated = true
+				// FIX 1 (review): restore the degraded-transport flag from
+				// the persisted envelope so Degraded() reflects reality
+				// immediately after a restart, not just after the next live
+				// Refresh — an install that has been running on the
+				// unverified raw.githubusercontent.com fallback for days
+				// must not report "not degraded" for the whole boot window
+				// before the 7-day ticker fires again.
+				c.stateMu.Lock()
+				c.degraded = degraded
+				c.degradedReleaseErr = releaseErr
+				c.stateMu.Unlock()
 			}
 		}
 	}
@@ -594,6 +721,37 @@ func (c *Catalog) Source() string {
 	return c.source
 }
 
+// Degraded reports whether the catalog currently applied came from a Puller
+// that fell back to an unverified transport (e.g. GHReleasePuller's
+// raw.githubusercontent.com path after its GitHub Release path failed —
+// FR-025's "semver-tagged, checksum-verified release" guarantee does not
+// apply to that transport). releaseErr is the release-path failure that
+// triggered the fallback, or nil when degraded is false.
+//
+// This is the state-level half of the FIX-1 review fix: refreshLocked also
+// logs a WARN on the transition, but a log line can be missed or rotated
+// away — this accessor gives an operator (or a future status/health
+// endpoint) a durable way to see which transport actually supplied the
+// running catalog.
+//
+// Observability (review re-fix, closing the "write-only field" finding):
+// the value is not merely in-memory — encodePersistedState/decodePersistedState
+// round-trip it through the Store's persisted file (e.g.
+// $OMNIPUS_HOME/capabilities_catalog.json via the gateway's capFileStore),
+// so (a) it survives a restart — NewCatalog restores it from a prior
+// Refresh's persisted state before any live pull runs on the new process,
+// and (b) it is directly inspectable by an operator reading that file
+// (`"degraded":true` at the top level) without needing any code path to
+// call this accessor at all. A catalog with no Store, or whose Store has
+// never been written to (fresh install, no Refresh has run yet), reports
+// (false, nil) — the honest "unknown state defaults to not-degraded"
+// reading documented on persistedCatalogState.
+func (c *Catalog) Degraded() (degraded bool, releaseErr error) {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.degraded, c.degradedReleaseErr
+}
+
 // Refresh fetches an updated catalog via the configured Puller. The whole
 // transaction — pull → parse → version-check → apply → store — runs
 // under a dedicated refreshMu, so two concurrent Refresh calls cannot
@@ -625,6 +783,28 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 		c.logger.Warn("capabilities: pull failed; retaining last-known-good", "error", err)
 		return err
 	}
+	// 1a. Degraded-transport check (review FIX 1): a successful Pull can
+	// still mean the Puller silently fell back to an unverified transport
+	// (GHReleasePuller: GitHub Release fetch/checksum failed, raw
+	// fallback succeeded). That degradation used to be indistinguishable
+	// from a clean success — fetchErr was discarded once the fallback
+	// succeeded, and refreshLocked only ever logged on a non-nil Pull
+	// error. degradedTransportReporter is an optional interface so this
+	// works for GHReleasePuller without widening the Puller contract
+	// itself (other implementations, e.g. tests, are unaffected).
+	degraded := false
+	var releaseErr error
+	if reporter, ok := c.puller.(degradedTransportReporter); ok {
+		degraded, releaseErr = reporter.LastPullDegraded()
+		if degraded {
+			c.logger.Warn(
+				"capabilities: catalog pulled via degraded fallback transport; "+
+					"the GitHub Release path failed and could not be checksum-verified "+
+					"against a signed release asset, so this data is unpinned and unverified",
+				"release_error", releaseErr,
+			)
+		}
+	}
 	// 2. Parse + validate (the two-stage parse; invalid JSON or invalid
 	// invariants are both rejected here, last-known-good retained).
 	s, err := ParseSeed(data)
@@ -647,9 +827,23 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 	}
 	// 4. Apply.
 	c.applySeed(s)
+	c.stateMu.Lock()
+	c.degraded = degraded
+	c.degradedReleaseErr = releaseErr
+	c.stateMu.Unlock()
 	// 5. Store.
 	if c.store != nil {
-		if err := c.store.Write(ctx, data); err != nil {
+		persisted, encErr := encodePersistedState(data, degraded, releaseErr)
+		if encErr != nil {
+			// Encoding the envelope only fails on a json.Marshal error,
+			// which cannot happen for this struct shape (a []byte, a bool,
+			// and two strings) — guarded defensively so a future field
+			// addition can't turn into a silent skip.
+			c.logger.Warn(
+				"capabilities: failed to encode persisted state; last-known-good write skipped",
+				"error", encErr,
+			)
+		} else if err := c.store.Write(ctx, persisted); err != nil {
 			c.logger.Warn(
 				"capabilities: last-known-good write failed (in-memory state updated, persistence lagged)",
 				"error", err,

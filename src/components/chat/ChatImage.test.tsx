@@ -51,6 +51,7 @@ beforeEach(() => {
   canCopyImageMock.mockReset().mockReturnValue(true)
   canShareFilesMock.mockReset().mockReturnValue(true)
   useUiStore.getState().closeMediaLightbox()
+  useUiStore.setState({ toasts: [] })
 })
 
 describe('ChatImage', () => {
@@ -130,6 +131,90 @@ describe('ChatImage', () => {
       alt: 'shot',
       filename: 'x.png',
     })
+  })
+
+  it('falls back to a visible placeholder card when the <img> fails to load (no silent broken glyph)', () => {
+    const { container } = render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="shot" filename="diagram.png" />)
+    expect(container.querySelector('img')).toBeTruthy()
+
+    fireEvent.error(container.querySelector('img')!)
+
+    // The broken <img> is gone — replaced by a labeled placeholder, not a
+    // blank/broken glyph.
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('diagram.png')).toBeInTheDocument()
+    expect(screen.getByText('Image unavailable')).toBeInTheDocument()
+  })
+
+  it('falls back using alt text when no filename is provided', () => {
+    render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="a shot" />)
+    fireEvent.error(screen.getByRole('button', { name: 'View: a shot' }))
+    expect(screen.getByText('a shot')).toBeInTheDocument()
+  })
+
+  it('keeps the recovery actions available on error — Copy/Share/Download/Enlarge are independent fetches, not a replay of the failed <img>, plus an explicit Retry', () => {
+    const { container } = render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="shot" filename="diagram.png" />)
+    fireEvent.error(container.querySelector('img')!)
+
+    const toolbar = screen.getByRole('toolbar')
+    expect(toolbar).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy image' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Share' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Enlarge' })).toBeInTheDocument()
+  })
+
+  it('surfaces the load failure via a toast (matches the sibling upload-failure convention)', () => {
+    const { container } = render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="shot" filename="diagram.png" />)
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+
+    fireEvent.error(container.querySelector('img')!)
+
+    expect(useUiStore.getState().toasts).toEqual([
+      expect.objectContaining({ variant: 'error', message: expect.stringContaining('diagram.png') }),
+    ])
+  })
+
+  it('Enlarge still works from the error card — opens the lightbox, an independent load attempt', () => {
+    const { container } = render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="shot" filename="diagram.png" />)
+    fireEvent.error(container.querySelector('img')!)
+    expect(useUiStore.getState().mediaLightbox).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enlarge' }))
+
+    expect(useUiStore.getState().mediaLightbox).toEqual({
+      kind: 'image',
+      src: '/api/v1/media/workspace/ws-1/m-1',
+      alt: 'shot',
+      filename: 'diagram.png',
+    })
+  })
+
+  it('Retry clears the error and re-mounts the <img> for a fresh load attempt', () => {
+    const { container } = render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="shot" filename="diagram.png" />)
+    fireEvent.error(container.querySelector('img')!)
+    expect(screen.getByText('Image unavailable')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(screen.queryByText('Image unavailable')).toBeNull()
+    expect(container.querySelector('img')).toBeTruthy()
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/api/v1/media/workspace/ws-1/m-1')
+  })
+
+  it('a NEW src after a prior error is not stuck showing the stale error card (unkeyed re-render, e.g. via markdown-shared.tsx)', () => {
+    const { container, rerender } = render(<ChatImage src="/api/v1/media/workspace/ws-1/m-1" alt="shot" filename="diagram.png" />)
+    fireEvent.error(container.querySelector('img')!)
+    expect(screen.getByText('Image unavailable')).toBeInTheDocument()
+
+    // Same component instance (no key change), new src — mirrors an unkeyed
+    // markdown re-render swapping which image is at this tree position.
+    rerender(<ChatImage src="/api/v1/media/workspace/ws-1/m-2" alt="other shot" filename="other.png" />)
+
+    expect(screen.queryByText('Image unavailable')).toBeNull()
+    expect(container.querySelector('img')).toBeTruthy()
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/api/v1/media/workspace/ws-1/m-2')
   })
 
   it('pressing Space calls preventDefault (blocks the page-scroll default), unlike Enter which has no default to block', () => {

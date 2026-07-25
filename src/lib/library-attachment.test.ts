@@ -12,6 +12,7 @@ import {
   takeLibraryAttachments,
   useLibraryAttachments,
   buildWorkspaceMediaRef,
+  mediaRefURL,
   // NOTE: reset the module-level store between tests via clearLibraryAttachments.
 } from './library-attachment'
 
@@ -20,6 +21,30 @@ describe('buildWorkspaceMediaRef', () => {
     expect(buildWorkspaceMediaRef('01KY6SHW', '550e8400')).toBe(
       'media://workspace/01KY6SHW/550e8400',
     )
+  })
+})
+
+describe('mediaRefURL', () => {
+  // Regression coverage for the BLOCK finding: omnipus-runtime.ts used to
+  // build the library-attachment preview URL from lib.mediaId alone
+  // (`/api/v1/media/${lib.mediaId}`), which 404s for workspace-scoped
+  // entries — HandleMedia (rest.go:9131) is a legacy-registry lookup keyed
+  // by the FULL ref string and rejects any id containing "/", so a
+  // workspace-scoped id can never resolve through it. mediaRefURL mirrors
+  // pkg/gateway/webchat_channel.go::mediaRefURL exactly — see the Go-side
+  // TestWebchatChannel_MediaRefURL and TestReplay_MediaRefURL cases, which
+  // assert the same two input/output pairs. Keep the two in lockstep.
+  it('routes a workspace-scoped ref through /api/v1/media/workspace/<ws>/<id>', () => {
+    expect(mediaRefURL('media://workspace/ws-1/abc')).toBe('/api/v1/media/workspace/ws-1/abc')
+  })
+
+  it('routes a legacy media://<id> ref through /api/v1/media/<id>', () => {
+    expect(mediaRefURL('media://uuid-1')).toBe('/api/v1/media/uuid-1')
+  })
+
+  it('round-trips a ref built by buildWorkspaceMediaRef', () => {
+    const ref = buildWorkspaceMediaRef('ws-42', 'm-7')
+    expect(mediaRefURL(ref)).toBe('/api/v1/media/workspace/ws-42/m-7')
   })
 })
 

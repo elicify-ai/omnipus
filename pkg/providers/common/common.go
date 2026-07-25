@@ -423,6 +423,21 @@ func (e *ProviderError) Error() string {
 	if preview == "" {
 		preview = e.Body
 	}
+	// LOW item (review): BodyTruncated was written in three places
+	// (HandleErrorResponse x2, WrapHTMLResponseError) but never read
+	// anywhere — a dead field. Wire it into the message itself: an
+	// operator or classifier reading the error text can now tell a
+	// genuinely short body apart from a body that hit handleErrorBodyCap
+	// and lost data, instead of the flag being invisible dead weight.
+	// This only appends a suffix — it does not change the existing
+	// status=/content-type=/body= prefix any substring-matching caller
+	// scans for.
+	if e.BodyTruncated {
+		return fmt.Sprintf(
+			"provider error: status=%d content-type=%s body=%q (truncated at %d bytes)",
+			e.Status, e.ContentType, preview, handleErrorBodyCap,
+		)
+	}
 	return fmt.Sprintf(
 		"provider error: status=%d content-type=%s body=%q",
 		e.Status, e.ContentType, preview,

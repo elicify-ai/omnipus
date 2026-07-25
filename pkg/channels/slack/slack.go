@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -207,6 +208,19 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			title = filename
 		}
 
+		// FileSize is MANDATORY: UploadFileContext hard-fails with
+		// "file.upload.v2: file size cannot be 0" before issuing any HTTP
+		// request when it is unset (slack-go files.go:547). The v2 flow needs
+		// the length up front to reserve the external upload URL.
+		fi, err := os.Stat(localPath)
+		if err != nil {
+			logger.ErrorCF("slack", "Failed to stat media file", map[string]any{
+				"path":  localPath,
+				"error": err.Error(),
+			})
+			continue
+		}
+
 		// slack-go 0.20 removed the V2-suffixed API; UploadFileContext now uses
 		// the v2 three-step upload flow internally with the same field set.
 		_, err = c.api.UploadFileContext(ctx, slack.UploadFileParameters{
@@ -214,6 +228,7 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			File:     localPath,
 			Filename: filename,
 			Title:    title,
+			FileSize: int(fi.Size()),
 		})
 		if err != nil {
 			logger.ErrorCF("slack", "Failed to upload media", map[string]any{
@@ -225,8 +240,25 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 		sentCount++
 	}
 
-	if sentCount == 0 {
-		return fmt.Errorf("slack: all %d media parts failed", len(msg.Parts))
+	// sentCount < len(msg.Parts) means at least one part failed to resolve
+	// locally (the loop above only `continue`s past those failures; a
+	// genuine upload API failure returns immediately above, never reaching
+	// here).
+	//
+	// Review fix (parity with Feishu/Matrix/Telegram, which shared this same
+	// convention): the original guard only caught sentCount==0 (total
+	// loss), so a PARTIAL failure — e.g. 2 of 3 parts delivered — returned
+	// nil and left the caller's (pkg/agent/loop.go) pre-baked success text
+	// untouched; neither the user nor the LLM learned a part never arrived.
+	// Reporting any shortfall closes that gap. Wrapping in
+	// channels.ErrSendFailed additionally marks it permanent: a local
+	// resolve failure will not succeed on a bare retry with the same ref,
+	// so pkg/channels/manager.go's sendMediaWithRetry must not re-attempt
+	// it — retrying would also re-upload the parts that already succeeded,
+	// duplicating them for the user.
+	if sentCount < len(msg.Parts) {
+		return fmt.Errorf("slack: %d of %d media parts failed to send: %w",
+			len(msg.Parts)-sentCount, len(msg.Parts), channels.ErrSendFailed)
 	}
 	return nil
 }

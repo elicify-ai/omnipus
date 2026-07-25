@@ -3364,22 +3364,63 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if !matchesChatID(p.ChatID) {
 				continue
 			}
-			le := agent.TranslateLLMError(p.ProviderError, p.Message)
-			if le.Code == agent.CodeRateLimited {
+			// FIX 2: prefer the already-computed p.Code/p.Message over a
+			// fresh TranslateLLMError call. Every ErrorPayload construction
+			// site now populates Code (pkg/agent's FIX 3) alongside a
+			// Message that is EITHER the classifier's own generic copy OR —
+			// for trusted internal stages (hook aborts, model-switch
+			// failures, session save/restore, synthetic-error-floor,
+			// external-CLI sanitized text) — caller-curated text that must
+			// reach the wire verbatim. This mirrors appendErrorTranscript's
+			// write-choke-point behavior (pkg/agent/turn.go): re-running
+			// TranslateLLMError against already-curated text here would
+			// re-classify it against the generic message catalog and
+			// silently replace the curated copy with boilerplate whenever
+			// the text happened to contain a pinned substring (e.g. a hook
+			// abort reason mentioning "safety") — exactly the live-vs-replay
+			// divergence this closes. Only fall back to a fresh translation
+			// when a call site left Code empty (defensive — after FIX 3
+			// every production site sets it).
+			translated := agent.TranslateLLMError(p.ProviderError, p.Message)
+			code := translated.Code
+			message := translated.Message
+			retryable := translated.Retryable
+			detail := translated.Detail
+			if p.Code != "" {
+				code = agent.LLMErrorCode(p.Code)
+				message = p.Message
+				retryable = agent.IsRetryableCode(code)
+				// FIX 2 (re-review): detail must follow the same
+				// curated-preferred rule as code/message/retryable above,
+				// not silently stay pinned to the fresh-classification
+				// value computed a few lines up. Recomputing from
+				// (p.ProviderError, message) — message is already the
+				// curated p.Message reassigned just above — is a no-op
+				// TODAY (every curated site passes ProviderError: nil, so
+				// agent.BuildDetail(nil, msg) echoes msg exactly like
+				// translated.Detail already does), but stops being one the
+				// day a curated site pairs a curated Code+Message with a
+				// non-nil ProviderError: buildDetail favors pe.Status/
+				// pe.Body over the message argument once pe != nil, so
+				// leaving this pinned to `translated.Detail` would render a
+				// diagnostic string that was never validated against the
+				// curated Code/Message this frame actually carries.
+				detail = agent.BuildDetail(p.ProviderError, message)
+			}
+			if code == agent.CodeRateLimited {
 				continue
 			}
 			errSID := sessionIDForChat(p.ChatID)
 			errF := generated.ErrorFrame{
 				Type:      string(generated.WsFrameTypeError),
 				SessionId: &errSID,
-				Message:   le.Message,
+				Message:   message,
 			}
-			detail := le.Detail
 			errF.Payload = &generated.ErrorPayload{
 				LlmError: generated.LLMError{
-					Code:      string(le.Code),
-					Message:   le.Message,
-					Retryable: le.Retryable,
+					Code:      string(code),
+					Message:   message,
+					Retryable: retryable,
 					Detail:    &detail,
 				},
 			}

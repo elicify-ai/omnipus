@@ -2188,35 +2188,43 @@ func setupAndStartServices(
 	// Build the capability catalog for model media-modality resolution
 	// (FR-024/FR-025/FR-026): seeded from embedded data, refreshed from
 	// the Omnipus GitHub release every 7 days.
+	//
+	// Re-review FIX 1b: capabilities.NewCatalog's `log` parameter used to be
+	// slog.Default() directly, which meant every Warn/Info diagnostic
+	// catalog.go emits (failed pull, degraded/unverified transport
+	// fallback, rejected pulled catalog, version regression, last-known-good
+	// persistence failure) went to the same invisible-on-a-backgrounded-
+	// gateway sink FIX 1 above fixes — but catalog.go is owned by another
+	// agent and out of scope to edit here. capabilityCatalogLogAdapter
+	// satisfies the same minimal (unexported, structurally-matched)
+	// Warn/Info interface catalog.go declares — exactly the way
+	// slog.Default() (a *slog.Logger, which also has Warn/Info methods)
+	// already did — so no change to catalog.go is needed: passing a
+	// differently-backed value that satisfies the same structural interface
+	// is sufficient.
 	capCatalog, catErr := capabilities.NewCatalog(
 		capabilities.EmbeddedSeed(),
 		capabilities.NewGHReleasePuller("elicify-ai", "omnipus", "providers_capabilities.json"),
 		&capFileStore{path: filepath.Join(homePath, "capabilities_catalog.json")},
-		slog.Default(),
+		capabilityCatalogLogAdapter{},
 	)
 	if catErr != nil {
-		slog.Warn("gateway: capability catalog construction failed; model modality detection degraded", "error", catErr)
+		logger.WarnCF("gateway", "capability catalog construction failed; model modality detection degraded",
+			map[string]any{"error": catErr})
 	} else {
 		agentLoop.SetCapabilityCatalog(capCatalog)
 		// Start the 7-day background refresh (FR-025). Non-fatal: a pull
 		// failure retains last-known-good and is logged but does not abort
-		// the gateway or the refresh loop.
-		go func() {
-			const refreshInterval = 7 * 24 * time.Hour
-			ticker := time.NewTicker(refreshInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					if refreshErr := capCatalog.Refresh(ctx); refreshErr != nil {
-						slog.Warn("gateway: capability catalog refresh failed; last-known-good retained",
-							"error", refreshErr)
-					}
-					cancel()
-				}
-			}
-		}()
+		// the gateway or the refresh loop. Extracted into its own function
+		// (rather than an inline goroutine literal) so the "refresh once
+		// immediately, THEN wait for the ticker" ordering is independently
+		// unit-testable without booting the whole gateway — see
+		// capability_catalog_refresh_test.go.
+		go runCapabilityCatalogRefreshLoop(
+			capCatalog,
+			capabilityCatalogRefreshInterval,
+			capabilityCatalogRefreshTimeout,
+		)
 	}
 
 	api := &restAPI{
@@ -2569,6 +2577,104 @@ func (s *capFileStore) Write(ctx context.Context, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return fileutil.WriteFileAtomic(s.path, data, 0o600)
+}
+
+// capabilityCatalogRefreshInterval and capabilityCatalogRefreshTimeout are
+// the production values for the FR-025 background refresh: pull at most
+// once every 7 days, bound each individual pull attempt to 30s.
+const (
+	capabilityCatalogRefreshInterval = 7 * 24 * time.Hour
+	capabilityCatalogRefreshTimeout  = 30 * time.Second
+)
+
+// capabilityCatalogLogAdapter routes capabilities.NewCatalog's minimal
+// Warn(msg string, args ...any) / Info(msg string, args ...any) logger
+// dependency through pkg/logger instead of log/slog.Default() (re-review
+// FIX 1b — see the doc comment at this type's construction site). args
+// follows log/slog's own alternating-key/value convention, since that is
+// the shape catalog.go's call sites already use (they were written
+// against slog.Logger's Warn/Info signature).
+type capabilityCatalogLogAdapter struct{}
+
+func (capabilityCatalogLogAdapter) Warn(msg string, args ...any) {
+	logger.WarnCF("capabilities", msg, slogArgsToFields(args))
+}
+
+func (capabilityCatalogLogAdapter) Info(msg string, args ...any) {
+	logger.InfoCF("capabilities", msg, slogArgsToFields(args))
+}
+
+// slogArgsToFields converts a slog-style alternating key/value argument
+// list into the map[string]any pkg/logger's *CF functions take. A
+// malformed odd-length call (a bug at the call site, not expected in
+// practice) preserves its trailing value under "!BADKEY" rather than
+// silently dropping it — the same convention log/slog itself documents
+// for the identical case.
+func slogArgsToFields(args []any) map[string]any {
+	fields := make(map[string]any, len(args)/2+1)
+	for i := 0; i+1 < len(args); i += 2 {
+		key, ok := args[i].(string)
+		if !ok {
+			key = fmt.Sprintf("%v", args[i])
+		}
+		fields[key] = args[i+1]
+	}
+	if len(args)%2 == 1 {
+		fields["!BADKEY"] = args[len(args)-1]
+	}
+	return fields
+}
+
+// runCapabilityCatalogRefreshLoop performs an immediate refresh, then a
+// refresh every interval thereafter, forever. It never returns — the sole
+// caller (setupAndStartServices) invokes it in its own goroutine.
+//
+// The immediate call before the ticker loop is load-bearing, not
+// cosmetic: Go's time.Ticker does NOT fire on creation, so a bare
+// `for { select { case <-ticker.C: ... } } }` loop (the previous shape of
+// this code, inlined at the call site) never invokes the puller until
+// `interval` has elapsed — meaning any gateway restarted more often than
+// that (dev pods, containers, k8s rolling deploys, systemd restarts) runs
+// indefinitely on the build-time embedded seed and never refreshes at
+// all. That contradicts both this package's own intent (FR-025) and
+// catalog.go's doc comment, which promises a refresh "on gateway startup
+// and every 7 days". A failed initial refresh does not prevent the ticker
+// loop from starting: last-known-good (the embedded seed, on a fresh
+// catalog) is retained and the failure is logged, exactly like any
+// periodic refresh failure.
+//
+// Extracted as its own function (rather than an inline goroutine literal)
+// specifically so this startup-ordering invariant is unit-testable
+// without booting the whole gateway — see
+// capability_catalog_refresh_test.go, which passes a very long interval
+// and a fake Puller to prove the first Pull happens immediately rather
+// than only after the (never-fired-in-the-test) ticker tick.
+func runCapabilityCatalogRefreshLoop(cat *capabilities.Catalog, interval, refreshTimeout time.Duration) {
+	refresh := func(failureLogMsg string) {
+		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+		defer cancel()
+		if err := cat.Refresh(ctx); err != nil {
+			// Re-review FIX 1: this used to be a bare slog.Warn. slog.SetDefault
+			// is never called anywhere in this repo, so log/slog.Default() sits
+			// on its zero-value stderr-only handler — invisible on a
+			// backgrounded gateway (the documented `./omnipus gateway
+			// --allow-empty &` launch form), since nothing routes stderr into
+			// $OMNIPUS_HOME/logs/gateway.log. Route through pkg/logger (the
+			// same structured sink pkg/agent already uses, wired to
+			// gateway.log via logger.EnableFileLogging at this file's own
+			// EnableFileLogging call) so a refresh failure is actually
+			// discoverable.
+			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
+		}
+	}
+
+	refresh("gateway: capability catalog initial refresh failed; embedded seed retained")
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		refresh("gateway: capability catalog refresh failed; last-known-good retained")
+	}
 }
 
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) {
