@@ -62,6 +62,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/devices"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
@@ -241,6 +243,24 @@ type services struct {
 	// homePath is the Omnipus home directory. Stored here so omnipusGracefulShutdown
 	// can remove the self-registered PID file without an additional parameter.
 	homePath string
+}
+
+// markReloadDegraded records a reload-adjacent failure so /health surfaces it
+// (503, "config reload failed: <err>") until the next successful reload
+// clears it (mirrors executeReload's own local markDegraded closure, which
+// writes the same two fields under the same reloadMu). Exists as a method —
+// rather than duplicating the lock/set/unlock pattern — so failure paths
+// that reject a candidate config BEFORE executeReload is even reached (the
+// manual-reload branch in RunContextWithOptions, and the file-watcher poller
+// in setupConfigWatcherPolling — both guarding
+// populateAgentsListFromEntityStoreStrict) can surface the same
+// operator-visible degraded signal without reaching into executeReload's
+// local closure or duplicating reloadMu handling at each call site.
+func (s *services) markReloadDegraded(err error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	s.reloadDegraded = true
+	s.reloadError = err
 }
 
 type startupBlockedProvider struct {
@@ -883,48 +903,6 @@ func pluralSuffix(n int) string {
 // is a UX gap, not a boot-blocking condition, and ensureVerifierSoul
 // remains the lazy backstop for any path (e.g. pkg/agent's own test
 // harnesses) that never runs this boot sequence at all.
-// populateAgentsListFromEntityStore is the ADR-054 D3/§5 "read through an
-// in-memory cache" bridge between the per-entity agent store
-// (entities/agents/<id>.json, D2) and cfg.Agents.List — the in-memory field
-// the whole codebase's existing readers (pkg/gateway, pkg/agent, pkg/routing,
-// pkg/tools, cmd/omnipus: dozens of call sites) still consult directly.
-//
-// config.LoadConfig now strips any legacy agents.list content from config.json
-// on every load (legacy_agents_list.go) — agents are per-entity records now,
-// never config.json entries — so cfg.Agents.List is EMPTY immediately after
-// LoadConfig/LoadConfigWithStore returns, on every boot AND every subsequent
-// reload. Without this bridge, the entire in-memory agent roster would
-// silently vanish on the very next config reload (any config.json write via
-// safeUpdateConfigJSON/updateConfigJSONLocked, including a completely
-// unrelated settings change) — a severe regression, not just a test-fixture
-// inconvenience.
-//
-// NOTE: pkg/agent/roster_load.go ships an equivalent
-// agent.LoadAgentRosterFromEntityStore(cfg), which derives the entities/
-// root via filepath.Dir(cfg.AgentHomeBasePath()) (i.e.
-// filepath.Dir(cfg.Agents.Defaults.Home)). This function intentionally takes
-// homePath EXPLICITLY instead of using that derivation: empirically, against
-// this package's own test fixtures (many of which set Agents.Defaults.Home
-// directly to the harness temp dir, not <home>/workspace),
-// filepath.Dir(cfg.AgentHomeBasePath()) resolves ONE LEVEL ABOVE the actual
-// $OMNIPUS_HOME those fixtures use — pointing agentstore at a sibling
-// directory with no entities/agents/ tree and silently returning an empty
-// roster. Swapping to the shared helper regressed 9 gateway tests (verified
-// 2026-07-25); reverted. Threading the real homePath through explicitly
-// (already known correctly at every call site in this package) avoids the
-// derivation entirely rather than trying to fix it here.
-func populateAgentsListFromEntityStore(cfg *config.Config, homePath string) {
-	agents, skipped, err := agentstore.New(homePath).List()
-	if err != nil {
-		slog.Error("gateway: populateAgentsListFromEntityStore: could not list agent entity records — "+
-			"in-memory agent roster will be empty until the next successful reload",
-			"home", homePath, "error", err)
-		return
-	}
-	cfg.Agents.List = agents
-	cfg.SkippedAgentIDs = skipped
-}
-
 func seedJudgeEagerSoul(cfg *config.Config) {
 	for i := range cfg.Agents.List {
 		if cfg.Agents.List[i].ID != string(coreagent.IDJudge) {
@@ -937,6 +915,266 @@ func seedJudgeEagerSoul(cfg *config.Config) {
 		}
 		return
 	}
+}
+
+// lastNonEmptyRosters remembers, per home directory, the most recently
+// observed NON-EMPTY agent roster loaded by
+// populateAgentsListFromEntityStoreStrict. It backs that function's
+// regression guard: a fresh entity-store List() that comes back EMPTY for a
+// home directory that previously yielded a real roster is treated as a hard
+// failure rather than silently wiping the in-memory roster — see that
+// function's doc comment for the full rationale (an empty roster does not
+// merely mean "nothing to route to"; it promotes ALL traffic to an
+// unrestricted fallback agent).
+//
+// Keyed by homePath (never a single global) so multiple *config.Config
+// instances/tests rooted at different homes cannot cross-contaminate each
+// other's remembered roster. Process-lifetime only, in-memory — a
+// genuinely fresh process/home combination has no entry yet, so its first
+// (legitimately empty, pre-SeedConfig) population never trips the guard.
+var (
+	lastNonEmptyRostersMu sync.Mutex
+	lastNonEmptyRosters   = map[string][]config.AgentConfig{}
+)
+
+// forgetRosterBaseline drops the remembered non-empty roster for homePath so
+// the next populateAgentsListFromEntityStoreStrict call will not treat a
+// legitimately-shrunk roster as a regression.
+//
+// WHY THIS IS NEEDED, and why the guard alone is not enough: the regression
+// guard cannot distinguish "the store broke and handed back nothing" from
+// "the operator deleted the last agent" — both look like non-empty -> empty,
+// and an on-disk file count does not separate them either (a homePath that
+// resolves to the WRONG directory also reports zero records, which is the
+// precise failure the guard exists to catch). The authority on an INTENTIONAL
+// shrink is the mutation path, so deleteAgent tells the guard rather than the
+// guard trying to infer it.
+//
+// Without this, deleting the LAST agent wedged the running gateway: the entity
+// record was removed from disk, the post-delete reload was rejected by the
+// guard, and the in-memory roster kept serving the deleted agent until a
+// restart — permanent divergence between disk and memory. Regression coverage:
+// TestHandleAgentsDelete_OK (rest_clidetect_test.go) deletes the only agent and
+// asserts the subsequent GET is 404.
+//
+// The narrow trade-off is deliberate: if the store ALSO fails during the very
+// next reload after an intentional delete, that one reload accepts an empty
+// roster instead of rejecting it. The baseline re-establishes on the following
+// successful load, and an operator-initiated delete is a far weaker signal of
+// compromise than an unexplained disappearance.
+func forgetRosterBaseline(homePath string) {
+	lastNonEmptyRostersMu.Lock()
+	delete(lastNonEmptyRosters, homePath)
+	lastNonEmptyRostersMu.Unlock()
+}
+
+// populateAgentsListFromEntityStore — the legacy void, log-and-continue
+// bridge between the per-entity agent store (entities/agents/<id>.json) and
+// cfg.Agents.List — was DELETED (RELEASE BLOCKER security-fix follow-up,
+// 2026-07-26). It was kept only for pkg/gateway/rest.go's
+// populateAgentsListFromStore and rest_pending_restart.go's
+// HandlePendingRestart, which were out of this security-fix pass's original
+// file-ownership scope; once those call sites were fixed to call the strict,
+// fail-closed populateAgentsListFromEntityStoreStrict directly (same package,
+// no export needed) and reject on error instead of silently proceeding with
+// whatever roster the entity store handed back, nothing in the codebase
+// called this lenient wrapper anymore (verified: `grep -rn
+// "populateAgentsListFromEntityStore("` finds only the strict variant's own
+// definition). See populateAgentsListFromEntityStoreStrict's doc comment
+// immediately below for the full privilege-escalation rationale this
+// wrapper's removal closes off entirely rather than leaving as a
+// still-reachable, silently-permissive code path.
+
+// populateAgentsListFromEntityStoreStrict is populateAgentsListFromEntityStore's
+// fail-closed variant. It returns a non-nil error whenever the entity
+// store's state cannot be trusted enough to safely (re)populate
+// cfg.Agents.List, and on ANY error path it leaves cfg.Agents.List and
+// cfg.SkippedAgentIDs COMPLETELY UNTOUCHED — callers own the decision of
+// what "cannot trust this" means for them (boot aborts; a reload rejects the
+// candidate config and marks the service degraded via
+// (*services).markReloadDegraded rather than swapping it in).
+//
+// This distinction matters far more than it looks: an EMPTY cfg.Agents.List
+// does not merely mean "no agent to route a message to". Verified
+// 2026-07-26 as a real privilege-escalation chain, not a theoretical one:
+// pkg/agent/registry.go's NewAgentRegistry ALWAYS registers an unrestricted
+// "main" sentinel AgentConfig with no Tools/Policies at all, and
+// pkg/tools/compositor.go's global×agent policy merge
+// (resolveEffectivePolicyWith) falls through to the GLOBAL floor for every
+// tool an agent has no per-agent policy entry for — which is every tool,
+// for that sentinel. pkg/config/defaults.go seeds that global floor "allow"
+// for bash, write_file, edit_file, delegate, send_email, and more. So a
+// wiped roster silently promotes ALL routed traffic (via
+// AgentRegistry.GetDefaultAgent's fallback ladder) to an unrestricted
+// agent — and repairAndValidateToolPolicyCoverage (this file), which walks
+// cfg.Agents.List to find coverage gaps, finds ZERO agents to check and
+// vacuously PASSES an empty roster, so the existing coverage gate does not
+// catch this at all. Silently limping on with whatever (potentially empty)
+// roster the entity store handed back — the historical behavior, preserved
+// only in the legacy populateAgentsListFromEntityStore wrapper above — is
+// therefore never acceptable from a fresh call site.
+//
+// Three independent failure classes are rejected here:
+//
+//  1. A genuine entity.Store.List() error (e.g. EMFILE/ENFILE under fd
+//     pressure, EACCES after a restore with the wrong ownership, EIO,
+//     entities/agents shadowed by a regular file) — propagated directly.
+//     This is DIFFERENT from "the directory does not exist yet", which
+//     entity.Store.List() maps to (nil, nil, nil): a genuine fresh-install
+//     state, not an error.
+//  2. Every on-disk agent record failed to parse (List() succeeds, but
+//     every id it found landed in `skipped`, none in `agents`) — e.g. a
+//     breaking schema change. total := len(agents)+len(skipped) is the true
+//     on-disk record count (every id List() finds lands in exactly one of
+//     the two); total > 0 with zero LOADED agents must never be treated as
+//     "fresh install, nothing configured" (total == 0 is the genuine
+//     fresh-install case and is unaffected).
+//  3. A regression within this process's own lifetime: homePath previously
+//     yielded a non-empty roster (tracked in lastNonEmptyRosters) and this
+//     call now yields an empty one. A genuinely fresh process/home
+//     combination never has a prior entry, so this cannot fire on a real
+//     first boot — it only fires on a live process observing its own
+//     roster apparently disappear, e.g. homePath momentarily/incorrectly
+//     resolving to the wrong directory (see setupConfigWatcherPolling's
+//     homePath-threading fix) or a transient store hiccup that happened to
+//     return a clean empty list instead of a class-1 error.
+//
+// Also closes the ADR-054-era normalization gap: entity-loaded agents never
+// pass through loadConfigInternal's own NormalizeFallbacks /
+// migrateAgentPrimaryProvider passes (those only run against config.json's
+// agents.list inside config.LoadConfig*, which is stripped to empty before
+// this bridge ever runs) — config.NormalizeAgentRoster applies both to the
+// roster on every successful load here so an agent whose FallbackModel/
+// primary-model fields were written pre-split still resolves correctly.
+func populateAgentsListFromEntityStoreStrict(cfg *config.Config, homePath string) error {
+	agents, skipped, err := agentstore.New(homePath).List()
+	if err != nil {
+		logger.Errorf("gateway: agent entity store list failed at %q: %v", homePath, err)
+		return fmt.Errorf("gateway: could not list agent entity records at %q: %w", homePath, err)
+	}
+
+	if total := len(agents) + len(skipped); total > 0 && len(agents) == 0 {
+		logger.Errorf("gateway: agent entity store at %q has %d on-disk record(s), all %d "+
+			"unparseable — refusing to treat this as a fresh install", homePath, total, len(skipped))
+		return fmt.Errorf(
+			"gateway: entity store at %q has %d on-disk agent record(s), all %d unparseable — "+
+				"refusing to treat this as a fresh install with zero agents",
+			homePath, total, len(skipped),
+		)
+	}
+
+	if len(agents) == 0 {
+		lastNonEmptyRostersMu.Lock()
+		previous := lastNonEmptyRosters[homePath]
+		lastNonEmptyRostersMu.Unlock()
+		if len(previous) > 0 {
+			logger.Errorf("gateway: agent entity store at %q returned an EMPTY roster where a "+
+				"NON-EMPTY roster (%d agents) was previously loaded for this home — refusing to "+
+				"overwrite the in-memory roster", homePath, len(previous))
+			return fmt.Errorf(
+				"gateway: entity store at %q returned an EMPTY roster where a NON-EMPTY roster "+
+					"(%d agents) was previously loaded for this home", homePath, len(previous),
+			)
+		}
+	}
+
+	cfg.Agents.List = agents
+	cfg.SkippedAgentIDs = skipped
+	config.NormalizeAgentRoster(cfg)
+
+	if len(agents) > 0 {
+		rosterCopy := make([]config.AgentConfig, len(agents))
+		copy(rosterCopy, agents)
+		lastNonEmptyRostersMu.Lock()
+		lastNonEmptyRosters[homePath] = rosterCopy
+		lastNonEmptyRostersMu.Unlock()
+	}
+	return nil
+}
+
+// persistSeededCoreAgents persists every agent SeedConfig added-or-touched
+// via the agent store: Create for one with no existing record, Update (full-
+// record replace) for one that already has one — matching SeedConfig's own
+// "re-enforce identity fields on existing core agents" semantics. Extracted
+// from RunContextWithOptions as its own function so the fix below (a single
+// corrupt/unparseable entity record must degrade, never abort boot —
+// ADR-054 D7 + §0 R3) is directly unit-testable without spinning up the
+// full boot sequence (credentials, providers, agent loop).
+//
+// store.Get's error is explicitly classified rather than treated as a bare
+// "absent" signal: gating solely on "any error means create" (the previous
+// behavior) mis-handled a PARSE error (corrupt entities/agents/<id>.json)
+// identically to "record does not exist yet" — store.Create then hit
+// entity.ErrAlreadyExists (the file DOES exist, it just didn't parse) and
+// that error was propagated as a hard boot-abort. One unparseable agent
+// record made the entire gateway unbootable, inverting ADR-054's own D7
+// ("unparseable record -> skip + ERROR + mark degraded") and §0 R3, which
+// explicitly rejected fail-closed here because a single corrupt file
+// dropping ALL inbound traffic has no in-product repair path. Only a true
+// entity.ErrNotFound now takes the create path; anything else (a corrupt
+// record, a permission error, etc.) is skipped with an ERROR log so boot
+// continues — the entity's on-disk record is left exactly as it was rather
+// than being clobbered by a Create attempt that would only fail anyway.
+func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error {
+	store := agentstore.New(homePath)
+	for i := range agents {
+		seeded := agents[i]
+		_, getErr := store.Get(seeded.ID)
+		switch {
+		case getErr == nil:
+			// Record exists and parsed fine — re-enforce identity fields.
+			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
+				*existing = seeded
+				return nil
+			}); updateErr != nil {
+				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
+			}
+		case errors.Is(getErr, entity.ErrNotFound):
+			// No record on disk yet — create it.
+			if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
+				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
+			}
+		default:
+			// Get failed for a reason OTHER than "not found" — most commonly a
+			// corrupt/unparseable record. Skip re-seeding this one agent rather
+			// than aborting the whole boot; see this function's doc comment.
+			logger.Errorf("gateway: seeded core agent %q record exists but could not be read "+
+				"(corrupt/unparseable?) — skipping re-seed for this agent; boot continues degraded "+
+				"for this agent only: %v", seeded.ID, getErr)
+		}
+	}
+	return nil
+}
+
+// persistFreshInstallDefaultAgentID writes agents.defaults.default_agent_id
+// into config.json's raw JSON map, preserving every other key exactly as-is —
+// unlike config.SaveConfig, which round-trips the whole typed Config struct
+// and can clobber SecureString-backed API keys (CLAUDE.md hard rule: "NEVER
+// use config.SaveConfig() — it corrupts API keys"). Mirrors
+// pkg/gateway/rest.go's updateConfigJSONLocked/ensureMap read-modify-write
+// convention. Called exactly once, at boot, immediately after
+// coreagent.SeedConfig sets this field in memory on a genuinely fresh
+// install (SeedConfig itself performs no file I/O by design) — see the call
+// site's doc comment for why this durability step cannot live inside
+// SeedConfig or persistSeededCoreAgents.
+func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var m map[string]any
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		return fmt.Errorf("parse config: %w", unmarshalErr)
+	}
+	ensureMap(m, "agents", "defaults")["default_agent_id"] = agentID
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize config: %w", err)
+	}
+	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }
 
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
@@ -1058,8 +1296,15 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// starts empty: config.LoadConfig strips config.json's legacy agents.list
 	// unconditionally, see legacy_agents_list.go) and SeedConfig would
 	// re-create core agents from their seed defaults on every restart,
-	// discarding any operator customization.
-	populateAgentsListFromEntityStore(cfg, homePath)
+	// discarding any operator customization. Strict variant: a roster-
+	// population failure here (genuine store error, every on-disk record
+	// unparseable, or a same-process non-empty→empty regression) must abort
+	// boot rather than silently proceed with an empty/partial roster — see
+	// populateAgentsListFromEntityStoreStrict's doc for the verified
+	// privilege-escalation chain an empty roster otherwise opens up.
+	if rosterErr := populateAgentsListFromEntityStoreStrict(cfg, homePath); rosterErr != nil {
+		return fmt.Errorf("gateway: could not populate agent roster from entity store at boot: %w", rosterErr)
+	}
 
 	// Seed core agents into config on first boot. Core agents are stored in
 	// cfg.Agents.List with Locked=true so they appear alongside custom agents
@@ -1073,28 +1318,45 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// reason ("corrupts API keys" via SecureString round-trip), and (b)
 		// anything it wrote to agents.list would be stripped again on the
 		// very next config.LoadConfig call, so it would not even survive.
-		// Persist every agent SeedConfig added-or-touched (its own "re-enforce
-		// identity fields on existing core agents" pass, and any brand-new
-		// core agent it appended) via the agent store: Create for one with no
-		// existing record, Update (full-record replace) for one that already
-		// has one — matching SeedConfig's existing "re-enforce" semantics,
-		// which already unconditionally overwrites identity fields on every
-		// boot for a real core agent ID, independent of this ADR.
-		store := agentstore.New(homePath)
-		for i := range cfg.Agents.List {
-			seeded := cfg.Agents.List[i]
-			if _, getErr := store.Get(seeded.ID); getErr != nil {
-				if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
-					return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
-				}
-				continue
-			}
-			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
-				*existing = seeded
-				return nil
-			}); updateErr != nil {
-				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
-			}
+		// persistSeededCoreAgents persists every agent SeedConfig
+		// added-or-touched (its own "re-enforce identity fields on existing
+		// core agents" pass, and any brand-new core agent it appended) via
+		// the agent store — see its own doc comment for the corrupt-record
+		// handling that makes this safe against a single bad entity file.
+		if seedErr := persistSeededCoreAgents(homePath, cfg.Agents.List); seedErr != nil {
+			return seedErr
+		}
+	}
+
+	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh
+	// install, coreagent.SeedConfig also sets the settings singleton
+	// (cfg.Agents.Defaults.DefaultAgentID = "mia") — the ONLY field
+	// agent.AgentRegistry.GetDefaultAgent and pkg/routing's
+	// resolveDefaultAgentID consult (ADR-054 D6.4). SeedConfig is a pure
+	// in-memory struct mutation by design, with zero filesystem side effects
+	// (mirrors why seedJudgeEagerSoul below is a separate call site rather
+	// than living inside SeedConfig itself) — so without persisting it here,
+	// the singleton lives only in THIS process's in-memory cfg. NewAgentLoop
+	// immediately below reads it fine, so THIS boot resolves correctly, but
+	// config.json on disk never gets it: the very next restart reloads an
+	// empty default_agent_id, isFreshInstall is now false (agents already
+	// exist), SeedConfig never re-seeds it, and the two resolution ladders'
+	// differing Priority-2 fallbacks silently disagree again — reopening the
+	// exact bug this fix closes, just delayed by one restart. Persist it
+	// directly into config.json's raw JSON map (mirrors rest.go's
+	// updateConfigJSONLocked/ensureMap convention — never config.SaveConfig,
+	// which round-trips the whole typed struct and can clobber
+	// SecureString-backed API keys, CLAUDE.md's hard rule). Runs once, here,
+	// strictly before the config-file watcher starts later in this function,
+	// so there is no self-write-registry race to account for. Best-effort:
+	// a write failure only means the in-memory resolution (correct for this
+	// boot) does not survive a restart — not a boot-time fatal, since the
+	// gateway is otherwise fully healthy.
+	if cfg.Agents.Defaults.DefaultAgentID != "" {
+		if persistErr := persistFreshInstallDefaultAgentID(configPath, cfg.Agents.Defaults.DefaultAgentID); persistErr != nil {
+			slog.Warn("gateway: could not persist fresh-install default_agent_id to config.json; "+
+				"in-memory resolution is correct for this boot but will not survive a restart",
+				"default_agent_id", cfg.Agents.Defaults.DefaultAgentID, "error", persistErr)
 		}
 	}
 
@@ -1657,6 +1919,16 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		if runningServices.reloadDegraded {
 			return true, fmt.Sprintf("config reload failed: %v", runningServices.reloadError)
 		}
+		// ADR-054 §0 R3: the configured default agent naming an entity record
+		// that failed to load is a degraded state, not a silent fallback —
+		// EvaluateDefaultAgentHealth (called from NewAgentRegistry) records it.
+		// SetDegradedFunc is a single-slot hook, so this COMPOSES with the
+		// checks above rather than replacing them.
+		if registry := agentLoop.GetRegistry(); registry != nil {
+			if degraded, reason := registry.DefaultAgentDegraded(); degraded {
+				return true, reason
+			}
+		}
 		return false, ""
 	})
 
@@ -1677,9 +1949,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if cfg.Gateway.HotReload {
 		configReloadChan, stopWatch = setupConfigWatcherPolling(
 			configPath,
+			homePath,
 			debug,
 			credStore,
 			runningServices.selfWriteReg,
+			runningServices.markReloadDegraded,
 		)
 		logger.Info("Config hot reload enabled")
 	}
@@ -1720,8 +1994,19 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			// config.LoadConfig* strips agents.list on every load
 			// (legacy_agents_list.go), and this manual-reload path is a
 			// separate config-load call site from restAPI.
-			// refreshConfigAndRewireServices's own bridge.
-			populateAgentsListFromEntityStore(newCfg, homePath)
+			// refreshConfigAndRewireServices's own bridge. Strict variant: a
+			// roster-population failure here must reject this reload attempt
+			// exactly like the config-load/validation failures around it, not
+			// silently proceed with an empty/stale roster (see
+			// populateAgentsListFromEntityStoreStrict's doc for why) — and mark
+			// the service degraded so /health surfaces it.
+			if err = populateAgentsListFromEntityStoreStrict(newCfg, homePath); err != nil {
+				logger.Errorf("Manual reload: agent roster population failed: %v", err)
+				runningServices.markReloadDegraded(fmt.Errorf("manual reload rejected: agent roster population failed: %w", err))
+				agentLoop.ClearReloadPending()
+				runningServices.reloading.Store(false)
+				continue
+			}
 			if err = newCfg.ValidateProviders(); err != nil {
 				logger.Errorf("Config validation failed: %v", err)
 				agentLoop.ClearReloadPending()
@@ -3199,11 +3484,36 @@ func restartServices(
 // and the reload is skipped, preventing spurious full-service restarts on every
 // login, settings change, or channel-config write. Only genuine external edits
 // (hashes not present in the registry) proceed to executeReload.
+//
+// homePath is $OMNIPUS_HOME, threaded through explicitly by the caller
+// (RunContextWithOptions, which already resolves it correctly) rather than
+// derived from configPath here. A prior version of this function derived the
+// entities root as filepath.Dir(configPath) under a comment claiming
+// "configPath is always $OMNIPUS_HOME/config.json by convention (see
+// agentstore.New's own doc comment)" — that citation was fabricated
+// (agentstore.New's doc says nothing of the kind) and the claim itself is
+// false whenever OMNIPUS_CONFIG (config.EnvConfig,
+// cmd/omnipus/internal/helpers.go's GetConfigPath) overrides the config path
+// to somewhere outside $OMNIPUS_HOME: filepath.Dir(configPath) then points at
+// the wrong directory, entity.Store.List maps a missing entities/agents/ dir
+// to (nil, nil, nil) — no error — and the entire in-memory agent roster
+// silently vanishes on the next external config edit. Passing the real
+// homePath in avoids the derivation entirely.
+//
+// markDegraded (may be nil, e.g. in tests) is called when
+// populateAgentsListFromEntityStoreStrict rejects a candidate config for
+// this home — see its doc for why an empty/wiped roster is a
+// privilege-escalation risk, not merely a UX gap. This lets the poller
+// surface the same operator-visible /health degraded signal executeReload's
+// own internal checks already produce, for a failure that happens BEFORE
+// executeReload is even reached.
 func setupConfigWatcherPolling(
 	configPath string,
+	homePath string,
 	debug bool,
 	credStore *credentials.Store,
 	selfWriteReg *configSelfWriteRegistry,
+	markDegraded func(error),
 ) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
@@ -3273,9 +3583,19 @@ func setupConfigWatcherPolling(
 					// load (legacy_agents_list.go), and this file-watcher
 					// poller is a separate config-load call site from
 					// restAPI.refreshConfigAndRewireServices's own bridge.
-					// configPath is always $OMNIPUS_HOME/config.json by
-					// convention (see agentstore.New's own doc comment).
-					populateAgentsListFromEntityStore(newCfg, filepath.Dir(configPath))
+					// Strict variant + the real homePath (see this function's
+					// doc comment for why filepath.Dir(configPath) was wrong):
+					// a roster-population failure must reject this reload
+					// attempt, not silently proceed with an empty/stale
+					// roster.
+					if rosterErr := populateAgentsListFromEntityStoreStrict(newCfg, homePath); rosterErr != nil {
+						logger.Errorf("⚠ Config reload: agent roster population failed: %v", rosterErr)
+						logger.Warn("  Using previous valid config")
+						if markDegraded != nil {
+							markDegraded(fmt.Errorf("config reload rejected: agent roster population failed: %w", rosterErr))
+						}
+						continue
+					}
 
 					if err := newCfg.ValidateProviders(); err != nil {
 						logger.Errorf("  ⚠ New config validation failed: %v", err)

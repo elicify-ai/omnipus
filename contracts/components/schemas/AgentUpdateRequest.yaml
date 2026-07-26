@@ -166,9 +166,13 @@ properties:
   default:
     type: boolean
     description: >
-      Whether this agent is the global default that handles inbound messages
-      with no more-specific routing rule. At most one agent is default.
-      Omitting this field leaves the flag unchanged. Main only — workers never default.
+      Send true to make this agent the global default that handles inbound
+      messages with no more-specific routing rule — replacing whichever agent
+      previously held it. Send false to clear the default, which only has an
+      effect if this agent currently holds it (sending false for an agent
+      that isn't the current default is a no-op). Omitting this field leaves
+      the default unchanged. Main only — workers never default (rejected with
+      400 if attempted).
     example: false
   skills:
     type: array

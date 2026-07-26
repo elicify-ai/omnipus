@@ -118,7 +118,6 @@ var listScaleLevels = []int{10, 100, 1000, 5000}
 // creating a DISTINCT agent record via entity.Store[T].Create.
 func BenchmarkEntityCreate_Concurrent(b *testing.B) {
 	for _, n := range concurrencyLevels {
-		n := n
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			store := entity.New[benchAgent](dir, benchAccessors)
@@ -200,7 +199,6 @@ func cloneBaselineConfig(roster []config.AgentConfig) *config.Config {
 func BenchmarkConfigSave_WholeFile_Concurrent(b *testing.B) {
 	roster := baselineAgentRoster()
 	for _, n := range concurrencyLevels {
-		n := n
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			path := filepath.Join(dir, "config.json")
@@ -258,7 +256,6 @@ func BenchmarkConfigSave_WholeFile_Concurrent(b *testing.B) {
 
 func BenchmarkEntityUpdate_SameID_Concurrent(b *testing.B) {
 	for _, n := range concurrencyLevels {
-		n := n
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			store := entity.New[benchAgent](dir, benchAccessors)
@@ -303,7 +300,6 @@ func BenchmarkEntityUpdate_SameID_Concurrent(b *testing.B) {
 
 func BenchmarkEntityList_Scale(b *testing.B) {
 	for _, n := range listScaleLevels {
-		n := n
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			store := entity.New[benchAgent](dir, benchAccessors)

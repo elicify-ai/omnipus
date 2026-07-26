@@ -145,6 +145,14 @@ func TestHandleToolPolicies_PUT_IncompleteCoverageRejected(t *testing.T) {
 		},
 	})
 	api.agentLoop.SwapConfig(cfgCopy)
+	// ADR-054 D2/D6: this PUT's coverage guard is expected to REJECT the
+	// request (400) before ever reaching safeUpdateConfigJSON/persist, so
+	// today "sparse-agent" being in-memory-only never actually gets wiped by
+	// a reload in this specific test. Persist a real entity record anyway so
+	// this fixture stays correct if the guard's rejection path ever changes
+	// to reach persistence (which would trigger refreshConfigAndRewireServices
+	// and repopulate cfg.Agents.List from the entity store).
+	seedAgentEntities(t, api.homePath, cfgCopy.Agents.List)
 
 	body := `{"policies":{"read_file":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))

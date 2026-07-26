@@ -101,7 +101,22 @@ func TestAgentModelConfig_MarshalObject(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_FullParse(t *testing.T) {
+// TestAgentConfig_FullParse_AgentsListNeverUnmarshals is a pinning test for
+// Bug 1's fix (AgentsConfig.List json:"-", see its doc comment on config.go):
+// a raw json.Unmarshal of a config.json-shaped payload carrying an
+// "agents.list" array must NOT populate cfg.Agents.List — the field is
+// structurally invisible to JSON now, both marshal and unmarshal, so no
+// config-write path can ever re-inject the roster (SaveConfig) and no
+// legacy-load path can ever read it back into this typed field either
+// (legacy content is instead detected/dropped from the raw file bytes by
+// legacy_agents_list.go's stripAgentsListOnDisk). Every OTHER field in the
+// same payload — agents.defaults, bindings, session — must still parse
+// normally; only "list" is inert.
+//
+// Formerly named TestAgentConfig_FullParse, when this exact payload asserted
+// the opposite (that Agents.List DID populate with 2 agents) — that was the
+// pre-Bug-1-fix behavior this change deliberately reverses.
+func TestAgentConfig_FullParse_AgentsListNeverUnmarshals(t *testing.T) {
 	jsonData := `{
 		"agents": {
 			"defaults": {
@@ -153,30 +168,20 @@ func TestAgentConfig_FullParse(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if len(cfg.Agents.List) != 2 {
-		t.Fatalf("agents.list len = %d, want 2", len(cfg.Agents.List))
+	// The heart of Bug 1's fix: json:"-" means this raw unmarshal must never
+	// populate the field, regardless of what the payload's "list" key holds.
+	if len(cfg.Agents.List) != 0 {
+		t.Fatalf("agents.list len = %d, want 0 — AgentsConfig.List must be json:\"-\" "+
+			"(structurally non-serializable); got %+v", len(cfg.Agents.List), cfg.Agents.List)
 	}
 
-	sales := cfg.Agents.List[0]
-	if sales.ID != "sales" || !sales.Default || sales.Name != "Sales Bot" {
-		t.Errorf("sales = %+v", sales)
+	// agents.defaults, a genuine SETTING (not part of the roster), must still
+	// parse normally alongside the now-inert list key.
+	if cfg.Agents.Defaults.Home != "~/.omnipus/workspace" {
+		t.Errorf("Agents.Defaults.Home = %q", cfg.Agents.Defaults.Home)
 	}
-	if sales.Model == nil || sales.Model.Primary != "gpt-4" {
-		t.Errorf("sales.Model = %+v", sales.Model)
-	}
-
-	support := cfg.Agents.List[1]
-	if support.ID != "support" || support.Name != "Support Bot" {
-		t.Errorf("support = %+v", support)
-	}
-	if support.Model == nil || support.Model.Primary != "claude-opus" {
-		t.Errorf("support.Model = %+v", support.Model)
-	}
-	if len(support.Model.Fallbacks) != 1 || support.Model.Fallbacks[0] != "haiku" {
-		t.Errorf("support.Model.Fallbacks = %v", support.Model.Fallbacks)
-	}
-	if support.Subagents == nil || len(support.Subagents.AllowAgents) != 1 {
-		t.Errorf("support.Subagents = %+v", support.Subagents)
+	if cfg.Agents.Defaults.MaxTokens != 8192 {
+		t.Errorf("Agents.Defaults.MaxTokens = %d", cfg.Agents.Defaults.MaxTokens)
 	}
 
 	if len(cfg.Bindings) != 1 {

@@ -1246,9 +1246,22 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 			},
 		},
 	}
+	// cfg.Agents.List no longer round-trips through this marshal (ADR-054:
+	// json:"-") — config.json on disk carries no "list" either way now, but
+	// writing it still exercises the same on-disk shape callers expect.
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+	// ADR-054 D2/D6: several tests using this roster (e.g.
+	// TestHandleWorkspacePut_DeltaValidation_PreExistingDanglingMemberDoesNotWedge)
+	// exercise workspace core_team validation purely against the in-memory
+	// cfg.Agents.List, which is unaffected either way — but persisting real
+	// entity records here means this roster survives intact even if a future
+	// test built on this helper calls a handler that reaches
+	// refreshConfigAndRewireServices (which repopulates cfg.Agents.List
+	// wholesale from the entity store, silently wiping an entity-less
+	// in-memory-only roster).
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	return &restAPI{
@@ -1583,6 +1596,11 @@ func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
+	// ADR-054 D2/D6: see newTestRestAPIWithAvaRoster's identical comment —
+	// persist real entity records so this roster survives any future reload
+	// trigger, not just the in-memory cfg.Agents.List this package's current
+	// tests happen to rely on.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	return &restAPI{

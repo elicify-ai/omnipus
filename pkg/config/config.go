@@ -333,6 +333,17 @@ type OmnipusChannelRoutingRule struct {
 //
 // Clone does NOT copy the sensitiveCache or registeredSensitive fields — those
 // are runtime-only and must be re-registered on the clone if needed.
+//
+// Agents.List is deliberately json:"-" on AgentsConfig (Bug 1 fix, see its
+// doc comment) so it never rides through Config's own JSON round-trip above
+// — but Clone's "fully independent deep copy" contract must still hold for
+// it: callers such as pkg/gateway's candidate-config validate-then-commit
+// pattern (cfg.Clone() -> mutate the candidate -> discard on validation
+// failure) rely on a mutated clone never reaching back into the original's
+// in-memory roster. List is therefore deep-copied via its own, independent
+// JSON round-trip below, unaffected by the "-" tag (which only governs how
+// AgentsConfig marshals AS A FIELD OF Config, not how []AgentConfig marshals
+// on its own).
 func (c *Config) Clone() (*Config, error) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(c); err != nil {
@@ -341,6 +352,18 @@ func (c *Config) Clone() (*Config, error) {
 	clone := &Config{}
 	if err := json.NewDecoder(&buf).Decode(clone); err != nil {
 		return nil, fmt.Errorf("clone: unmarshal: %w", err)
+	}
+
+	if len(c.Agents.List) > 0 {
+		var listBuf bytes.Buffer
+		if err := json.NewEncoder(&listBuf).Encode(c.Agents.List); err != nil {
+			return nil, fmt.Errorf("clone: marshal agents.list: %w", err)
+		}
+		var listClone []AgentConfig
+		if err := json.NewDecoder(&listBuf).Decode(&listClone); err != nil {
+			return nil, fmt.Errorf("clone: unmarshal agents.list: %w", err)
+		}
+		clone.Agents.List = listClone
 	}
 	return clone, nil
 }
@@ -540,7 +563,37 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 
 type AgentsConfig struct {
 	Defaults AgentDefaults `json:"defaults"`
-	List     []AgentConfig `json:"list,omitempty"`
+	// List is the live in-memory agent roster. Since ADR-054 (entity/config
+	// separation) it is populated exclusively by the roster bridge
+	// (pkg/gateway.populateAgentsListFromEntityStoreStrict, and
+	// cmd/omnipus's own loaders) from the per-entity agent store
+	// ($OMNIPUS_HOME/entities/agents/<id>.json, pkg/agentstore) — never from
+	// config.json. It remains a normal, heavily-read in-memory field (dozens
+	// of call sites across pkg/gateway, pkg/coreagent, pkg/routing,
+	// pkg/tools, pkg/agent range over cfg.Agents.List directly), but
+	// json:"-" makes its ABSENCE FROM THE WIRE STRUCTURAL rather than a
+	// convention every caller must remember: no json.Marshal(cfg) — SaveConfig,
+	// GET /api/v1/config's raw dump, the system.config.get/set dotGet/dotSet
+	// round-trip in pkg/sysagent/tools/config.go, or any future caller — can
+	// ever re-inject the roster into config.json, no matter how populated
+	// this field is at the time of the call. Before this fix, the field's
+	// ordinary `json:"list,omitempty"` tag meant ANY config.json write
+	// (e.g. a bare `system.config.set gateway.log_level`, or
+	// SaveConfigLocked) re-serialized the ENTIRE live roster back into
+	// config.json, silently degrading ADR-054's headline guarantee
+	// ("config.json no longer carries the roster") from a structural
+	// property into a best-effort self-healing loop.
+	//
+	// A legacy config.json still carrying an "agents.list" key from before
+	// ADR-054 is handled by legacy_agents_list.go's stripLegacyAgentsList —
+	// which, because this tag means typed unmarshal can never see that key
+	// in the first place, detects and drops it by reading the raw file
+	// bytes directly rather than inspecting this field.
+	//
+	// Config.Clone() (this file) deep-copies this field via its own
+	// independent JSON round-trip, since Config's own marshal/unmarshal no
+	// longer touches it — see Clone's doc comment.
+	List []AgentConfig `json:"-"`
 }
 
 // AgentModelConfig supports both string and structured model config.

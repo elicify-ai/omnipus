@@ -44,8 +44,8 @@ func LoadConfig() (*config.Config, error) {
 	// legacy agents.list content on every load (legacy_agents_list.go), so
 	// cfg.Agents.List is repopulated here from the agent store directly
 	// (GetOmnipusHome(), not a derivation from cfg — see loadConfigWithAgents
-	// in cmd/omnipus/main.go for why the derivation-based
-	// agent.LoadAgentRosterFromEntityStore helper was tried and reverted).
+	// in cmd/omnipus/main.go for why a derivation-based helper was tried,
+	// found to resolve the wrong directory, reverted and ultimately deleted).
 	// Best-effort: a store-list failure only warns — callers still get every
 	// other config field.
 	agents, skipped, listErr := agentstore.New(GetOmnipusHome()).List()
@@ -55,5 +55,13 @@ func LoadConfig() (*config.Config, error) {
 	}
 	cfg.Agents.List = agents
 	cfg.SkippedAgentIDs = skipped
+	// Entity-loaded agents never pass through config.loadConfigInternal's own
+	// NormalizeFallbacks/migrateAgentPrimaryProvider passes — those only run
+	// against config.json's agents.list inside config.LoadConfig itself,
+	// which is stripped to empty before this bridge re-injects the real
+	// per-entity roster (ADR-054, legacy_agents_list.go). Apply both here so
+	// an agent whose FallbackModel/primary-model fields were written
+	// pre-split still resolves correctly for this CLI invocation.
+	config.NormalizeAgentRoster(cfg)
 	return cfg, nil
 }

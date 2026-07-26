@@ -3188,7 +3188,7 @@ export interface components {
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
             /**
-             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Main only — workers never default.
+             * @description Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
              * @example false
              */
             default?: boolean;
@@ -3843,7 +3843,7 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged. Main only — workers never default.
+             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Main only — workers never default (rejected with 400 if attempted).
              * @example false
              */
             default?: boolean;

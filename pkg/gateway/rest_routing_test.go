@@ -76,6 +76,16 @@ func marshalConfigForDisk(t *testing.T, cfg *config.Config) []byte {
 // newRoutingTestAPI creates a restAPI with two custom agents and a minimal config.json
 // suitable for the routing/default-flag tests. agentA starts as default=true,
 // agentB starts as default=false.
+//
+// RELEASE BLOCKER fix follow-up: "default=true" is now expressed via the
+// settings singleton (Agents.Defaults.DefaultAgentID), which
+// registry.GetDefaultAgent/routing.resolveDefaultAgentID actually consult and
+// which the wire `default` field is derived from (rest.go's listAgents/
+// getAgent/updateAgent) — the per-entity AgentConfig.Default bool alongside it
+// is kept only for backward display compatibility (see config.go's ADR-054
+// D6.4 note) and is never read by resolution logic or echoed back on the
+// wire. Both must be set here for agent-a to be genuinely "the default" under
+// the fixed contract, or these tests would only coincidentally pass.
 func newRoutingTestAPI(t *testing.T) (*restAPI, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -91,6 +101,7 @@ func newRoutingTestAPI(t *testing.T) (*restAPI, string) {
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
+				DefaultAgentID:    "agent-a",
 			},
 			List: []config.AgentConfig{
 				{ID: "agent-a", Name: "Agent A", Default: true},
@@ -628,20 +639,30 @@ func TestChannelRouting_PutReplaceExistingBinding(t *testing.T) {
 	assert.Equal(t, 1, count, "must have exactly one wildcard binding for telegram after replace")
 }
 
-// TestUpdateAgent_DiskSingleDefault verifies the disk-level single-default invariant:
-// after PUT /api/v1/agents/{id} with {default:true}, re-reading config.json from disk
-// must show EXACTLY ONE agent with "default":true.
+// TestUpdateAgent_DiskSingleDefault verifies the disk-level single-default
+// invariant: after PUT /api/v1/agents/{id} with {default:true}, re-reading
+// config.json from disk must show the settings singleton
+// (agents.defaults.default_agent_id) naming exactly agent-b.
 //
-// BDD: Given agent-a is default=true and agent-b is default=false persisted
-// as entity records,
+// BDD: Given agent-a is default=true and agent-b is default=false (per the
+// settings singleton — see newRoutingTestAPI),
 //
 //	When PUT /api/v1/agents/agent-b with {"default": true},
-//	Then re-reading the agent store shows exactly one agent has "default":true,
-//	And that agent is agent-b.
+//	Then re-reading config.json shows agents.defaults.default_agent_id is
+//	"agent-b".
 //
 // Traces to: sprint/258-jun-2026 — updateAgent single-default invariant,
-// disk-level. ADR-054: the durable source is now each agent's own entity
-// record under entities/agents/<id>.json, not config.json's agents.list.
+// disk-level. RELEASE BLOCKER fix follow-up: the durable source of "the one
+// default" moved from an aggregate invariant over N per-entity Default bools
+// (each its own independently-locked write — the exact race ADR-054 D6.4
+// retired RepairMultipleDefaults over) to a single settings-singleton string
+// behind the existing config-write lock, which cannot have two winners by
+// construction. This test used to count agentstore.List() entries with
+// Default==true and require exactly one; that invariant is no longer
+// maintained by anything (the N-write fan-out that used to clear every OTHER
+// agent's per-entity flag is retired — see rest.go's updateAgent) because
+// nothing reads it anymore, so asserting on it here would just pin dead
+// behavior back in.
 func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
 	api, _ := newRoutingTestAPI(t)
 
@@ -651,36 +672,46 @@ func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "PUT agent-b default=true must succeed")
 
-	// Re-read the persisted entity records.
+	// Re-read the live config (already reflects the just-written config.json —
+	// updateConfigJSONLocked calls refreshConfigAndRewireServices, which
+	// reloads from disk and swaps it in via SwapConfig).
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Equal(t, "agent-b", liveCfg.Agents.Defaults.DefaultAgentID,
+		"agents.defaults.default_agent_id must name agent-b on disk after the PUT")
+
+	// The per-entity Default bool on agent-b's OWN entity record is still
+	// written too (kept for backward display compatibility, per config.go's
+	// ADR-054 D6.4 note) — but only ITS record, not an aggregate invariant
+	// across every agent.
 	agents, _, err := agentstore.New(api.homePath).List()
 	require.NoError(t, err)
-
-	defaultCount := 0
-	defaultAgentID := ""
-	for _, a := range agents {
-		if a.Default {
-			defaultCount++
-			defaultAgentID = a.ID
+	var agentBRec *config.AgentConfig
+	for i := range agents {
+		if agents[i].ID == "agent-b" {
+			agentBRec = &agents[i]
 		}
 	}
-	assert.Equal(t, 1, defaultCount, "exactly one agent must have default=true across entity records")
-	assert.Equal(t, "agent-b", defaultAgentID, "agent-b must be the default agent on disk")
+	require.NotNil(t, agentBRec, "agent-b's entity record must exist")
+	assert.True(t, agentBRec.Default, "agent-b's own entity record must reflect the PUT's default:true")
 }
 
 // TestUpdateAgent_IdempotentDefault verifies that PUT default=true on an agent that is
-// already the default is a no-op: still exactly one default, same agent, others unchanged.
+// already the default is a no-op: the settings singleton still names that
+// same agent, and no other agent is disturbed.
 //
-// BDD: Given agent-a is already default=true,
+// BDD: Given agent-a is already default=true (the settings singleton names
+// agent-a),
 //
 //	When PUT /api/v1/agents/agent-a with {"default": true} again,
-//	Then the persisted entity records still show exactly one agent with
-//	default=true,
-//	And that agent is still agent-a (idempotent).
+//	Then agents.defaults.default_agent_id still names agent-a,
+//	And agent-b's entity record remains default=false (untouched).
 //
 // Traces to: sprint/258-jun-2026 — updateAgent single-default invariant,
-// idempotent case. ADR-054: the durable source is now each agent's own
-// entity record under entities/agents/<id>.json, not config.json's
-// agents.list.
+// idempotent case. RELEASE BLOCKER fix follow-up: the durable "is this THE
+// default" signal is the settings singleton (agents.defaults.default_agent_id),
+// not an aggregate count of per-entity Default==true records — see
+// TestUpdateAgent_DiskSingleDefault's doc comment for why the old aggregate
+// invariant is no longer meaningful to assert.
 func TestUpdateAgent_IdempotentDefault(t *testing.T) {
 	api, _ := newRoutingTestAPI(t)
 
@@ -691,21 +722,21 @@ func TestUpdateAgent_IdempotentDefault(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "PUT agent-a default=true (already default) must succeed")
 
-	// Re-read the persisted entity records.
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Equal(t, "agent-a", liveCfg.Agents.Defaults.DefaultAgentID,
+		"idempotent PUT must keep the settings singleton pointed at agent-a")
+
+	// agent-b's own entity record must remain untouched.
 	agents, _, err := agentstore.New(api.homePath).List()
 	require.NoError(t, err)
-
-	defaultCount := 0
-	defaultAgentID := ""
-	for _, a := range agents {
-		if a.Default {
-			defaultCount++
-			defaultAgentID = a.ID
+	var agentBRec *config.AgentConfig
+	for i := range agents {
+		if agents[i].ID == "agent-b" {
+			agentBRec = &agents[i]
 		}
 	}
-	// Must still be exactly one default — not zero (cleared) and not two (doubled).
-	assert.Equal(t, 1, defaultCount, "idempotent PUT must keep exactly one default across entity records")
-	assert.Equal(t, "agent-a", defaultAgentID, "agent-a must remain the default agent on disk")
+	require.NotNil(t, agentBRec, "agent-b's entity record must exist")
+	assert.False(t, agentBRec.Default, "agent-b must remain untouched by an idempotent PUT on agent-a")
 }
 
 // TestChannelRouting_PutDisabledChannelSucceeds verifies that setting a routing

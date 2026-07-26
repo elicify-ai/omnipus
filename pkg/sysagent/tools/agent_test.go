@@ -11,13 +11,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -301,8 +306,8 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 		t.Fatalf("read agent entity record %s: %v", entityPath, err)
 	}
 	var entry map[string]any
-	if err := json.Unmarshal(data, &entry); err != nil {
-		t.Fatalf("unmarshal agent entity record: %v", err)
+	if unmarshalErr := json.Unmarshal(data, &entry); unmarshalErr != nil {
+		t.Fatalf("unmarshal agent entity record: %v", unmarshalErr)
 	}
 	if entry["color"] != "#22C55E" {
 		t.Errorf("disk color = %v, want #22C55E", entry["color"])
@@ -353,8 +358,23 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 	}
 	m := parseError(t, result.ForLLM)
 	errBlock, _ := m["error"].(map[string]any)
-	if errBlock["code"] == nil {
-		t.Errorf("expected error code in result, got nil")
+	// Anti-shortcut: AgentDeleteTool.Execute has SIX distinct error returns,
+	// and FOUR of them satisfy a bare "code != nil" check — AGENT_NOT_FOUND
+	// (store.Get miss, e.g. a fixture pointed at the wrong Home), two other
+	// SAVE_FAILED variants (a non-ErrNotFound store.Get error, or a
+	// store.Delete failure), and the intended locked rejection (also
+	// SAVE_FAILED). A regression that resolved this test's store against the
+	// wrong Home would yield AGENT_NOT_FOUND — non-nil, AND the seeded
+	// record would trivially "survive" (it was never visible to the tool in
+	// the first place) — passing both this check and the survival check
+	// below while the locked-agent guard is never actually exercised. Assert
+	// the exact code AND that the message names the locked-core-agent reason.
+	if errBlock["code"] != "SAVE_FAILED" {
+		t.Errorf("expected error code SAVE_FAILED, got %v", errBlock["code"])
+	}
+	msg, _ := errBlock["message"].(string)
+	if !strings.Contains(msg, "locked core agent") {
+		t.Errorf("expected message naming the locked-core-agent rejection, got %q", msg)
 	}
 	// The agent must still exist — the locked check must run BEFORE delete.
 	if _, err := store.Get("locked-core"); err != nil {
@@ -1059,4 +1079,177 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 				"context, got %v", someTeam)
 		}
 	})
+}
+
+// reloadTestProvider is a minimal providers.LLMProvider stub for
+// TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart — it is never
+// actually invoked (the test never runs a real LLM turn); it only needs to
+// satisfy agent.NewAgentLoop's constructor signature.
+type reloadTestProvider struct{}
+
+func (p *reloadTestProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: "mock", FinishReason: "stop"}, nil
+}
+
+func (p *reloadTestProvider) GetDefaultModel() string { return "mock-model" }
+
+// TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart is the DoD proof
+// for the fix to system.agent.delete/update: both used to write ONLY the
+// entity file (agentstore.Store.Delete/Update) — neither mutating the live
+// in-memory config nor calling t.deps.ReloadFunc(), unlike AgentCreateTool,
+// which already did. A deleted agent therefore stayed live (still routable
+// AND still listed) until the process restarted.
+//
+// This test wires a REAL *agent.AgentLoop's hot-reload path
+// (ReloadProviderAndConfig) behind deps.ReloadFunc, mirroring exactly what
+// pkg/gateway's own reloadTrigger does in production (re-derive
+// cfg.Agents.List/SkippedAgentIDs from the entity store via
+// agentstore.Store.List — what populateAgentsListFromEntityStore does —
+// then hand the fresh config to ReloadProviderAndConfig to rebuild the
+// registry). It proves that calling delete_agent alone, with NO restart and
+// NO other call, makes the agent disappear from BOTH the live registry
+// (GetAgent/ListAgentIDs) and the channel-binding routing cascade.
+func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
+	home := t.TempDir()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              filepath.Join(home, "workspace"),
+				ModelName:         "test-model",
+				MaxTokens:         8192,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	provider := &reloadTestProvider{}
+	al, err := agent.NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	if err != nil {
+		t.Fatalf("NewAgentLoop: %v", err)
+	}
+
+	const agentID = "reload-test-agent"
+	// Bind the "telegram" channel wildcard to the agent BEFORE it exists —
+	// ordinary config (an operator can configure a binding for an agent that
+	// gets created later, or that existed in a previous session).
+	cfg.Bindings = []config.AgentBinding{
+		{AgentID: agentID, Match: config.BindingMatch{Channel: "telegram", AccountID: "*"}},
+	}
+
+	// reloadFunc mirrors pkg/gateway's real reloadTrigger: re-derive
+	// cfg.Agents.List/SkippedAgentIDs from the entity store (exactly what
+	// populateAgentsListFromEntityStore does), then hand the fresh config to
+	// ReloadProviderAndConfig so the registry is rebuilt from it.
+	reloadFunc := func() error {
+		agents, skipped, listErr := agentstore.New(home).List()
+		if listErr != nil {
+			return fmt.Errorf("list agent entity records: %w", listErr)
+		}
+		newCfg := *al.GetConfig()
+		newCfg.Agents.List = agents
+		newCfg.SkippedAgentIDs = skipped
+		return al.ReloadProviderAndConfig(context.Background(), provider, &newCfg)
+	}
+
+	deps := &systools.Deps{
+		Home:   home,
+		GetCfg: al.GetConfig,
+		MutateConfig: func(fn func(*config.Config) error) error {
+			return fn(al.GetConfig())
+		},
+		SaveConfigLocked: func(*config.Config) error { return nil },
+		ReloadFunc:       reloadFunc,
+	}
+
+	createResult := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":        "Reload Test Agent",
+		"description": "proves delete_agent hot-reloads without a restart",
+		"soul":        "You are a test agent.",
+		"model":       "test-model",
+		"color":       "#22C55E",
+		"icon":        "robot",
+	})
+	if createResult.IsError {
+		t.Fatalf("create_agent failed: %s", createResult.ForLLM)
+	}
+	created := parseSuccess(t, createResult.ForLLM)
+	if got, _ := created["id"].(string); got != agentID {
+		t.Fatalf("create_agent id = %q, want %q (slug mismatch — fix the test's expected ID)", got, agentID)
+	}
+
+	// A SECOND, surviving agent — deliberately kept in the roster so that
+	// after agentID is deleted, cfg.Agents.List is non-empty. Without this,
+	// pickAgentID's own len(agents)==0 branch (a pre-existing, unrelated
+	// quirk: with a completely empty roster it trusts a binding's raw agent
+	// ID as-is, since there is nothing to validate against) would make the
+	// post-delete route resolve to the literal string "reload-test-agent"
+	// regardless of whether the entity/registry were actually refreshed —
+	// masking the very hot-reload behavior this test exists to prove.
+	keeperResult := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":        "Keeper Agent",
+		"description": "stays in the roster after the other agent is deleted",
+		"soul":        "You persist.",
+		"model":       "test-model",
+		"color":       "#3366FF",
+		"icon":        "robot",
+	})
+	if keeperResult.IsError {
+		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)
+	}
+
+	// Precondition: create_agent's OWN ReloadFunc call already makes the
+	// agent immediately live — registered AND routable — with no restart.
+	reg := al.GetRegistry()
+	if _, ok := reg.GetAgent(agentID); !ok {
+		t.Fatalf("test setup: expected %q to be registered immediately after create", agentID)
+	}
+	resolver := routing.NewRouteResolver(al.GetConfig())
+	route := resolver.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	if route.AgentID != agentID {
+		t.Fatalf("test setup: expected the telegram binding to route to %q, got %q (matched_by=%s)",
+			agentID, route.AgentID, route.MatchedBy)
+	}
+
+	// Delete the agent — the fix under test.
+	deleteResult := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
+		"id":      agentID,
+		"confirm": true,
+	})
+	if deleteResult.IsError {
+		t.Fatalf("delete_agent failed: %s", deleteResult.ForLLM)
+	}
+	parseSuccess(t, deleteResult.ForLLM)
+
+	// The entity record is gone on disk (pre-existing behavior, unaffected
+	// by this fix).
+	if _, err := agentstore.New(home).Get(agentID); !errors.Is(err, entity.ErrNotFound) {
+		t.Fatalf("expected the entity record to be deleted, Get error = %v", err)
+	}
+
+	// UNLISTED, with NO restart: the live registry must no longer contain it.
+	regAfter := al.GetRegistry()
+	if _, ok := regAfter.GetAgent(agentID); ok {
+		t.Error("BUG: deleted agent is still present in the live registry — delete_agent did not hot-reload")
+	}
+	for _, id := range regAfter.ListAgentIDs() {
+		if id == agentID {
+			t.Error("BUG: deleted agent still appears in ListAgentIDs() — delete_agent did not hot-reload")
+		}
+	}
+
+	// UNROUTABLE, with NO restart: the same channel binding must no longer
+	// resolve to the deleted agent — it falls back to the default tier
+	// instead (pickAgentID's non-existent-agent branch).
+	resolverAfter := routing.NewRouteResolver(al.GetConfig())
+	routeAfter := resolverAfter.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	if routeAfter.AgentID == agentID {
+		t.Error("BUG: the telegram binding still routes to the deleted agent — delete_agent did not hot-reload")
+	}
 }

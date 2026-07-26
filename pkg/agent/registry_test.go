@@ -7,6 +7,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 type mockRegistryProvider struct{}
@@ -332,8 +333,12 @@ func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 
 // TestAgentRegistry_UpsertAgent verifies a freshly-constructed instance
 // becomes visible via GetAgent/ListAgentIDs immediately, without rebuilding
-// the rest of the registry — the mechanism pkg/agentstore's Notifier uses
-// after a verified entity write (ADR-054 §5).
+// the rest of the registry (ADR-054 §5's originally-envisioned zero-rebuild
+// write path). No production caller exists as of this commit — see
+// UpsertAgent's own doc comment for the honest status and why full
+// AgentLoop.ReloadProviderAndConfig is what production actually uses; this
+// test exists to keep the primitive itself correct for whenever a future
+// caller needs it.
 func TestAgentRegistry_UpsertAgent(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{{ID: "alpha"}})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
@@ -537,5 +542,69 @@ func TestAgentRegistry_ConcurrentSetDefaultAgentOverride_NoSplitBrain(t *testing
 	final := registry.GetDefaultAgent()
 	if final == nil || (final.ID != "alpha" && final.ID != "beta") {
 		t.Fatalf("expected a definite final default of alpha or beta, got %v", final)
+	}
+}
+
+// TestNewAgentRegistry_MainSentinelDeniesHighImpactToolsByDefault is the
+// regression guard for the "main" sentinel tool-policy hole a security review
+// found: the sentinel used to be constructed with a nil Tools field, which
+// resolves to an empty per-agent policy map (agentToolsCfgToPolicy's a==""
+// branch), which in turn falls through to whatever the GLOBAL
+// sandbox.tool_policies floor says (pkg/tools/compositor.go's
+// resolveEffectivePolicyWith: g!="" && a=="" -> return g). Because the real
+// seeded global floor (pkg/config/defaults.go) allows several high-impact
+// tools (bash, write_file, edit_file, delegate, send_email), the sentinel
+// silently inherited "allow" for all of them with zero explicit policy entry
+// of its own — and "main" is never a member of cfg.Agents.List, so
+// config.ValidateToolPolicyCoverage's boot/write-time coverage gate (Hard
+// Constraint #6) never validated it either.
+//
+// This test reproduces that exact global floor (mirroring defaults.go's
+// seeded values for these five tools) and asserts the sentinel now resolves
+// DENY for every one of them, proving it carries its own explicit,
+// wildcard-free per-agent policy (coreagent.NewCustomAgentToolsCfg()) rather
+// than falling through to the permissive global ceiling.
+func TestNewAgentRegistry_MainSentinelDeniesHighImpactToolsByDefault(t *testing.T) {
+	cfg := testCfg(nil)
+	// Mirror the real seeded global floor (pkg/config/defaults.go) for the
+	// exact tools the security review flagged — these are ScopeGeneral tools,
+	// so the scope gate never blocks them; only the global x agent merge
+	// decides the verdict.
+	cfg.Sandbox.ToolPolicies = map[string]string{
+		"bash":       "allow",
+		"write_file": "allow",
+		"edit_file":  "allow",
+		"delegate":   "allow",
+		"send_email": "allow",
+	}
+
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+	main, ok := registry.GetAgent(DefaultAgentID)
+	if !ok || main == nil {
+		t.Fatal("expected to find the 'main' sentinel agent")
+	}
+
+	policy := main.LoadToolPolicy()
+	if policy == nil {
+		t.Fatal("expected 'main' to carry a non-nil tool-policy snapshot")
+	}
+
+	for _, toolName := range []string{"bash", "write_file", "edit_file", "delegate", "send_email"} {
+		got := tools.EffectiveToolPolicy(policy, tools.ScopeGeneral, main.AgentType, toolName)
+		if got != string(config.ToolPolicyDeny) {
+			t.Errorf("EffectiveToolPolicy(%q) = %q, want %q (sentinel must not inherit the permissive global floor)",
+				toolName, got, config.ToolPolicyDeny)
+		}
+	}
+
+	// Sanity check: the conservative allow-list NewCustomAgentToolsCfg grants
+	// still resolves allow, proving the sentinel isn't accidentally deny-all
+	// either — it has its own genuine, narrow allow-list.
+	for _, toolName := range []string{"read_file", "list_directory", "remember", "recall_memory"} {
+		got := tools.EffectiveToolPolicy(policy, tools.ScopeGeneral, main.AgentType, toolName)
+		if got != string(config.ToolPolicyAllow) {
+			t.Errorf("EffectiveToolPolicy(%q) = %q, want %q (sentinel's own conservative allow-list)",
+				toolName, got, config.ToolPolicyAllow)
+		}
 	}
 }

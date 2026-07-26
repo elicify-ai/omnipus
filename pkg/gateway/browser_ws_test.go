@@ -1218,7 +1218,12 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, attachData))
 
-	attachResp := readBrowserFrame(t, conn, 20*time.Second)
+	// Use the skip-until-found reader: browser_tabs/browser_screencast frames
+	// legitimately interleave ahead of browser_status on a REAL browser (they are
+	// repaint-driven and asynchronous to the attach response) — see
+	// readBrowserWebRTCStateFrame's doc comment. A naive readBrowserFrame here
+	// asserted an ordering the protocol does not guarantee.
+	attachResp := readBrowserStatusFrame(t, conn, 20*time.Second)
 	require.Equal(t, "browser_status", attachResp.Type)
 	require.Equal(t, "attached", attachResp.State,
 		"attach must succeed against a real headless Chromium: %+v", attachResp)
@@ -1228,7 +1233,7 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, controlData))
 
-	controlResp := readBrowserFrame(t, conn, 5*time.Second)
+	controlResp := readBrowserStatusFrame(t, conn, 5*time.Second)
 	require.Equal(t, "browser_status", controlResp.Type)
 	require.Equal(t, "controlling", controlResp.State)
 

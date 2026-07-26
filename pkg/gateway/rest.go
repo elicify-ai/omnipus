@@ -1751,7 +1751,14 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
-		ag.Default = boolPtr(ac.Default)
+		// The wire `default` is DERIVED from the settings singleton
+		// (cfg.Agents.Defaults.DefaultAgentID), never read from the per-entity
+		// ac.Default bool — see updateAgent's singleton-write block for why:
+		// nothing (routing, registry.GetDefaultAgent) has consulted the
+		// per-entity flag since ADR-054 D6.4, so echoing it back here would
+		// silently disagree with which agent actually receives inbound
+		// messages with no more-specific routing rule.
+		ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 		if len(ac.Skills) > 0 {
 			skills := make([]string, len(ac.Skills))
 			copy(skills, ac.Skills)
@@ -1808,7 +1815,9 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
-			ag.Default = boolPtr(ac.Default)
+			// Derived from the settings singleton — see listAgents' comment on
+			// the same line shape for the full rationale.
+			ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 			if len(ac.Skills) > 0 {
 				skills := make([]string, len(ac.Skills))
 				copy(skills, ac.Skills)
@@ -2662,6 +2671,13 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusInternalServerError, "failed to delete agent")
 		return
 	}
+	// Tell the roster regression guard this shrink was INTENTIONAL before the
+	// reload below re-reads the store. Deleting the last agent legitimately
+	// empties the roster, which is otherwise indistinguishable from the store
+	// failing — see forgetRosterBaseline's doc comment. Without this the
+	// post-delete reload is rejected and the in-memory roster keeps serving
+	// the agent we just deleted from disk.
+	forgetRosterBaseline(a.homePath)
 	// Reload the live config so the deleted agent is no longer in memory.
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the 204 response is sent back to the caller (prevents a
@@ -3098,6 +3114,21 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// stays nil (skipping the check — see withToolPolicyCoverageGuard's doc
 	// comment) unless the caller actually sent tools_cfg.
 	var toolsCoverageMutate func(*config.Config)
+	// defaultAgentIDChanged is set INSIDE the persist closure below, iff this
+	// request actually flips cfg.Agents.Defaults.DefaultAgentID (the settings
+	// singleton registry.GetDefaultAgent/routing.resolveDefaultAgentID
+	// consult). It gates needsReload further down: AgentProfile.tsx's autosave
+	// sends `default: <current value>` on EVERY save (not only the deliberate
+	// ★ toggle), so gating on mere req.Default != nil would force a full
+	// reload — dropping the WebSocket — on every unrelated profile edit. A
+	// full reload is genuinely required here (not merely convenient) because
+	// both registry.GetDefaultAgent's cached defaultAgentOverride field and
+	// AgentRegistry's nested *routing.RouteResolver each capture their own
+	// config.Config snapshot at last full-registry-rebuild time — a bare
+	// SwapConfig (what every OTHER config-only field on this handler relies
+	// on) never reaches either, so without a rebuild the two ladders would
+	// keep disagreeing exactly as this bug fix set out to close.
+	var defaultAgentIDChanged bool
 	if req.ToolsCfg != nil {
 		toolsCoverageMutate = func(c *config.Config) {
 			// Search by ID against the FRESHLY-fetched clone — never the
@@ -3241,12 +3272,25 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					agentRec.FallbackModels = fbs
 				}
-				// Default flag: single-default invariant.
-				// If req.Default is set, handle two sub-cases:
-				//   true  → mark this agent as default; clear Default on all others
-				//           (handled below, after this record's own write succeeds).
-				//   false → clear Default on this agent only; leave others unchanged.
-				// If req.Default is nil (absent), leave the Default flag unchanged.
+				// Default flag: ADR-054 D6.4 moved default-agent RESOLUTION
+				// entirely to the settings singleton
+				// (cfg.Agents.Defaults.DefaultAgentID — see registry.go's
+				// GetDefaultAgent and route.go's resolveDefaultAgentID). This
+				// per-entity bool is retained only for backward display
+				// compatibility (see config.go's ADR-054 D6.4 note) — it is
+				// NOT read by any resolution logic, and the wire `default`
+				// field is derived from the singleton at every response site
+				// (listAgents/getAgent above, updateAgent's response below),
+				// never from this field. The actual singleton write happens
+				// further down in THIS SAME a.configMu-locked closure (see the
+				// "agents.defaults.default_agent_id" write after the entity
+				// write below succeeds), so both land atomically or not at
+				// all — that replaces the old racy N-write fan-out that used
+				// to clear Default on every OTHER agent's entity record (see
+				// git history: independently-locked per-entity writes with no
+				// shared lock could each set Default=true, which is exactly
+				// the composition ADR-054 D6.4 retired RepairMultipleDefaults
+				// over).
 				if req.Default != nil {
 					agentRec.Default = *req.Default
 				}
@@ -3333,30 +3377,46 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				}
 				return fmt.Errorf("update agent entity record: %w", updateErr)
 			}
-			// Single-default invariant: when setting default=true on this agent,
-			// clear default on every OTHER agent's entity record. Each is its own
-			// independently-locked write (ADR-054 D6 rule 4's resolution keeps
-			// routing authoritative via agents.defaults.default_agent_id, not
-			// this per-entity flag — but the flag itself, surfaced to the SPA's
-			// star toggle, still needs the single-default UX invariant).
-			if req.Default != nil && *req.Default {
-				others, _, listErr := store.List()
-				if listErr != nil {
-					slog.Warn("rest: updateAgent: could not list agents to clear stale default flags",
-						"agent_id", id, "error", listErr)
-				} else {
-					for _, other := range others {
-						if other.ID == id || !other.Default {
-							continue
-						}
-						if _, clearErr := store.Update(other.ID, func(a *config.AgentConfig) error {
-							a.Default = false
-							return nil
-						}); clearErr != nil {
-							slog.Warn("rest: updateAgent: could not clear stale default flag",
-								"agent_id", other.ID, "error", clearErr)
-						}
+			// Single-default invariant, for real this time: the settings
+			// singleton (agents.defaults.default_agent_id) is the ONLY thing
+			// registry.GetDefaultAgent and routing.resolveDefaultAgentID
+			// consult, and the ONLY thing the wire `default` field is derived
+			// from (listAgents/getAgent above, this handler's response
+			// below) — so it is also the only thing that needs writing here.
+			// There is no more N-write fan-out across every OTHER agent's
+			// entity record: a per-entity bool never had to be reconciled
+			// once "the one default" became a single string behind the
+			// existing config-write lock (this closure already holds
+			// a.configMu via withToolPolicyCoverageGuard), and that old loop
+			// was itself racy (each Update below was its own
+			// independently-locked write, so two concurrent PUTs to two
+			// different agents could each "win" with no shared lock to
+			// serialize them — precisely the failure mode ADR-054 D6.4
+			// retired RepairMultipleDefaults over).
+			//
+			// true  → point the singleton at this agent (worker guard
+			//         already rejected this request above if foundAgent is a
+			//         worker, so `id` is always a valid chat-target here).
+			// false → clear the singleton ONLY if it currently names this
+			//         agent, so un-starring the actual default reverts to
+			//         the registry's own fallback ladder (main sentinel,
+			//         then first non-worker) instead of leaving the
+			//         singleton pointed at an agent that just un-defaulted
+			//         itself. Un-starring an agent that the singleton
+			//         doesn't currently name is a no-op — matches the old
+			//         per-entity semantics ("clear this agent only, leave
+			//         others unchanged").
+			if req.Default != nil {
+				defaultsMap := ensureMap(m, "agents", "defaults")
+				cur, _ := defaultsMap["default_agent_id"].(string)
+				if *req.Default {
+					if cur != id {
+						defaultsMap["default_agent_id"] = id
+						defaultAgentIDChanged = true
 					}
+				} else if cur == id {
+					defaultsMap["default_agent_id"] = ""
+					defaultAgentIDChanged = true
 				}
 			}
 			// O6: heartbeat is now fully per-agent (written inside the agent-found
@@ -3399,7 +3459,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// agent-instance construction time — so a graph edit already takes effect
 	// on the NEXT turn with no reload required at all, unlike the old
 	// per-agent policy this replaced.
-	needsReload := req.Soul != nil
+	//
+	// defaultAgentIDChanged (set inside the persist closure above, iff this
+	// request actually flipped agents.defaults.default_agent_id) also forces
+	// a reload — see that variable's doc comment. This is deliberately NOT
+	// keyed off req.Default != nil (which AgentProfile.tsx's autosave sends
+	// on every save, unrelated edits included); only a real transition of the
+	// singleton earns the WebSocket-dropping cost of a full rebuild, because
+	// nothing short of one re-syncs registry.GetDefaultAgent's cached
+	// override AND the registry's nested RouteResolver's own config
+	// snapshot — the two ladders this bug fix makes agree.
+	needsReload := req.Soul != nil || defaultAgentIDChanged
 	var reloadWarning string
 	if needsReload {
 		if err := a.agentLoop.TriggerReload(); err != nil {
@@ -3503,7 +3573,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
 				ag.Type = coreagent.ToWireType(ac)
-				ag.Default = boolPtr(ac.Default)
+				// Derived from the settings singleton — see listAgents' comment
+				// for the full rationale. liveCfg is fetched fresh above, and
+				// (when defaultAgentIDChanged fired) TriggerReload has already
+				// rebuilt it from the just-written config.json, so this reflects
+				// the singleton this exact request just persisted.
+				ag.Default = boolPtr(ac.ID == liveCfg.Agents.Defaults.DefaultAgentID)
 				if len(ac.Skills) > 0 {
 					skills := make([]string, len(ac.Skills))
 					copy(skills, ac.Skills)
@@ -3902,11 +3977,34 @@ func ensureMap(m map[string]any, keys ...string) map[string]any {
 // Called while a.configMu is held.
 // populateAgentsListFromStore is the ADR-054 D3/§5 "read through an
 // in-memory cache" bridge for the config-reload path — see
-// populateAgentsListFromEntityStore's doc comment (gateway.go) for the full
-// rationale. Thin per-restAPI wrapper so REST call sites don't have to thread
-// a.homePath through by hand.
-func (a *restAPI) populateAgentsListFromStore(cfg *config.Config) {
-	populateAgentsListFromEntityStore(cfg, a.homePath)
+// populateAgentsListFromEntityStoreStrict's doc comment (gateway.go) for the
+// full rationale, including the verified privilege-escalation chain a
+// silently-empty roster opens (an unrestricted "main" sentinel falls through
+// to the permissive global tool-policy floor, and the coverage gate vacuously
+// passes zero agents).
+//
+// SECURITY FIX (RELEASE BLOCKER, F3 follow-up): this used to call the LENIENT
+// populateAgentsListFromEntityStore (log-and-continue on failure, silently
+// leaving cfg.Agents.List whatever it already was — which, on a genuine
+// entity-store failure, is often already empty this early in a fresh
+// *config.Config's life). refreshConfigAndRewireServices is the single
+// authoritative refresh path for EVERY REST-initiated config write — agent
+// create/update/delete, channel configure, tool-policy write, mailbox grant,
+// god-mode toggle, all of it — making this the highest-traffic call site for
+// the bug F3 closed in gateway.go's boot/manual-reload/file-watcher paths.
+// Now calls the STRICT variant directly (same package, same function — no
+// export needed) and returns its error so refreshConfigAndRewireServices can
+// reject the candidate config exactly like it already does for a credential-
+// resolution failure below: never call SwapConfig, propagate the error so the
+// caller's updateConfigJSONLocked fails the write and the HTTP handler
+// surfaces a 500 instead of silently serving a config whose roster may have
+// come back empty. restAPI has no reference to gateway.go's *services (and
+// therefore no markReloadDegraded hook to call) — the synchronous REST-write
+// path's equivalent signal is failing THIS request with a real error instead
+// of a fake 200, which is the same "reject, don't swap" semantic gateway.go's
+// async reload loop expresses via markReloadDegraded + a degraded /health.
+func (a *restAPI) populateAgentsListFromStore(cfg *config.Config) error {
+	return populateAgentsListFromEntityStoreStrict(cfg, a.homePath)
 }
 
 func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
@@ -3918,7 +4016,11 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 		if err != nil {
 			return fmt.Errorf("load config (no store): %w", err)
 		}
-		a.populateAgentsListFromStore(newCfg)
+		if rosterErr := a.populateAgentsListFromStore(newCfg); rosterErr != nil {
+			slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+				"agent roster population failed (no credential store variant)", "error", rosterErr)
+			return fmt.Errorf("agent roster population failed: %w", rosterErr)
+		}
 		a.agentLoop.SwapConfig(newCfg)
 		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 		// restart-gated), so a Settings save must take effect immediately
@@ -3930,7 +4032,11 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	a.populateAgentsListFromStore(newCfg)
+	if rosterErr := a.populateAgentsListFromStore(newCfg); rosterErr != nil {
+		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+			"agent roster population failed", "error", rosterErr)
+		return fmt.Errorf("agent roster population failed: %w", rosterErr)
+	}
 	// Build a ref→in-use map so a resolution failure on something actually
 	// enabled/in-use (fatal — surfaced as a failed request) can be
 	// distinguished from one on a disabled channel or unused feature

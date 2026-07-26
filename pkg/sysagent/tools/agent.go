@@ -52,6 +52,34 @@ func validateAgentColor(s string) error {
 	return nil
 }
 
+// resolveOmnipusHome returns the effective $OMNIPUS_HOME to use for both the
+// agent entity store (agentstore.New) and the agent's own on-disk workspace
+// (SOUL.md/HEARTBEAT.md, datamodel.InitAgentHome/AgentHomePath). depsHome is
+// t.deps.Home (OMNIPUS_HOME) — reliable in containers where $HOME may be
+// unset — used verbatim when non-empty; os.UserHomeDir()+"/.omnipus" is the
+// fallback only when depsHome is empty.
+//
+// MUST be called exactly once per Execute, BEFORE constructing an
+// agentstore.Store or computing any workspace path, so the entity record and
+// the agent's workspace directory never resolve against two different
+// "home" values. All three tools used to construct the store from the raw,
+// possibly-empty t.deps.Home directly and only apply this fallback later
+// (or, in Delete's case, not at all) when computing the workspace path — an
+// empty t.deps.Home meant the entity record landed under
+// ./entities/agents/<id>.json (relative to the process's CWD) while
+// SOUL.md/HEARTBEAT.md landed under $HOME/.omnipus/agents/<id>/, a
+// split-brain between the two halves of "the same agent's" on-disk state.
+func resolveOmnipusHome(depsHome string) (string, error) {
+	if depsHome != "" {
+		return depsHome, nil
+	}
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+	return h + "/.omnipus", nil
+}
+
 // validateAgentIcon returns an error when icon is non-empty and contains
 // characters outside the Phosphor icon naming convention (alphanumeric + hyphens,
 // max 64 chars). Empty strings pass (field is optional).
@@ -278,8 +306,19 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
 	// paths cannot drift out of sync on this seed again.
 	newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
+
+	// Resolve home ONCE, before constructing the agent store, so the entity
+	// record (below) and the agent's own workspace (SOUL.md/HEARTBEAT.md,
+	// further down) always agree on the same $OMNIPUS_HOME — see
+	// resolveOmnipusHome's doc comment for the split-brain this closes.
+	omnipusHome, homeErr := resolveOmnipusHome(t.deps.Home)
+	if homeErr != nil {
+		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", homeErr.Error(),
+			"Set OMNIPUS_HOME environment variable"))
+	}
+
 	finalID := id
-	if err := agentstore.New(t.deps.Home).Create(id, &newAgent); err != nil {
+	if err := agentstore.New(omnipusHome).Create(id, &newAgent); err != nil {
 		if errors.Is(err, entity.ErrAlreadyExists) {
 			return tools.ErrorResult(errorJSON(
 				"AGENT_ALREADY_EXISTS",
@@ -291,17 +330,6 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	}
 
 	// Create agent workspace and write personality files.
-	// Use deps.Home (OMNIPUS_HOME) as base — reliable in containers where HOME may be unset.
-	omnipusHome := t.deps.Home
-	if omnipusHome == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			omnipusHome = h + "/.omnipus"
-		} else {
-			return tools.ErrorResult(errorJSON("WORKSPACE_ERROR",
-				"cannot determine home directory: "+err.Error(),
-				"Set OMNIPUS_HOME environment variable"))
-		}
-	}
 	wsPath := omnipusHome + "/agents/" + finalID
 	if err := datamodel.InitAgentHome(omnipusHome, finalID); err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR",
@@ -459,8 +487,19 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 	// entities/agents/<id>.json, not config.json's agents.list — persist via
 	// the agent store's read-modify-write instead of t.deps.WithConfig +
 	// cfg.Agents.List splicing.
+	//
+	// Resolve home ONCE, before constructing the agent store, so the entity
+	// record and the workspace file writes below always agree on the same
+	// $OMNIPUS_HOME (resolveOmnipusHome's doc comment; matches
+	// AgentCreateTool's identical fix).
+	omnipusHome, homeErr := resolveOmnipusHome(t.deps.Home)
+	if homeErr != nil {
+		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", homeErr.Error(),
+			"Set OMNIPUS_HOME environment variable"))
+	}
+
 	var updated []string
-	_, updateErr := agentstore.New(t.deps.Home).Update(id, func(a *config.AgentConfig) error {
+	_, updateErr := agentstore.New(omnipusHome).Update(id, func(a *config.AgentConfig) error {
 		if a.Locked {
 			return fmt.Errorf("agent %q is a locked core agent and cannot be modified", id)
 		}
@@ -515,13 +554,7 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", updateErr.Error(), ""))
 	}
 
-	// Write workspace files if provided. Use deps.Home as base.
-	omnipusHome := t.deps.Home
-	if omnipusHome == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			omnipusHome = h + "/.omnipus"
-		}
-	}
+	// Write workspace files if provided.
 	wsPath := omnipusHome + "/agents/" + id
 	if v, ok := args["soul"].(string); ok && strings.TrimSpace(v) != "" {
 		if err := os.MkdirAll(wsPath, 0o700); err != nil {
@@ -539,6 +572,16 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 			} else {
 				updated = append(updated, "heartbeat")
 			}
+		}
+	}
+
+	// Trigger hot-reload so the update takes effect immediately in routing,
+	// list_agents, and GET /api/v1/agents, without a restart — same pattern
+	// as AgentCreateTool.Execute above.
+	if t.deps.ReloadFunc != nil {
+		if err := t.deps.ReloadFunc(); err != nil {
+			slog.Warn("sysagent: hot-reload after agent update failed — change available after restart",
+				"id", id, "error", err)
 		}
 	}
 
@@ -589,7 +632,20 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	// agents.list — remove the entity record (via the agent store) FIRST,
 	// before the best-effort workspace-directory cleanup below, instead of
 	// splicing cfg.Agents.List inside t.deps.WithConfig.
-	store := agentstore.New(t.deps.Home)
+	//
+	// Resolve home ONCE, before constructing the agent store, so the entity
+	// record and the workspace-directory cleanup below always agree on the
+	// same $OMNIPUS_HOME (resolveOmnipusHome's doc comment; matches
+	// AgentCreateTool/AgentUpdateTool's identical fix — this tool previously
+	// used raw t.deps.Home for BOTH with no fallback at all, unlike the
+	// other two).
+	omnipusHome, homeErr := resolveOmnipusHome(t.deps.Home)
+	if homeErr != nil {
+		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", homeErr.Error(),
+			"Set OMNIPUS_HOME environment variable"))
+	}
+
+	store := agentstore.New(omnipusHome)
 	existing, getErr := store.Get(id)
 	if getErr != nil {
 		if errors.Is(getErr, entity.ErrNotFound) {
@@ -608,10 +664,23 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	// Remove workspace directory (best-effort; failure is non-fatal but logged).
-	wsPath := datamodel.AgentHomePath(t.deps.Home, id)
+	wsPath := datamodel.AgentHomePath(omnipusHome, id)
 	if err := os.RemoveAll(wsPath); err != nil {
 		slog.Warn("sysagent: workspace cleanup incomplete",
 			"agent_id", id, "path", wsPath, "error", err)
+	}
+
+	// Trigger hot-reload so the deleted agent is immediately unroutable and
+	// unlisted (RouteResolver, list_agents, GET /api/v1/agents) without a
+	// restart — same pattern as AgentCreateTool.Execute above. Without this,
+	// a deleted agent stayed live until the next process restart: its entity
+	// record was gone from disk, but the in-memory cfg.Agents.List/registry
+	// snapshot every routing/list read consults was never told to refresh.
+	if t.deps.ReloadFunc != nil {
+		if err := t.deps.ReloadFunc(); err != nil {
+			slog.Warn("sysagent: hot-reload after agent delete failed — agent remains routable/listed until restart",
+				"id", id, "error", err)
+		}
 	}
 
 	return tools.NewToolResult(successJSON(map[string]any{

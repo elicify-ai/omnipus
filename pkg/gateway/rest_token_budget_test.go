@@ -58,7 +58,12 @@ func TestTokenBudget_PutPersistsAndNotesRestart(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 
 	// v1 config so LoadConfig treats it as CurrentVersion (no migration).
-	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
+	// ADR-054: agents.list is json:"-" and can no longer be seeded via a raw
+	// config.json splice (it is silently stripped on load) — omitted here
+	// entirely; the roster now lives in the entity store (seedAgentEntities
+	// below), keeping the in-memory cfg.Agents.List (still required for
+	// AgentLoop construction).
+	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096}}}`
 	cfgPath := filepath.Join(tmpDir, "config.json")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
@@ -75,6 +80,12 @@ func TestTokenBudget_PutPersistsAndNotesRestart(t *testing.T) {
 			},
 		},
 	}
+	// ADR-054 D2/D6: this PUT reaches safeUpdateConfigJSON, which triggers
+	// refreshConfigAndRewireServices and repopulates cfg.Agents.List wholesale
+	// from the agent entity store — an in-memory-only roster would be
+	// silently wiped to empty at that point. Persist a real entity record so
+	// the roster survives the reload.
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
@@ -114,7 +125,9 @@ func TestTokenBudget_PutSetToZeroGivesUnbounded(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 
-	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"test-agent","name":"Test Agent","type":"custom"}]}}`
+	// ADR-054: agents.list is json:"-" — see the sibling test above for why
+	// the on-disk splice is omitted and seedAgentEntities is used instead.
+	cfgJSON := `{"version":1,"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096}}}`
 	cfgPath := filepath.Join(tmpDir, "config.json")
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
@@ -127,6 +140,7 @@ func TestTokenBudget_PutSetToZeroGivesUnbounded(t *testing.T) {
 			},
 		},
 	}
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 

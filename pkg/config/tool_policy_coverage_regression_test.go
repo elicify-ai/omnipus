@@ -12,13 +12,17 @@
 // purpose is to ABORT boot on any agent×tool policy gap: an empty roster
 // sails straight through the gate built specifically to catch this.
 //
-// This is NOT a live, exploitable bug in production. Both boot paths
-// (pkg/agent.LoadAgentRosterFromEntityStore and pkg/gateway's
-// populateAgentsListFromEntityStore, see roster_load.go / gateway.go)
-// repopulate cfg.Agents.List from the on-disk agent entity store (ADR-054)
-// BEFORE ValidateToolPolicyCoverage ever runs — a config with a genuinely
-// empty roster only arises on an install with literally zero agents
-// recorded, which is not the scenario Constraint #6 exists to guard against.
+// This is NOT a live, exploitable bug in production, but the reason is
+// narrower than it first looks. The roster bridge
+// (pkg/gateway.populateAgentsListFromEntityStoreStrict, plus cmd/omnipus's
+// own loaders) repopulates cfg.Agents.List from the on-disk agent entity
+// store (ADR-054) BEFORE ValidateToolPolicyCoverage ever runs, so a
+// genuinely empty roster only arises on an install with literally zero
+// agents recorded. That ordering is a CALL-SITE CONVENTION, not an enforced
+// invariant — nothing stops a future LoadConfig call site from reaching the
+// validation without the bridge. The STRICT bridge exists precisely because
+// the earlier best-effort variant could silently produce the empty-roster
+// state this test pins; see its doc comment in pkg/gateway/gateway.go.
 // This test is defence-in-depth documentation, not a bug report: if a future
 // refactor changes ValidateToolPolicyCoverage's iteration source, or someone
 // "fixes" the empty-roster case in one direction without checking the other,
@@ -84,8 +88,8 @@ func TestValidateToolPolicyCoverage_EmptyAgentRoster_VacuousPass(t *testing.T) {
 			Agents: AgentsConfig{
 				List: nil, // deliberately empty — e.g. a config.LoadConfig pass that stripped agents.list
 				// (ADR-054, pkg/config/legacy_agents_list.go) with the entity-store
-				// repopulation step (LoadAgentRosterFromEntityStore /
-				// populateAgentsListFromEntityStore) not yet having run.
+				// repopulation step (populateAgentsListFromEntityStoreStrict)
+				// not yet having run.
 			},
 		}
 

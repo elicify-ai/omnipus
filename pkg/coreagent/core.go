@@ -18,6 +18,7 @@ package coreagent
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -1136,6 +1137,30 @@ func SeedConfig(cfg *config.Config) bool {
 			cfg.Agents.Defaults.BootstrapRecapEnabled = true
 			modified = true
 		}
+	}
+
+	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
+	// was previously ONLY expressed via the per-entity AgentConfig.Default
+	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
+	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
+	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
+	// pkg/agent.AgentRegistry.GetDefaultAgent and
+	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
+	// THAT field, so a fresh install had NO configured default at all:
+	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
+	// default and disagreed. Seed the singleton here, on the exact same
+	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
+	// actual resolved default matches the documented "Mia is default" intent.
+	// The per-entity Default:true stamp on Mia's fresh-seed record below is
+	// UNCHANGED (kept for backward display compatibility per config.go's
+	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
+	// Guarded by "still empty" so an operator's pre-boot env override
+	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
+	// fresh-install-only seed, not a re-enforcement that would overwrite an
+	// operator's later choice on every subsequent boot.
+	if isFreshInstall && strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID) == "" {
+		cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
+		modified = true
 	}
 
 	// Re-enforce identity fields on existing core agents (tamper protection + rename).

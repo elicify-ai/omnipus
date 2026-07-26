@@ -51,8 +51,8 @@ import (
 // legacy_agents_list.go — so every CLI call site that reads cfg.Agents.List
 // must go through this instead of a bare config.LoadConfig).
 //
-// homePath is threaded through explicitly rather than derived from cfg (e.g.
-// agent.LoadAgentRosterFromEntityStore's filepath.Dir(cfg.AgentHomeBasePath())
+// homePath is threaded through explicitly rather than derived from cfg (a
+// now-deleted helper used a filepath.Dir(cfg.AgentHomeBasePath())
 // derivation) — that derivation assumes Agents.Defaults.Home is always
 // exactly <home>/workspace, which does not hold for every fixture/config
 // shape and was verified (2026-07-25) to silently point at the wrong
@@ -71,6 +71,14 @@ func loadConfigWithAgents(configPath, homePath string) (*config.Config, error) {
 	}
 	cfg.Agents.List = agents
 	cfg.SkippedAgentIDs = skipped
+	// Entity-loaded agents never pass through config.loadConfigInternal's own
+	// NormalizeFallbacks/migrateAgentPrimaryProvider passes — those only run
+	// against config.json's agents.list inside config.LoadConfig itself,
+	// which is stripped to empty before this bridge re-injects the real
+	// per-entity roster (ADR-054, legacy_agents_list.go). Apply both here so
+	// an agent whose FallbackModel/primary-model fields were written
+	// pre-split still resolves correctly for this CLI invocation.
+	config.NormalizeAgentRoster(cfg)
 	return cfg, nil
 }
 

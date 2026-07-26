@@ -83,8 +83,8 @@ func seedTestAgents(cfg *config.Config) {
 // Tests that are read-only (GET) or where the request is rejected BEFORE
 // the persist step (400/403/404) do not need this — a bare in-memory
 // cfg.Agents.List remains the correct, sanctioned way to seed AgentLoop for
-// those (see pkg/agent/roster_load.go's doc comment: NewAgentLoop does not
-// auto-populate the roster from the entity store; mirrors the pattern
+// those (NewAgentLoop does not auto-populate the roster from the entity
+// store — only pkg/gateway's boot/reload bridge does; mirrors the pattern
 // already proven in pkg/gateway/rest_mailbox_test.go's newMailboxTestAPI and
 // pkg/sysagent/tools/agent_test.go).
 func seedAgentEntities(t *testing.T, homePath string, agents []config.AgentConfig) {

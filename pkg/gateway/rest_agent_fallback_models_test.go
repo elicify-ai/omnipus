@@ -24,13 +24,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -59,24 +59,19 @@ func TestUpdateAgent_FallbackModels_PersistAndEchoOnPUT(t *testing.T) {
 	require.NotNil(t, (*updated.FallbackModels)[1].Provider)
 	assert.Equal(t, "openai", *(*updated.FallbackModels)[1].Provider)
 
-	// Persisted to config.json (the save-race fix this test wave builds on).
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	agents, _ := m["agents"].(map[string]any)
-	list, _ := agents["list"].([]any)
-	var entry map[string]any
-	for _, item := range list {
-		e, _ := item.(map[string]any)
-		if e != nil && e["id"] == "test-agent" {
-			entry = e
-			break
-		}
-	}
-	require.NotNil(t, entry, "test-agent must be persisted")
-	fm, _ := entry["fallback_models"].([]any)
-	require.Len(t, fm, 2, "fallback_models must be persisted to config.json")
+	// Persisted to the entity store (ADR-054 + the config.AgentsConfig.List
+	// = `json:"-"` follow-up: agents are per-entity records now, and
+	// agents.list can never be marshaled into config.json by any code path —
+	// createAgent/updateAgent persist exclusively via agentstore.Store. This
+	// is the save-race fix this test wave builds on, re-pointed at its real
+	// persistence target.)
+	rec, err := agentstore.New(api.homePath).Get("test-agent")
+	require.NoError(t, err, "test-agent must be persisted")
+	require.Len(t, rec.FallbackModels, 2, "fallback_models must be persisted to the entity store")
+	assert.Equal(t, "claude-sonnet-4.6", rec.FallbackModels[0].Model)
+	assert.Equal(t, "anthropic", rec.FallbackModels[0].Provider)
+	assert.Equal(t, "gpt-4o-mini", rec.FallbackModels[1].Model)
+	assert.Equal(t, "openai", rec.FallbackModels[1].Provider)
 }
 
 // TestGetAgent_FallbackModels_ReflectsPersistedValue proves GET /agents/{id}

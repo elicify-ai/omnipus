@@ -131,9 +131,16 @@ func resolveExeName(pid int) (string, bool) {
 //  2. We avoid the Setsid ioctl, which is blocked by seccomp when the calling
 //     process is already a session leader.
 //
-// Stdin is connected to /dev/null; stdout and stderr are inherited so that
-// early startup errors are visible. In production, operators redirect them
-// via a supervisor or shell redirection.
+// Stdin, stdout AND stderr are all connected to /dev/null: cmd.Stdout and
+// cmd.Stderr are left nil below, and os/exec opens /dev/null for any nil
+// stream. This is deliberate for a detached daemon (a terminal that closes
+// must not break the child), but it has a consequence worth stating: ANY
+// diagnostic written to stdout/stderr by the child is DISCARDED. In
+// particular `log/slog` writes to stderr by default and slog.SetDefault is
+// never called anywhere in this tree, so slog output is invisible in the
+// daemonized deployment. Operator-facing diagnostics MUST go through
+// pkg/logger, which writes $OMNIPUS_HOME/logs/gateway.log; startup failures
+// before that is wired land in gateway_panic.log.
 func spawnProcess(exe string, args []string, _ string) (int, error) {
 	// Filter the parent env to pass only non-sensitive, runtime-relevant vars.
 	// We explicitly pass OMNIPUS_HOME so the child finds its data directory.

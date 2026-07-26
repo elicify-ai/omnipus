@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -89,11 +90,42 @@ func TestCreate_DuplicateID_Rejected(t *testing.T) {
 // TestCreate_IDMismatch_Rejected verifies a caller-supplied cfg.ID that
 // disagrees with the requested id is rejected rather than silently
 // overridden (defense against a reused-request-struct caller bug).
+//
+// Anti-shortcut: Store.Create's id/cfg.ID mismatch check
+// (pkg/agentstore/store.go) returns a bare fmt.Errorf with no sentinel of
+// its own — it does not wrap entity.ErrInvalidID, entity.ErrAlreadyExists,
+// or any write/verify-read-back error, but all of those ALSO produce a
+// non-nil err from Create. A bare `err == nil` check would keep passing if
+// a regression accidentally routed this case through one of those other
+// failure paths instead of the intended mismatch rejection (e.g. a reused
+// id from a leaked temp dir hitting ErrAlreadyExists, or a validateID
+// regression flagging "someone-else" as ErrInvalidID) — so assert the exact
+// rejection reason via its distinctive message, rule out the sentinel'd
+// alternatives via errors.Is, and confirm no record was persisted under
+// either id (ruling out a write succeeding under the wrong ID).
 func TestCreate_IDMismatch_Rejected(t *testing.T) {
 	s := newTestStore(t)
 	err := s.Create("mia", &config.AgentConfig{ID: "someone-else", Name: "Mia"})
 	if err == nil {
 		t.Fatal("expected an error for a cfg.ID/id mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), `cfg.ID "someone-else" does not match requested id`) {
+		t.Errorf("expected the id-mismatch message naming both ids, got: %v", err)
+	}
+	if errors.Is(err, entity.ErrInvalidID) {
+		t.Error("rejection must be the id/cfg.ID mismatch check, not ErrInvalidID")
+	}
+	if errors.Is(err, entity.ErrAlreadyExists) {
+		t.Error("rejection must be the id/cfg.ID mismatch check, not ErrAlreadyExists")
+	}
+
+	// No side effect: a rejected mismatched create must not have persisted
+	// anything under either id.
+	if _, getErr := s.Get("mia"); !errors.Is(getErr, entity.ErrNotFound) {
+		t.Errorf("mismatched create must not persist a record under %q, Get error = %v", "mia", getErr)
+	}
+	if _, getErr := s.Get("someone-else"); !errors.Is(getErr, entity.ErrNotFound) {
+		t.Errorf("mismatched create must not persist a record under %q, Get error = %v", "someone-else", getErr)
 	}
 }
 

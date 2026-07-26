@@ -392,16 +392,30 @@ func (r *RouteResolver) isSkippedAgentID(id string) bool {
 	return false
 }
 
-// resolveDefaultAgentID mirrors pkg/agent.AgentRegistry.GetDefaultAgent's
-// ladder (see that function's doc comment for the full ADR-054 D6.4
-// rationale). Priority 1 used to be "the agent whose AgentConfig.Default
-// field is true" — withdrawn: splitting agents into independent per-entity
-// files means two concurrent writes to two different agents could each set
-// Default=true with no shared lock to serialize them, so a per-entity bool
-// can no longer be the source of the "the one default" signal. The settings
-// singleton (config.Agents.Defaults.DefaultAgentID) replaces it — a single
-// string field behind the existing config-write lock cannot have two
-// winners.
+// resolveDefaultAgentID resolves the channel-binding cascade's final
+// "default" tier over cfg.Agents.List (the raw config slice — never
+// contains an implicit "main" entry). It follows the same 3-tier SHAPE as
+// pkg/agent.AgentRegistry.GetDefaultAgent (override → built-in fallback →
+// deterministic last resort; see that method's doc comment for the full
+// ADR-054 D6.4 rationale on why Priority 1 used to be "the agent whose
+// AgentConfig.Default field is true" and was withdrawn in favor of the
+// settings-singleton override config.Agents.Defaults.DefaultAgentID), but the
+// two are independent resolvers over different data and are NOT guaranteed
+// to produce the same agent ID:
+//   - This function's Priority 2 fallback returns the FIRST chat-target
+//     agent in cfg.Agents.List's SLICE ORDER (not sorted), and only falls
+//     through to the literal DefaultAgentID ("main") constant when the list
+//     has no chat-target agent at all.
+//   - GetDefaultAgent's registry-map equivalent always has the implicit
+//     "main" sentinel available as its own Priority 2, ahead of a
+//     lexicographically-sorted last resort.
+//
+// Concretely: with no override configured and at least one chat-target
+// custom/core agent in cfg.Agents.List, this function resolves to that agent
+// (e.g. Mia) while GetDefaultAgent resolves to "main" for the same config —
+// intentional, since the two serve different callers (this one the channel
+// binding cascade; GetDefaultAgent registry-level lookups with no routing
+// input), not a bug to reconcile here.
 func (r *RouteResolver) resolveDefaultAgentID() string {
 	agents := r.cfg.Agents.List
 	if len(agents) == 0 {

@@ -173,9 +173,12 @@ properties:
   default:
     type: boolean
     description: >
-      Whether this agent is the global default that handles inbound messages
-      with no more-specific routing rule. At most one agent is default.
-      Main only — workers never default.
+      Whether this agent is the current global default that handles inbound
+      messages with no more-specific routing rule. This is a COMPUTED value —
+      the backend derives it by comparing the agent's id against the single
+      default-agent setting each time it builds a response; it is never
+      stored per-agent. At most one agent is default at a time. Main only —
+      workers never default.
     example: false
   skills:
     type: array

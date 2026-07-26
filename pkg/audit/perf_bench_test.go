@@ -71,7 +71,6 @@ func newPerfBenchLogger(tb testing.TB, dir string) *Logger {
 // sub-linear.
 func BenchmarkAuditAppend_Concurrent(b *testing.B) {
 	for _, n := range []int{1, 8, 32} {
-		n := n
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			logger := newPerfBenchLogger(b, dir)
@@ -127,7 +126,6 @@ func BenchmarkAuditAppend_Concurrent(b *testing.B) {
 // the allow-path benchmark where per-op cost stayed flat.
 func BenchmarkAuditAppend_Concurrent_Fsync(b *testing.B) {
 	for _, n := range []int{1, 8, 32} {
-		n := n
 		b.Run(fmt.Sprintf("N=%d", n), func(b *testing.B) {
 			dir := b.TempDir()
 			logger := newPerfBenchLogger(b, dir)

@@ -30,48 +30,36 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// readTypeTestConfigMap parses the current config.json on disk into a
-// map[string]any. Tests use it to assert the on-disk type after a create
-// (the load-bearing assertion, since the response is an echo and the
-// in-memory config is reloaded post-write).
-func readTypeTestConfigMap(t *testing.T, path string) map[string]any {
+// findTypeTestAgentInStore returns the persisted config.AgentConfig with the
+// given name (case-sensitive) from the entity store (entities/agents/<id>.json),
+// or nil when not found.
+//
+// ADR-054 + the config.AgentsConfig.List = `json:"-"` follow-up: agents are
+// per-entity records now, and agents.list can NEVER be marshaled into
+// config.json by any code path — createAgent/updateAgent persist exclusively
+// via agentstore.Store. Tests must therefore assert on "the persisted type"
+// by reading the entity store directly, not config.json (which was the
+// historical, now-obsolete, fixture assertion this helper replaces).
+func findTypeTestAgentInStore(t *testing.T, homePath, name string) *config.AgentConfig {
 	t.Helper()
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err, "read config.json: %s", string(raw))
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(raw, &m))
-	return m
-}
-
-// findTypeTestAgentInConfig returns the agents.list[*] entry with the
-// given name (case-sensitive). Returns nil when not found.
-func findTypeTestAgentInConfig(t *testing.T, m map[string]any, name string) map[string]any {
-	t.Helper()
-	agents, _ := m["agents"].(map[string]any)
-	if agents == nil {
-		return nil
-	}
-	list, _ := agents["list"].([]any)
-	for _, item := range list {
-		entry, _ := item.(map[string]any)
-		if entry == nil {
-			continue
-		}
-		if entry["name"] == name {
-			return entry
+	agents, _, err := agentstore.New(homePath).List()
+	require.NoError(t, err)
+	for i := range agents {
+		if agents[i].Name == name {
+			return &agents[i]
 		}
 	}
 	return nil
@@ -94,8 +82,7 @@ func TestCreateAgent_TypeOmitted_Rejected(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "type is required")
 
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "Typed Omit")
+	entry := findTypeTestAgentInStore(t, api.homePath, "Typed Omit")
 	assert.Nil(t, entry, "a rejected create must not persist anything")
 }
 
@@ -114,10 +101,9 @@ func TestCreateAgent_TypeCustom_Explicit(t *testing.T) {
 	created := decodeAgentResp(t, w.Body.Bytes())
 	assert.Equal(t, gen.AgentTypeMain, created.Type)
 
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "Typed Custom")
+	entry := findTypeTestAgentInStore(t, api.homePath, "Typed Custom")
 	require.NotNil(t, entry)
-	assert.Equal(t, "custom", entry["type"])
+	assert.Equal(t, config.AgentTypeCustom, entry.Type)
 }
 
 // TestCreateAgent_TypeWorker_PersistsAndEchoes proves the worker create
@@ -151,10 +137,9 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 		"newly-created worker must not be the default")
 
 	// Persisted to config.json with type=worker and no default flag.
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "My Worker")
+	entry := findTypeTestAgentInStore(t, api.homePath, "My Worker")
 	require.NotNil(t, entry, "worker must be persisted")
-	assert.Equal(t, "worker", entry["type"])
+	assert.Equal(t, config.AgentTypeWorker, entry.Type)
 }
 
 // TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists proves the
@@ -187,15 +172,13 @@ func TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists(t *testing.T) {
 	require.NotNil(t, created.Executor.Cli, "executor.cli must be present")
 	assert.Equal(t, gen.Codex, *created.Executor.Cli)
 
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "Worker External")
+	entry := findTypeTestAgentInStore(t, api.homePath, "Worker External")
 	require.NotNil(t, entry)
-	sub, _ := entry["subagents"].(map[string]any)
-	require.NotNil(t, sub, "executor subagents must be persisted for a worker")
-	exec, _ := sub["executor"].(map[string]any)
+	require.NotNil(t, entry.Subagents, "executor subagents must be persisted for a worker")
+	exec := entry.Subagents.Executor
 	require.NotNil(t, exec)
-	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "codex", exec["cli"])
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "codex", exec.CLI)
 }
 
 // TestCreateAgent_NonWorker_ExecutorFieldRejected is the regression guard for
@@ -223,8 +206,7 @@ func TestCreateAgent_NonWorker_ExecutorFieldRejected(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "executor")
 
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "Bad Custom")
+	entry := findTypeTestAgentInStore(t, api.homePath, "Bad Custom")
 	assert.Nil(t, entry, "a rejected create must not persist anything")
 }
 
@@ -302,10 +284,9 @@ func TestUpdateAgent_DoesNotChangeType(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "put body: %s", w.Body.String())
 
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "Sticky Custom")
+	entry := findTypeTestAgentInStore(t, api.homePath, "Sticky Custom")
 	require.NotNil(t, entry)
-	assert.Equal(t, "custom", entry["type"],
+	assert.Equal(t, config.AgentTypeCustom, entry.Type,
 		"update must not change Type — it is create-only")
 }
 
@@ -337,10 +318,9 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "put body: %s", w.Body.String())
 
-	raw := readTypeTestConfigMap(t, api.configPath())
-	entry := findTypeTestAgentInConfig(t, raw, "Sticky Worker")
+	entry := findTypeTestAgentInStore(t, api.homePath, "Sticky Worker")
 	require.NotNil(t, entry)
-	assert.Equal(t, "worker", entry["type"],
+	assert.Equal(t, config.AgentTypeWorker, entry.Type,
 		"update must not change Type on a worker either")
 }
 
