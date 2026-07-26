@@ -3,7 +3,7 @@ import * as path from 'path'
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors';
 import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -147,6 +147,9 @@ async function openSession(page: Page, sessionId: string): Promise<void> {
 
 async function waitForReplayDone(page: Page): Promise<void> {
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+  // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+  // see waitForConnected's doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 30_000 })
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -181,6 +184,7 @@ test(
   async ({ page }) => {
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
     await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+    await waitForConnected(page, { timeout: 15_000 })
 
     // Create a session and seed a transcript with messages from three agents.
     const sessionId = await createSession(page)
@@ -266,6 +270,17 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // Confirm the composer is genuinely usable (enabled AND the socket is
+    // actually open, not merely queueing — toBeEnabled() alone no longer
+    // implies "connected", see waitForConnected's doc comment in
+    // fixtures/selectors.ts) before driving the real-LLM delegate flow
+    // below. Without this, a page-load-time reconnect blip can leave the
+    // composer looking usable while the first message it sends lands in
+    // the outbound queue instead of the wire — the delegate call never
+    // fires, and the test hangs to its full test.slow() timeout waiting on
+    // a subagent-collapsed block that will never appear.
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
 
     // Route to Jim: the default agent Mia is a guide whose policy excludes the
     // `delegate` tool (verified in CI: `load_tool(load): ... Rejected: delegate — denied

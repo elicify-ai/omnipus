@@ -47,7 +47,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { startNewChat } from './fixtures/selectors';
+import { startNewChat, waitForConnected } from './fixtures/selectors';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -422,6 +422,9 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeEnabled({ timeout: 15_000 });
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 15_000 });
 
     // ── Turn 1: remember the nonce ────────────────────────────────────────────
     //

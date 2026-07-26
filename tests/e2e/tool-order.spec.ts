@@ -107,7 +107,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import * as fs from 'fs'
 import * as path from 'path'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages } from './fixtures/selectors'
+import { chatInput, assistantMessages, waitForConnected } from './fixtures/selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -230,6 +230,10 @@ async function openSessionByDeepLink(page: Page, sessionId: string): Promise<voi
   // "Replay finished" signal — chatInput re-enables once the replay's done
   // frame lands. No arbitrary timeout.
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+  // toBeEnabled() alone conflates "replay done" with "connected" — it no
+  // longer implies the latter (2fa26e6a, #105 fix; see waitForConnected's
+  // doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 30_000 })
 }
 
 // One interleaved part of a rendered assistant turn: either a text marker
@@ -383,6 +387,10 @@ test('single tool call stays interleaved between its true text neighbors, after 
   // No role=banner on the session route — composer attach is the shell signal.
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+  // toBeEnabled() alone conflates "replay done" with "connected" — it no
+  // longer implies the latter (2fa26e6a, #105 fix; see waitForConnected's
+  // doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 30_000 })
   // Same thread-scoped assertion as above (bubble count is not the invariant).
   await expect(assistantMessages(page).first()).toBeVisible({ timeout: 15_000 })
   await assertInterleavedOrder(page, page.locator('main'), parts, 'after reload + re-replay')
@@ -499,6 +507,10 @@ test('two tool calls in one turn stay interleaved with all three text segments, 
   // No role=banner on the session route — composer attach is the shell signal.
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+  // toBeEnabled() alone conflates "replay done" with "connected" — it no
+  // longer implies the latter (2fa26e6a, #105 fix; see waitForConnected's
+  // doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 30_000 })
   // Same thread-scoped assertion as above (bubble count is not the invariant).
   await expect(assistantMessages(page).first()).toBeVisible({ timeout: 15_000 })
   await assertInterleavedOrder(page, page.locator('main'), parts, 'after reload + re-replay')

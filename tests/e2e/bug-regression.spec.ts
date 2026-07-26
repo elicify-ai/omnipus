@@ -21,7 +21,7 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, assistantMessages, newChatButton } from './fixtures/selectors'
+import { chatInput, agentPicker, assistantMessages, newChatButton, waitForConnected } from './fixtures/selectors'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -493,6 +493,9 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 15_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 15_000 })
 
     // 5. Listen for the "session not found" error frame. If it arrives,
     //    the bug is back. We watch the page's connection store for a

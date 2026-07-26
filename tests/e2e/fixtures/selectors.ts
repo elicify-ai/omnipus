@@ -8,6 +8,51 @@ export const chatInput = (page: Page) =>
   page.locator('textarea[aria-label="Message input"]');
 
 /**
+ * Reconnect banner — ChatScreen.tsx renders `data-testid="reconnect-banner"`
+ * in exactly three mutually-exclusive branches, together covering EVERY
+ * state where the WebSocket is not genuinely open:
+ *   - `reconnectPhase === 'gave_up'`
+ *   - `reconnectPhase === 'reconnecting' | 'slow'`
+ *   - `!isConnected && reconnectPhase === null` (brief pre-first-connect /
+ *     just-dropped window)
+ * `useConnectionStore.setConnected` (src/store/connection.ts) atomically
+ * clears `reconnectPhase` to `null` in the SAME update that flips
+ * `isConnected` true, so there is no window where the banner is hidden yet
+ * the socket isn't really open. Its absence is therefore an exact,
+ * already-shipped (not test-only) observable for "the WebSocket is
+ * genuinely connected" — see `waitForConnected` below.
+ */
+export const reconnectBanner = (page: Page) =>
+  page.locator('[data-testid="reconnect-banner"]');
+
+/**
+ * Wait for a GENUINE, wire-ready WebSocket connection — not merely for the
+ * composer's `disabled` attribute to clear.
+ *
+ * Regression history (2fa26e6a, issue #105 fix): ChatScreen's `inputEnabled`
+ * used to require strict `isConnected`, so `chatInput(page)` reporting
+ * `toBeEnabled()` was a reliable (if accidental) proxy for "the socket is
+ * open" — every readiness gate in this suite leaned on that side effect.
+ * The #105 fix correctly ALSO enables the composer while
+ * `reconnectPhase` is `'reconnecting'`/`'slow'`, so a user can type during a
+ * transient outage — the message is buffered in the outbound queue and
+ * drained automatically once the connection recovers (this is the CORRECT,
+ * intentional product behavior — see ws-reconnect.spec.ts's
+ * `online_event_triggers_reconnect`, which deliberately asserts the
+ * composer STAYS enabled during that window; do not "fix" that test).
+ *
+ * `toBeEnabled()` alone therefore no longer implies "connected": a message
+ * filled and sent while only enabled-but-reconnecting lands in the outbound
+ * queue, not the wire, and a test awaiting a real LLM reply then hangs to
+ * its full timeout instead of failing fast. Call this ALONGSIDE (not
+ * instead of) a `toBeEnabled()` check wherever a test previously used
+ * `toBeEnabled()` alone as its "safe to type and send" gate.
+ */
+export async function waitForConnected(page: Page, opts?: { timeout?: number }): Promise<void> {
+  await expect(reconnectBanner(page)).toBeHidden({ timeout: opts?.timeout ?? 15_000 });
+}
+
+/**
  * Send button — ComposerPrimitive.Send rendered with aria-label="Send message"
  * (ChatScreen.tsx:698). Only visible when not streaming.
  */

@@ -209,8 +209,17 @@ export function useAutoSave<T>(
       // avoid leaking setTimeouts when saves happen in quick succession.
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
       fadeTimerRef.current = setTimeout(() => {
-        setStatus((s) => (s === 'saved' ? 'idle' : s))
         fadeTimerRef.current = null
+        // The host environment can disappear while this 2s timer is still
+        // armed. The unmount cleanup below only fires if an unmount actually
+        // happens — a jsdom test file that ends with the component still
+        // mounted tears the environment down without one, and then setStatus
+        // dereferences a destroyed `window` inside React's scheduler and
+        // throws an UNHANDLED "ReferenceError: window is not defined". That
+        // fails the entire vitest run even when every test passed, which is
+        // exactly what CI hit. Bail if the host is gone.
+        if (typeof window === 'undefined') return
+        setStatus((s) => (s === 'saved' ? 'idle' : s))
       }, 2000)
     } catch (err) {
       // FIX 1: a user-initiated re-auth dialog dismissal is not an error —

@@ -16,7 +16,7 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, newChatButton, selectAgent } from './fixtures/selectors';
+import { chatInput, assistantMessages, newChatButton, selectAgent, waitForConnected } from './fixtures/selectors';
 import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -104,6 +104,17 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // Confirm the composer is genuinely usable — enabled AND the socket is
+    // actually open, not merely queueing. toBeEnabled() alone no longer
+    // implies "connected" since the #105 offline-queue fix (2fa26e6a): see
+    // waitForConnected's doc comment in fixtures/selectors.ts. Without this,
+    // a page-load-time reconnect blip can leave the composer looking usable
+    // while the very first message (the one that triggers `delegate`) lands
+    // in the outbound queue instead of the wire, and this test then hangs to
+    // its full timeout waiting on a subagent-collapsed block that will never
+    // appear.
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
 
     // Deterministic prompt with temperature=0+seed=42 now plumbed into OpenRouter.
     // Commanding, specific: exact tool name, task, and behavior with no optional phrasing.
@@ -170,6 +181,17 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // Confirm the composer is genuinely usable — enabled AND the socket is
+    // actually open, not merely queueing. toBeEnabled() alone no longer
+    // implies "connected" since the #105 offline-queue fix (2fa26e6a): see
+    // waitForConnected's doc comment in fixtures/selectors.ts. Without this,
+    // a page-load-time reconnect blip can leave the composer looking usable
+    // while the very first message (the one that triggers `delegate`) lands
+    // in the outbound queue instead of the wire, and this test then hangs to
+    // its full timeout waiting on a subagent-collapsed block that will never
+    // appear.
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
 
     // Deterministic prompt: explicit, numbered, no prose.
     await input.fill(
@@ -245,6 +267,17 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // Confirm the composer is genuinely usable — enabled AND the socket is
+    // actually open, not merely queueing. toBeEnabled() alone no longer
+    // implies "connected" since the #105 offline-queue fix (2fa26e6a): see
+    // waitForConnected's doc comment in fixtures/selectors.ts. Without this,
+    // a page-load-time reconnect blip can leave the composer looking usable
+    // while the very first message (the one that triggers `delegate`) lands
+    // in the outbound queue instead of the wire, and this test then hangs to
+    // its full timeout waiting on a subagent-collapsed block that will never
+    // appear.
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
 
     // Deterministic prompt: force a single delegate call with a subagent task that mandates ≥3 tool calls.
     // read_file is always registered and does not require special permissions.
@@ -359,6 +392,17 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // Confirm the composer is genuinely usable — enabled AND the socket is
+    // actually open, not merely queueing. toBeEnabled() alone no longer
+    // implies "connected" since the #105 offline-queue fix (2fa26e6a): see
+    // waitForConnected's doc comment in fixtures/selectors.ts. Without this,
+    // a page-load-time reconnect blip can leave the composer looking usable
+    // while the very first message (the one that triggers `delegate`) lands
+    // in the outbound queue instead of the wire, and this test then hangs to
+    // its full timeout waiting on a subagent-collapsed block that will never
+    // appear.
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
 
     // Natural language prompt — no explicit instruction to use delegate.
     // Let the agent decide whether to delegate based on its own judgment.
@@ -426,6 +470,17 @@ test(
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // Confirm the composer is genuinely usable — enabled AND the socket is
+    // actually open, not merely queueing. toBeEnabled() alone no longer
+    // implies "connected" since the #105 offline-queue fix (2fa26e6a): see
+    // waitForConnected's doc comment in fixtures/selectors.ts. Without this,
+    // a page-load-time reconnect blip can leave the composer looking usable
+    // while the very first message (the one that triggers `delegate`) lands
+    // in the outbound queue instead of the wire, and this test then hangs to
+    // its full timeout waiting on a subagent-collapsed block that will never
+    // appear.
+    await expect(input).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
 
     // The prompt gives the subagent a real reason to exist (running a shell
     // command in isolation) so the LLM doesn't shortcut and answer directly.

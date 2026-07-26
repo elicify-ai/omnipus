@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors'
+import { chatInput, agentPicker, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -178,6 +178,12 @@ function safeMtimeMs(p: string): number {
 async function triggerLongStreamingTurn(page: Page): Promise<void> {
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
+  // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+  // see waitForConnected's doc comment in fixtures/selectors.ts). Without
+  // this, the long-streaming prompt below can land in the outbound queue
+  // instead of the wire, and every T2x test built on this helper hangs
+  // waiting for a stop-btn that never appears.
+  await waitForConnected(page, { timeout: 20_000 })
 
   // Switch to Jim — long inline generation, multi-second stream window.
   const picker = agentPicker(page)
@@ -396,6 +402,9 @@ async function assertCancelCascadesToSubagent(
 
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
+  // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+  // see waitForConnected's doc comment in fixtures/selectors.ts).
+  await waitForConnected(page, { timeout: 20_000 })
 
   // Use the `/new` client-delivery slash command to create a fresh session
   // and bind the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
@@ -429,6 +438,13 @@ async function assertCancelCascadesToSubagent(
   await input.fill('/new')
   await input.press('Enter')
   await expect(input).toBeEnabled({ timeout: 20_000 })
+  // Real gate before the actual delegate-triggering message below — this is
+  // the critical site: toBeEnabled() alone no longer implies "connected"
+  // (2fa26e6a, #105 fix — see waitForConnected's doc comment in
+  // fixtures/selectors.ts). Without it, the delegate prompt can silently
+  // land in the outbound queue and this test (T24a/T24b) hangs waiting for
+  // an activity-bar pill that will never appear.
+  await waitForConnected(page, { timeout: 20_000 })
 
   // Switch to Jim so the parent turn will actually delegate.
   await selectAgent(page, /Jim/i)
@@ -702,6 +718,9 @@ test(
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 20_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+    // see waitForConnected's doc comment in fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 20_000 })
 
     // Best-effort agent switch to Jim for reliable long streaming output.
     //

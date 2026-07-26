@@ -44,7 +44,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages } from './fixtures/selectors'
+import { chatInput, assistantMessages, waitForConnected } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -476,8 +476,18 @@ test(
     await expect(inputLocator).toBeVisible({ timeout: 15_000 })
 
     // Wait for the SPA WS to connect before sending any messages.
-    // The SPA auto-attaches on session navigation; give it a moment.
-    await page.waitForTimeout(2_000)
+    // The SPA auto-attaches on session navigation. A blind sleep here used to
+    // be "enough" only as a side effect of chatInput's `disabled` attribute
+    // ALSO gating the .fill()/.press() below on genuine connectivity — that
+    // accidental protection is gone since the #105 offline-queue fix
+    // (2fa26e6a): the composer now reports enabled during a transient
+    // reconnect too, so a fixed timeout no longer proves the socket is open.
+    // Wait for the real signal instead (see waitForConnected's doc comment
+    // in fixtures/selectors.ts) — without it, the fact-recording message
+    // below can silently land in the outbound queue instead of the wire and
+    // this test hangs to its full 900s ceiling waiting for an ack that will
+    // never come.
+    await waitForConnected(page, { timeout: 15_000 })
 
     // ── Step 2: Send distinctive fact ─────────────────────────────────────────
 
@@ -543,7 +553,10 @@ test(
     await expect(inputLocator).toBeVisible({ timeout: 15_000 })
     // Fresh session — no prior assistant turns; and let the SPA attach + WS connect.
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-    await page.waitForTimeout(2_000)
+    // Real connectivity wait, not a blind sleep — see the identical fix and
+    // rationale at Step 2 above (waitForConnected's doc comment in
+    // fixtures/selectors.ts).
+    await waitForConnected(page, { timeout: 15_000 })
 
     const recallQuestion =
       'What was the launch codename I mentioned in our previous conversation?'

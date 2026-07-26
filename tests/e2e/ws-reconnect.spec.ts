@@ -38,6 +38,14 @@ test(
     // Wait for the chat input to be enabled (WS connected).
     const chatInput = page.locator('textarea').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix):
+    // the composer is also enabled while reconnectPhase is 'reconnecting' or
+    // 'slow', so it can look ready immediately after page load even during a
+    // transient first-connect blip. Confirm genuine connectivity — via the
+    // absence of the SAME reconnect-banner this test asserts on below — so
+    // the WebSocket-stubbing steps that follow start from a real, stable
+    // connection rather than a mid-reconnect one.
+    await expect(page.getByTestId('reconnect-banner')).toBeHidden({ timeout: 15_000 })
 
     // Step 1a: Stub the WebSocket constructor so any reconnect attempt
     // produces a never-opens socket. page.route() does NOT intercept
@@ -166,6 +174,12 @@ test(
 
     const chatInput = page.locator('textarea').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
+    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix)
+    // — confirm the socket is genuinely open before this test deliberately
+    // drops it below, so the subsequent "banner appears / composer stays
+    // enabled" assertions measure a real transition rather than racing an
+    // already-in-progress reconnect from page load.
+    await expect(page.getByTestId('reconnect-banner')).toBeHidden({ timeout: 15_000 })
 
     // Step 1: Set the browser context offline (network unavailable).
     // This will cause the existing WS to disconnect (TCP reset).

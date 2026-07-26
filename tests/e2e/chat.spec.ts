@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, userMessages, startNewChat, tokenCounter } from './fixtures/selectors';
+import { chatInput, agentPicker, assistantMessages, userMessages, startNewChat, tokenCounter, waitForConnected } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -282,6 +282,15 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
     await expect(input).toBeEnabled({ timeout: 15_000 });
+    // Confirm the socket is genuinely open BEFORE this test starts its own
+    // deliberate offline/reconnect manipulation below — toBeEnabled() alone
+    // no longer implies "connected" (2fa26e6a, #105 fix; see
+    // waitForConnected's doc comment in fixtures/selectors.ts). NOTE: this is
+    // NOT the same as the later `await expect(input).toBeEnabled()` at the
+    // point the test goes offline (line ~313 below) — THAT check is the
+    // intentional assertion that the composer STAYS enabled while
+    // reconnecting/queueing, and must not be changed.
+    await waitForConnected(page, { timeout: 15_000 });
 
     // Fresh session so assistantMessages/userMessages counts start at zero.
     await startNewChat(page);
