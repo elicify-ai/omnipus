@@ -6,12 +6,23 @@
  * per-task errors inline and does NOT close/optimistically transition.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { ApiError } from '@/lib/api-error'
 import type { Plan } from '@/lib/api'
+
+// jsdom doesn't implement scrollIntoView — Radix Select's Viewport calls it
+// (unconditionally, via an effect) to scroll the selected item into view on
+// open. Needed only because these tests actually open+select in the Owner
+// agent SmartSelect (same gap noted in CreateTaskSlideOver.test.tsx /
+// date-time-picker.test.tsx for the same underlying Radix Select).
+beforeAll(() => {
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {}
+  }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -80,6 +91,28 @@ function renderSlideOver(props: Partial<React.ComponentProps<typeof CreatePlanSl
   )
 }
 
+// Owner agent picker is a plain (<=5 item) SmartSelect → Radix Select, whose
+// trigger carries `aria-label="Owner agent"` directly (SmartSelect's required
+// `ariaLabel` prop) — no DOM-traversal hack needed, unlike pickers elsewhere
+// in the app that rely on a sibling Label's text. The trigger is `disabled`
+// while `useWorkspaceTeamIds`'s delegation-graph query is still in flight
+// (mocked here to reject via `fetchWorkspaceDelegation`), so a click fired
+// before it settles would silently no-op — wait for it to become enabled
+// first (mirrors CreateTaskSlideOver.test.tsx's `openAgentPicker`).
+async function openOwnerPicker(): Promise<HTMLElement> {
+  const trigger = screen.getByRole('combobox', { name: /^owner agent$/i })
+  await waitFor(() => expect(trigger).not.toBeDisabled())
+  fireEvent.click(trigger)
+  return trigger
+}
+
+async function selectOwner(name: RegExp) {
+  await openOwnerPicker()
+  const option = await screen.findByRole('option', { name })
+  fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
+  fireEvent.click(option)
+}
+
 beforeEach(() => {
   vi.mocked(createPlan).mockReset()
   vi.mocked(executePlan).mockReset()
@@ -100,6 +133,7 @@ describe('CreatePlanSlideOver — create', () => {
 
     fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
     fireEvent.change(screen.getByLabelText(/^goal$/i), { target: { value: 'Ship it' } })
+    await selectOwner(/^jim$/i)
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
@@ -108,6 +142,45 @@ describe('CreatePlanSlideOver — create', () => {
     expect(body.title).toBe('v1.0 Launch')
     expect(body.goal).toBe('Ship it')
     expect(body.workspace_id).toBe('ws-1')
+    expect(body.owner_agent_id).toBe('jim')
+  })
+
+  // S2 UAT finding: owner_agent_id is server-required (400 invalid
+  // owner_agent_id) but the field previously had no client-side validation at
+  // all and defaulted to the unselected '__none__' sentinel — a first-time
+  // Create click fired a request doomed to 400, then (S3 finding) retried it
+  // up to 4×, and the resulting error toast rendered underneath the
+  // slide-over footer (invisible on screen). This proves the fix: the
+  // request never fires, and the error is visible inline next to the field.
+  it('requires an owner agent — shows a visible, field-specific error and fires no request', async () => {
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    expect(await screen.findByText(/owner agent is required/i)).toBeInTheDocument()
+    expect(createPlan).not.toHaveBeenCalled()
+  })
+
+  it('clears the owner-agent error once an owner is selected', async () => {
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+    expect(await screen.findByText(/owner agent is required/i)).toBeInTheDocument()
+
+    await selectOwner(/^jim$/i)
+
+    await waitFor(() => expect(screen.queryByText(/owner agent is required/i)).toBeNull())
+  })
+
+  it('shows both Title and Owner errors together when both are left empty (batched validation)', async () => {
+    renderSlideOver()
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    expect(await screen.findByText(/title is required/i)).toBeInTheDocument()
+    expect(await screen.findByText(/owner agent is required/i)).toBeInTheDocument()
+    expect(createPlan).not.toHaveBeenCalled()
   })
 
   it('shows an error toast (and does not close) when Create fails — e.g. the workspace-route 405', async () => {
@@ -118,6 +191,7 @@ describe('CreatePlanSlideOver — create', () => {
     renderSlideOver({ onOpenChange })
 
     fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    await selectOwner(/^jim$/i)
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() =>
@@ -159,5 +233,50 @@ describe('CreatePlanSlideOver — Approve (SD-C4 confirm-on-success)', () => {
 
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
     expect(mockAddToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }))
+  })
+})
+
+// S2 UAT finding: the Goal textarea allowed 4000 chars client-side while the
+// SERVER caps goals at 2000 (pkg/plan/plan.go maxPlanGoalRunes) — a
+// 2500-char goal was silently accepted by the UI and only rejected on submit
+// with "plan validation: goal must be 2000 characters or fewer". These tests
+// pin the textarea's real cap and prove truncation is never silent (S3).
+describe('CreatePlanSlideOver — character caps are visible, not silent (S3/S4 UAT)', () => {
+  it('caps the Goal textarea at the real server limit (2000), not the old 4000', () => {
+    renderSlideOver()
+    const goal = screen.getByLabelText(/^goal$/i) as HTMLTextAreaElement
+    expect(goal.maxLength).toBe(2000)
+  })
+
+  it('caps the Title input at the real server limit (200)', () => {
+    renderSlideOver()
+    const title = screen.getByLabelText(/^title/i) as HTMLInputElement
+    expect(title.maxLength).toBe(200)
+  })
+
+  it('shows a live character counter for Title that flips to a "max length reached" notice at the cap', () => {
+    renderSlideOver()
+    const title = screen.getByLabelText(/^title/i)
+
+    fireEvent.change(title, { target: { value: 'short' } })
+    expect(screen.getByText('5/200')).toBeInTheDocument()
+    expect(screen.queryByText(/max length reached/i)).toBeNull()
+
+    fireEvent.change(title, { target: { value: 'x'.repeat(200) } })
+    expect(screen.getByText(/200\/200/)).toBeInTheDocument()
+    expect(screen.getByText(/max length reached/i)).toBeInTheDocument()
+  })
+
+  it('shows a live character counter for Goal that flips to a "max length reached" notice at the cap', () => {
+    renderSlideOver()
+    const goal = screen.getByLabelText(/^goal$/i)
+
+    fireEvent.change(goal, { target: { value: 'short goal' } })
+    expect(screen.getByText('10/2000')).toBeInTheDocument()
+    expect(screen.queryByText(/max length reached/i)).toBeNull()
+
+    fireEvent.change(goal, { target: { value: 'y'.repeat(2000) } })
+    expect(screen.getByText(/2000\/2000/)).toBeInTheDocument()
+    expect(screen.getByText(/max length reached/i)).toBeInTheDocument()
   })
 })

@@ -234,3 +234,69 @@ describe('TaskCard — keyboard event bubbling from nested subtask rows (altitud
     expect(drag.listeners.onKeyDown).not.toHaveBeenCalled()
   })
 })
+
+// ── Long unbroken title containment (UAT Finding 2) ─────────────────────────
+//
+// UAT repro: a 200-char title with NO spaces (exactly the create-task form's
+// own `maxLength`) widened its Board column enough to push Done/Failed
+// entirely off-screen, with no horizontal scroll to reach them — because a
+// flex item's default `min-width: auto` resolves to its CONTENT's min-content
+// size, and for an unbroken string that's the string's full rendered width.
+// That inflated width cascades up through every ancestor flex container
+// (this `<p>` -> the title row -> the card -> StatusColumn, itself a flex
+// item of the columns row) unless something bounds it.
+//
+// jsdom has no real layout/intrinsic-sizing engine (`getBoundingClientRect`
+// et al. always report zero without help — see BoardViewDnd.test.tsx's
+// `withMockedBoardRects` for the lengths keyboard-DnD coverage goes to to
+// work around that), so this can't measure actual on-screen pixels. What IS
+// verifiable in jsdom: (a) the title element carries the two classes the fix
+// relies on, and (b) — via a real injected stylesheet + `getComputedStyle`,
+// not just a className string match — those classes resolve through jsdom's
+// real CSSOM cascade to the EXACT declarations Tailwind's own compiler emits
+// for them (confirmed directly against the installed `tailwindcss` v4
+// package: `grep -o 'overflow-wrap","anywhere' node_modules/tailwindcss/dist/lib.js`
+// matches). `overflow-wrap: anywhere` is the one wrapping mode the CSS Text
+// spec requires browsers to fold into MIN-CONTENT size calculations
+// themselves (unlike `break-word`, which they're allowed to ignore for
+// min-content) — that's the actual mechanism that stops the column blowout,
+// not a cosmetic wrapping preference.
+describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
+  function injectRealTailwindDeclarations() {
+    const style = document.createElement('style')
+    style.textContent = '.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
+    document.head.appendChild(style)
+    return () => style.remove()
+  }
+
+  it('renders a 200-char unbroken title with wrap-anywhere + min-w-0, full text intact, and a tooltip carrying the whole string', () => {
+    const removeStyle = injectRealTailwindDeclarations()
+    try {
+      const longTitle = 'A'.repeat(200) // exactly the create-task form's maxLength, no spaces
+      render(<TaskCard task={baseTask({ title: longTitle })} onClick={vi.fn()} showActions={false} />)
+
+      const titleEl = screen.getByText(longTitle)
+      expect(titleEl.textContent).toBe(longTitle) // CSS (line-clamp) truncates the RENDER, not the DOM content
+      expect(titleEl).toHaveAttribute('title', longTitle) // native tooltip carries the full string
+      expect(titleEl).toHaveClass('wrap-anywhere')
+      expect(titleEl).toHaveClass('min-w-0')
+
+      // Real cascade resolution, not just a className string match: the
+      // injected stylesheet mirrors Tailwind's actual compiled output for
+      // these utilities, so this proves the classes take effect through
+      // jsdom's real CSSOM rather than merely being present in `className`.
+      const computed = getComputedStyle(titleEl)
+      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.minWidth).toBe('0px')
+    } finally {
+      removeStyle()
+    }
+  })
+
+  it('short titles are unaffected — no visible change for normal-length content', () => {
+    render(<TaskCard task={baseTask({ title: 'Fix login bug' })} onClick={vi.fn()} showActions={false} />)
+    const titleEl = screen.getByText('Fix login bug')
+    expect(titleEl).toHaveAttribute('title', 'Fix login bug')
+    expect(titleEl).toHaveClass('wrap-anywhere', 'min-w-0', 'line-clamp-2')
+  })
+})

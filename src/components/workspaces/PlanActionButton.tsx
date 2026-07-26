@@ -67,7 +67,16 @@ const ACTION_COPY: Record<PlanAction, ActionCopy> = {
   },
   play: {
     icon: Play,
-    label: 'Play',
+    // S4 UAT finding — vocabulary must agree everywhere for the same button:
+    // this drives BOTH the icon button's aria-label ("Restart plan X" — the
+    // button itself is icon-only, so assistive tech reads only this) AND the
+    // confirm modal's visible Confirm button text. It was 'Play' here while
+    // the confirm dialog title ("Restart this plan?") and the success toast
+    // ("Plan restarted", below) already said "Restart" — pick ONE word (the
+    // spec's button matrix says Restart) and keep it consistent everywhere.
+    // The internal `PlanAction` union value stays `'play'` (API/type surface,
+    // unaffected by display copy).
+    label: 'Restart',
     pendingLabel: 'Restarting…',
     confirmTitle: 'Restart this plan?',
     confirmDescription: (title) =>

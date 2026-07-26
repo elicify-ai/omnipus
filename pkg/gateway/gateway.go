@@ -2649,6 +2649,18 @@ func setupAndStartServices(
 	}
 	fmt.Println("✓ Plan tool surface wired (create_plan/execute_plan/run_task/inspect_session)")
 
+	// S1 UAT fix (PRIYA-GATE-never-executed / PRIYA-D8-race): install the
+	// SAME planStore onto the TaskExecutor so its heartbeat auto-dispatch path
+	// (CheckQueuedTasks) can verify a plan member task's parent plan is
+	// actually in an executing state (approved/running) before dispatching it
+	// — see task_executor.go's CheckQueuedTasks doc. Mirrors the
+	// degrade-not-abort convention used for tExecutor just below (a minimal
+	// test harness's AgentLoop may have no task executor at all); a nil
+	// tExecutor here just means there is no heartbeat drain to gate.
+	if tExecutor != nil {
+		tExecutor.SetPlanStore(planStore)
+	}
+
 	// ADR-053 §5 boot sweep (FR-118/G-13) + intent-log (FR-148/M4): construct
 	// the durable session-lifecycle store and the write-ahead intent-log. Both
 	// are folded into the plan engine's single boot pass via the setters below

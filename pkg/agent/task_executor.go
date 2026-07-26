@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -68,6 +69,19 @@ type TaskExecutor struct {
 	// boot, in which case no evidence is recorded and Play takes its
 	// documented fresh-attempt path.
 	evidence evidenceCommitter
+
+	// planStore is the shared *plan.Store (ADR-049/ADR-052), wired at the
+	// gateway boot seam right alongside AgentLoop.SetPlanStore — see
+	// SetPlanStore's doc comment below. It exists on TaskExecutor (not just
+	// reached via te.agentLoop.GetPlanStore()) so CheckQueuedTasks' plan-gate
+	// (see its doc) has a direct, test-friendly seam: newTaskExecutor's test
+	// callers construct a bare TaskExecutor with agentLoop left nil, and the
+	// gate must still be exercisable without a full AgentLoop. Nil in test
+	// harnesses that never call SetPlanStore and on a boot sequence not yet
+	// past gateway wiring — CheckQueuedTasks treats a nil store as fail-closed
+	// for any task that names a PlanID (never auto-dispatch a plan member
+	// whose parent plan's live state cannot be verified).
+	planStore *plan.Store
 
 	// goroutineCtxHook is a test seam ONLY — production leaves it nil.
 	// When non-nil, runTaskFromInProgress calls it with the goroutine's context
@@ -1213,6 +1227,17 @@ func (te *TaskExecutor) SetEvidenceCommitter(c evidenceCommitter) {
 	te.evidence = c
 }
 
+// SetPlanStore installs the shared *plan.Store so CheckQueuedTasks' plan-gate
+// (see its doc) can resolve a plan member task's parent plan state. Wired at
+// the gateway boot seam right alongside AgentLoop.SetPlanStore (the same
+// planStore value goes to both — see gateway.go's boot wiring region);
+// mirrors SetEvidenceCommitter's late-binding discipline. Leaving it unset
+// (nil, the test-harness default) makes the gate fail-closed for any task
+// carrying a PlanID — see planForGate.
+func (te *TaskExecutor) SetPlanStore(store *plan.Store) {
+	te.planStore = store
+}
+
 // notifySourceChannel sends a compact task result back to the originating
 // channel. Only sends for terminal statuses.
 func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
@@ -1797,9 +1822,70 @@ func (te *TaskExecutor) TryAcquireDispatchSema() (bool, func()) {
 	return te.dispatchSema.TryAcquire()
 }
 
+// executingPlanStates is the allow-list of plan.State values under which
+// CheckQueuedTasks may auto-dispatch a `next` PLAN MEMBER task (S1 fix, UAT
+// "PRIYA-GATE-never-executed" / "PRIYA-D8-race"). A member task's own Status
+// is user-settable independently of its parent plan's lifecycle — e.g. a
+// Kanban drag from Inbox straight to Next in the SPA — so task.StatusNext
+// alone is NOT proof the Execute approval gate was ever passed. Approved
+// (DoD/owner locked in, ready to run or cap-waiting) and Running (the engine
+// is actively dispatching under the plan judge) are the only two states in
+// which a human granted permission for autonomous execution; Draft (never
+// approved) and the two terminal states Done/Failed (which a user Stop also
+// lands on, via FailedReasonStoppedByUser) must never auto-dispatch a
+// member — see CheckQueuedTasks' doc for the full rationale.
+var executingPlanStates = map[plan.State]bool{ //nolint:gochecknoglobals
+	plan.StateApproved: true,
+	plan.StateRunning:  true,
+}
+
+// planForGate resolves planID's current Plan for CheckQueuedTasks' plan-gate.
+// Returns an error (nil plan) when no plan.Store is wired — a minimal test
+// harness, or a boot sequence not yet past gateway.go's SetPlanStore wiring —
+// or when the lookup itself fails (I/O error, or the plan was deleted out
+// from under a task that still names it). Both cases are FAIL-CLOSED by the
+// caller: a plan member task whose parent plan's live state cannot be
+// verified must never auto-dispatch, matching SetPlanStore's own "will
+// remain fail-closed" convention for a nil store.
+func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
+	if te.planStore == nil {
+		return nil, errors.New("task_executor: no plan store wired, cannot verify parent plan state")
+	}
+	return te.planStore.Get(planID)
+}
+
 // CheckQueuedTasks picks the highest-priority *dispatchable* `next` task per
-// agent and starts it. Called by the heartbeat service. Skips tasks whose
-// blocked_by dependencies are not all `done`.
+// agent and starts it. Called by the heartbeat service (pkg/heartbeat's
+// TaskDrainService) on an unconditional ~1-minute ticker — this is the
+// UNATTENDED auto-dispatch path, distinct from a deliberate single-task
+// dispatch (StartTaskNow / a direct ExecuteTask call from e.g. the plan
+// engine's own dispatchReadyMembers or a REST "run now" action), which this
+// function does not gate and must not: those callers already know exactly
+// why the specific task is being run right now.
+//
+// Skips tasks whose blocked_by dependencies are not all `done`.
+//
+// S1 UAT fix (PRIYA-GATE-never-executed / PRIYA-D8-race): also skips any
+// task whose PlanID names a plan that is not currently in an executing state
+// (executingPlanStates — approved or running). Without this, a plan member
+// task's status is fully player-settable (a Kanban drag straight from Inbox
+// to Next) independent of the plan's own lifecycle, so this unattended drain
+// would dispatch a Draft plan's member the moment it turned `next` — the
+// Execute confirm dialog's promise that "member tasks will run ... without
+// further approval" only ever holds AFTER Execute was actually clicked. The
+// same gate closes the Stop leak: a Stop transitions the plan to the
+// terminal `failed` state (FailedReasonStoppedByUser) but only cancels
+// members already `in_progress` at that instant — a member still `next` at
+// the moment of Stop was previously left in the queue for this exact drain
+// to pick up and run to completion after the user had already stopped the
+// plan. Standalone tasks (PlanID == "") are entirely unaffected: the gate
+// only ever runs when PlanID is non-empty.
+//
+// Plan lookups are cached for the duration of one tick (rather than
+// re-resolving the same plan once per member task) since a single tick
+// already walks every dispatchable `next` task across every agent/plan; a
+// plan with N ready members would otherwise cost N redundant
+// plan.Store.Get reads on the same pass.
 func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 	queued, err := te.store.List(task.Filter{Status: task.StatusNext})
 	if err != nil {
@@ -1814,6 +1900,10 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 	type agentState struct{ picked bool }
 	agentDone := make(map[string]agentState)
 
+	// planCache holds the resolved *plan.Plan (or nil on any lookup failure,
+	// including "no store wired") for every distinct PlanID seen this tick.
+	planCache := make(map[string]*plan.Plan)
+
 	for i := range queued {
 		t := &queued[i]
 		if t.AgentID == "" {
@@ -1821,6 +1911,29 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 		}
 		if agentDone[t.AgentID].picked {
 			continue
+		}
+
+		if t.PlanID != "" {
+			p, cached := planCache[t.PlanID]
+			if !cached {
+				var gerr error
+				p, gerr = te.planForGate(t.PlanID)
+				if gerr != nil {
+					logger.WarnCF("task_executor", "Heartbeat: could not resolve parent plan, skipping member task",
+						map[string]any{"task_id": t.ID, "plan_id": t.PlanID, "error": gerr.Error()})
+					p = nil
+				}
+				planCache[t.PlanID] = p
+			}
+			if p == nil || !executingPlanStates[p.State] {
+				state := "unresolved"
+				if p != nil {
+					state = string(p.State)
+				}
+				logger.WarnCF("task_executor", "Heartbeat: skipping plan member task, parent plan not in an executing state",
+					map[string]any{"task_id": t.ID, "plan_id": t.PlanID, "plan_state": state})
+				continue
+			}
 		}
 
 		depsSatisfied := true

@@ -15,6 +15,58 @@ function _handleAuthError(err: unknown): void {
   forceLogout()
 }
 
+// ── Retry predicates ─────────────────────────────────────────────────────────
+//
+// Exported (rather than inlined into `defaultOptions` below) so tests can
+// exercise the REAL predicate instead of hand-maintaining a parallel copy that
+// can silently drift from production behaviour.
+
+/**
+ * Retry predicate for QUERIES. Never retry ApiSchemaError — retrying cannot
+ * fix a schema mismatch and would produce a toast storm (4 toasts per failure
+ * with default retry:3). Never retry 401/403 — these are auth errors that
+ * will keep failing with the same token and would flood the console before
+ * the redirect fires. Never retry 404 — a missing resource will not appear on
+ * retry (e.g. a just-deleted schedule whose refetch fires after the delete
+ * onSuccess). Every other error (including any other 4xx, every 5xx, and
+ * network failures) retries up to 3 times.
+ */
+export function shouldRetryQuery(failureCount: number, err: unknown): boolean {
+  return (
+    !(err instanceof ApiSchemaError) &&
+    !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
+    failureCount < 3
+  )
+}
+
+/**
+ * Retry predicate for MUTATIONS.
+ *
+ * S3 UAT finding: this predicate previously mirrored `shouldRetryQuery`
+ * exactly (only 401/403/404 excluded), so a deterministic 400 (e.g. plan
+ * creation's "invalid owner_agent_id") was retried like a transient failure —
+ * up to 4 identical POSTs for a single Create click, all doomed to fail the
+ * same way, with the user-facing error toast only appearing after the last
+ * one (~7s later). Fixed here: ANY 4xx is excluded for mutations, not just
+ * 401/403/404 — a client/validation error can never succeed by resending the
+ * exact same request, and mutations are frequently non-idempotent (POST
+ * create), so blindly retrying also risks duplicate side effects on top of
+ * the wasted round trips.
+ *
+ * Preserved deliberately: 5xx (the server may recover) and network failures
+ * (status 0 — the request never reached the server) are still retried up to
+ * 3 times, same as queries. That distinction is the point of this predicate
+ * existing separately from `shouldRetryQuery` — do not collapse them back
+ * into one shared function.
+ */
+export function shouldRetryMutation(failureCount: number, err: unknown): boolean {
+  return (
+    !(err instanceof ApiSchemaError) &&
+    !(err instanceof ApiError && err.status >= 400 && err.status < 500) &&
+    failureCount < 3
+  )
+}
+
 // Singleton QueryClient — created once and shared between:
 //   - main.tsx (passed to QueryClientProvider)
 //   - chat store (for WS-driven query invalidation)
@@ -22,24 +74,11 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
-      // Never retry ApiSchemaError — retrying cannot fix a schema mismatch and
-      // would produce a toast storm (4 toasts per failure with default retry:3).
-      // Never retry 401/403 — these are auth errors that will keep failing with
-      // the same token and would flood the console before the redirect fires.
-      // Never retry 404 — a missing resource will not appear on retry (e.g. a
-      // just-deleted schedule whose refetch fires after the delete onSuccess).
-      retry: (failureCount, err) =>
-        !(err instanceof ApiSchemaError) &&
-        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
-        failureCount < 3,
+      retry: shouldRetryQuery,
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
     },
     mutations: {
-      // Same guard for mutations: schema mismatches, auth errors, and 404s are not transient.
-      retry: (failureCount, err) =>
-        !(err instanceof ApiSchemaError) &&
-        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
-        failureCount < 3,
+      retry: shouldRetryMutation,
     },
   },
 })

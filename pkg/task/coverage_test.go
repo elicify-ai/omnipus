@@ -1073,6 +1073,60 @@ func TestUpdateTitleEmpty(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrValidation))
 }
 
+// TestCreateTitleWhitespaceOnlyRejected is a regression test for the task-title
+// sibling of S2 UAT finding B (an untrimmed `== ""` required-field check let a
+// whitespace-only Plan title through as 201; the exact same pattern existed
+// here — `t.Title == ""` never matched " \t "). A whitespace-only title must
+// be rejected exactly like an empty one.
+func TestCreateTitleWhitespaceOnlyRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("   \t  ", "ws")
+	err := s.Create(tk)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+// TestCreateTitleTrimmed proves the flip side: a legitimate title with
+// incidental leading/trailing whitespace is accepted (not rejected) and
+// persisted trimmed, not verbatim.
+func TestCreateTitleTrimmed(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("  Analyze logs  ", "ws")
+	require.NoError(t, s.Create(tk))
+	assert.Equal(t, "Analyze logs", tk.Title, "in-memory Title must be trimmed")
+
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Analyze logs", got.Title, "persisted Title must be trimmed")
+}
+
+// TestUpdateTitleWhitespaceOnlyRejected mirrors TestCreateTitleWhitespaceOnlyRejected
+// for the Patch path (patch.Title's own untrimmed `== ""` check had the same gap).
+func TestUpdateTitleWhitespaceOnlyRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	mustCreate(t, s, tk)
+
+	_, err := s.Update(tk.ID, Patch{Title: ptr("   \t  ")})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation))
+}
+
+// TestUpdateTitleTrimmed mirrors TestCreateTitleTrimmed for the Patch path.
+func TestUpdateTitleTrimmed(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("t", "ws")
+	mustCreate(t, s, tk)
+
+	updated, err := s.Update(tk.ID, Patch{Title: ptr("  Renamed Task  ")})
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed Task", updated.Title)
+
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed Task", got.Title, "persisted Title must be trimmed")
+}
+
 func TestUpdatePriorityOutOfRange(t *testing.T) {
 	// Traces to: store.go line 539 — priority 1-5 on update
 	s := newStore(t)

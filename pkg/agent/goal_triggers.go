@@ -39,14 +39,27 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// --- Pill state constants (D14 crosswalk, FR / Pill-state enum 8) ---------
+// --- Pill state constants (D14 crosswalk, FR / Pill-state enum) -----------
 //
-// The 8-state pill emitted on the goal_status WS frame. The durable lifecycle
+// The pill emitted on the goal_status WS frame. The durable lifecycle
 // authority (S2 8-state enum) is owned elsewhere; these pill values are the
 // DISPLAY overlay reconstructed from lifecycle + engine phase. The two
 // ephemeral engine-phase pills (judging / judge_unavailable) and the
 // waiting_on_user pause are what THIS file drives; re-planning is a durable
 // plan_phase overlay (C1) owned by the plan-owner loop.
+//
+// goalPillCleared is a 9th value ADDED to the original ADR-053 8-value pill
+// enum by the UAT S3 fix (contracts/components/schemas/GoalStatusFrame.yaml,
+// Constraint #8): a user-initiated `/goal clear` (clearGoal's
+// goalClearNoteUser path, goal_loop.go) now reports this instead of
+// collapsing into goalPillFailed. This intentionally departs from the
+// original R§8.10 crosswalk's "failed/cancelled/timed_out → failed" design
+// (docs/internal/specs/unified-goal-plan-subagent-spec.md's crosswalk table)
+// — a deliberate, human-UAT-confirmed amendment: painting a red "failed"
+// badge for a deliberate, successful user stop is misleading regardless of
+// what `latest_reason` says, and the SPA pill does not read latest_reason to
+// disambiguate. Round/budget/idle-expiry brakes (genuine terminal failures,
+// not a user choice) still report goalPillFailed, unchanged.
 const (
 	goalPillQueued           = "queued"
 	goalPillActive           = "active"
@@ -56,6 +69,7 @@ const (
 	goalPillJudging          = "judging"
 	goalPillDone             = "done"
 	goalPillFailed           = "failed"
+	goalPillCleared          = "cleared"
 )
 
 // goalIdleQuietWindow is the ~60 s idle quiet window (FR-102). A goal-bearing
@@ -310,7 +324,7 @@ func (al *AgentLoop) runGoalAdjudication(
 	}
 	// Emit the ephemeral judging pill BEFORE dispatch (D14 crosswalk: judging
 	// ← ephemeral engine-phase signal, pill-only).
-	al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds, meta.GoalLatestReason, goalPillJudging)
+	al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds, meta.GoalLatestReason, goalPillJudging)
 
 	criteria := compiledGoalCriteriaFor(meta.GoalCriteriaJSON, meta.GoalCondition, sessionID)
 	attempt := meta.GoalRoundsUsed + 1
@@ -345,7 +359,7 @@ func (al *AgentLoop) runGoalAdjudication(
 		al.goalMarkIdleSettling(sessionID, false)
 		logger.WarnCF("agent", "goal trigger: judge unavailable, round not consumed",
 			map[string]any{"session_id": sessionID, "reason": jr.Reason, "claim_text_len": len(claimText)})
-		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds, jr.Reason, goalPillJudgeUnavailable)
+		al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds, jr.Reason, goalPillJudgeUnavailable)
 		return false
 	}
 
@@ -416,11 +430,11 @@ func (al *AgentLoop) runGoalAdjudication(
 		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, fmt.Sprintf(
 			"Goal %q: could not persist the adjudication round counter (%v). The round was not counted and no follow-up was dispatched — investigate storage and retry the goal.",
 			meta.GoalCondition, perr))
-		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, maxRounds,
+		al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, maxRounds,
 			"round-advance persist failed (goal paused)", goalPillActive)
 		return false
 	}
-	al.emitGoalStatusFrame(sessionID, meta.GoalCondition, newRound, maxRounds, reasonText, goalPillActive)
+	al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, newRound, maxRounds, reasonText, goalPillActive)
 	if deliverSteer != nil {
 		deliverSteer(goalSteeringPrompt(meta.GoalCondition, reasonText))
 	}
@@ -645,7 +659,7 @@ func (al *AgentLoop) handleBareGoalClaim(
 				SessionID: sessionID, SessionKey: opts.SessionKey,
 			})
 		}
-		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
+		al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
 			"bare completion claim bounced (no evidence)", goalPillActive)
 		return true
 	}
@@ -691,11 +705,11 @@ func (al *AgentLoop) handleBareGoalClaim(
 		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, fmt.Sprintf(
 			"Goal %q: could not persist the bare-claim round counter (%v). The round was not counted and no follow-up was dispatched — investigate storage and retry.",
 			meta.GoalCondition, perr))
-		al.emitGoalStatusFrame(sessionID, meta.GoalCondition, meta.GoalRoundsUsed, maxRounds,
+		al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, maxRounds,
 			"round-advance persist failed (goal paused)", goalPillActive)
 		return true
 	}
-	al.emitGoalStatusFrame(sessionID, meta.GoalCondition, newRound, maxRounds, reason, goalPillActive)
+	al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, newRound, maxRounds, reason, goalPillActive)
 	if result != nil {
 		result.followUps = append(result.followUps, bus.InboundMessage{
 			Channel: opts.Channel, ChatID: opts.ChatID,

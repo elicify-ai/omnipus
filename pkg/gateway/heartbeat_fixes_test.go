@@ -49,18 +49,25 @@ import (
 // buildHeartbeatTestAPI creates a restAPI with an audit logger, two agents ("mia"
 // and "jim"), and a wired cron service. The agent stores are registered in the
 // agent loop so GetAgentStore returns a real *session.UnifiedStore for each.
+//
+// ADR-054 FIXTURE-VACUITY fix: this used to os.WriteFile a raw config.json
+// blob with a non-empty "agents.list" array (mia/jim) alongside building the
+// in-memory cfg directly. That on-disk write was already dead weight before
+// ADR-054 lands here too: none of the handlers this file exercises
+// (HandleWorkspaces' member-config PUT, HandleSessions) ever call
+// safeUpdateConfigJSON/refreshConfigAndRewireServices — they read the
+// in-memory a.agentLoop.GetConfig() and write workspace JSON directly via
+// writeWorkspaceFile, never reloading config.json from disk. ADR-054 makes
+// this permanent (config.LoadConfig now strips any on-disk "agents.list"
+// unconditionally), so the splice is replaced with real entity records via
+// agentstore.Create, per the operator's fixture-vacuity directive. The
+// in-memory cfg.Agents.List construction below (required for
+// mustAgentLoop/registry construction) is unchanged.
 func buildHeartbeatTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
-
-	cfgJSON := fmt.Sprintf(
-		`{"version":1,"agents":{"defaults":{"workspace":%q,"model_name":"test-model","max_tokens":4096},`+
-			`"list":[{"id":"mia","name":"Mia","type":"custom"},{"id":"jim","name":"Jim","type":"custom"}]}}`,
-		tmpDir,
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -72,6 +79,7 @@ func buildHeartbeatTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 			},
 		},
 	}
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 
@@ -307,21 +315,19 @@ func TestDeleteSession_HeartbeatGuard(t *testing.T) {
 //   - enabled + empty body → 422
 //   - worker → 422
 //   - disabled + interval = 0 + empty body → 200 (M-1 fix: only gate when enabled)
+//
+// TestWorkspacePUT_MemberConfigBounds's fixture used to ALSO os.WriteFile a
+// raw config.json blob with a non-empty "agents.list" array (mia/worker1) —
+// dead weight per buildHeartbeatTestAPI's doc comment above (handleWorkspacePut
+// never reloads config.json from disk). Replaced with real entity records via
+// seedAgentEntities, per the operator's fixture-vacuity directive; the
+// in-memory cfg.Agents.List construction is unchanged.
 func TestWorkspacePUT_MemberConfigBounds(t *testing.T) {
 	// Build an API with a worker agent "worker1" and main agent "mia".
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 
-	cfgJSON := fmt.Sprintf(
-		`{"version":1,"agents":{"defaults":{"workspace":%q,"model_name":"test-model","max_tokens":4096},`+
-			`"list":[`+
-			`{"id":"mia","name":"Mia","type":"custom"},`+
-			`{"id":"worker1","name":"Worker","type":"worker"}`+
-			`]}}`,
-		tmpDir,
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(cfgJSON), 0o600))
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -332,6 +338,7 @@ func TestWorkspacePUT_MemberConfigBounds(t *testing.T) {
 			},
 		},
 	}
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 

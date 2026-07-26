@@ -220,7 +220,28 @@ export function TaskCard({
         >
           {badge.label}
         </span>
-        <p className="flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 pr-6">
+        {/* UAT Finding 2 fix: a long UNBROKEN title (no spaces — e.g. the
+            200-char maxLength case) used to blow out this flex chain. `<p>`
+            is a flex item (`flex-1`) whose default `min-width: auto`
+            resolves to its CONTENT's min-content size — for an unbroken
+            string that's the string's full rendered width, which cascaded
+            up through every ancestor flex container (this row → the card →
+            StatusColumn, a flex item of the columns ROW) and inflated the
+            column's own width well past its `min-w-[162px]` floor, pushing
+            later columns off-screen with no way to scroll to them.
+            `min-w-0` removes the auto floor on this item; `wrap-anywhere`
+            (overflow-wrap: anywhere) is the one wrapping mode the spec
+            requires browsers to factor into MIN-CONTENT sizing itself (unlike
+            `break-word`, which they're allowed to ignore for min-content) —
+            together they cap this paragraph's contribution at a single
+            glyph's width, so the column can never be forced wider by title
+            content. `line-clamp-2` still truncates (with the native `title`
+            tooltip below carrying the full text) — wrap-anywhere just makes
+            sure that clamp actually happens within the card's own width. */}
+        <p
+          className="min-w-0 flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-6"
+          title={task.title}
+        >
           {task.title}
         </p>
       </div>

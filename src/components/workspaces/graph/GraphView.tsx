@@ -7,6 +7,7 @@ import {
   reconnectEdge,
   useEdgesState,
   useNodesState,
+  useReactFlow,
   type Connection,
   type Edge,
   type EdgeTypes,
@@ -15,7 +16,7 @@ import {
   type OnConnect,
   type OnReconnect,
 } from '@xyflow/react'
-import { GraphIcon } from '@phosphor-icons/react'
+import { GraphIcon, Info } from '@phosphor-icons/react'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
 import { TaskNode } from './TaskNode'
@@ -40,6 +41,29 @@ function minimapNodeColor(node: TaskGraphNode): string {
   return statusVisual(node.data?.task?.status).color
 }
 
+// Shared fitView tuning (UAT #26/S3 fix) — module-scope so both the
+// mount-time `fitViewOptions` prop and every imperative `fitView()` call (our
+// own re-fit effect below, AND the <Controls> "fit view" button, which is
+// wired to the same options) agree on one floor, and so it's a stable object
+// identity rather than a fresh literal every render.
+//
+// `minZoom: 0.8` is the fix for "at 50 nodes auto-fit renders labels at
+// 3.22px, unreadable": the node title renders at ~14px at scale 1 (measured:
+// the tester's own instrumentation showed rendered label px scales linearly
+// with the viewport zoom — 3.22px / 0.23 zoom ≈ 19.59px / 1.40 zoom ≈ 14px
+// base). Floors auto-fit's chosen scale at 0.8 keeps the title at >= ~11px —
+// a practical legibility floor for compact UI microcopy (comparable to the
+// smallest "caption"-tier type most design systems allow, e.g. iOS HIG's
+// Caption 2 / Material's label-small). Below that floor, fitView deliberately
+// stops trying to cram every node into the viewport and instead leaves the
+// canvas LARGER than the viewport — the user pans/scrolls/uses the minimap to
+// reach nodes outside the fitted view, rather than everything shrinking to
+// illegible dots. The `minZoom={0.2}` interactive floor on <ReactFlow> below
+// is unchanged, so a user who deliberately wants to zoom out further than
+// this to see the whole graph at once still can — this clamp only bounds the
+// automatic fit, never manual zoom.
+const GRAPH_FIT_VIEW_OPTIONS = { padding: 0.25, maxZoom: 1.1, minZoom: 0.8 }
+
 interface GraphViewProps {
   tasks: Task[]
   agents: AgentLike[]
@@ -55,11 +79,13 @@ interface GraphViewProps {
    */
   planId?: string | null
   /**
-   * Whole-workspace "All" mode only (ignored when `planId` is set): collapse
-   * non-DAG-relevant (unlinked) tasks into a single tray instead of rendering
-   * a field of disconnected one-time-task dots. Defaults to false so existing
-   * callers/tests that render every visible task as a node are unaffected —
-   * the real Graph tab (WorkspaceGraphTab) opts in explicitly.
+   * Whole-workspace "All" mode only (ignored when `planId` is set): exclude
+   * non-DAG-relevant (unlinked) tasks from the canvas instead of rendering a
+   * field of disconnected one-time-task dots. There is no separate tray UI —
+   * the excluded count is surfaced inline via `GraphUnlinkedNotice` whenever
+   * `buildTaskGraph`'s `unlinked` comes back non-empty. Defaults to false so
+   * existing callers/tests that render every visible task as a node are
+   * unaffected — the real Graph tab (WorkspaceGraphTab) opts in explicitly.
    */
   collapseOrphans?: boolean
   /**
@@ -188,6 +214,7 @@ function GraphViewInner({
 
   const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(nodesWithOpen)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(edgesWithData)
+  const { fitView } = useReactFlow<TaskGraphNode>()
 
   // Re-seed React Flow state whenever the computed layout changes (task added /
   // status changed / agent resolved / dependency edited). React Flow owns
@@ -199,6 +226,37 @@ function GraphViewInner({
     setNodes(nodesWithOpen)
     setEdges(edgesWithData)
   }, [nodesWithOpen, edgesWithData, setNodes, setEdges])
+
+  // S2 UAT fix (#25) — re-fit the viewport whenever the rendered node SET
+  // changes (the plan-scope filter narrowing "All" down to one plan, or
+  // widening back). `fitView` on <ReactFlow> below only ever applies once, at
+  // mount, so without this the canvas kept whatever scale/pan it had before
+  // the scope change: scoping 50 tasks down to 3 left the camera at the
+  // whole-workspace 0.23 zoom (the 3 nodes filling 0.5% of the canvas), and a
+  // manual fit-view on that 3-node scope followed by scoping back to "All"
+  // left the camera at that 3-node 1.40 zoom with 48 of 50 nodes clipped
+  // off-screen — no cue but the minimap.
+  //
+  // Keyed on the SET of node ids (sorted, so member order never matters),
+  // not on `layout.nodes`/`nodesWithOpen` themselves — those are fresh
+  // objects on every data change (a status edit, a re-resolved agent name),
+  // and re-fitting on every one of those would yank a user's deliberate
+  // pan/zoom out from under them for no reason. Only an actual change in
+  // WHICH tasks are visible re-fits; the previous key is tracked in a ref
+  // (not state) so comparing it never itself triggers a render, and the
+  // very first run (mount, `prevKey === undefined`) is skipped — the
+  // `fitView` prop already frames the initial layout.
+  const nodeIdsKey = useMemo(
+    () => layout.nodes.map((n) => n.id).sort().join('␟'),
+    [layout.nodes],
+  )
+  const prevNodeIdsKeyRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const prevKey = prevNodeIdsKeyRef.current
+    prevNodeIdsKeyRef.current = nodeIdsKey
+    if (prevKey === undefined || prevKey === nodeIdsKey) return
+    void fitView(GRAPH_FIT_VIEW_OPTIONS)
+  }, [nodeIdsKey, fitView])
 
   // Reflect external selection (the open slide-over) onto the nodes.
   useEffect(() => {
@@ -293,7 +351,11 @@ function GraphViewInner({
   // Nothing to graph: no DAG-relevant nodes. One-time tasks with no
   // dependencies (`layout.unlinked`) are deliberately NOT rendered on the DAG
   // canvas — they live on the Board/List — so an all-unlinked workspace shows
-  // the empty state here rather than a canvas full of nothing.
+  // the empty state here rather than a canvas full of nothing. When SOME (but
+  // not all) visible tasks are unlinked, `layout.nodes.length > 0` so we fall
+  // through to the canvas below, which surfaces the excluded count via the
+  // `graph-unlinked-notice` banner (S3 UAT fix #9) instead of letting them
+  // vanish with no cue.
   if (layout.nodes.length === 0) {
     return <GraphEmptyState />
   }
@@ -315,7 +377,7 @@ function GraphViewInner({
         edgesReconnectable={!!onReconnectDependency}
         isValidConnection={isValidConnection}
         fitView
-        fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
+        fitViewOptions={GRAPH_FIT_VIEW_OPTIONS}
         minZoom={0.2}
         maxZoom={1.75}
         proOptions={{ hideAttribution: false }}
@@ -327,6 +389,7 @@ function GraphViewInner({
       >
         <Controls
           showInteractive={false}
+          fitViewOptions={GRAPH_FIT_VIEW_OPTIONS}
           className="!bottom-4 !left-4"
         />
         <MiniMap
@@ -337,6 +400,33 @@ function GraphViewInner({
           className="!bottom-4 !right-4"
         />
       </ReactFlow>
+      {layout.unlinked.length > 0 && <GraphUnlinkedNotice count={layout.unlinked.length} />}
+    </div>
+  )
+}
+
+/**
+ * S3 UAT fix (#9) — when the plan-scope filter is off and `collapseOrphans`
+ * hid some (but not all) visible tasks off the canvas because they carry no
+ * dependency and no plan membership, say so. The all-unlinked case already
+ * has its own full `GraphEmptyState`; this is the partial case, which
+ * previously dropped the excluded tasks with zero count and zero hint —
+ * `taskGraph.ts`'s `buildTaskGraph` already computes exactly this number via
+ * `unlinked`, it just never reached the screen.
+ */
+function GraphUnlinkedNotice({ count }: { count: number }) {
+  return (
+    <div
+      data-testid="graph-unlinked-notice"
+      className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2"
+    >
+      <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-3 py-1 text-[11px] text-[var(--color-muted)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur">
+        <Info size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
+        <span>
+          {count} {count === 1 ? 'task' : 'tasks'} not shown here — no dependencies. See the
+          Board or List.
+        </span>
+      </div>
     </div>
   )
 }

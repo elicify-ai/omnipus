@@ -219,7 +219,18 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-sm">
+        {/* UAT Finding 2 fix: `table-layout: auto` (the default) sizes
+            columns from CONTENT's min-content width, ignoring the Title
+            cell's own `truncate`/overflow-hidden entirely — a 200-char
+            unbroken title's min-content IS its full rendered width, so the
+            browser widened the Title column to fit it regardless, pushing
+            Status/Tags/Agent/Updated/Actions off-screen with no scroll to
+            reach them. `table-fixed` sizes every column from the header
+            row's own explicit widths (w-12/w-24/w-28/w-10 on the other
+            columns) instead — content can no longer drive column width, so
+            the unwidthed Title column always gets exactly "whatever's left"
+            and its own `truncate` (see TaskRow below) finally has effect. */}
+        <table className="w-full table-fixed text-sm">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
               <th className="w-12 px-4 py-2 text-left" aria-sort={ariaSort('priority')}>
@@ -439,7 +450,17 @@ function TaskRow({
             onClick()
           }}
           aria-label={`${task.title}, status ${taskDisplayLabel(task)}`}
-          className="block w-full text-left text-sm text-[var(--color-secondary)] line-clamp-1"
+          // `title` gives a native tooltip with the full text (Finding 2 —
+          // "truncate with ellipsis plus a title/tooltip"). `truncate`
+          // (nowrap + overflow-hidden + ellipsis) — rather than the old
+          // `line-clamp-1` (which clips with no ellipsis once the row can't
+          // grow) — reads as a real single-line ellipsis, and now that the
+          // table itself is `table-fixed` (see ListView's <table> above),
+          // this button's `w-full` resolves against a WIDTH-STABLE column
+          // instead of one that grows to fit the very content it's meant to
+          // truncate.
+          title={task.title}
+          className="block w-full truncate text-left text-sm text-[var(--color-secondary)]"
         >
           {task.title}
         </button>

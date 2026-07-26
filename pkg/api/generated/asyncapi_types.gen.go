@@ -276,7 +276,7 @@ type GoalStatusFrame struct {
 	// Adjudications consumed so far (ADR-053 R§8.9 — one round = one adjudication, claim-triggered OR idle-settled).
 	Round     int    `json:"round"`
 	SessionId string `json:"session_id"`
-	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (8 states, superseding the original 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
+	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
 	State string `json:"state"`
 	Type  string `json:"type"`
 }

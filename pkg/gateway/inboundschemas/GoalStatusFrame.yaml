@@ -91,12 +91,13 @@ properties:
       - judging
       - done
       - failed
+      - cleared
     description: >
-      ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (8
-      states, superseding the original 4-value
+      ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
+      (originally 8 states, superseding the earlier 4-value
       active/paused_judge_unavailable/brake_fired/cleared set — no
-      back-compat). `queued` admitted to the global cap, not yet
-      dispatched (lifecycle). `active` iterating normally (lifecycle
+      back-compat at the time). `queued` admitted to the global cap, not
+      yet dispatched (lifecycle). `active` iterating normally (lifecycle
       default overlay). `waiting_on_user` a typed `GOAL_STATUS:
       waiting_on_user` pause, OR `needs_input`/`paused` for any other
       reason — cancel-soft grace, etc. (lifecycle). `judge_unavailable`
@@ -108,7 +109,14 @@ properties:
       `re-planning`, not `waiting_on_user`, after a boot sweep).
       `judging` a verifier turn is in flight (ephemeral engine-phase
       signal, pill-only). `done` terminal success (lifecycle `completed`).
-      `failed` terminal failure — `failed`/`cancelled`/`timed_out`
-      lifecycle states collapse here; the reason distinguishes
-      stopped/timeout/budget/rounds-exhausted.
+      `failed` terminal failure — a genuine budget/rounds-exhausted/
+      idle-expired brake, NOT a user-initiated stop (see `cleared` below).
+      `cleared` — 9th value, ADDED post-ADR-053 (UAT S3 fix): a
+      user-initiated `/goal clear|stop|off|reset|cancel|none` is a
+      deliberate, successful action, not a failure — it MUST NOT collapse
+      into `failed` the way `cancelled`/`timed_out` do. This intentionally
+      departs from the original crosswalk's blanket
+      "failed/cancelled/timed_out → failed" rule for the specific case of
+      a human choosing to stop; the frontend does not disambiguate via
+      `latest_reason`, so the wire state itself must carry the distinction.
     example: "active"

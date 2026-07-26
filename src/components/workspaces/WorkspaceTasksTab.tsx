@@ -291,7 +291,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         </div>
 
         {/* Right: New Task on its own. */}
-        <div className="flex items-center justify-end">
+        <div className="flex flex-col items-end gap-0.5">
           <button tabIndex={0}
             type="button"
             onClick={() => setCreateTaskOpen(true)}
@@ -300,6 +300,24 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             <Plus size={14} />
             New Task
           </button>
+          {/* S3 UAT finding — quick-create inside a plan-scoped board always
+              lands the new task UNPLANNED (`plan_id: null` — intended, see
+              CreateTaskSlideOver's `planId={null}` below: "no filter-scoped
+              quick-create"). With the heading reading "{plan} — tasks", a
+              user who creates a task here previously got no warning; the
+              board then immediately read "No tasks match the current
+              filter" and the task appeared to vanish. This is a plain-
+              language, ALWAYS-VISIBLE hint (not a tooltip) right where the
+              user is about to act, naming the real recovery path ("Move to
+              plan…" on the task detail panel, already documented above). */}
+          {selectedPlan && (
+            <span
+              data-testid="new-task-unplanned-hint"
+              className="text-[10px] leading-snug text-[var(--color-muted)]"
+            >
+              Lands unplanned, not in "{selectedPlan.title}" — use "Move to plan…" after creating
+            </span>
+          )}
         </div>
       </div>
       <div className="mx-6 border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />

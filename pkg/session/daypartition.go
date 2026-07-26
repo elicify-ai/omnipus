@@ -108,6 +108,18 @@ type SessionMeta struct {
 	// (the `goal_status` WS frame and `/goal status` reply are the wire/UX
 	// surfaces). GoalCondition == "" means no active goal — replace-on-set
 	// (FR-068) simply overwrites all five fields together.
+	// GoalID is the stable identifier for the CURRENT goal generation
+	// (ADR-053 R§8.11's `goal_id`, UAT S3 fix): minted once when a goal
+	// activates from empty (fresh `/goal <condition>` or a confirmed fresh
+	// pending goal), held constant across every round-advance/pause/judging
+	// frame for that generation (an amendment via `/goal confirm` keeps it —
+	// it is the SAME goal being refined), and cleared together with the rest
+	// of the Goal* fields on `/goal clear`. This is what lets the SPA's
+	// GoalPillTray key one pill per goal generation instead of collapsing
+	// every goal this session ever carried into a single `_default` bucket.
+	// Never regenerated mid-lifecycle — a fabricated per-frame id would be
+	// worse than no id at all.
+	GoalID           string `json:"goal_id,omitempty"`
 	GoalCondition    string `json:"goal_condition,omitempty"`
 	GoalRoundsUsed   int    `json:"goal_rounds_used,omitempty"`
 	GoalMaxRounds    int    `json:"goal_max_rounds,omitempty"`

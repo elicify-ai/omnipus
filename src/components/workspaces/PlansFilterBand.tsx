@@ -29,7 +29,14 @@ import {
 import { Progress } from '@/components/ui/progress'
 import { PlanActionButton } from './PlanActionButton'
 import type { Agent, Plan, Task } from '@/lib/api'
-import { isPlanCancelled, planDisplayColor, planDisplayLabel } from '@/lib/planStateColors'
+import {
+  isPlanCancelled,
+  planDisplayColor,
+  planDisplayLabel,
+  planPhaseChip,
+  planSecondaryChipLabel,
+  AWAITING_OWNER_CORRECTION_EXPLANATION,
+} from '@/lib/planStateColors'
 import { cn } from '@/lib/utils'
 
 interface PlansFilterBandProps {
@@ -246,6 +253,16 @@ function PlanFilterTile({
   const cancelled = isPlanCancelled(plan)
   const displayColor = planDisplayColor(plan)
   const displayLabelText = planDisplayLabel(plan)
+  // S2 UAT finding — a plan parked at `awaiting_owner_correction` rendered as
+  // plain "Running" here, indistinguishable from one making real progress.
+  // Reuses the same `planPhaseChip` helper WorkspaceGraphTab already wires up
+  // (ADR-053 FE-2 §7) — this tile was the surface it was missing from.
+  const phaseChip = planPhaseChip(plan)
+  // S3 UAT finding — `failed_reason` was on the wire but never rendered; the
+  // tile showed only "Failed" with no explanation. Skip the cancelled case —
+  // that already renders as "Cancelled" via `displayLabelText`, so a second
+  // "stopped by user" line would be redundant.
+  const failureReason = plan.state === 'failed' && !cancelled ? planSecondaryChipLabel(plan) : null
 
   return (
     <div
@@ -315,17 +332,64 @@ function PlanFilterTile({
         onClick={onSelect}
         className="flex h-full w-full flex-col items-start gap-2 pr-10 text-left"
       >
-        <span
-          className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight"
-          style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
-        >
-          <PlanStateGlyph state={plan.state} cancelled={cancelled} />
-          {displayLabelText}
+        <span className="flex flex-wrap items-center gap-1">
+          <span
+            className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight"
+            style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
+          >
+            <PlanStateGlyph state={plan.state} cancelled={cancelled} />
+            {displayLabelText}
+          </span>
+
+          {/* S2 UAT finding — a plan parked at `awaiting_owner_correction`
+              rendered as plain "Running" here, indistinguishable from a plan
+              actually making progress. Surfaces the same phase chip
+              WorkspaceGraphTab already renders (ADR-053 FE-2 §7). */}
+          {phaseChip && (
+            <span
+              data-testid={`plan-phase-chip-${plan.id}`}
+              className={cn(
+                'flex-shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold leading-none',
+                phaseChip.tone === 'warning'
+                  ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
+                  : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+              )}
+            >
+              {phaseChip.label}
+            </span>
+          )}
         </span>
+
+        {/* S2 UAT finding — always-visible plain-language explanation,
+            replacing the hover-only tooltip that used to be the ONLY place
+            this was explained (dead on touch, easy to miss). Names the one
+            REAL control available now (Stop) instead of the three corrective
+            actions, which have no in-app path yet — see the constant's
+            header comment in planStateColors.ts for why. */}
+        {phaseChip?.tone === 'warning' && (
+          <span
+            data-testid={`plan-phase-explanation-${plan.id}`}
+            className="text-[10px] leading-snug text-[color:var(--color-warning)]"
+          >
+            {AWAITING_OWNER_CORRECTION_EXPLANATION}
+          </span>
+        )}
 
         <span className="line-clamp-2 text-sm font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
+
+        {/* S3 UAT finding — `failed_reason` (e.g. `judge_rounds_exhausted`)
+            was on the wire but never rendered; the tile showed only the word
+            "Failed" with no explanation and no next step. */}
+        {failureReason && (
+          <span
+            data-testid={`plan-failed-reason-${plan.id}`}
+            className="text-[10px] leading-snug text-[var(--color-muted)]"
+          >
+            Why: {failureReason}
+          </span>
+        )}
 
         <span className="flex flex-wrap items-center gap-1.5">
           <span

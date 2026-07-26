@@ -535,10 +535,19 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// S2 UAT finding B: trim before it ever reaches plan.Store.Create, whose
+	// own required-field check is a plain `== ""` (untrimmed) — a
+	// whitespace-only title ("   \t  ") is not "" and sailed through as 201,
+	// producing an unnamed, unfindable/unfilterable plan chip. Trimming here
+	// means a genuinely blank title is rejected by the SAME existing
+	// "title is required" 400 the store already returns for "", and a
+	// legitimate title's incidental leading/trailing whitespace is stored
+	// trimmed rather than verbatim.
+	trimmedTitle := strings.TrimSpace(req.Title)
 	c := a.callerIdentity(r)
 	p := &plan.Plan{
 		WorkspaceID:  workspaceID,
-		Title:        req.Title,
+		Title:        trimmedTitle,
 		OwnerAgentID: req.OwnerAgentId,
 		Owner:        c.Username,
 		CreatedBy:    c.Username,
@@ -733,7 +742,12 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 
 	patch := plan.Patch{}
 	if req.Title != nil {
-		patch.Title = req.Title
+		// S2 UAT finding B (PUT sibling of the create-path fix, same
+		// untrimmed-`== ""` gap in plan.Store's own patch.Title check): trim
+		// before it reaches the store so a whitespace-only PUT title is
+		// rejected as empty rather than persisted as a blank-looking chip.
+		trimmedTitle := strings.TrimSpace(*req.Title)
+		patch.Title = &trimmedTitle
 	}
 	if req.Goal != nil {
 		patch.Goal = req.Goal

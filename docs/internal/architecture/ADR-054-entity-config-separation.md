@@ -257,6 +257,209 @@ rests solely on the single-instance pidfile.
 **Confidence: High** on the in-process guarantee. **Medium** on the sidecar
 design — it is sound in principle but unimplemented and unbenchmarked here.
 
+### 5.1 Testing-gap closure and Windows posture (qa-lead, 2026-07-26)
+
+A post-implementation review found the cross-process claim above was
+**asserted but never tested** — no test anywhere forked a second OS process
+— and worse, made three things concrete:
+
+1. In-process, the striped mutex ALONE satisfies every existing test.
+   Deleting `fileutil.WithFlock` from the `Store.Update`/`Create`/`Delete`
+   call sites did not make
+   `TestSameEntityContention_ConcurrentUpdatesSerializeNoLostUpdate`
+   (`pkg/entity/store_test.go`) fail — nothing isolated the flock's own
+   contribution.
+2. The inherited flock suite (`pkg/fileutil/flock_test.go`) is vacuous for
+   mutual exclusion: `TestAdvisoryFileLockWrites` only asserts a counter
+   total (passes with `WithFlock` as a pure pass-through), and
+   `TestConcurrentConfigWrites` only asserts the final file is valid JSON
+   (guaranteed by `WriteFileAtomic`'s atomic rename alone, no lock needed).
+3. On Windows, `WithFlock` is an unconditional pass-through and `pkg/entity`
+   has no single-writer-goroutine (or any other) compensation — unlike the
+   general pattern CLAUDE.md's Storage section describes.
+
+**Closed by two new tests, both `!windows`-gated:**
+
+- `pkg/entity/store_crossprocess_test.go` —
+  `TestCrossProcess_ConcurrentUpdatesSerializeNoLostUpdate` re-execs the test
+  binary as 6 independent OS processes (mirrors the
+  `pkg/sandbox/*_subprocess_test.go` env-var-marker + exit-code convention),
+  all racing `Store.Update` read-modify-write cycles on one shared entity
+  counter, each sleeping between read and write to widen the race window
+  (the same technique `TestAdvisoryFileLockWrites` already uses in-process).
+  **Proven not vacuous**: with `fileutil.WithFlock` temporarily stubbed out
+  of `Store.Update`, this test reliably failed (final counter 15 of an
+  expected 90 — most updates lost); restoring the call made it reliably
+  pass again.
+- `pkg/entity/flock_isolation_test.go` —
+  `TestUpdate_HoldsExclusiveFlockOnSidecarDuringCriticalSection` closes
+  finding #1 directly: it holds one `Update` call open mid-critical-section
+  and, from an independent `os.File` handle on the exact same sidecar path
+  (`Store.lockPath`), attempts a non-blocking `flock`. Because flock binds to
+  the open file description rather than the process
+  (`pkg/tools/browser/coordinator_lock_unix.go` documents and relies on the
+  same property), this bypasses the Go-level mutex entirely — a pass can
+  only be explained by `Store.Update` genuinely holding the OS lock. Also
+  proven not vacuous by the same stub/restore method (the probe acquired the
+  lock immediately when the flock was stubbed out; it correctly blocked with
+  `EWOULDBLOCK` once restored).
+
+**Windows decision: POSIX-only, documented — not implemented.** Two options
+were on the table: (a) implement a real Windows compensation (e.g.
+`LockFileEx`, or the `pkg/tools/browser/coordinator_lock_other.go` `O_EXCL`
+pattern already used elsewhere in this repo for the identical problem), or
+(b) state plainly that the cross-process guarantee is POSIX-only and Windows
+relies on the in-process striped mutex alone. **(b) was chosen.** Reasoning:
+
+- No package in this repo actually implements a dedicated single-writer
+  goroutine (a channel-fed serialization goroutine) for its Windows path —
+  `pkg/task`, `pkg/plan`, `pkg/session`, `pkg/credentials`, `pkg/auth`, and
+  `pkg/agentstore` all pair the same in-process mutex with the same
+  `fileutil.WithFlock` call as `pkg/entity` does, and none has Windows-
+  specific LOCKING code (`grep runtime.GOOS` across all six returns only
+  unrelated hits: `pkg/auth/oauth.go`'s browser-opener switch and a
+  `pkg/credentials` test permission guard — nothing touching write
+  serialization). CLAUDE.md's
+  "Windows uses the single-writer goroutine pattern" line describes an
+  aspiration, not a shipped mechanism, for the whole file-store family — not
+  a regression specific to `pkg/entity`.
+- Verified separately: the "single-instance gateway pidfile" this ADR's own
+  D3/D4 text leans on for the Windows story is **also not implemented**
+  as a hard boot-time gate anywhere in `pkg/gateway`/`cmd/omnipus`. The
+  closest thing, `daemon.Status` (`pkg/daemon/daemon.go`), is a soft,
+  advisory check used only by the CLI's auto-start convenience path, not a
+  gate the gateway's own boot sequence enforces. So the Windows gap is real
+  today, not merely hypothetical.
+- Implementing a genuine Windows-specific lock is a production-code change
+  to `pkg/entity`'s locking logic, which is explicitly out of scope for the
+  work that surfaced this gap (test-writing) and belongs with a design
+  owner (backend-lead / this ADR's next revision), not folded in silently
+  here.
+- This documents a limitation honestly rather than asserting an untested,
+  unimplemented mechanism. Per hard constraint 4 (graceful degradation),
+  falling back to in-process-only protection on a platform without kernel
+  primitives is an accepted posture elsewhere in this codebase (Landlock/
+  seccomp fall back the same way); making the fallback explicit here is
+  consistent with that precedent, not a new exception.
+
+**Follow-up (NOT yet filed as a GitHub issue — this ADR text is currently the only record; see Consequences before treating it as scheduled):** implement a real Windows
+cross-process lock for `pkg/entity` — either a `golang.org/x/sys/windows`
+`LockFileEx` call behind `fileutil.WithFlock`'s existing signature, or the
+`O_EXCL`-based sidecar pattern `coordinator_lock_other.go` already ships —
+so the guarantee stops being POSIX-only. Until then, `pkg/entity`'s Go doc
+comments (`store.go`, `lock.go`, `entity.go`) and CLAUDE.md's Storage section
+state the POSIX-only scope explicitly so no future reader assumes Windows
+parity that was never built.
+
+**Confidence: High** — both new tests were verified to fail without the
+flock and pass with it (see the qa-lead session transcript), and the "no
+package actually has a Windows single-writer goroutine" claim was verified
+by direct code search, not inferred.
+
+### 5.1.1 §5.1 itself overclaimed — corrected (qa-lead, 2026-07-26, same-day follow-up)
+
+A second, independent review found that the paragraph above — "Closed by two
+new tests, both `!windows`-gated" — was **itself an overclaim**. It reproduced
+the problem directly: with `fileutil.WithFlock` stubbed to a pass-through at
+**both** the `Create` and `Delete` call sites in `store.go` simultaneously,
+the entire pre-existing `pkg/entity` suite (including the two tests §5.1
+lists above) still passed. Neither
+`TestCrossProcess_ConcurrentUpdatesSerializeNoLostUpdate` nor
+`TestUpdate_HoldsExclusiveFlockOnSidecarDuringCriticalSection` exercises
+`Create` or `Delete` at all — both are Update-only, despite
+`flock_isolation_test.go`'s own doc comment and this section's original text
+claiming the gap was closed for "the Update/Create/Delete call sites."
+`Create` is the higher-severity miss of the two: it guards the
+write-then-verify existence check D6 relies on as the durable fix for this
+ADR's motivating failure class (a roster naming an entity that was never
+actually persisted) — exactly the call site with no cross-process test at
+all until now.
+
+**Closed by two more tests, both in `pkg/entity/store_crossprocess_test.go`,
+both `!windows`-gated, both proven non-vacuous the identical stub/restore
+way:**
+
+- `TestCrossProcess_CreateRaceOnSameID_ExactlyOneWinner` — races 10
+  independent OS processes, barrier-synchronized (a shared ready/go
+  marker-file handshake, tighter than relying on `exec.Cmd.Start()` timing
+  alone) to call `Store.Create` on the exact same entity ID at effectively
+  the same instant. A correctly serialized store permits exactly one winner
+  (nil error) and `ErrAlreadyExists` for every other process, with the
+  persisted record exactly matching the winner's own payload. **Proven not
+  vacuous**: with `fileutil.WithFlock` removed from `Store.Create` only (via
+  a `go test -overlay` scratch copy, never the repo), the test reliably
+  observed 9–10 of 10 processes reporting a successful `Create` for the same
+  ID — not merely "more than one," effectively all of them, since with no
+  lock at all every racer's existence check runs unserialized. Restoring the
+  call made exactly one winner the only observed outcome across repeated
+  runs, including under `-race`.
+- `TestCrossProcess_DeleteRacesUpdate_NeverResurrectsDeletedEntity` — races
+  five barrier-synchronized `Store.Update` processes (each widening its own
+  read-modify-write window with the same in-mutate-sleep technique the
+  original Update test uses) against one `Store.Delete` process on the same
+  entity ID. `Update` and `Delete` share the same sidecar lock path for a
+  given ID, so the only coherent outcome under any scheduling order is that
+  the entity is gone once every process finishes — nothing can recreate a
+  file after a successful `Delete` in a correctly serialized store. **Proven
+  not vacuous**: with `fileutil.WithFlock` removed from `Store.Delete` ONLY
+  (`Store.Update`'s own flock call left intact — mirroring how the review
+  reproduced the original gap by stubbing `Create`/`Delete` but not
+  `Update`), the test reliably observed the entity still existing after the
+  race: an in-flight `Update` that had already read pre-delete state
+  recreated the file on its write, resurrecting an entity `Delete` had
+  already reported as successfully removed. Restoring the call made "gone
+  after the race" the only observed outcome across repeated runs, including
+  under `-race`.
+
+**Accounting of what is ACTUALLY covered, precisely, so this section cannot
+be over-read again:**
+
+| Call site | In-process (goroutines) | Cross-process (POSIX, real forked OS processes) |
+|---|---|---|
+| `Create` | Covered generically by every `Store` test that calls `Create` | `TestCrossProcess_CreateRaceOnSameID_ExactlyOneWinner` |
+| `Update` | `TestSameEntityContention_ConcurrentUpdatesSerializeNoLostUpdate` | `TestCrossProcess_ConcurrentUpdatesSerializeNoLostUpdate` (no-lost-update) + `TestUpdate_HoldsExclusiveFlockOnSidecarDuringCriticalSection` (isolates the flock's own contribution from the mutex) |
+| `Delete` | Covered generically (no dedicated in-process contention test — `Delete` has no read-modify-write cycle to race, only an existence check + remove) | `TestCrossProcess_DeleteRacesUpdate_NeverResurrectsDeletedEntity` (specifically: Delete racing concurrent Updates, not Delete racing Delete) |
+
+Four related fixes to the test suite's own robustness, found during the same
+pass (not concurrency-contract gaps, but silent-failure risks in the test
+code itself, closed under the same "no deferrals" instruction):
+
+- `flock_isolation_test.go`'s `TestUpdate_HoldsExclusiveFlockOnSidecarDuringCriticalSection`
+  had two `t.Fatal` exit paths that fired before its explicit `close(release)`,
+  which would leave the blocked `Update` goroutine holding both the
+  process-global striped-mutex shard (`lock.go` — 64 shards shared by every
+  `Store[T]` in the binary) and the sidecar flock forever, hanging any later
+  test whose entity ID happens to hash to the same shard. Fixed with a
+  once-guarded `defer close(release)` registered immediately after the
+  goroutine is launched, so every exit path (including `t.Fatal`'s
+  `runtime.Goexit`, which does run deferred functions) releases it.
+- `store_crossprocess_test.go`'s child processes had no `-test.timeout` (a
+  directly re-exec'd test binary has none by default — only the `go test`
+  wrapper injects the familiar 10m), so a child stuck on a leaked flock could
+  hang forever, and a `t.Fatalf` mid-`Start`-loop left already-started
+  siblings killed but never `Wait`-ed (POSIX zombies until the test binary's
+  own process exits). Fixed with a per-child `-test.timeout=60s` plus a
+  parent-side `context.WithTimeout` (belt-and-suspenders — the context
+  force-kills the child even if its own internal timeout somehow fails to
+  fire) and a `reapChildren` helper that both kills and waits every started
+  process from `t.Cleanup`.
+- A `fmt.Sscanf(s, "%d", &got)` counter-parse in the same file accepted
+  trailing garbage without error (`"15x"` parses as `15`, `err == nil`),
+  which would silently truncate a corrupted counter to a wrong number instead
+  of failing loudly. Replaced with `strconv.Atoi` on a trimmed string, which
+  rejects trailing garbage.
+- `flock_isolation_test.go`'s same-process-contends-via-independent-open-file-description
+  property (the mechanism its whole probe technique relies on) holds on
+  local Linux/macOS/BSD filesystems, but Linux emulates `flock(2)` over NFS
+  using POSIX record locks scoped per-process rather than per open file
+  description — on an NFS-mounted test directory the probe would not block.
+  This fails closed (a spurious failure, not a missed regression), which is
+  documented as an acceptable, known limitation rather than left unstated.
+
+**Confidence: High** — every new/changed claim in this subsection was
+verified directly (overlay-based before/after runs, repeated and under
+`-race`), not inferred.
+
 ## 6. `config.json` cross-process lock — D4 (REVISED — v1 did not fix the cited incident)
 
 **Decision.** Add the sidecar lockfile + single-instance pidfile. **Do not claim

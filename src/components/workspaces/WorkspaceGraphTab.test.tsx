@@ -233,6 +233,64 @@ describe('WorkspaceGraphTab — plan-phase chip (ADR-053 FE-2 §7)', () => {
   })
 })
 
+// S2 UAT finding — the ONLY explanation of `awaiting_owner_correction` used
+// to be a hover-only `title` tooltip on the chip above (dead on touch, easy
+// to miss). This is now always-visible plain-language text.
+describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the hover-only tooltip)', () => {
+  it('renders an always-visible plain-language explanation for the warning chip, not a title tooltip', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-rp2', title: 'Launch', state: 'running', plan_phase: 'awaiting_owner_correction' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-rp2' })
+    renderTab()
+
+    const explanation = await screen.findByTestId('plan-phase-explanation-plan-rp2')
+    expect(explanation).not.toHaveAttribute('title')
+    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/stop this plan/i)
+    // Does not name the three corrective verbs as if they were reachable —
+    // they have no exposed route/control (see planStateColors.ts).
+    expect(explanation.textContent).not.toMatch(/append a tail|supersede|targeted.retry/i)
+  })
+
+  it('renders no explanation for a quieter info sub-phase (e.g. judging)', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-j2', title: 'Launch', state: 'running', plan_phase: 'judging' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-j2' })
+    renderTab()
+
+    await screen.findByTestId('plan-phase-chip-plan-j2')
+    expect(screen.queryByTestId('plan-phase-explanation-plan-j2')).not.toBeInTheDocument()
+  })
+})
+
+// S3 UAT finding — `failed_reason` was on the wire but never rendered; the
+// strip showed only the word "Failed" with no explanation.
+describe('WorkspaceGraphTab — failed_reason rendering (S3 UAT)', () => {
+  it('renders the human-readable failed_reason for a genuinely-failed active plan', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-fail', title: 'Launch', state: 'failed', failed_reason: 'judge_rounds_exhausted' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-fail' })
+    renderTab()
+
+    expect(await screen.findByText('Failed')).toBeInTheDocument()
+    expect(screen.getByTestId('plan-failed-reason-plan-fail')).toHaveTextContent('judge rounds exhausted')
+  })
+
+  it('does not render a redundant reason line for a cancelled (user-stopped) plan — "Cancelled" already says why', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-cancel', title: 'Launch', state: 'failed', failed_reason: 'stopped_by_user' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-cancel' })
+    renderTab()
+
+    expect(await screen.findByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByTestId('plan-failed-reason-plan-cancel')).not.toBeInTheDocument()
+  })
+})
+
 // ── Plan-scope guard against an unresolvable plan (review-gate fix #3) ──────
 
 describe('WorkspaceGraphTab — plan-scope guard', () => {

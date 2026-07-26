@@ -347,7 +347,7 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 
 	withheld := false
 	for _, c := range machineCriteria {
-		v, ev, nv := al.runMachineCheck(ctx, in.AssigneeAgentID, c, in.Attempt, in.TaskID)
+		v, ev, nv := al.runMachineCheck(ctx, in.AssigneeAgentID, c, in.Attempt, in.TaskID, in.WorkspaceID)
 		if ev != nil {
 			evidence = append(evidence, *ev)
 		}
@@ -481,6 +481,7 @@ func (al *AgentLoop) runMachineCheck(
 	c task.AcceptanceCriterion,
 	attempt int,
 	taskID string,
+	workspaceID string,
 ) (task.CriterionVerdict, *task.EvidenceRecord, NonVerdictClass) {
 	verdict := task.CriterionVerdict{CriterionID: c.ID}
 
@@ -534,6 +535,62 @@ func (al *AgentLoop) runMachineCheck(
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs+5)*time.Second)
 	defer cancel()
 	callCtx = tools.WithAgentID(callCtx, assigneeAgentID)
+
+	// S2 UAT fix (MARCUS-P4): the check MUST run in the SAME working
+	// directory the task's own turn ran in, or any relative-path criterion
+	// on genuinely-completed work reports a false unmet. Without this,
+	// ExecTool's own baseDir fallback (pkg/tools/shell.go's executeRun) roots
+	// the check at the assignee's FIXED agent-home dir (tools.TurnWorkspaceDir
+	// unset on this ctx) while the work landed in workspaces/<id>/work/ — the
+	// bash mechanism runs, is not denied, does not time out, and still
+	// reports exit 1 on a file that genuinely exists, burning an attempt on
+	// completed work.
+	//
+	// Reuse the SAME shared gate the native turn loop itself calls
+	// (resolveTurnWorkDirOrRefuse, workspace_reroot.go, invoked from
+	// loop.go's runTurn at the tools.WithTurnWorkspaceDir call site) rather
+	// than inventing a second resolution path — deliberately keyed by
+	// workspaceID (the TASK's/plan's own workspace — task_executor.go's
+	// JudgeCriteriaInput.WorkspaceID is t.WorkspaceID, task.go:246-247's
+	// "every task belongs to a workspace"; plan_engine.go's is p.WorkspaceID —
+	// runMachineCheck's caller threads in.WorkspaceID straight through as
+	// this parameter), not the assignee's ambient current-turn workspace: the
+	// check verifies THAT task's/plan's own output, so it must root at the
+	// workspace the work-under-review actually belongs to, regardless of
+	// what else the assignee agent might be doing concurrently in another
+	// workspace.
+	//
+	// A task/plan with NO workspace (workspaceID == "", e.g. a goal-scope
+	// adjudication for an unbound chat — JudgeCriteriaInput.WorkspaceID's own
+	// doc comment: "may legitimately be empty there") is left exactly as
+	// before this fix: no re-rooting is attempted, so ExecTool falls back to
+	// its fixed agent-home baseDir unchanged — there is no work-under-review
+	// workspace to root the check against in the first place, so this is the
+	// sane fallback, not an error.
+	if workspaceID != "" {
+		wsDir, wsErr := resolveTurnWorkDirOrRefuse(callCtx, assigneeAgentID, agentInst.Home, workspaceID)
+		if wsErr != nil {
+			// A genuine refusal (the assignee is not a member of the task's
+			// own workspace, or that workspace's work dir is unavailable)
+			// MUST stay a refusal — never laundered into a bare exit 1 that
+			// looks like an ordinary criterion-unmet. Classified exactly like
+			// the "assignee not resolvable" / "bash policy denied" branches
+			// above: the verification MECHANISM could not run under the
+			// agent's own confinement -> unable_to_verify, re-run, never
+			// scored as absent evidence (G-3/FR-116) — this does NOT weaken
+			// sandbox/filesystem confinement, it only reports the refusal
+			// honestly instead of silently mis-scoring the check.
+			reason := fmt.Sprintf(
+				"check's task workspace %q not reachable for agent %q — verification mechanism "+
+					"could not root in the work-under-review workspace (unable_to_verify): %s",
+				workspaceID, assigneeAgentID, wsErr.Error(),
+			)
+			verdict.Reason = reason
+			return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+				NonVerdictUnableToVerify
+		}
+		callCtx = tools.WithTurnWorkspaceDir(callCtx, wsDir)
+	}
 
 	args := map[string]any{
 		"action":          "run",

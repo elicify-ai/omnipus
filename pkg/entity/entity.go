@@ -18,6 +18,19 @@
 // no-op on Windows (fileutil.WithFlock's platform files); this package makes
 // no claim beyond what D3/D5 document.
 //
+// PLATFORM SCOPE (decided, not an open question): the cross-process half of
+// this guarantee is POSIX-only. On Windows, WithFlock's no-op leaves ONLY
+// the in-process striped mutex — two Windows processes racing
+// Update/Create/Delete on the same entity are not protected from each
+// other. This is proven both ways, not just asserted: store_crossprocess_test.go
+// forks real OS processes to confirm the POSIX guarantee holds (and would
+// fail if the sidecar flock were removed), and flock_isolation_test.go
+// isolates the flock's own contribution from the striped mutex so that
+// exact regression can never pass silently again. Both are `!windows`-gated
+// — there is nothing POSIX-specific left to prove on Windows, since there
+// the cross-process guarantee simply does not exist. See ADR-054 §5 and
+// Store.Update's doc comment for the full rationale.
+//
 // Store[T] is generic over the entity payload type T itself (e.g. a future
 // config.AgentConfig) — there is no envelope/wrapper struct, so the on-disk
 // JSON shape is exactly T's own json tags. Because T is only ever seen as

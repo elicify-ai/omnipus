@@ -3264,12 +3264,16 @@ components:
             - judging
             - done
             - failed
+            - cleared
           description: >
             ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
-            (8 states, superseding the original 4-value
+            (originally 8 states, superseding the earlier 4-value
             active/paused_judge_unavailable/brake_fired/cleared set — no
-            back-compat). See components/schemas/GoalStatusFrame.yaml for
-            the full per-state crosswalk description.
+            back-compat at the time; `cleared` re-added as a 9th value by
+            the UAT S3 fix so a user-initiated `/goal clear` no longer
+            collapses into `failed`). See
+            components/schemas/GoalStatusFrame.yaml for the full
+            per-state crosswalk description.
 
     LoopStatusFrame:
       title: LoopStatusFrame

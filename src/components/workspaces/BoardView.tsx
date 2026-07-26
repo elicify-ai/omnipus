@@ -4,6 +4,7 @@ import {
   PointerSensor,
   KeyboardSensor,
   KeyboardCode,
+  closestCenter,
   useSensor,
   useSensors,
   useDraggable,
@@ -13,6 +14,7 @@ import {
   type ScreenReaderInstructions,
   type DragStartEvent,
   type DragEndEvent,
+  type KeyboardCoordinateGetter,
 } from '@dnd-kit/core'
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
@@ -45,6 +47,83 @@ const COLUMNS: ColumnConfig[] = STATUS_ORDER.map((status) => ({
  * partial migration) — those tasks match no column and must not be dropped
  * silently. See the orphan-task banner in `BoardView`. */
 const STATUS_SET = new Set<TaskStatus>(STATUS_ORDER)
+
+/** Column order as rendered left-to-right (DOM/visual order matches
+ * STATUS_ORDER — COLUMNS is built straight off it with no reordering), used
+ * by `boardKeyboardCoordinateGetter` to resolve "next"/"previous" column. */
+const COLUMN_STATUSES: TaskStatus[] = COLUMNS.map((c) => c.status)
+
+/**
+ * UAT Finding 1 fix: dnd-kit's DEFAULT keyboard coordinate getter
+ * (`defaultKeyboardCoordinateGetter`) nudges the virtual drag position by a
+ * fixed 25px per arrow-key press. A status column here is >=162px wide, so
+ * even two presses (50px) never left the origin column's measured rect —
+ * combined with the DndContext default `rectIntersection` collision
+ * detection, `over` kept resolving back to the column the drag started in,
+ * so "arrow keys move the card between columns" (the announced
+ * screen-reader instruction) was a no-op: the drop always landed back on the
+ * origin column with zero network calls.
+ *
+ * This getter instead teleports the drag rect directly onto the CENTER of
+ * the adjacent column (by `COLUMN_STATUSES` order, i.e. visual left-to-right
+ * order — the board is a single row, so ArrowRight/ArrowDown both mean "next
+ * column" and ArrowLeft/ArrowUp both mean "previous column"), so one key
+ * press reliably moves exactly one column and stops at the first/last
+ * column rather than drifting by a few pixels. Paired with `closestCenter`
+ * (passed as the DndContext's `collisionDetection` below, replacing the
+ * default `rectIntersection`) so the teleported position resolves
+ * predictably to the target column.
+ */
+const ARROW_COLUMN_STEP: Partial<Record<string, 1 | -1>> = {
+  [KeyboardCode.Right]: 1,
+  [KeyboardCode.Down]: 1,
+  [KeyboardCode.Left]: -1,
+  [KeyboardCode.Up]: -1,
+}
+
+export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, { context, currentCoordinates }) => {
+  const step = ARROW_COLUMN_STEP[event.code]
+  if (step === undefined) return undefined
+
+  const { collisionRect, droppableRects } = context
+  if (!collisionRect) return undefined
+
+  const rectCenterX = collisionRect.left + collisionRect.width / 2
+
+  // Which column is the drag rect currently over? Prefer an exact match;
+  // fall back to the nearest column center (covers the first keypress,
+  // before any move, when the rect is still measured over its origin card
+  // rather than sitting exactly within a column boundary).
+  let currentIndex = COLUMN_STATUSES.findIndex((status) => {
+    const rect = droppableRects.get(status)
+    return !!rect && rectCenterX >= rect.left && rectCenterX <= rect.left + rect.width
+  })
+  if (currentIndex === -1) {
+    let closestDistance = Infinity
+    COLUMN_STATUSES.forEach((status, index) => {
+      const rect = droppableRects.get(status)
+      if (!rect) return
+      const distance = Math.abs(rect.left + rect.width / 2 - rectCenterX)
+      if (distance < closestDistance) {
+        closestDistance = distance
+        currentIndex = index
+      }
+    })
+  }
+  if (currentIndex === -1) return undefined
+
+  const targetIndex = currentIndex + step
+  if (targetIndex < 0 || targetIndex >= COLUMN_STATUSES.length) return undefined // stop at the edges, don't wrap
+
+  const targetRect = droppableRects.get(COLUMN_STATUSES[targetIndex])
+  if (!targetRect) return undefined
+
+  event.preventDefault()
+  return {
+    x: targetRect.left + targetRect.width / 2 - collisionRect.width / 2,
+    y: currentCoordinates.y,
+  }
+}
 
 // Screen-reader-only instructions dnd-kit surfaces via aria-describedby on
 // every draggable card, announced once when a card first receives focus.
@@ -193,8 +272,20 @@ export function BoardView({
           {orphanTasks.length === 1 ? "isn't" : "aren't"} shown in any column.
         </div>
       )}
-      <div className="relative flex-1 min-h-0 overflow-auto">
-        <div className="min-w-max flex flex-col min-h-full">
+      {/* UAT Finding 3 fix: this outer container used to be `overflow-auto`
+          (scrolling BOTH axes) wrapping a `min-h-full` (floor-only) inner
+          div — that made it ONE shared vertical scroller for the whole
+          board, so the tallest lane (e.g. Inbox) set the scrollHeight for
+          every column and scrolling past a short lane's content just showed
+          blank space under its still-visible header/count. Now this level
+          only ever scrolls HORIZONTALLY (for narrow viewports/many
+          columns); vertical scrolling is delegated to each column
+          individually (see StatusColumn's own `overflow-y-auto` below), so
+          the header row and each lane's own count stay meaningful no matter
+          how far any single lane is scrolled, and two lanes' cards can be
+          visible at once. */}
+      <div className="relative flex-1 min-h-0 overflow-x-auto overflow-y-hidden">
+        <div className="min-w-max flex flex-col h-full">
           <StatusHeaderRow counts={counts} />
           <StatusColumnsRow
             tasks={rootTasks}
@@ -281,12 +372,16 @@ function StatusColumnsRow({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     // Restrict the lift/drop key to Space only (dnd-kit's default is Space
     // AND Enter) so Enter stays free for TaskCard's "open task" action.
+    // `coordinateGetter` is `boardKeyboardCoordinateGetter` (Finding 1 fix,
+    // see above) — WITHOUT it, dnd-kit's 25px-per-press default never
+    // crosses a column boundary and arrow keys become a no-op.
     useSensor(KeyboardSensor, {
       keyboardCodes: {
         start: [KeyboardCode.Space],
         cancel: [KeyboardCode.Esc],
         end: [KeyboardCode.Space],
       },
+      coordinateGetter: boardKeyboardCoordinateGetter,
     }),
   )
 
@@ -314,6 +409,12 @@ function StatusColumnsRow({
   return (
     <DndContext
       sensors={sensors}
+      // closestCenter (rather than the DndContext default of
+      // rectIntersection) is dnd-kit's own recommended pairing for the
+      // keyboard sensor — it resolves the teleported drag rect from
+      // `boardKeyboardCoordinateGetter` to the target column predictably,
+      // without requiring pixel-perfect rect overlap.
+      collisionDetection={closestCenter}
       accessibility={{
         screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
         announcements,
@@ -322,7 +423,11 @@ function StatusColumnsRow({
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveTask(null)}
     >
-      <div className="flex flex-1">
+      {/* `min-h-0` lets this row take exactly the wrapper's remaining
+          height (after the header) rather than growing with content —
+          required for each StatusColumn's own `overflow-y-auto` below to
+          actually bound and scroll (Finding 3). */}
+      <div className="flex flex-1 min-h-0">
         {COLUMNS.map((col) => (
           <StatusColumn
             key={col.status}
@@ -394,7 +499,14 @@ function StatusColumn({
         // Vertical column dividers, restored (ADR-051 D4) — a subtle hairline
         // between columns so the board reads as a real grid, not a loose row
         // of stacks. Full-height via flex-1 stretch against the row's height.
-        'flex flex-col flex-1 min-w-[162px] min-h-[56px] gap-2 p-2 border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
+        // `min-h-0 overflow-y-auto overscroll-contain` (Finding 3): each lane
+        // gets its OWN vertical scroller bounded by the row's stretched
+        // height, instead of all six columns sharing one scroller sized to
+        // the tallest lane — a short lane's content (and its own header
+        // count above) stays visible/meaningful regardless of how far a
+        // neighboring lane has been scrolled, and scrolling one lane never
+        // bleeds into the page/board underneath (`overscroll-contain`).
+        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-2 p-2 overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
         isOver && !canAccept && 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40',
       )}

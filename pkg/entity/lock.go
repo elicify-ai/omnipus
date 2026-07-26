@@ -39,4 +39,15 @@ func (s *stripedLock) get(key string) *sync.Mutex {
 // Store per process" being true, since this package is meant to be
 // instantiated once per entity kind (entities/agents, entities/channels,
 // ...), not once system-wide like pkg/task.
+//
+// PLATFORM SCOPE: this mutex is in-process only, by construction — it is a
+// Go value living in one process's memory, so it cannot and does not
+// coordinate two OS processes. On POSIX, Store.Update/Create/Delete pair it
+// with fileutil.WithFlock's sidecar-file OS lock for the cross-process half
+// of the guarantee (ADR-054 D3). On Windows, WithFlock is a documented no-op
+// (pkg/fileutil/flock_windows.go), so this stripedLock is the ONLY
+// protection Store offers there — cross-process safety does not hold on
+// Windows. See Store.Update's doc comment for the full, precise breakdown,
+// and pkg/entity/store_crossprocess_test.go /
+// pkg/entity/flock_isolation_test.go for the tests proving the POSIX half.
 var fileLock = &stripedLock{}

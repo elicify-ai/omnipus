@@ -368,11 +368,47 @@ jobs:
         # offenders. A package that fails BOTH times is a real failure; a
         # non-zero exit with no package-level `FAIL <pkg>` line (a build/setup
         # error) is a real failure too and is never swallowed.
+        #
+        # DATA RACE carve-out: this step doesn't pass -race itself (that's the
+        # dedicated step below), but a "DATA RACE" marker in the output — e.g.
+        # a future GOFLAGS change, or a test binary that shells out with -race
+        # — is never routed through the flake filter. A race that only
+        # manifests under parallel package execution and vanishes under -p 1
+        # is the textbook signature of a genuine concurrency bug, not CI
+        # flakiness; defense in depth here is cheap.
         run: |
           set +e
           out=$(go test -tags goolm,stdjson -count=1 ./... 2>&1)
           code=$?
           echo "$out"
+          # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
+          # race can be reported without flipping the overall `go test` exit code
+          # (e.g. a test that shells out with -race and only inspects the child's
+          # stdout, or ignores cmd.Run()'s error). Checking after `[ $code -eq 0 ]`
+          # would skip exactly the case this carve-out's own rationale describes.
+          #
+          # Native bash substring match — NOT `printf ... | grep -q`. Under
+          # GitHub's `bash -eo pipefail`, `grep -q` exits on the FIRST match and
+          # closes the pipe, `printf` then dies of SIGPIPE (141), and pipefail
+          # makes the whole pipeline 141 — so the test evaluated FALSE and this
+          # carve-out was silently skipped whenever the race report appeared more
+          # than one pipe buffer (64 KB) from the end of $out. Real `go test`
+          # output is megabytes, so that was the COMMON case; it only "worked"
+          # against small synthetic fixtures. No pipe, no subprocess, no SIGPIPE.
+          if [[ $out == *"DATA RACE"* ]]; then
+            echo ""
+            echo "=== DATA RACE detected in parallel run — this is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (data race detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (data race detected — never excused): race detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race detected — now the ordinary short-circuit applies.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -389,23 +425,67 @@ jobs:
           exit $rc
 
       - name: Run go test -race (concurrency-sensitive packages)
-        # pkg/agent is excluded: it has 2 pre-existing races in unrelated tests
-        # that predate this PR. The packages below cover the full concurrency
+        # pkg/agent is now INCLUDED. It was excluded for "2 pre-existing races in
+        # unrelated tests"; a full `go test -race -count=1 -p 1 ./pkg/agent/` run
+        # on 2026-07-26 reported ZERO data races (ok, 124.6s), so the exclusion
+        # was stale and Constraint #7 ("pre-existing is never a closure path")
+        # applies. If a race reappears here it is a real finding, not a flake —
+        # the DATA RACE carve-out above makes it unexcusable.
+        # The packages below cover the full concurrency
         # contract introduced by MutateConfig, WithConfig, SaveConfigLocked,
-        # and the single-user bypass.
+        # and the single-user bypass, plus ADR-054's pkg/entity (64-shard
+        # striped mutex + sidecar flock) and pkg/agentstore.
         # pkg/gateway is excluded: every gateway file is //go:build !cgo, so
         # under CGO_ENABLED=1 the package compiles to nothing and the test
         # invocation fails. Race coverage for the gateway is provided by the
         # CGO=0 test job above.
-        # Same flake filter as the CGO=0 step above; the isolated re-run keeps
-        # -race so a genuine DATA RACE still fails twice and is reported.
+        #
+        # DATA RACE carve-out (never routed through the flake filter): a race
+        # that manifests under the default parallel `-p` (NumCPU) run but
+        # disappears when the same package is re-run isolated at -p 1 is the
+        # textbook signature of a genuine concurrency bug — shared state
+        # racing under real parallelism — not a timing flake. The flake filter
+        # below exists only for ordinary (non-race) test failures that are
+        # sensitive to GitHub-runner CPU oversubscription; it must never be
+        # allowed to excuse an actual detected race. So: if "DATA RACE" shows
+        # up anywhere in the first run's output, fail immediately and skip the
+        # isolated re-run/flake-filter path entirely — a race is never given a
+        # second chance to "pass isolated".
         env:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 240s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 240s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... 2>&1)
           code=$?
           echo "$out"
+          # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
+          # race can be reported without flipping the overall `go test` exit code
+          # (e.g. a test that shells out with -race and only inspects the child's
+          # stdout, or ignores cmd.Run()'s error). Checking after `[ $code -eq 0 ]`
+          # would skip exactly the case this carve-out's own rationale describes.
+          #
+          # Native bash substring match — NOT `printf ... | grep -q`. Under
+          # GitHub's `bash -eo pipefail`, `grep -q` exits on the FIRST match and
+          # closes the pipe, `printf` then dies of SIGPIPE (141), and pipefail
+          # makes the whole pipeline 141 — so the test evaluated FALSE and this
+          # carve-out was silently skipped whenever the race report appeared more
+          # than one pipe buffer (64 KB) from the end of $out. Real `go test`
+          # output is megabytes, so that was the COMMON case; it only "worked"
+          # against small synthetic fixtures. No pipe, no subprocess, no SIGPIPE.
+          if [[ $out == *"DATA RACE"* ]]; then
+            echo ""
+            echo "=== DATA RACE detected in parallel run — skipping flake filter entirely ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (data race detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (data race detected — never excused): race detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race detected — now the ordinary short-circuit applies.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code

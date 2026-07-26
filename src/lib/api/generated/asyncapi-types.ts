@@ -542,7 +542,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed";
+  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
 }
 
 export interface LoopStatusFrame {

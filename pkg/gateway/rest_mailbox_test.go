@@ -115,14 +115,30 @@ func TestSetAgentMailbox_RoutesPasswordToCredentialStore(t *testing.T) {
 	assert.Equal(t, "app-pass-123", got)
 }
 
+// TestSetAgentMailbox_UnknownAgent404 verifies the agent-existence guard at
+// the top of setAgentMailbox (rest_mailbox.go). setAgentMailbox has TWO
+// distinct 404 causes in sequence: (1) !a.agentExists(agentID), and (2) an
+// unknown workspace via a.loadWorkspace. The original version of this test
+// used workspace ID "ws" WITHOUT ever seeding a "ws" workspace file, so BOTH
+// preconditions were violated simultaneously — a regression that deleted the
+// agent-existence check entirely would fall through to the workspace check
+// and still 404, and this test would keep passing without ever exercising
+// the guard it's named for. Fixed by seeding "ws" as a real workspace (so the
+// ONLY remaining failure is the unknown agent) and asserting the body names
+// the agent, not the workspace.
 func TestSetAgentMailbox_UnknownAgent404(t *testing.T) {
 	api := newMailboxTestAPI(t, nil)
+	seedWorkspaceFile(t, api.homePath, "ws")
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/ghost/mailboxes/ws",
 		strings.NewReader(`{"enabled":true,"imap_host":"i","smtp_host":"s","username":"u"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.setAgentMailbox(w, r, "ghost", "ws")
 	require.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "ghost",
+		"the 404 must name the unknown agent, not an unrelated workspace-not-found rejection")
+	assert.NotContains(t, w.Body.String(), "workspace",
+		"with the workspace seeded, the ONLY possible 404 cause is the unknown agent")
 }
 
 func TestSetAgentMailbox_MissingRequiredField(t *testing.T) {
@@ -214,13 +230,30 @@ func TestSetAgentMailbox_SameAgentTwoWorkspacesBothRetrievable(t *testing.T) {
 	assert.NotEqual(t, gotA, gotB)
 }
 
+// TestGetAgentMailbox_NotConfigured404 verifies getAgentMailbox's
+// "no mailbox for this agent" branch. getAgentMailbox has THREE distinct 404
+// causes in sequence: (1) !a.agentExists(agentID) → "agent %q not found",
+// (2) cfg.Mailboxes[agentID] missing, (3) byWorkspace[workspaceID] missing —
+// (2) and (3) share the same "no mailbox configured..." message but (1) is
+// a DIFFERENT message. "mia" IS a real agent in this fixture (agentExists
+// resolves it via cfg.Agents.List), so the only reachable branch here is (2);
+// pin the actual message so a regression that broke agent resolution (which
+// would silently reroute this test through cause (1) instead) is caught
+// rather than masked by the shared 404 status.
 func TestGetAgentMailbox_NotConfigured404(t *testing.T) {
 	api := newMailboxTestAPI(t, nil)
 	w := httptest.NewRecorder()
 	api.getAgentMailbox(w, "mia", "ws_my")
 	require.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "no mailbox configured",
+		"the 404 must be the no-mailbox-configured branch, not a masked agent-not-found")
 }
 
+// TestGetAgentMailbox_WrongWorkspace404 mirrors TestGetAgentMailbox_NotConfigured404
+// but for cause (3) above: the agent has a mailbox in ws_my, but requesting it
+// under a different workspace must 404 — the pair, not just the agent, must
+// match. Pin the message for the same reason: this must not be silently
+// satisfied by an "agent not found" regression.
 func TestGetAgentMailbox_WrongWorkspace404(t *testing.T) {
 	// The agent has a mailbox in ws_my, but requesting it under a different
 	// workspace must 404 — the pair, not just the agent, must match.
@@ -233,6 +266,8 @@ func TestGetAgentMailbox_WrongWorkspace404(t *testing.T) {
 	w := httptest.NewRecorder()
 	api.getAgentMailbox(w, "mia", "ws_other")
 	require.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "no mailbox configured",
+		"the 404 must be the wrong-workspace branch, not a masked agent-not-found")
 }
 
 func TestGetAgentMailbox_ReturnsConfigNoSecret(t *testing.T) {

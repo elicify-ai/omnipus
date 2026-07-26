@@ -179,3 +179,27 @@ export function planPhaseChip(plan: {
   }
   return { label: phase.charAt(0).toUpperCase() + phase.slice(1), tone: 'info' }
 }
+
+// ── S2 UAT finding — `awaiting_owner_correction` plain-language copy ───────
+//
+// The warning chip above communicates urgency but not WHAT is needed. Before
+// this fix the only explanation anywhere was a hover-only `title` tooltip on
+// the WorkspaceGraphTab chip (dead on touch, easy to miss entirely, and not
+// wired into PlansFilterBand's tile at all). This constant is the single,
+// ALWAYS-VISIBLE explanation both surfaces render as plain text — not a
+// tooltip — so a first-time user gets it without hovering or tapping anything.
+//
+// Honesty constraint (do not relax without re-checking the backend): the
+// three corrective verbs named in the plan's own phase semantics — append a
+// tail, supersede a done member, targeted-retry a frozen member — map to a
+// real backend mechanism, `PlanEngine.AppendCorrection`
+// (`pkg/agent/plan_engine.go`), but as of this fix it has NO exposed REST
+// route and NO SPA control anywhere (only called from Go tests). Do not word
+// this copy as if any of the three is reachable from the UI — that would
+// name controls the user cannot actually use, which is the exact complaint
+// this fix responds to. The one REAL, present alternative is Stop: the plan
+// stays in `state: 'running'` throughout this phase, so `PlanActionButton`
+// (ADR-052 §6.8) still renders the ■ Stop action right next to this chip —
+// point to that real control instead of inventing one.
+export const AWAITING_OWNER_CORRECTION_EXPLANATION =
+  "This plan hit a dead end its own checks can't clear, and is on hold waiting for a correction. There's no in-app action for that yet — Stop this plan (■) and create a new one with the fix instead."

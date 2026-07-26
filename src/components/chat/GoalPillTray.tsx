@@ -11,18 +11,19 @@
 // falling back to '_default'). The latest goal-scoped JudgeVerdict (for the
 // expanded per-criterion view) is read from the global judgeActivity store.
 //
-// All 8 pill states render with distinct colour/icon grammar per the design:
+// All 9 pill states render with distinct colour/icon grammar per the design:
 // queued (muted) / active (gold target) / waiting_on_user (amber) /
 // judge_unavailable (amber) / re-planning (amber) / judging (muted pulse) /
-// done (green) / failed (red). The pill-state→render mapping lives in
-// `describePillState` below — an exhaustive switch with a `never` default so
-// a future 9th enum value fails typecheck.
+// done (green) / failed (red) / cleared (muted — a deliberate user stop is
+// neither success nor failure, UAT S3 fix). The pill-state→render mapping
+// lives in `describePillState` below — an exhaustive switch with a `never`
+// default so a future 10th enum value fails typecheck.
 //
 // `aria-live="polite"` on the tray root announces state transitions to screen
 // readers without stealing focus.
 
 import { useState } from 'react'
-import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, Hourglass, ChatCircleDots, FlagBannerFold, Pencil } from '@phosphor-icons/react'
+import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, Hourglass, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
@@ -72,6 +73,11 @@ function describePillState(state: GoalStatusFrame['state']): PillStateConfig {
       return { testId: 'goal-pill-done', label: 'done', accentClass: 'text-[color:var(--color-success)]', Icon: CheckCircle }
     case 'failed':
       return { testId: 'goal-pill-failed', label: 'failed', accentClass: 'text-[color:var(--color-error)]', Icon: XCircle }
+    case 'cleared':
+      // UAT S3 fix: a user-initiated `/goal clear` is a deliberate, successful
+      // stop — NOT a failure. Neutral/muted, distinct from both `done`
+      // (green success) and `failed` (red error).
+      return { testId: 'goal-pill-cleared', label: 'cleared', accentClass: 'text-[var(--color-muted)]', Icon: MinusCircle }
     default: {
       const exhaustiveCheck: never = state
       throw new Error(`GoalPillTray: unhandled goal pill state ${String(exhaustiveCheck)}`)

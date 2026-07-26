@@ -313,30 +313,117 @@ describe('PlansFilterBand — ▶/■/Play action button (ADR-052 §6.8)', () =>
     expect(onSelectPlan).not.toHaveBeenCalled()
   })
 
-  it('shows Play for a cancelled plan; confirming calls restartPlan', async () => {
+  it('shows Restart for a cancelled plan; confirming calls restartPlan (S4 UAT — vocabulary is Restart everywhere, not Play)', async () => {
     const user = userEvent.setup()
     const { onSelectPlan } = renderBand({
       plans: [makePlan({ id: 'plan-x', state: 'failed', failed_reason: 'stopped_by_user' })],
     })
-    await user.click(screen.getByRole('button', { name: 'Play plan Launch' }))
+    await user.click(screen.getByRole('button', { name: 'Restart plan Launch' }))
     const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Play' }))
+    expect(within(dialog).getByText('Restart this plan?')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Restart' }))
     expect(restartPlanMock).toHaveBeenCalledWith('plan-x')
     expect(onSelectPlan).not.toHaveBeenCalled()
   })
 
   it('shows no action button for a genuinely-failed plan (judge_rounds_exhausted)', () => {
     renderBand({ plans: [makePlan({ state: 'failed', failed_reason: 'judge_rounds_exhausted' })] })
-    expect(screen.queryByRole('button', { name: /Play plan/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Restart plan/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Execute plan/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Stop plan/ })).not.toBeInTheDocument()
   })
 
   it('shows no action button for a done plan', () => {
     renderBand({ plans: [makePlan({ state: 'done' })] })
-    expect(screen.queryByRole('button', { name: /Play plan/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Restart plan/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Execute plan/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Stop plan/ })).not.toBeInTheDocument()
+  })
+})
+
+// ── S2 UAT finding — a STUCK plan (`plan_phase: awaiting_owner_correction`)
+// rendered as plain "Running", indistinguishable from a plan making real
+// progress (testers saw 4-5 plans parked at once with no signal). Reuses
+// `planPhaseChip` (ADR-053 FE-2 §7), which WorkspaceGraphTab already wired up
+// — this tile was the surface it was missing from.
+
+describe('PlansFilterBand — plan-phase chip distinguishes parked from running (S2 UAT)', () => {
+  it('a normally-running plan (plan_phase idle) shows plain "Running" with NO phase chip and NO explanation', () => {
+    renderBand({ plans: [makePlan({ id: 'plan-run', state: 'running', plan_phase: 'idle' })] })
+    expect(screen.getByText('Running')).toBeInTheDocument()
+    expect(screen.queryByTestId('plan-phase-chip-plan-run')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('plan-phase-explanation-plan-run')).not.toBeInTheDocument()
+  })
+
+  it('a plan parked at awaiting_owner_correction renders a distinguishable warning chip alongside (not instead of) "Running"', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-parked', state: 'running', plan_phase: 'awaiting_owner_correction' })],
+    })
+    expect(screen.getByText('Running')).toBeInTheDocument()
+    expect(screen.getByTestId('plan-phase-chip-plan-parked')).toHaveTextContent(
+      'Re-planning — awaiting owner correction',
+    )
+  })
+
+  it('the parked chip comes with an ALWAYS-VISIBLE plain-language explanation — not a hover-only tooltip', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-parked2', state: 'running', plan_phase: 'awaiting_owner_correction' })],
+    })
+    const explanation = screen.getByTestId('plan-phase-explanation-plan-parked2')
+    // Visible text content, not hidden behind a `title` attribute (dead on touch,
+    // easy to miss — the exact S2 complaint this fix responds to).
+    expect(explanation).not.toHaveAttribute('title')
+    expect(explanation.textContent).toMatch(/no in-app action/i)
+    // Names the one REAL control available (Stop) instead of inventing UI for
+    // the three corrective verbs, which have no exposed route/control yet.
+    expect(explanation.textContent).toMatch(/stop this plan/i)
+    expect(explanation.textContent).not.toMatch(/append a tail|supersede|targeted.retry/i)
+  })
+
+  it('a quieter info sub-phase (e.g. dispatching) renders a chip with NO explanation (only the warning phase gets one)', () => {
+    renderBand({ plans: [makePlan({ id: 'plan-disp', state: 'running', plan_phase: 'dispatching' })] })
+    expect(screen.getByTestId('plan-phase-chip-plan-disp')).toHaveTextContent('Dispatching')
+    expect(screen.queryByTestId('plan-phase-explanation-plan-disp')).not.toBeInTheDocument()
+  })
+})
+
+// ── S3 UAT finding — a FAILED plan never explained why. `failed_reason` was
+// on the wire but never rendered; the tile showed only "Failed" with no next
+// step. US-9 Acceptance 2 (no Restart for a genuine failure) must still hold.
+
+describe('PlansFilterBand — failed_reason rendering (S3 UAT)', () => {
+  it('a genuinely-failed plan (judge_rounds_exhausted) renders its failure reason in human language', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-jre', state: 'failed', failed_reason: 'judge_rounds_exhausted' })],
+    })
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.getByTestId('plan-failed-reason-plan-jre')).toHaveTextContent('judge rounds exhausted')
+  })
+
+  it('a genuinely-failed plan (idle_expired) renders its failure reason in human language', () => {
+    renderBand({ plans: [makePlan({ id: 'plan-ie', state: 'failed', failed_reason: 'idle_expired' })] })
+    expect(screen.getByTestId('plan-failed-reason-plan-ie')).toHaveTextContent('idle expired')
+  })
+
+  it('a cancelled plan (stopped_by_user) does NOT duplicate the reason — "Cancelled" already says why', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-cancelled', state: 'failed', failed_reason: 'stopped_by_user' })],
+    })
+    expect(screen.getByText('Cancelled')).toBeInTheDocument()
+    expect(screen.queryByTestId('plan-failed-reason-plan-cancelled')).not.toBeInTheDocument()
+  })
+
+  it('a failed plan with no recorded failed_reason renders no reason line (nothing to show)', () => {
+    renderBand({ plans: [makePlan({ id: 'plan-nr', state: 'failed' })] })
+    expect(screen.queryByTestId('plan-failed-reason-plan-nr')).not.toBeInTheDocument()
+  })
+
+  it('still offers NO Restart button for a genuinely-failed plan even though it now explains why (US-9 Acceptance 2 must still hold)', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-jre2', state: 'failed', failed_reason: 'judge_rounds_exhausted' })],
+    })
+    expect(screen.getByTestId('plan-failed-reason-plan-jre2')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Restart plan/ })).not.toBeInTheDocument()
   })
 })
 

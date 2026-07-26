@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
+import { cn } from '@/lib/utils'
 import {
   createPlan,
   updatePlan,
@@ -49,6 +50,14 @@ interface FormState {
 const DEFAULT_BOUNDS_ROUNDS = '20'
 const DEFAULT_BOUNDS_DAYS = '7'
 
+// S2 UAT finding: these MUST mirror the server's real caps
+// (pkg/plan/plan.go maxPlanTitleRunes / maxPlanGoalRunes) — the Goal textarea
+// previously allowed 4000 chars client-side while the server 400s anything
+// over 2000 ("plan validation: goal must be 2000 characters or fewer"), so a
+// 2500-char goal was silently accepted by the UI and only rejected on submit.
+const TITLE_MAX_LEN = 200
+const GOAL_MAX_LEN = 2000
+
 const INITIAL_FORM: FormState = {
   title: '',
   goal: '',
@@ -84,6 +93,11 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
 
   const [form, setForm] = useState<FormState>(plan ? formFromPlan(plan) : INITIAL_FORM)
   const [titleError, setTitleError] = useState('')
+  // S2 UAT finding: owner_agent_id is server-required but previously had no
+  // client-side validation at all — a submit with the default '__none__'
+  // selection fired a doomed request that 400'd invisibly (toast covered by
+  // the slide-over footer). Validated the same way Title already is.
+  const [ownerError, setOwnerError] = useState('')
   const [approveErrors, setApproveErrors] = useState<PlanApproveTaskError[] | null>(null)
   const [approveErrorMessage, setApproveErrorMessage] = useState('')
 
@@ -91,6 +105,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
     if (open) {
       setForm(plan ? formFromPlan(plan) : INITIAL_FORM)
       setTitleError('')
+      setOwnerError('')
       setApproveErrors(null)
       setApproveErrorMessage('')
     }
@@ -172,11 +187,26 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
   })
 
   function handleSubmit() {
+    // Validate every required field before firing the request (mirrors the
+    // Title check that already existed) — batched so both errors show at
+    // once rather than the user fixing one and re-clicking to discover the
+    // next. Owner agent is server-required (400 invalid owner_agent_id) but
+    // defaults to the unselected '__none__' sentinel, so it needs the same
+    // guard Title has always had.
+    let hasError = false
     if (!form.title.trim()) {
       setTitleError('Title is required')
-      return
+      hasError = true
+    } else {
+      setTitleError('')
     }
-    setTitleError('')
+    if (form.ownerAgentId === '__none__' || !form.ownerAgentId.trim()) {
+      setOwnerError('Owner agent is required')
+      hasError = true
+    } else {
+      setOwnerError('')
+    }
+    if (hasError) return
     saveMutation.mutate()
   }
 
@@ -198,16 +228,27 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
 
         <div className="flex flex-col flex-1 gap-5 px-6 py-4 overflow-y-auto">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cp-title" className="text-[var(--color-secondary)]">
-              Title <span className="text-[var(--color-error)]">*</span>
-            </Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="cp-title" className="text-[var(--color-secondary)]">
+                Title <span className="text-[var(--color-error)]">*</span>
+              </Label>
+              <span
+                className={cn(
+                  'text-[10px]',
+                  form.title.length >= TITLE_MAX_LEN ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]',
+                )}
+              >
+                {form.title.length}/{TITLE_MAX_LEN}
+                {form.title.length >= TITLE_MAX_LEN ? ' — max length reached' : ''}
+              </span>
+            </div>
             <Input
               id="cp-title"
               value={form.title}
               onChange={(e) => { setForm((s) => ({ ...s, title: e.target.value })); setTitleError('') }}
               placeholder="v1.0 Launch"
               autoFocus
-              maxLength={200}
+              maxLength={TITLE_MAX_LEN}
               aria-invalid={!!titleError}
               aria-describedby={titleError ? 'cp-title-error' : undefined}
             />
@@ -215,14 +256,25 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cp-goal" className="text-[var(--color-secondary)]">Goal</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="cp-goal" className="text-[var(--color-secondary)]">Goal</Label>
+              <span
+                className={cn(
+                  'text-[10px]',
+                  form.goal.length >= GOAL_MAX_LEN ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]',
+                )}
+              >
+                {form.goal.length}/{GOAL_MAX_LEN}
+                {form.goal.length >= GOAL_MAX_LEN ? ' — max length reached' : ''}
+              </span>
+            </div>
             <Textarea
               id="cp-goal"
               value={form.goal}
               onChange={(e) => setForm((s) => ({ ...s, goal: e.target.value }))}
               placeholder="Plain-prose objective the plan judge evaluates against when the DoD is empty…"
               rows={3}
-              maxLength={4000}
+              maxLength={GOAL_MAX_LEN}
               className="text-xs"
             />
           </div>
@@ -241,10 +293,12 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Owner agent</Label>
+            <Label className="text-[var(--color-secondary)]">
+              Owner agent <span className="text-[var(--color-error)]">*</span>
+            </Label>
             <SmartSelect
               value={form.ownerAgentId}
-              onValueChange={(v) => setForm((s) => ({ ...s, ownerAgentId: v }))}
+              onValueChange={(v) => { setForm((s) => ({ ...s, ownerAgentId: v })); setOwnerError('') }}
               placeholder={teamLoading ? 'Loading team…' : 'Select an owner'}
               disabled={teamLoading}
               triggerClassName="h-9 text-sm"
@@ -257,6 +311,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
                 }),
               ]}
             />
+            {ownerError && <p id="cp-owner-error" className="text-xs text-[var(--color-error)]">{ownerError}</p>}
             {teamError && (
               <p className="text-xs text-[var(--color-muted)]">Team list unavailable — showing all agents</p>
             )}

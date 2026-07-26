@@ -97,6 +97,21 @@ run_gotest() {
   local out; out=$(GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
+  # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
+  # race can be reported without flipping the overall `go test` exit code (a test
+  # that shells out with -race and only reads the child's stdout, for example).
+  # A race that vanishes under the isolated `-p 1` re-run is the TEXTBOOK
+  # signature of a real concurrency bug, not a flake, so it is never excused.
+  # Native bash substring match, NOT `echo | grep -q`: grep -q exits on the first
+  # match and closes the pipe, echo dies of SIGPIPE, and under `set -o pipefail`
+  # the pipeline status becomes 141 — the test would silently evaluate false on
+  # any multi-MB log. (Mirrors the same guard in .github/workflows/pr.yml.)
+  if [[ $out == *"DATA RACE"* ]]; then
+    echo ""
+    echo "=== DATA RACE detected — never excused by an isolated re-run ==="
+    echo "$out" | grep -aE '^FAIL[[:space:]]|DATA RACE' | head -20
+    return 1
+  fi
   [ $code -eq 0 ] && return 0
   local failed; failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
   [ -z "$failed" ] && return $code

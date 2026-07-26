@@ -281,6 +281,13 @@ func (s *Store) Get(id string) (*Task, error) {
 // the filesystem (cycle checks are the caller's responsibility via the DAG
 // validator). Returns a user-facing error on invalid input.
 func (t *Task) normalize() error {
+	// Trim before validating (S2 UAT finding B sibling: the same
+	// untrimmed-`== ""` pattern that let a whitespace-only Plan title through
+	// also existed here). A whitespace-only title (" \t ") is not user-facing
+	// content — reject it as empty rather than persisting a blank-looking
+	// board card; a legitimate title's incidental leading/trailing whitespace
+	// is silently normalized rather than rejected.
+	t.Title = strings.TrimSpace(t.Title)
 	if t.Title == "" {
 		return verr("title is required")
 	}
@@ -523,6 +530,17 @@ func (s *Store) Create(t *Task) error {
 		}
 	}
 
+	// S2 UAT finding A: derive the `blocked` side-state at create time too, not
+	// just on later Update/AddDependency/RestartReset. The create_task agent
+	// tool (pkg/tools/task.go) seeds new tasks directly into `next` (not the
+	// REST-only `inbox` default) and accepts blocked_by in the same call — a
+	// task created that way with an unmet dependency must land `blocked`
+	// immediately rather than surfacing as a dispatchable `next` task until
+	// some later write happens to touch it. recomputeBlockedStateLocked is a
+	// no-op for every status other than next/blocked (inbox included), so the
+	// REST create path (always `inbox`) is unaffected by this call.
+	s.recomputeBlockedStateLocked(t)
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	t.CreatedAt = now
 	t.UpdatedAt = now
@@ -698,13 +716,18 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	}
 
 	if patch.Title != nil {
-		if *patch.Title == "" {
+		// Trim before validating (S2 UAT finding B sibling — see normalize()'s
+		// matching comment): a whitespace-only patch title is rejected as
+		// empty; a legitimate title's incidental leading/trailing whitespace
+		// is normalized away rather than persisted verbatim.
+		trimmedTitle := strings.TrimSpace(*patch.Title)
+		if trimmedTitle == "" {
 			return nil, verr("title must not be empty")
 		}
-		if len([]rune(*patch.Title)) > 200 {
+		if len([]rune(trimmedTitle)) > 200 {
 			return nil, verr("title must be 200 characters or fewer")
 		}
-		t.Title = *patch.Title
+		t.Title = trimmedTitle
 	}
 	if patch.Description != nil {
 		if len(*patch.Description) > 2000 {
@@ -828,13 +851,10 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		if len(t.BlockedBy) == 0 {
 			t.BlockedBy = nil
 		}
-		// Recompute the derived `blocked` side-state from the new blocked_by set,
-		// mirroring AddDependency. Without this, a `next` task that gains an
-		// unmet blocker stays `next` (dispatchable), violating the store's own
-		// contract that `blocked` reflects an unmet dependency. recompute...Locked
-		// is a no-op for statuses other than `next`/`blocked`, so terminal and
-		// in_progress tasks are unaffected.
-		s.recomputeBlockedStateLocked(t)
+		// The derived `blocked` side-state is recomputed once, unconditionally,
+		// at the end of this function (after every patch field — including a
+		// same-call Status change — has been merged); see that call's doc
+		// comment for why a second recompute here would be redundant.
 	}
 	if patch.Todos != nil {
 		if err := validateTodos(*patch.Todos); err != nil {
@@ -957,6 +977,24 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	if t.CancelReason != "" && t.Status != StatusFailed {
 		return nil, verr("cancel_reason is only valid when status is failed")
 	}
+
+	// S2 UAT finding A: derive the `blocked` side-state from the (now fully
+	// merged) blocked_by set as the single terminal step of every persisted
+	// Update, regardless of which patch field(s) triggered this call. Before
+	// this, only a patch that touched BlockedBy itself (or the AddDependency/
+	// RestartReset call paths) ever recomputed it — a plain
+	// `Patch{Status: next}` on a task whose EXISTING (on-disk, unmodified)
+	// blocked_by set still had an unmet dependency sailed through as a
+	// dispatchable `next` instead of the derived `blocked` the contract
+	// promises (Task.yaml: "set automatically on an unmet dependency"). Client
+	// requests are still never allowed to SET `blocked` directly — that 400
+	// (ErrBlockedNotSettable) is enforced above, before this point is ever
+	// reached; this only ever silently redirects a `next` outcome to
+	// `blocked` (or the reverse, once every blocker is done), exactly
+	// mirroring what AddDependency/RestartReset already do.
+	// recomputeBlockedStateLocked is a no-op for every other status
+	// (in_progress/done/failed/inbox unaffected).
+	s.recomputeBlockedStateLocked(t)
 
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {

@@ -290,6 +290,45 @@ describe('WorkspaceTasksTab — New task', () => {
   })
 })
 
+// ── S3 UAT finding — quick-create inside a plan-scoped board silently lands
+// the task UNPLANNED (`plan_id: null`, intended — CreateTaskSlideOver always
+// receives `planId={null}` here, "no filter-scoped quick-create"). With the
+// heading reading "{plan} — tasks", the board then immediately reads "No
+// tasks match the current filter" and the new task appears to vanish. This
+// is not a behavior change — just telling the user up front, at the point
+// they're about to act, via an always-visible (non-tooltip) hint.
+describe('WorkspaceTasksTab — unplanned quick-create hint (S3 UAT)', () => {
+  it('shows no hint when no plan filter is active', async () => {
+    renderTab()
+    await screen.findByRole('button', { name: /new task/i })
+    expect(screen.queryByTestId('new-task-unplanned-hint')).not.toBeInTheDocument()
+  })
+
+  it('shows a visible hint naming the recovery path once a plan filter is active', async () => {
+    const plan = makePlan({ title: 'Payments revamp' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    const user = userEvent.setup()
+    renderTab()
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+
+    const hint = await screen.findByTestId('new-task-unplanned-hint')
+    expect(hint.textContent).toMatch(/unplanned/i)
+    expect(hint.textContent).toMatch(/move to plan/i)
+  })
+
+  it('the hint disappears again once the plan filter is cleared', async () => {
+    const plan = makePlan({ title: 'Payments revamp' })
+    vi.mocked(fetchPlans).mockResolvedValue([plan])
+    const user = userEvent.setup()
+    renderTab()
+    await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
+    await screen.findByTestId('new-task-unplanned-hint')
+
+    await user.click(screen.getByRole('button', { name: 'select-all' }))
+    await waitFor(() => expect(screen.queryByTestId('new-task-unplanned-hint')).not.toBeInTheDocument())
+  })
+})
+
 // ── Plan mutation wiring (through the callback props passed to the band) ────
 //
 // Only Clear and Edit remain screen-owned — Execute/Stop/Play moved entirely

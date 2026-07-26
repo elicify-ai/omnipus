@@ -18,16 +18,18 @@
 // as a contract asymmetry for Wave 2 backend to reconcile.
 //
 // ADR-053 §Contract Surface — "Pill-state enum"/R§8.10: `GoalStatusFrame.state`
-// is now an 8-value pill enum (queued/active/waiting_on_user/
+// was an 8-value pill enum (queued/active/waiting_on_user/
 // judge_unavailable/re-planning/judging/done/failed), superseding the
 // original 4-value active/paused_judge_unavailable/brake_fired/cleared set
-// — NO back-compat, and no `cleared` literal survives. This is a MINIMAL
-// compat fix to render all 8 states sanely; it deliberately does NOT do the
+// — NO back-compat at the time. The UAT S3 fix re-added `cleared` as a 9th
+// value so a user-initiated `/goal clear` no longer collapses into `failed`
+// (a deliberate, successful stop is not a failure). This is a MINIMAL
+// compat fix to render all 9 states sanely; it deliberately does NOT do the
 // FE-1 pill redesign (bottom-right relocation, per-goal-id multi-pill,
-// click-to-expand criteria) — that remains a Phase-2 deliverable. Since
-// there is no `cleared` state to compare against any more, this component
-// renders whenever a non-null `goalStatus` frame is present; the store
-// clears the bucket (session switch / reset) rather than a state literal.
+// click-to-expand criteria) — that remains a Phase-2 deliverable (see
+// GoalPillTray.tsx, which already implements it). This component renders
+// whenever a non-null `goalStatus` frame is present; the store clears the
+// bucket (session switch / reset) rather than any particular state literal.
 //
 // `aria-live="polite"` on the root announces state transitions to screen
 // readers without stealing focus.
@@ -116,6 +118,14 @@ function describeNonActiveState(state: Exclude<GoalPillState, 'active'>): Status
         testId: 'goal-indicator-failed',
         text: 'failed',
         className: 'text-[color:var(--color-error)]',
+      }
+    case 'cleared':
+      // UAT S3 fix: a user-initiated `/goal clear` is a deliberate, successful
+      // stop — NOT a failure. Neutral/muted, distinct from `done` and `failed`.
+      return {
+        testId: 'goal-indicator-cleared',
+        text: 'cleared',
+        className: 'text-[var(--color-muted)]',
       }
     default: {
       const exhaustiveCheck: never = state

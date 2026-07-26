@@ -1066,3 +1066,217 @@ func TestLoop_IdleExpiry_7d(t *testing.T) {
 }
 
 func strPtrForTest(s string) *string { return &s }
+
+// --- UAT S3 fix: stable per-generation goal_id + non-failure user-clear ----
+//
+// goal_loop-uat-s3.md findings 1 & 2 (2026-07): (1) GoalStatusFrame.goal_id
+// was never populated, so every goal landed in the SPA's `_default` pill
+// bucket and a second goal set after a clear could not get its own pill/
+// history; (2) `/goal clear` emitted state="failed" for a deliberate,
+// successful user action. Both are fixed in goal_loop.go/goal_triggers.go;
+// these tests are the DoD: (a) an emitted GoalStatusFrame carries a
+// non-empty, STABLE goal_id, and (b) a user-initiated clear does NOT emit
+// state="failed".
+
+// goalStatusPayloadsFor drains the event collector and returns every
+// GoalStatusChangedPayload observed for sid, in emission order — mirrors
+// conformance_design_test.go's goalPillStates but also exposes GoalID, which
+// these tests assert on directly.
+func goalStatusPayloadsFor(c *eventCollector, sid string) []GoalStatusChangedPayload {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []GoalStatusChangedPayload
+	for _, e := range c.events {
+		if e.Kind != EventKindGoalStatusChanged {
+			continue
+		}
+		p, ok := e.Payload.(GoalStatusChangedPayload)
+		if !ok || p.SessionID != sid {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear proves finding 1:
+// every GoalStatusFrame for an active goal carries a non-empty goal_id that
+// stays STABLE across every frame of that one generation (set, amend
+// +confirm, an ordinary round-advance turn) — never fabricated per-frame —
+// and a genuinely NEW goal set after `/goal clear` mints a DIFFERENT id. This
+// is exactly the UAT-confirmed symptom ("goal -> amend -> clear -> second
+// goal left exactly ONE pill and no history"): without a stable-but-distinct
+// id, the SPA's GoalPillTray (one pill per goal-id) cannot tell the second
+// goal apart from the first.
+func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+
+	c, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	// --- Goal #1: set, then amend+confirm (must KEEP the same goal-id — it's
+	// the SAME goal being refined, not a new one) ---
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal condition A", UserInitiated: true}, agentInst, &opts)
+	meta1, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta1.GoalID == "" {
+		t.Fatal("a freshly-set goal must carry a non-empty GoalID")
+	}
+	firstID := meta1.GoalID
+
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal condition A amended", UserInitiated: true}, agentInst, &opts)
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal confirm", UserInitiated: true}, agentInst, &opts)
+	metaAmended, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaAmended.GoalID != firstID {
+		t.Fatalf("amendment must keep the same goal-id, got %q want %q", metaAmended.GoalID, firstID)
+	}
+
+	// An ordinary (non-claim) worker turn re-emits the SAME goal-id.
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{finalContent: "still working"})
+	metaAfterTurn, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaAfterTurn.GoalID != firstID {
+		t.Fatalf("an ordinary turn must not change the goal-id, got %q want %q", metaAfterTurn.GoalID, firstID)
+	}
+
+	// --- Clear goal #1, then set a genuinely new goal #2 ---
+	al.clearGoal(sid, store, goalClearNoteUser)
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal condition B", UserInitiated: true}, agentInst, &opts)
+	meta2, err := store.GetMeta(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta2.GoalID == "" {
+		t.Fatal("the second goal must also carry a non-empty GoalID")
+	}
+	if meta2.GoalID == firstID {
+		t.Fatal("a NEW goal set after /goal clear must mint a DIFFERENT goal-id from the cleared goal " +
+			"(UAT S3: this is what distinguishes the second goal's pill/history from the first)")
+	}
+
+	// Drain: cleanup unsubscribes and blocks until the collector goroutine has
+	// appended every already-emitted, already-buffered event to c.events —
+	// without this, reading c.events right after the last call above races
+	// the background goroutine that populates it.
+	cleanup()
+
+	// Every emitted frame for goal #1's lifecycle carries firstID; goal #2's
+	// own frame carries its own, different id. None is ever empty.
+	payloads := goalStatusPayloadsFor(c, sid)
+	sawFirstID, sawSecondID := false, false
+	for _, p := range payloads {
+		switch p.GoalID {
+		case firstID:
+			sawFirstID = true
+		case meta2.GoalID:
+			sawSecondID = true
+		case "":
+			t.Fatalf("emitted GoalStatusFrame with an empty goal_id: %+v", p)
+		default:
+			t.Fatalf("emitted GoalStatusFrame with an unexpected goal_id %q: %+v", p.GoalID, p)
+		}
+	}
+	if !sawFirstID {
+		t.Fatal("expected at least one emitted frame carrying the first goal's id")
+	}
+	if !sawSecondID {
+		t.Fatal("expected at least one emitted frame carrying the second goal's id")
+	}
+}
+
+// TestGoalClear_UserInitiated_EmitsClearedNotFailed proves finding 2: the
+// user-facing `/goal clear` path (applyGoalCommandPrompt's clear-verb branch,
+// the ONLY caller of clearGoal with goalClearNoteUser) emits pill state
+// "cleared" — NOT "failed". A deliberate, successful user action must never
+// paint the pill as a failure.
+func TestGoalClear_UserInitiated_EmitsClearedNotFailed(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+
+	c, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal clear", UserInitiated: true}, agentInst, &opts)
+	if !matched || !handled {
+		t.Fatalf("clear: matched=%v handled=%v, want both true", matched, handled)
+	}
+	if !strings.Contains(reply, "cleared") {
+		t.Fatalf("clear reply = %q, want a cleared confirmation (chat text is unaffected by this fix)", reply)
+	}
+
+	// Drain (see the sibling test's identical comment): block until the
+	// collector goroutine has appended every buffered event before reading it.
+	cleanup()
+
+	payloads := goalStatusPayloadsFor(c, sid)
+	if len(payloads) == 0 {
+		t.Fatal("expected at least one emitted GoalStatusFrame for the clear")
+	}
+	last := payloads[len(payloads)-1]
+	if last.State == goalPillFailed {
+		t.Fatal("user-initiated clear must NEVER emit state=failed (UAT S3: a deliberate, successful " +
+			"action must not read as a failure)")
+	}
+	if last.State != goalPillCleared {
+		t.Fatalf("user-initiated clear emitted state %q, want %q", last.State, goalPillCleared)
+	}
+}
+
+// TestGoalClear_GenuineFailures_StillEmitFailed proves the S3 fix did not
+// regress the real terminal-failure paths — round-bound-reached, budget-
+// exhausted, and idle-expired clears are NOT user-initiated and must still
+// emit "failed", unchanged.
+func TestGoalClear_GenuineFailures_StillEmitFailed(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+
+	c, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	al.clearGoal(sid, store, "round bound reached (3/3)")
+
+	// Drain (see the sibling tests' identical comment).
+	cleanup()
+
+	payloads := goalStatusPayloadsFor(c, sid)
+	if len(payloads) == 0 {
+		t.Fatal("expected an emitted GoalStatusFrame")
+	}
+	if got := payloads[len(payloads)-1].State; got != goalPillFailed {
+		t.Fatalf("round-bound-reached clear emitted state %q, want %q (this path is NOT user-initiated "+
+			"and must still report a genuine failure)", got, goalPillFailed)
+	}
+}

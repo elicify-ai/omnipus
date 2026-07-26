@@ -115,12 +115,25 @@ func (s *Store[T]) write(id string, t *T) error {
 // — Create never silently overwrites).
 //
 // The whole existence-check + write is performed under BOTH the in-process
-// striped mutex (fast path, same process) and the cross-process sidecar
-// lockfile (D3), and — per D6's "write-then-verify" corollary — Create reads
-// the just-written file back and confirms it parses with the expected ID
-// before reporting success. This is the durable fix for the ADR's motivating
-// failure class: a roster that names an entity which was never actually
-// persisted.
+// striped mutex (fast path, same process, every platform) and the
+// cross-process sidecar lockfile (D3) — the latter POSIX-only, since
+// fileutil.WithFlock is a documented no-op on Windows (see the package doc
+// and Windows caveat below Update's doc comment) — and — per D6's
+// "write-then-verify" corollary — Create reads the just-written file back
+// and confirms it parses with the expected ID before reporting success.
+// This is the durable fix for the ADR's motivating failure class: a roster
+// that names an entity which was never actually persisted.
+//
+// Cross-process guarantee, proven with real forked processes (not just
+// asserted): pkg/entity/store_crossprocess_test.go's
+// TestCrossProcess_CreateRaceOnSameID_ExactlyOneWinner races N independent OS
+// processes calling Create with the SAME id — exactly one may observe a nil
+// error, every other process must observe ErrAlreadyExists, and the
+// persisted record must be exactly the winner's own payload, never a
+// corrupted mix of two processes' writes. Proven non-vacuous: with
+// fileutil.WithFlock's call removed from this method, the test reliably
+// observes more than one winner (see that test's doc comment for the
+// before/after evidence).
 func (s *Store[T]) Create(t *T) error {
 	id := s.acc.GetID(t)
 	if id == "" {
@@ -248,10 +261,44 @@ func (s *Store[T]) List() (result []T, skipped []string, err error) {
 
 // Update loads the entity identified by id, applies mutate to it, and
 // persists the result — all under the SAME striped-mutex + sidecar-flock
-// acquisition, closing the cross-process read-modify-write race D3
-// describes. mutate must not change the entity's ID (SetID is not
-// re-validated after mutate runs); it returning a non-nil error aborts the
-// whole cycle with nothing written.
+// acquisition, closing the read-modify-write race D3 describes. mutate must
+// not change the entity's ID (SetID is not re-validated after mutate runs);
+// it returning a non-nil error aborts the whole cycle with nothing written.
+//
+// Concurrency guarantee, stated precisely (closes the ADR-054 D3 testing
+// gap — see pkg/entity/store_crossprocess_test.go and
+// pkg/entity/flock_isolation_test.go):
+//   - In-process (any platform): the 64-shard striped mutex (lock.go)
+//     serializes goroutines racing this same id. Proven by
+//     TestSameEntityContention_ConcurrentUpdatesSerializeNoLostUpdate.
+//   - Cross-process, POSIX only (Linux/macOS/BSD): fileutil.WithFlock takes
+//     a real OS advisory lock on the sidecar file (Store.lockPath) around
+//     the whole load/mutate/write cycle, so two independent OS processes —
+//     each with their own, unrelated stripedLock instance — still cannot
+//     interleave a read-modify-write on the same entity. Proven with real
+//     forked processes by TestCrossProcess_ConcurrentUpdatesSerializeNoLostUpdate,
+//     and isolated from the mutex's contribution (so a regression deleting
+//     this WithFlock call cannot pass silently) by
+//     TestUpdate_HoldsExclusiveFlockOnSidecarDuringCriticalSection.
+//   - Cross-process, WINDOWS: fileutil.WithFlock is a documented no-op there
+//     (pkg/fileutil/flock_windows.go) and pkg/entity has no compensating
+//     single-writer-goroutine mechanism. Two Windows processes concurrently
+//     calling Update/Create/Delete on the same entity are NOT protected from
+//     each other — only the in-process guarantee above holds. This is a
+//     deliberate, documented scope decision (not an oversight): see
+//     ADR-054 §5's Windows note and CLAUDE.md's Storage section.
+//
+// The above is Update's OWN cross-process proof. Create's and Delete's
+// analogous guarantees are proven separately, by their own dedicated
+// cross-process tests (a prior revision of this package proved only Update
+// and left Create/Delete asserted-but-untested — see ADR-054 §5.1's
+// accounting of exactly what closed that gap):
+//   - Create: TestCrossProcess_CreateRaceOnSameID_ExactlyOneWinner (a same-ID
+//     creation race — exactly one winner, never two, never a corrupted
+//     record).
+//   - Delete (racing this method): TestCrossProcess_DeleteRacesUpdate_NeverResurrectsDeletedEntity
+//     (a concurrent Delete must never be "resurrected" by an in-flight
+//     Update that read pre-delete state).
 func (s *Store[T]) Update(id string, mutate func(*T) error) (*T, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
@@ -284,6 +331,21 @@ func (s *Store[T]) Update(id string, mutate func(*T) error) (*T, error) {
 
 // Delete removes the entity's data file. Per the lockPath invariant above,
 // the sidecar lockfile itself is NEVER removed here.
+//
+// Cross-process guarantee, proven with real forked processes: this method
+// shares its sidecar lock path with Update (same id → same lockPath), so a
+// concurrent Update racing this Delete must serialize against it rather than
+// interleave — an interleaving would let an Update that already read
+// pre-delete state recreate the file on its write, "resurrecting" an entity
+// this method just reported as successfully removed.
+// pkg/entity/store_crossprocess_test.go's
+// TestCrossProcess_DeleteRacesUpdate_NeverResurrectsDeletedEntity races
+// exactly that shape and asserts the entity is gone once every process
+// finishes, regardless of scheduling order. Proven non-vacuous: with
+// fileutil.WithFlock's call removed from this method only (Update's own
+// flock call left intact), the test reliably observes the entity still
+// existing afterward — a resurrected record (see that test's doc comment for
+// the before/after evidence).
 func (s *Store[T]) Delete(id string) error {
 	if err := validateID(id); err != nil {
 		return err

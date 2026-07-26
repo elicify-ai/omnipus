@@ -231,6 +231,83 @@ func TestPlanCRUD_RoundtripAndProgress(t *testing.T) {
 // helpers just for this one call site).
 func taskStatusPtr(s task.Status) *task.Status { return &s }
 
+// TestPlanCreate_WhitespaceOnlyTitleRejected is a regression test for S2 UAT
+// finding B: `title: "   \t  "` (whitespace-only) returned 201 and produced an
+// unnamed, unfindable/unfilterable plan chip, because plan.Store's own
+// required-field check is a plain `== ""` — never true for a non-empty string
+// of only whitespace. The fix trims in the REST handler (handleWorkspacePlan
+// Create/handlePlanPut) before the title ever reaches the store, so a
+// whitespace-only title now hits the SAME "title is required" 400 an empty
+// string already returned.
+func TestPlanCreate_WhitespaceOnlyTitleRejected(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Plans WS")
+
+	body := `{"workspace_id":"` + wsID + `","title":"   \t  ","owner_agent_id":"` + testPlansAgentID + `"}`
+	w := postPlan(t, api, wsID, body)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp.Error, "title is required")
+}
+
+// TestPlanCreate_TitleTrimmed proves the flip side of the same fix: a
+// legitimate title with incidental leading/trailing whitespace is accepted
+// (201, not 400) and persisted trimmed — not verbatim with the whitespace
+// still attached, which would itself be "unfindable/unfilterable" by an exact
+// title search.
+func TestPlanCreate_TitleTrimmed(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Plans WS")
+
+	body := `{"workspace_id":"` + wsID + `","title":"  Launch v1  ","owner_agent_id":"` + testPlansAgentID + `"}`
+	w := postPlan(t, api, wsID, body)
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	var created gen.Plan
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	assert.Equal(t, "Launch v1", created.Title, "response title must be trimmed")
+
+	wGet := getPlan(t, api, created.Id)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var got gen.Plan
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+	assert.Equal(t, "Launch v1", got.Title, "persisted title must be trimmed")
+}
+
+// TestPlanPut_WhitespaceOnlyTitleRejectedAndTrimmed mirrors the create-path
+// tests above for the PUT /plans/{id} update path (handlePlanPut has the same
+// untrimmed-check gap on patch.Title).
+func TestPlanPut_WhitespaceOnlyTitleRejectedAndTrimmed(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Plans WS")
+
+	createBody := `{"workspace_id":"` + wsID + `","title":"Launch v1","owner_agent_id":"` + testPlansAgentID + `"}`
+	wCreate := postPlan(t, api, wsID, createBody)
+	require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
+	var created gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &created))
+
+	// Whitespace-only PUT title -> 400.
+	wBad := putPlan(t, api, created.Id, `{"title":"   \t  "}`)
+	require.Equal(t, http.StatusBadRequest, wBad.Code, "body=%s", wBad.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(wBad.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp.Error, "title must not be empty")
+
+	// Legitimate PUT title with surrounding whitespace -> 200, stored trimmed.
+	wGood := putPlan(t, api, created.Id, `{"title":"  Renamed Plan  "}`)
+	require.Equal(t, http.StatusOK, wGood.Code, "body=%s", wGood.Body.String())
+	var updated gen.Plan
+	require.NoError(t, json.Unmarshal(wGood.Body.Bytes(), &updated))
+	assert.Equal(t, "Renamed Plan", updated.Title)
+
+	wGet := getPlan(t, api, created.Id)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var got gen.Plan
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+	assert.Equal(t, "Renamed Plan", got.Title, "persisted title must be trimmed")
+}
+
 // TestPlanApprove_MemberCriteriaGateReturns400WithTaskErrors verifies FR-084:
 // the unconditional member-task-criteria gate rejects approval with the
 // {task_errors:[{task_id,title,reason}]} body shape the SPA parses.
@@ -496,19 +573,34 @@ func TestPlanOwnerAgent_ValidationRejectsUnregisteredSystemAndWorker(t *testing.
 	)
 	wsID := createTestWorkspace(t, api, "Owner Validation WS")
 
+	// wantErr pins the EXACT distinguishing substring validatePlanOwnerAgent
+	// (rest_plans.go) produces for each cause, surfaced verbatim on the wire
+	// via jsonErr(w, http.StatusBadRequest, err.Error()) at both the POST and
+	// PUT call sites. Without this, all three subtests below assert only 400,
+	// but validatePlanOwnerAgent has exactly TWO distinct rejection messages
+	// ("is not a registered agent" for both the genuinely-unregistered ID AND
+	// a nil-cfg edge case; "is a System Agent or worker and cannot own a
+	// plan" for a real-but-non-chat-target agent) — a regression that, say,
+	// dropped the IsChatTarget() check and let the registry lookup treat
+	// System/Worker agents as "not found" (e.g. a registry that filters them
+	// out) would still 400 every subtest here, without ever exercising the
+	// system/worker-specific branch two of the three subtests exist to check.
 	cases := []struct {
 		name    string
 		ownerID string
+		wantErr string
 	}{
-		{"unregistered", "nonexistent-agent-id"},
-		{"system_agent", "judge-agent"},
-		{"worker_agent", "worker-agent"},
+		{"unregistered", "nonexistent-agent-id", "is not a registered agent"},
+		{"system_agent", "judge-agent", "is a System Agent or worker and cannot own a plan"},
+		{"worker_agent", "worker-agent", "is a System Agent or worker and cannot own a plan"},
 	}
 	for _, tc := range cases {
 		t.Run("create_"+tc.name, func(t *testing.T) {
 			w := postPlan(t, api, wsID,
 				`{"workspace_id":"`+wsID+`","title":"Bad Owner `+tc.name+`","owner_agent_id":"`+tc.ownerID+`"}`)
 			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.wantErr,
+				"the 400 must name the specific owner_agent_id rejection reason, not a masked generic one")
 		})
 	}
 
@@ -523,6 +615,8 @@ func TestPlanOwnerAgent_ValidationRejectsUnregisteredSystemAndWorker(t *testing.
 		t.Run("put_"+tc.name, func(t *testing.T) {
 			w := putPlan(t, api, p.Id, `{"owner_agent_id":"`+tc.ownerID+`"}`)
 			require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.wantErr,
+				"the 400 must name the specific owner_agent_id rejection reason, not a masked generic one")
 		})
 	}
 }

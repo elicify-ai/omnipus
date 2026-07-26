@@ -19,7 +19,13 @@ import {
   tasksQueryKeys,
   plansQueryKeys,
 } from '@/lib/api'
-import { planDisplayColor, planDisplayLabel, planPhaseChip } from '@/lib/planStateColors'
+import {
+  planDisplayColor,
+  planDisplayLabel,
+  planPhaseChip,
+  planSecondaryChipLabel,
+  AWAITING_OWNER_CORRECTION_EXPLANATION,
+} from '@/lib/planStateColors'
 import { cn } from '@/lib/utils'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
@@ -237,33 +243,43 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
           </>
         )}
 
-        {activePlan && (
-          <div className="flex flex-1 min-w-0 items-center gap-2 pl-2">
-            {/* ADR-052 FR-015/US-8 — a user-cancelled plan renders
-                "Cancelled" (orange), distinct from a genuine "Failed" (red),
-                via the shared planDisplayColor/planDisplayLabel helpers. */}
-            <span
-              className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
-              style={{
-                color: planDisplayColor(activePlan),
-                backgroundColor: `${planDisplayColor(activePlan)}1a`,
-              }}
-            >
-              {planDisplayLabel(activePlan)}
-            </span>
+        {activePlan && (() => {
+          // ADR-053 FE-2 §7 (D7) — the plan's runtime sub-phase. The
+          // re-planning hold (`plan_phase: awaiting_owner_correction`) is the
+          // durable, operator-actionable signal: the plan reached
+          // all-terminal-but-unmet and is waiting on an owner correction to
+          // continue — rendered as a warning chip so it can't blend into the
+          // gold Running badge. The other non-idle sub-phases
+          // (dispatching/judging/synthesizing) render as a quieter info chip.
+          const chip = planPhaseChip(activePlan)
+          // S3 UAT finding — `failed_reason` (e.g. `judge_rounds_exhausted`)
+          // was on the wire but never rendered; the UI showed only the word
+          // "Failed" with no explanation. Skip the user-cancel case — that
+          // already renders as "Cancelled" via planDisplayLabel, so a second
+          // "stopped by user" line here would be redundant.
+          const failureReason =
+            activePlan.state === 'failed' &&
+            activePlan.failed_reason &&
+            activePlan.failed_reason !== 'stopped_by_user'
+              ? planSecondaryChipLabel(activePlan)
+              : null
+          return (
+          <div className="flex flex-1 min-w-0 flex-col gap-1 pl-2">
+            <div className="flex flex-1 min-w-0 items-center gap-2">
+              {/* ADR-052 FR-015/US-8 — a user-cancelled plan renders
+                  "Cancelled" (orange), distinct from a genuine "Failed" (red),
+                  via the shared planDisplayColor/planDisplayLabel helpers. */}
+              <span
+                className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                style={{
+                  color: planDisplayColor(activePlan),
+                  backgroundColor: `${planDisplayColor(activePlan)}1a`,
+                }}
+              >
+                {planDisplayLabel(activePlan)}
+              </span>
 
-            {/* ADR-053 FE-2 §7 (D7) — the plan's runtime sub-phase. The
-                re-planning hold (`plan_phase: awaiting_owner_correction`) is
-                the durable, operator-actionable signal: the plan reached
-                all-terminal-but-unmet and is waiting on an owner correction
-                (tail / supersede / targeted-retry) to continue — rendered as
-                a warning chip so it can't blend into the gold Running badge.
-                The other non-idle sub-phases (dispatching/judging/synthesizing)
-                render as a quieter info chip — a live-progress hint. */}
-            {(() => {
-              const chip = planPhaseChip(activePlan)
-              if (!chip) return null
-              return (
+              {chip && (
                 <span
                   data-testid={`plan-phase-chip-${activePlan.id}`}
                   className={cn(
@@ -272,45 +288,64 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                       ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                       : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
                   )}
-                  title={
-                    chip.tone === 'warning'
-                      ? 'This plan is waiting on an owner correction (append a tail, supersede a done member, or targeted-retry a frozen member) to continue.'
-                      : undefined
-                  }
                 >
                   {chip.label}
                 </span>
-              )
-            })()}
-            {activePlan.goal && (
-              <p
-                className="flex-1 min-w-0 truncate text-xs text-[var(--color-muted)]"
-                title={activePlan.goal}
+              )}
+              {activePlan.goal && (
+                <p
+                  className="flex-1 min-w-0 truncate text-xs text-[var(--color-muted)]"
+                  title={activePlan.goal}
+                >
+                  {activePlan.goal}
+                </p>
+              )}
+              {/* Selected plan's completion — the share of its tasks that are
+                  `done`. Labelled + tooltipped so it reads as plan progress, not
+                  some ambient metric. */}
+              <div
+                className="flex flex-shrink-0 items-center gap-1.5"
+                role="img"
+                aria-label={`Plan progress: ${Math.round((activePlan.progress ?? 0) * 100)}% of tasks done`}
+                title={`Plan progress — ${Math.round((activePlan.progress ?? 0) * 100)}% of this plan's tasks are done`}
               >
-                {activePlan.goal}
+                <div className="h-1.5 w-16 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-[var(--color-accent)]"
+                    style={{ width: `${Math.round((activePlan.progress ?? 0) * 100)}%` }}
+                  />
+                </div>
+                <span className="flex-shrink-0 text-right text-[10px] text-[var(--color-muted)]">
+                  {Math.round((activePlan.progress ?? 0) * 100)}% done
+                </span>
+              </div>
+            </div>
+
+            {/* S2 UAT finding — replaces the hover-only `title` tooltip
+                (dead on touch, easy to miss) with always-visible plain-
+                language text: what the plan is waiting for, and the one
+                REAL control available right now (Stop), never inventing UI
+                that doesn't exist for the three corrective verbs. */}
+            {chip?.tone === 'warning' && (
+              <p
+                data-testid={`plan-phase-explanation-${activePlan.id}`}
+                className="text-[11px] leading-snug text-[color:var(--color-warning)]"
+              >
+                {AWAITING_OWNER_CORRECTION_EXPLANATION}
               </p>
             )}
-            {/* Selected plan's completion — the share of its tasks that are
-                `done`. Labelled + tooltipped so it reads as plan progress, not
-                some ambient metric. */}
-            <div
-              className="flex flex-shrink-0 items-center gap-1.5"
-              role="img"
-              aria-label={`Plan progress: ${Math.round((activePlan.progress ?? 0) * 100)}% of tasks done`}
-              title={`Plan progress — ${Math.round((activePlan.progress ?? 0) * 100)}% of this plan's tasks are done`}
-            >
-              <div className="h-1.5 w-16 rounded-full bg-[var(--color-surface-2)] overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-[var(--color-accent)]"
-                  style={{ width: `${Math.round((activePlan.progress ?? 0) * 100)}%` }}
-                />
-              </div>
-              <span className="flex-shrink-0 text-right text-[10px] text-[var(--color-muted)]">
-                {Math.round((activePlan.progress ?? 0) * 100)}% done
-              </span>
-            </div>
+
+            {failureReason && (
+              <p
+                data-testid={`plan-failed-reason-${activePlan.id}`}
+                className="text-[11px] leading-snug text-[var(--color-muted)]"
+              >
+                Why: {failureReason}
+              </p>
+            )}
           </div>
-        )}
+          )
+        })()}
       </div>
       )}
 

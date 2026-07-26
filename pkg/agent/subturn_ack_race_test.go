@@ -101,15 +101,35 @@ func TestUpdateToolCallStatusWithRetry_SyncDoesNotWaitForDelayedRecord(t *testin
 
 	const callID = session.ToolCallID("c-sync")
 
+	// Baseline: bare NOT-FOUND store lookups (the exact path this test's single
+	// attempt takes), max of 3 samples, so the threshold tracks this machine's
+	// current cost instead of a fixed number. See the sibling test below for why
+	// a hardcoded `elapsed < 10*time.Millisecond` was wrong here: 10ms IS
+	// updateToolCallStatusRetryDelays[0], so it had zero margin and could not
+	// distinguish "one slow attempt under CI load" from "one retry".
+	var baseline time.Duration
+	for i := 0; i < 3; i++ {
+		bStart := time.Now()
+		_, bErr := store.UpdateToolCallStatusAndResult(sessionID, callID, "error", 42, nil)
+		if sample := time.Since(bStart); sample > baseline {
+			baseline = sample
+		}
+		require.NoError(t, bErr)
+	}
+
 	start := time.Now()
 	found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "error", 42, false, nil)
 	elapsed := time.Since(start)
 
 	require.NoError(t, updateErr)
 	assert.False(t, found, "sync delegation's first-attempt not-found must remain terminal")
-	assert.Less(t, elapsed, 10*time.Millisecond,
+	// One retry would add at least updateToolCallStatusRetryDelays[0] of sleep on
+	// top of a second lookup, so at or below (baseline + first delay) provably
+	// means exactly one attempt was made.
+	assert.Less(t, elapsed, baseline+updateToolCallStatusRetryDelays[0],
 		"sync delegation must make exactly one attempt — no retry backoff — since a delayed "+
-			"write is never coming for this call site")
+			"write is never coming for this call site (baseline=%v, first retry delay=%v)",
+		baseline, updateToolCallStatusRetryDelays[0])
 }
 
 // TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry verifies
@@ -133,13 +153,39 @@ func TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry(t *testing.
 			},
 		}))
 
+		// Baseline: time BARE store updates on the same already-present record
+		// (no retry wrapper, so structurally zero retries). Take the max of a
+		// few samples so the threshold absorbs whatever this machine's disk and
+		// scheduler cost happens to be right now.
+		//
+		// WHY NOT A FIXED THRESHOLD: this assertion used to be
+		// `elapsed < 10*time.Millisecond`, which is EXACTLY
+		// updateToolCallStatusRetryDelays[0]. That gave it zero margin — it
+		// could not distinguish "no retry on a loaded machine" from "one
+		// retry", so it failed under parallel CI load and was absorbed by the
+		// flake filter twice (2026-07-26) while asserting nothing reliable.
+		var baseline time.Duration
+		for i := 0; i < 3; i++ {
+			bStart := time.Now()
+			_, bErr := store.UpdateToolCallStatusAndResult(sessionID, callID, "success", 0, nil)
+			if sample := time.Since(bStart); sample > baseline {
+				baseline = sample
+			}
+			require.NoError(t, bErr)
+		}
+
 		start := time.Now()
 		found, updateErr := updateToolCallStatusWithRetry(store, sessionID, callID, "success", 100, async, nil)
 		elapsed := time.Since(start)
 
 		require.NoError(t, updateErr)
 		assert.True(t, found)
-		assert.Less(t, elapsed, 10*time.Millisecond,
-			"an already-present record must resolve on the first attempt, no retry delay (async=%v)", async)
+		// A single retry costs at least updateToolCallStatusRetryDelays[0] of
+		// sleep ON TOP of a second store call, so anything at or below
+		// (baseline + first delay) provably took the no-retry path.
+		assert.Less(t, elapsed, baseline+updateToolCallStatusRetryDelays[0],
+			"an already-present record must resolve on the first attempt, no retry delay "+
+				"(async=%v, baseline=%v, first retry delay=%v)",
+			async, baseline, updateToolCallStatusRetryDelays[0])
 	}
 }

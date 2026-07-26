@@ -9141,7 +9141,7 @@ export const GoalStatusFrame = z
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed"]),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
   })
   .strict();
 

@@ -134,8 +134,12 @@ export interface AgentLike {
  * (`blocked_by`), something depends on IT, or it is a member of a Plan (plan
  * membership is itself a grouping structure, even before any `blocked_by`
  * edge exists among the plan's members). Everything else is a one-time,
- * unlinked task that belongs in the "N unlinked tasks" tray, never rendered
- * as a lone dot.
+ * unlinked task, excluded from the canvas entirely (never rendered as a lone
+ * dot) and returned via `unlinked` instead. There is no per-task "tray" UI —
+ * GraphView only surfaces the *count* (`layout.unlinked.length`) as a small
+ * banner pointing back to the Board/List (S3 UAT fix #9); an earlier version
+ * of this comment promised an "N unlinked tasks" tray, which was deliberately
+ * dropped before ship — don't resurrect it from this doc comment.
  *
  * `candidates` should be the same population `buildTaskGraph` would render as
  * nodes (already surface/parent-filtered) — a dependent hiding outside that

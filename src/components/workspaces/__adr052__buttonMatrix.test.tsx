@@ -116,7 +116,7 @@ describe('ADR-052 §6.8 button matrix — planActionFor (plan-row data table, re
     ['draft', undefined, 'execute', 'draft -> Execute'],
     ['approved', undefined, 'stop', 'approved (cap-queued, Edge Cases) -> Stop — must stay Stoppable while queued'],
     ['running', undefined, 'stop', 'running -> Stop'],
-    ['failed', 'stopped_by_user', 'play', 'cancelled (failed+stopped_by_user) -> Play (restart)'],
+    ['failed', 'stopped_by_user', 'play', 'cancelled (failed+stopped_by_user) -> Restart (S4 UAT: label is "Restart", internal PlanAction value stays "play")'],
     ['failed', 'judge_rounds_exhausted', null, 'genuinely failed (judge-exhausted) -> no restart offered'],
     ['failed', 'idle_expired', null, 'genuinely failed (idle-expired) -> no restart offered'],
     ['failed', undefined, null, 'failed with no recorded reason -> never assume cancelled, no button'],
@@ -178,15 +178,15 @@ describe('ADR-052 US-11 Acceptance 3 / FR-020 — PlanActionButton: confirm-moda
     expect(restartPlanMock).not.toHaveBeenCalled()
   })
 
-  it('cancelled plan: confirming Play calls restartPlan(plan.id) — the dedicated restart route (FR-026), never PUT', async () => {
+  it('cancelled plan: confirming Restart calls restartPlan(plan.id) — the dedicated restart route (FR-026), never PUT (S4 UAT: aria-label/button/title/toast all say Restart, not Play)', async () => {
     const user = userEvent.setup()
     renderWithClient(
       <PlanActionButton plan={basePlan({ id: 'plan-99', state: 'failed', failed_reason: 'stopped_by_user' })} />,
     )
 
-    await user.click(screen.getByRole('button', { name: 'Play plan Ship the epic' }))
+    await user.click(screen.getByRole('button', { name: 'Restart plan Ship the epic' }))
     expect(screen.getByText('Restart this plan?')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Play' }))
+    await user.click(screen.getByRole('button', { name: 'Restart' }))
 
     await waitFor(() => expect(restartPlanMock).toHaveBeenCalledWith('plan-99'))
     expect(executePlanMock).not.toHaveBeenCalled()
@@ -209,7 +209,7 @@ describe('ADR-052 US-11 Acceptance 3 / FR-020 — PlanActionButton: confirm-moda
     expect(container.querySelectorAll('button').length).toBe(0)
   })
 
-  it('a genuinely-failed plan (judge_rounds_exhausted) renders no action button — no Play offered (US-9 Acceptance 2)', () => {
+  it('a genuinely-failed plan (judge_rounds_exhausted) renders no action button — no Restart offered (US-9 Acceptance 2)', () => {
     const { container } = renderWithClient(
       <PlanActionButton plan={basePlan({ state: 'failed', failed_reason: 'judge_rounds_exhausted' })} />,
     )

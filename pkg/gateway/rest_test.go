@@ -1188,9 +1188,14 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 	// skill-authoring, summarize) for validation.
 
 	tmpDir := t.TempDir()
+	// config.json must exist on disk because updateAgent's persist step
+	// (safeUpdateConfigJSON) does a read-modify-write cycle against it — but
+	// the "list" CONTENT is otherwise inert: agents resolve exclusively via
+	// the agent store (entities/agents/<id>.json, ADR-054), never this
+	// file's list, so an empty list is the honest fixture (not the
+	// misleading non-empty agent-a/agent-b array this used to carry).
 	cfgPath := tmpDir + "/config.json"
-	// Two agents in config.json; skills update targets only agent-A.
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"agent-a","name":"Agent A"},{"id":"agent-b","name":"Agent B"}]}}`
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
@@ -1261,8 +1266,12 @@ func TestUpdateAgent_SkillsClear(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
+	// config.json must exist on disk for updateAgent's safeUpdateConfigJSON
+	// read-modify-write cycle; the "list" content itself is inert (agents
+	// resolve via the agent store, ADR-054) so an empty list is the honest
+	// fixture.
 	cfgPath := tmpDir + "/config.json"
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"skilled-agent","name":"Skilled Agent","skills":["web-research"]}]}}`
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
@@ -1315,8 +1324,12 @@ func TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
+	// config.json must exist on disk for updateAgent's safeUpdateConfigJSON
+	// read-modify-write cycle; the "list" content itself is inert (agents
+	// resolve via the agent store, ADR-054) so an empty list is the honest
+	// fixture.
 	cfgPath := tmpDir + "/config.json"
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"mem-agent","name":"Mem Agent"}]}}`
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
@@ -1490,9 +1503,6 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 	)
 
 	tmpDir := t.TempDir()
-	cfgPath := tmpDir + "/config.json"
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"my-agent","name":"My Agent"}]}}`
-	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -1507,6 +1517,15 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 			},
 		},
 	}
+	// This request is rejected (400, unknown skill id) at validateSkillIDs,
+	// before updateAgent ever reaches its agent-store persist step, so a real
+	// entity record is not strictly required for THIS test to pass — seeded
+	// anyway so the fixture matches production shape (a "my-agent" a caller
+	// could legitimately PUT against), rather than an in-memory-only agent.
+	// (FIXTURE-VACUITY fix: this used to instead os.WriteFile a raw
+	// config.json blob with a non-empty "agents.list" array — dead weight,
+	// since nothing in this test reads that raw file back.)
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1590,9 +1609,18 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
+	// cfgPath must exist on disk because the final assertion below re-reads
+	// config.json to confirm agents.list stays empty on disk (ADR-054) — but
+	// the "list" CONTENT written here is otherwise inert: updateAgentTools's
+	// persist step resolves/updates "update-agent" exclusively via the agent
+	// store (entities/agents/update-agent.json), never this file's list, so
+	// there is no reason to seed a non-empty (and therefore misleading)
+	// "agents.list" blob here. (FIXTURE-VACUITY fix: this used to write a
+	// non-empty "list":[{"id":"update-agent",...}] array, which read as if
+	// it mattered for resolution — it never did; only seedAgentEntities
+	// below does.)
 	cfgPath := tmpDir + "/config.json"
-	// Write a minimal config.json so safeUpdateConfigJSON can read it.
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"update-agent","name":"Update Agent"}]}}`
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
@@ -1700,9 +1728,6 @@ func TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
-	cfgPath := tmpDir + "/config.json"
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"update-agent-legacy","name":"Update Agent Legacy"}]}}`
-	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
@@ -1717,6 +1742,14 @@ func TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected(t *testing.T) {
 			},
 		},
 	}
+	// This request is rejected (400, coverage gap) before updateAgentTools
+	// ever reaches its agent-store persist step, so a real entity record is
+	// not strictly required for THIS test to pass — seeded anyway so the
+	// fixture matches production shape. (FIXTURE-VACUITY fix: this used to
+	// instead os.WriteFile a raw config.json blob with a non-empty
+	// "agents.list" array — dead weight, since nothing in this test reads
+	// that raw file back.)
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
@@ -1748,8 +1781,12 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
+	// config.json must exist on disk for updateAgentTools' safeUpdateConfigJSON
+	// read-modify-write cycle; the "list" content itself is inert (agents
+	// resolve via the agent store, ADR-054) so an empty list is the honest
+	// fixture.
 	cfgPath := tmpDir + "/config.json"
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"update-agent-both","name":"Update Agent Both"}]}}`
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
@@ -1833,8 +1870,12 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
+	// config.json must exist on disk for updateAgentTools' safeUpdateConfigJSON
+	// read-modify-write cycle; the "list" content itself is inert (agents
+	// resolve via the agent store, ADR-054) so an empty list is the honest
+	// fixture.
 	cfgPath := tmpDir + "/config.json"
-	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"reload-test-agent","name":"Reload Test Agent"}]}}`
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{

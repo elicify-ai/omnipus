@@ -119,9 +119,9 @@ describe('PlanActionButton — rendering per state', () => {
     expect(screen.getByRole('button', { name: 'Stop plan Launch' })).toBeInTheDocument()
   })
 
-  it('renders Play for a cancelled plan', () => {
+  it('renders Restart for a cancelled plan (S4 UAT — Play/Restart vocabulary must agree; the spec calls it Restart)', () => {
     renderButton(makePlan({ state: 'failed', failed_reason: 'stopped_by_user' }))
-    expect(screen.getByRole('button', { name: 'Play plan Launch' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restart plan Launch' })).toBeInTheDocument()
   })
 
   it('renders nothing for a genuinely-failed plan', () => {
@@ -168,12 +168,13 @@ describe('PlanActionButton — confirm-modal gating (ADR-052 FR-020)', () => {
     expect(stopPlanMock).toHaveBeenCalledWith('plan-1')
   })
 
-  it('Play opens a confirm modal; confirming calls restartPlan', async () => {
+  it('Restart opens a confirm modal; confirming calls restartPlan (S4 UAT — aria-label/button/title/toast all say Restart)', async () => {
     const user = userEvent.setup()
     renderButton(makePlan({ state: 'failed', failed_reason: 'stopped_by_user' }))
-    await user.click(screen.getByRole('button', { name: 'Play plan Launch' }))
+    await user.click(screen.getByRole('button', { name: 'Restart plan Launch' }))
     const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Play' }))
+    expect(within(dialog).getByText('Restart this plan?')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Restart' }))
     expect(restartPlanMock).toHaveBeenCalledWith('plan-1')
   })
 })

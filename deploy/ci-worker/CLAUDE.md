@@ -4,6 +4,29 @@ Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by C
 whenever a file in this directory (or a descendant) is read. See the root `CLAUDE.md`'s
 "Local PR-runner" pointer for the short version.
 
+## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
+
+The worker runs a FASTER SUBSET of GitHub CI. Two limits that have already caused a
+false sense of completeness (2026-07-26 — a green worker verdict was reported upstream
+as if it were a full pass):
+
+1. **There is no `-race` gate here at all.** `runci.sh` never invokes `go test -race`.
+   GitHub Actions (`.github/workflows/pr.yml`, the "Run go test -race" step) is the ONLY
+   place data races are detected. A green run from this worker carries **zero race signal**.
+2. **`run_gotest` excuses flakes.** A package that fails the parallel run but passes the
+   isolated `-p 1` re-run prints `FLAKE (passed isolated)` and the gate still returns 0.
+   That is intentional for timing-sensitive integration tests — but it means a green
+   verdict can contain an absorbed failure. **Read the log for `FLAKE (passed isolated)`
+   before treating a green as clean.** (This is exactly how a real `pkg/agent` failure
+   was absorbed on 2026-07-26 and reported upstream as an unqualified pass.)
+
+   A detected `DATA RACE` is now carved out and can never be flake-excused (mirrors the
+   guard in `pr.yml`) — but since nothing here runs with `-race`, that carve-out only
+   fires if a race is reported by a test that shells out with `-race` itself.
+
+**Bottom line:** treat this worker as a fast pre-merge smoke gate, not as the authority on
+concurrency. For race coverage, push and read GitHub CI.
+
 ## Local PR-runner (ci-omnipus Fly worker)
 
 The Go test/build suite is run on a dedicated Fly worker, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Testing & building — CI is the authority" section). The worker is a sized, on-demand box with persistent caches, driven via `flyctl ssh console`.

@@ -84,6 +84,9 @@ type MetaPatch struct {
 	// Goal loop fields (ADR-049 D6/D7, /goal). Only non-nil fields are
 	// written; callers that want to CLEAR a goal must pass an empty-string
 	// GoalCondition explicitly (matching the TaskID clear convention).
+	// GoalID is the stable per-generation goal identifier (see SessionMeta.GoalID's
+	// doc comment); pass an empty string to CLEAR it on /goal clear.
+	GoalID             *string
 	GoalCondition      *string
 	GoalRoundsUsed     *int
 	GoalMaxRounds      *int
@@ -633,6 +636,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.WorkspaceID != nil {
 		meta.WorkspaceID = *patch.WorkspaceID
+	}
+	if patch.GoalID != nil {
+		meta.GoalID = *patch.GoalID
 	}
 	if patch.GoalCondition != nil {
 		meta.GoalCondition = *patch.GoalCondition

@@ -602,7 +602,13 @@ type PlanStatusChangedPayload struct {
 // goal_status frame (generated.GoalStatusFrame). Session-scoped — SessionID
 // is the transcript session the goal belongs to.
 type GoalStatusChangedPayload struct {
-	SessionID    string `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// GoalID is the stable per-generation goal identifier (ADR-053 R§8.11,
+	// UAT S3 fix) — see session.SessionMeta.GoalID's doc comment. Empty for a
+	// legacy pre-upgrade goal that never had one minted; the WS forwarder
+	// (pkg/gateway/websocket.go) omits GoalStatusFrame.GoalId in that case
+	// (it is OPTIONAL on the wire).
+	GoalID       string `json:"goal_id,omitempty"`
 	Condition    string `json:"condition"`
 	Round        int    `json:"round"`
 	MaxRounds    int    `json:"max_rounds"`

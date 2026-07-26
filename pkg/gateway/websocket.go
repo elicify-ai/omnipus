@@ -3464,6 +3464,15 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				Cap:          p.Cap,
 				State:        p.State,
 			}
+			// ADR-053 R§8.11 / UAT S3 fix: goal_id disambiguates which goal
+			// generation this frame updates so the SPA's GoalPillTray can key
+			// one pill per goal-id instead of collapsing every goal a session
+			// ever carried into the `_default` bucket. Optional on the wire —
+			// omitted for a legacy pre-upgrade goal that never had one minted.
+			if p.GoalID != "" {
+				gid := p.GoalID
+				goalF.GoalId = &gid
+			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run
