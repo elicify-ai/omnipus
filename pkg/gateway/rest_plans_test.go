@@ -416,6 +416,49 @@ func TestPlanStop_RequiresRunning(t *testing.T) {
 	assert.Equal(t, gen.PlanFailedReasonStoppedByUser, *stopped.FailedReason)
 }
 
+// TestPlanGet_WirePlanPhaseStalled is the wire-visibility half of the
+// swimlane-board UAT fix (backend detection lives in
+// pkg/agent/plan_engine.go's surfaceStallIfAny/PhaseStalled): GET
+// /api/v1/plans/{id} must emit plan_phase: "stalled" once the plan engine
+// has persisted it, so the SPA's planPhaseChip can render a distinct chip
+// instead of an indistinguishable "Running 0/N". toWirePlan itself needs no
+// code change for this — it already forwards EffectivePlanPhase() verbatim
+// (rest_plans.go:163-164) — this test proves that generic forwarding
+// actually carries the new enum value end to end through the generated
+// wire type, not just in principle.
+func TestPlanGet_WirePlanPhaseStalled(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Stalled WS")
+
+	wCreate := postPlan(t, api, wsID,
+		`{"workspace_id":"`+wsID+`","title":"Stalled plan","owner_agent_id":"`+testPlansAgentID+`"}`)
+	require.Equal(t, http.StatusCreated, wCreate.Code)
+	var p gen.Plan
+	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	wApprove := postPlanAction(t, api, p.Id, "approve")
+	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
+
+	running := plan.StateRunning
+	stalled := plan.PhaseStalled
+	handover := "[stalled] This plan has no dispatchable or in-flight members, so it cannot make progress right now."
+	_, uerr := api.planStore.Update(p.Id, plan.Patch{State: &running, PlanPhase: &stalled, HandoverText: &handover})
+	require.NoError(t, uerr)
+
+	wGet := getPlan(t, api, p.Id)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var got gen.Plan
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+	require.NotNil(t, got.PlanPhase)
+	assert.Equal(t, gen.PlanPlanPhaseStalled, *got.PlanPhase)
+
+	// HandoverText is server-side only (never wire-exposed) — the raw JSON
+	// must not leak it. It names internal task IDs meant for the owner
+	// agent's chat turn, not for a REST client.
+	assert.NotContains(t, wGet.Body.String(), "handover_text",
+		"HandoverText must stay off the wire — it's for the owner agent's chat turn, not REST clients")
+}
+
 // TestTaskPlanID_CrossWorkspaceRejected verifies the plan_id FK gap fix
 // (rest_tasks.go): a task cannot reference a plan in a different workspace.
 func TestTaskPlanID_CrossWorkspaceRejected(t *testing.T) {

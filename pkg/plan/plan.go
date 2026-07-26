@@ -235,6 +235,26 @@ const (
 	PhaseSynthesizing            PlanPhase = "synthesizing"
 	PhaseIdle                    PlanPhase = "idle"
 	PhaseAwaitingOwnerCorrection PlanPhase = "awaiting_owner_correction"
+	// PhaseStalled (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) is
+	// set by PlanEngine.surfaceStallIfAny (pkg/agent/plan_engine.go) when a
+	// RUNNING, non-all-terminal plan has no member currently dispatchable
+	// (`next`) or in flight (`in_progress`) — i.e. the engine's own dispatch
+	// loop is guaranteed to be a no-op every tick until something changes (a
+	// dependency resolves, or the owner corrects the plan). Reverts to
+	// PhaseDispatching once a member becomes dispatchable/in-flight again.
+	//
+	// PRECEDENCE (never relax without re-checking pkg/agent/plan_engine.go):
+	// PhaseAwaitingOwnerCorrection is a strictly MORE SPECIFIC condition (a
+	// plan-judge dead end on an all-terminal DAG) and must NEVER be masked by
+	// PhaseStalled — surfaceStallIfAny explicitly refuses to touch PlanPhase
+	// while EffectivePlanPhase() == PhaseAwaitingOwnerCorrection. The two are
+	// mutually exclusive by construction: entering PhaseAwaitingOwnerCorrection
+	// requires an all-terminal member DAG (applyJudgeRoundOutcomeLocked is its
+	// only writer), while PhaseStalled requires a NON-terminal one (processPlan
+	// only ever reaches the stall check after its own allMembersTerminal check
+	// has already come back false) — so processPlan can never reach the stall
+	// check while genuinely parked at awaiting_owner_correction.
+	PhaseStalled PlanPhase = "stalled"
 )
 
 // validPlanPhases is the set of allowed non-empty PlanPhase values.
@@ -244,6 +264,7 @@ var validPlanPhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
 	PhaseSynthesizing:            true,
 	PhaseIdle:                    true,
 	PhaseAwaitingOwnerCorrection: true,
+	PhaseStalled:                 true,
 }
 
 // IsValidPlanPhase reports whether p is a known, explicit plan phase. The

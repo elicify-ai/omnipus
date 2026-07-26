@@ -1296,6 +1296,12 @@ func TestPlanEngine_StallSurfaced_WhenNoMemberIsDispatchableOrInFlight(t *testin
 	if !strings.Contains(got.HandoverText, stuck.ID) {
 		t.Fatalf("HandoverText = %q, want it to name the stuck member %q", got.HandoverText, stuck.ID)
 	}
+	// Swimlane-board UAT fix: the stall must be wire-visible via plan_phase,
+	// not just server-side HandoverText, so a "Running 0/N" plan renders a
+	// distinct chip instead of looking indistinguishable from live progress.
+	if got.PlanPhase != plan.PhaseStalled {
+		t.Fatalf("PlanPhase = %q, want %q", got.PlanPhase, plan.PhaseStalled)
+	}
 	events := h.notif.eventList()
 	stallWakes := 0
 	for _, e := range events {
@@ -1338,6 +1344,9 @@ func TestPlanEngine_StallSurfaced_WhenNoMemberIsDispatchableOrInFlight(t *testin
 	if strings.HasPrefix(got.HandoverText, stallHandoverNotePrefix) {
 		t.Fatalf("HandoverText = %q, want the stall note cleared once the plan is unstuck", got.HandoverText)
 	}
+	if got.PlanPhase != plan.PhaseDispatching {
+		t.Fatalf("PlanPhase = %q, want it reverted to %q once the plan is unstuck", got.PlanPhase, plan.PhaseDispatching)
+	}
 	dispatchedStuck := false
 	for _, id := range h.disp.callList() {
 		if id == stuck.ID {
@@ -1372,6 +1381,55 @@ func TestPlanEngine_StallNotSurfaced_WhenMemberInFlight(t *testing.T) {
 	for _, e := range h.notif.eventList() {
 		if e.SourceKind == "plan_stalled" {
 			t.Fatalf("unexpected plan_stalled wake for a plan with an in-flight member: %+v", e)
+		}
+	}
+}
+
+// TestPlanEngine_StallNeverMasksAwaitingOwnerCorrection is the PRECEDENCE
+// test for the swimlane-board UAT fix: awaiting_owner_correction (a
+// plan-judge dead end, ADR-053 C1) is a strictly more specific condition
+// than a generic stall and must NEVER be overwritten by one — testers
+// praised that chip by name (see plan.PhaseStalled's doc comment for the
+// full rationale). In production this scenario cannot arise (a plan only
+// ever enters awaiting_owner_correction with an all-terminal member DAG,
+// which processPlan's own allMembersTerminal check always intercepts before
+// reaching surfaceStallIfAny) — this test exercises surfaceStallIfAny's own
+// explicit guard directly, so the invariant is pinned even against a future
+// refactor of that call order.
+func TestPlanEngine_StallNeverMasksAwaitingOwnerCorrection(t *testing.T) {
+	h := newTestPlanEngine(t)
+	steeringText := "Plan judge round 1: the plan judge found the Definition of Done UNMET."
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "p1", Title: "p1", WorkspaceID: "ws", OwnerAgentID: "owner",
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		HandoverText: steeringText,
+	})
+	p, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A member set that WOULD read as stalled (planStallReason returns
+	// non-empty) if the precedence guard were not in place.
+	stalledLookingTasks := []task.Task{
+		{ID: "t1", Title: "stuck", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusBlocked, BlockedBy: []string{"outside"}},
+	}
+
+	h.pe.surfaceStallIfAny(p, stalledLookingTasks)
+
+	got, gerr := h.plans.Get("p1")
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+	if got.PlanPhase != plan.PhaseAwaitingOwnerCorrection {
+		t.Fatalf("PlanPhase = %q, want it to stay %q (never masked by a generic stall)",
+			got.PlanPhase, plan.PhaseAwaitingOwnerCorrection)
+	}
+	if got.HandoverText != steeringText {
+		t.Fatalf("HandoverText = %q, want the judge's steering text left untouched, got clobbered", got.HandoverText)
+	}
+	for _, e := range h.notif.eventList() {
+		if e.SourceKind == "plan_stalled" {
+			t.Fatalf("unexpected plan_stalled wake while awaiting_owner_correction holds: %+v", e)
 		}
 	}
 }

@@ -1182,60 +1182,71 @@ func planStallReason(tasks []task.Task) string {
 }
 
 // surfaceStallIfAny persists planStallReason's verdict onto p.HandoverText
-// and wakes the owner exactly once per distinct stall condition — mirroring
-// this file's other owner-wake decision points (plan_judge_unmet/
-// plan_judge_met/plan_<failed_reason>/plan_stopped_by_user) with a further
-// one (plan_stalled, FR-059's intent extended to this case): a running plan
-// that can make no progress at all is exactly the kind of condition that
-// must be surfaced rather than silently spun on.
+// AND p.PlanPhase (PhaseStalled), and wakes the owner exactly once per
+// distinct stall condition — mirroring this file's other owner-wake decision
+// points (plan_judge_unmet/plan_judge_met/plan_<failed_reason>/
+// plan_stopped_by_user) with a further one (plan_stalled, FR-059's intent
+// extended to this case): a running plan that can make no progress at all is
+// exactly the kind of condition that must be surfaced rather than silently
+// spun on.
 //
-// De-duped by comparing against the CURRENTLY persisted HandoverText (as
-// read by the caller at the top of processPlan, under planDecisionMu, so
-// this is race-free within one pass) — an unchanged stall condition across
-// ticks re-wakes no one; a materially different one (a different blocked/
-// inbox member set) does. Clears a stale stall note (recognized via
-// stallHandoverNotePrefix, so this never touches text any OTHER path wrote)
-// once the plan is no longer stalled.
+// Wire visibility (swimlane-board UAT fix): PlanPhase=stalled is exposed via
+// contracts/components/schemas/Plan.yaml's plan_phase enum and read
+// generically by pkg/gateway/rest_plans.go's toWirePlan (which already
+// forwards EffectivePlanPhase() verbatim — no code change needed there) and
+// by the plan_status WS frame (contracts/asyncapi.yaml, so a live push isn't
+// dropped by the SPA's Zod validation). The frontend renders it via
+// src/lib/planStateColors.ts's planPhaseChip/planPhaseExplanation, mirroring
+// the awaiting_owner_correction pattern exactly. HandoverText itself stays
+// server-only (never wire-exposed) — it names internal task IDs meant for
+// the owner AGENT's chat turn, not for the chip.
 //
-// NOTE for the SPA/contracts owners: Plan.HandoverText (pkg/plan/plan.go) is
-// NOT currently exposed on the wire — it has no field in
-// contracts/components/schemas/Plan.yaml and pkg/gateway/rest.go's plan
-// response mapping never reads it (true for every other writer of this
-// field too, not just this one). Rendering an "awaiting_owner_correction"-
-// style always-visible chip + plain-language body for a stall therefore
-// needs, in addition to this backend signal: (1) a wire-visible field —
-// either expose `handover_text` generically, or add a new closed-enum
-// `plan_phase` value (e.g. "stalled") the way `awaiting_owner_correction`
-// was added, regenerated via contracts/components/schemas/Plan.yaml +
-// scripts/gen-contracts.sh; (2) pkg/gateway/rest.go's plan-to-wire mapping
-// reading the new field; (3) a frontend chip + copy mirroring
-// src/lib/planStateColors.ts's planPhaseChip/AWAITING_OWNER_CORRECTION_EXPLANATION
-// pattern. None of that is implemented here (pkg/plan and the SPA are
-// outside this fix's file ownership) — but the owner agent IS already woken
-// today, via the existing async-notifier "system"/"plan:<id>" channel this
-// file uses for every other decision point, with the SAME plain-language
-// reason this note carries.
+// De-duped by comparing against the CURRENTLY persisted HandoverText/
+// PlanPhase (as read by the caller at the top of processPlan, under
+// planDecisionMu, so this is race-free within one pass) — an unchanged stall
+// condition across ticks re-wakes no one; a materially different one (a
+// different blocked/inbox member set) does. Clears a stale stall note
+// (recognized via stallHandoverNotePrefix, so this never touches text any
+// OTHER path wrote) and reverts PlanPhase to PhaseDispatching once the plan
+// is no longer stalled.
+//
+// PRECEDENCE (see plan.PhaseStalled's doc comment for the full rationale):
+// awaiting_owner_correction is a strictly MORE SPECIFIC condition than a
+// generic stall and must never be masked by it. This is guaranteed
+// structurally (processPlan's own allMembersTerminal check always intercepts
+// before this call while genuinely parked at awaiting_owner_correction) AND
+// enforced explicitly below as a belt-and-suspenders guard, so a future
+// refactor of that call order cannot silently reintroduce the bug.
 //
 // Caller must hold planDecisionMu and must only call this once
 // allMembersTerminal(tasks) and planStuckAfterMemberCancel(tasks) have both
 // already been ruled out (processPlan's own call order guarantees this).
 func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
+	if p.EffectivePlanPhase() == plan.PhaseAwaitingOwnerCorrection {
+		// Never mask a judge dead end with a generic stall note — see the
+		// PRECEDENCE doc above. Structurally unreachable in production (see
+		// plan.PhaseStalled's doc comment) but kept as an explicit guard.
+		return
+	}
+
 	reason := planStallReason(tasks)
 	if reason == "" {
-		if strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix) {
+		if strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix) || p.EffectivePlanPhase() == plan.PhaseStalled {
 			cleared := ""
-			if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &cleared}); err != nil {
-				logger.WarnCF("plan_engine", "could not clear stale stall note",
+			dispatching := plan.PhaseDispatching
+			if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &cleared, PlanPhase: &dispatching}); err != nil {
+				logger.WarnCF("plan_engine", "could not clear stale stall note/phase",
 					map[string]any{"plan_id": p.ID, "error": err.Error()})
 			}
 		}
 		return
 	}
 	note := stallHandoverNotePrefix + reason
-	if p.HandoverText == note {
+	if p.HandoverText == note && p.EffectivePlanPhase() == plan.PhaseStalled {
 		return // already surfaced this exact condition - no repeat wake
 	}
-	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note}); err != nil {
+	stalled := plan.PhaseStalled
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
 		logger.WarnCF("plan_engine", "could not persist stall note",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
 		return
