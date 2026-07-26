@@ -559,7 +559,7 @@ export interface PlanStatusFrame {
   type: "plan_status";
   plan_id: string;
   state: "draft" | "approved" | "running" | "done" | "failed";
-  plan_phase: "dispatching" | "judging" | "synthesizing" | "idle";
+  plan_phase: "dispatching" | "judging" | "synthesizing" | "idle" | "stalled";
   progress: number;
   paused_reason?: string;
 }

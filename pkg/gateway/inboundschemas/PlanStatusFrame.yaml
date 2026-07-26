@@ -43,9 +43,12 @@ properties:
       - judging
       - synthesizing
       - idle
+      - stalled
     description: >
       Runtime-only sub-phase while `state == running` (mirrors
-      `Plan.plan_phase`).
+      `Plan.plan_phase`). `stalled` (swimlane-board UAT fix) — see
+      `Plan.plan_phase`'s doc comment for the full precedence rule against
+      `awaiting_owner_correction`.
     example: "dispatching"
   progress:
     type: number

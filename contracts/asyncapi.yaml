@@ -3360,6 +3360,7 @@ components:
             - judging
             - synthesizing
             - idle
+            - stalled
         progress:
           type: number
           minimum: 0

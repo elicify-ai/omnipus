@@ -85,6 +85,7 @@ properties:
       - synthesizing
       - idle
       - awaiting_owner_correction
+      - stalled
     default: idle
     description: >
       Runtime-only sub-phase while `state == running` (R1) — NOT itself a
@@ -100,6 +101,19 @@ properties:
       owner session — sitting at durable lifecycle `paused` — from the
       `failed(interrupted)` sweep while this phase holds (INV-9). This does
       NOT add a 9th session-lifecycle state — it is a plan condition only.
+      `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) —
+      the plan is `running` with a NON-terminal member DAG (real work
+      remains) but no member is currently dispatchable (`next`) or in
+      flight (`in_progress`) — e.g. a member blocked on a dependency this
+      plan's own dispatch loop can never itself resolve. The engine wakes
+      the owner exactly once per distinct condition and reverts to
+      `dispatching` once something becomes dispatchable/in-flight again.
+      PRECEDENCE: `awaiting_owner_correction` is a strictly more specific
+      condition (a plan-judge dead end on an all-terminal DAG) and is NEVER
+      masked by `stalled` — the two are mutually exclusive by construction
+      (the former requires an all-terminal DAG, the latter a non-terminal
+      one), and the engine additionally refuses to touch `plan_phase` while
+      `awaiting_owner_correction` holds, belt-and-suspenders.
     example: "idle"
   last_unmet_terminal_signature:
     type: string

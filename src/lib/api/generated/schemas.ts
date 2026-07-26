@@ -847,6 +847,7 @@ type Plan = {
         | "synthesizing"
         | "idle"
         | "awaiting_owner_correction"
+        | "stalled"
       )
     | undefined;
   last_unmet_terminal_signature?: string | undefined;
@@ -2951,6 +2952,7 @@ export const Plan: z.ZodType<Plan> = z.object({
       "synthesizing",
       "idle",
       "awaiting_owner_correction",
+      "stalled",
     ])
     .optional()
     .default("idle"),
@@ -9162,7 +9164,7 @@ export const PlanStatusFrame = z
     type: z.literal("plan_status"),
     plan_id: z.string(),
     state: z.enum(["draft", "approved", "running", "done", "failed"]),
-    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "stalled"]),
     progress: z.number().min(0).max(1),
     paused_reason: z.string().optional(),
   })
