@@ -12,7 +12,10 @@ import {
   planStateLabel,
   planSecondaryChipLabel,
   planPhaseChip,
+  planPhaseExplanation,
   planDisplayColor,
+  AWAITING_OWNER_CORRECTION_EXPLANATION,
+  STALLED_EXPLANATION,
 } from './planStateColors'
 
 describe('planStateColors — badge matrix', () => {
@@ -141,5 +144,47 @@ describe('planPhaseChip — ADR-053 FE-2 §7 Graph plan-phase chip (D7, US-14)',
     expect(planPhaseChip({ state: 'failed', plan_phase: 'awaiting_owner_correction' })).toBeNull()
     expect(planPhaseChip({ state: 'draft', plan_phase: 'dispatching' })).toBeNull()
     expect(planPhaseChip({ state: 'done' })).toBeNull()
+  })
+
+  // Swimlane-board UAT fix — a running plan the engine has no dispatchable
+  // or in-flight member for (pkg/agent/plan_engine.go's surfaceStallIfAny)
+  // must render a distinct, actionable warning chip, never silently blend
+  // into a quiet info chip the way dispatching/judging/synthesizing do.
+  it('surfaces stalled as its own warning chip, distinct from awaiting_owner_correction', () => {
+    expect(planPhaseChip({ state: 'running', plan_phase: 'stalled' })).toEqual({
+      label: 'Stalled — needs a correction',
+      tone: 'warning',
+    })
+  })
+})
+
+describe('planPhaseExplanation — phase-specific warning-chip copy (swimlane-board fix)', () => {
+  it('resolves awaiting_owner_correction to its own explanation', () => {
+    expect(planPhaseExplanation({ state: 'running', plan_phase: 'awaiting_owner_correction' })).toBe(
+      AWAITING_OWNER_CORRECTION_EXPLANATION,
+    )
+  })
+
+  it('resolves stalled to its own DIFFERENT explanation (never reuses the awaiting_owner_correction copy)', () => {
+    const explanation = planPhaseExplanation({ state: 'running', plan_phase: 'stalled' })
+    expect(explanation).toBe(STALLED_EXPLANATION)
+    expect(explanation).not.toBe(AWAITING_OWNER_CORRECTION_EXPLANATION)
+  })
+
+  it('the stalled explanation never names a raw task UUID — it is static, owner-agent-only detail stays server-side', () => {
+    // Guards against ever templating HandoverText (which DOES name internal
+    // task IDs, e.g. "blocked on ... 7a2992f0-...") into this user-facing copy.
+    expect(STALLED_EXPLANATION).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
+  })
+
+  it('returns null for the quieter info-tone phases and for idle/no-phase', () => {
+    expect(planPhaseExplanation({ state: 'running', plan_phase: 'dispatching' })).toBeNull()
+    expect(planPhaseExplanation({ state: 'running', plan_phase: 'idle' })).toBeNull()
+    expect(planPhaseExplanation({ state: 'running' })).toBeNull()
+  })
+
+  it('returns null when not running', () => {
+    expect(planPhaseExplanation({ state: 'failed', plan_phase: 'stalled' })).toBeNull()
+    expect(planPhaseExplanation({ state: 'draft', plan_phase: 'awaiting_owner_correction' })).toBeNull()
   })
 })

@@ -177,6 +177,14 @@ export function planPhaseChip(plan: {
   if (phase === 'awaiting_owner_correction') {
     return { label: 'Re-planning — awaiting owner correction', tone: 'warning' }
   }
+  // `stalled` (swimlane-board UAT fix) — a DIFFERENT warning-tone condition
+  // from awaiting_owner_correction (a live DAG nothing can currently
+  // dispatch, vs. a judge dead end on an all-terminal one). Never collapse
+  // the two into the same label/copy — see planPhaseExplanation below for
+  // why they also carry distinct explanation text.
+  if (phase === 'stalled') {
+    return { label: 'Stalled — needs a correction', tone: 'warning' }
+  }
   return { label: phase.charAt(0).toUpperCase() + phase.slice(1), tone: 'info' }
 }
 
@@ -203,3 +211,46 @@ export function planPhaseChip(plan: {
 // point to that real control instead of inventing one.
 export const AWAITING_OWNER_CORRECTION_EXPLANATION =
   "This plan hit a dead end its own checks can't clear, and is on hold waiting for a correction. There's no in-app action for that yet — Stop this plan (■) and create a new one with the fix instead."
+
+// ── Stalled plan-phase copy (swimlane-board fix) ────────────────────────────
+//
+// `plan_phase: 'stalled'` (backend detection: pkg/agent/plan_engine.go's
+// planStallReason/surfaceStallIfAny) — the plan is `running` with real work
+// still outstanding, but no member is currently dispatchable or in flight
+// (e.g. blocked on a dependency this plan's own dispatch loop can never
+// itself resolve). This is a GENUINELY DIFFERENT condition from
+// `awaiting_owner_correction` above (that one is a judge dead end on an
+// all-terminal DAG; this one is a live DAG nothing can currently move) and
+// must never reuse that constant's copy — the two conditions need their own
+// explanations, mirrored via `tone: 'warning'` chips.
+//
+// Kept intentionally STATIC/generic — the backend's HandoverText reason
+// names internal task UUIDs for the OWNER AGENT to act on (surfaced via the
+// existing async-notifier wake), never meant for this chip: rendering those
+// IDs here would expose meaningless internal identifiers to a human reader.
+// The one real control available is the same as above: Stop (the plan stays
+// `state: 'running'` throughout, so `PlanActionButton` still renders ■).
+export const STALLED_EXPLANATION =
+  "This plan has no members it can currently dispatch or that are in progress, so it can't make progress right now. There's no in-app action for that yet — Stop this plan (■) and create a new one with the fix instead."
+
+/**
+ * Plain-language explanation for a warning-tone `planPhaseChip` — PHASE-
+ * SPECIFIC (never a single generic string), so `awaiting_owner_correction`
+ * and `stalled` each render their own accurate copy instead of silently
+ * sharing one. Returns null for every other phase (mirrors `planPhaseChip`'s
+ * own null-for-nothing-to-show contract) — callers gate rendering on this
+ * return value being non-null, not on `chip.tone === 'warning'` directly,
+ * so a future third warning-tone phase can't accidentally inherit the wrong
+ * text the way a `chip.tone`-only gate would allow.
+ */
+export function planPhaseExplanation(plan: { state: PlanState; plan_phase?: string }): string | null {
+  if (plan.state !== 'running') return null
+  switch (plan.plan_phase) {
+    case 'awaiting_owner_correction':
+      return AWAITING_OWNER_CORRECTION_EXPLANATION
+    case 'stalled':
+      return STALLED_EXPLANATION
+    default:
+      return null
+  }
+}

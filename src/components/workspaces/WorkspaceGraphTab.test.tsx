@@ -231,6 +231,19 @@ describe('WorkspaceGraphTab — plan-phase chip (ADR-053 FE-2 §7)', () => {
     await screen.findByTestId('graph-view-stub')
     expect(screen.queryByTestId('plan-phase-chip-plan-i')).not.toBeInTheDocument()
   })
+
+  // Swimlane-board UAT fix — a plan the engine cannot currently dispatch
+  // renders its OWN distinguishable warning chip, never the re-planning one.
+  it('renders the stalled warning chip, distinct from the re-planning chip, when the active plan is stalled', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-st', title: 'Launch', state: 'running', plan_phase: 'stalled' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-st' })
+    renderTab()
+
+    const chip = await screen.findByTestId('plan-phase-chip-plan-st')
+    expect(chip).toHaveTextContent('Stalled — needs a correction')
+  })
 })
 
 // S2 UAT finding — the ONLY explanation of `awaiting_owner_correction` used
@@ -270,6 +283,24 @@ describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the 
 
     await screen.findByTestId('plan-phase-chip-plan-j2')
     expect(screen.queryByTestId('plan-phase-explanation-plan-j2')).not.toBeInTheDocument()
+  })
+
+  // Swimlane-board UAT fix — the stalled explanation must be its own text,
+  // never the awaiting_owner_correction copy, and never a raw task UUID
+  // (HandoverText names internal IDs meant for the owner agent, not the SPA).
+  it('renders a stalled-specific explanation, distinct from awaiting_owner_correction, with no raw task ID', async () => {
+    vi.mocked(fetchPlans).mockResolvedValue([
+      makePlan({ id: 'plan-st2', title: 'Launch', state: 'running', plan_phase: 'stalled' }),
+    ])
+    useWorkspacesStore.setState({ activePlanId: 'plan-st2' })
+    renderTab()
+
+    const explanation = await screen.findByTestId('plan-phase-explanation-plan-st2')
+    expect(explanation).toBeVisible()
+    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/stop this plan/i)
+    expect(explanation.textContent).not.toMatch(/dead end/i)
+    expect(explanation.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
   })
 })
 

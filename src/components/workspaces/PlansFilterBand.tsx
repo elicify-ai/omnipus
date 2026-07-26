@@ -34,8 +34,8 @@ import {
   planDisplayColor,
   planDisplayLabel,
   planPhaseChip,
+  planPhaseExplanation,
   planSecondaryChipLabel,
-  AWAITING_OWNER_CORRECTION_EXPLANATION,
 } from '@/lib/planStateColors'
 import { cn } from '@/lib/utils'
 
@@ -258,6 +258,11 @@ function PlanFilterTile({
   // Reuses the same `planPhaseChip` helper WorkspaceGraphTab already wires up
   // (ADR-053 FE-2 §7) — this tile was the surface it was missing from.
   const phaseChip = planPhaseChip(plan)
+  // Swimlane-board UAT fix — `stalled` is a second warning-tone phase (a
+  // live DAG nothing can currently dispatch); planPhaseExplanation resolves
+  // the phase-specific copy so it never shares text with the re-planning
+  // explanation above.
+  const phaseExplanation = planPhaseExplanation(plan)
   // S3 UAT finding — `failed_reason` was on the wire but never rendered; the
   // tile showed only "Failed" with no explanation. Skip the cancelled case —
   // that already renders as "Cancelled" via `displayLabelText`, so a second
@@ -366,12 +371,12 @@ function PlanFilterTile({
             REAL control available now (Stop) instead of the three corrective
             actions, which have no in-app path yet — see the constant's
             header comment in planStateColors.ts for why. */}
-        {phaseChip?.tone === 'warning' && (
+        {phaseExplanation && (
           <span
             data-testid={`plan-phase-explanation-${plan.id}`}
             className="text-[10px] leading-snug text-[color:var(--color-warning)]"
           >
-            {AWAITING_OWNER_CORRECTION_EXPLANATION}
+            {phaseExplanation}
           </span>
         )}
 

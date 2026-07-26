@@ -391,6 +391,26 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
     expect(screen.getByTestId('plan-phase-chip-plan-disp')).toHaveTextContent('Dispatching')
     expect(screen.queryByTestId('plan-phase-explanation-plan-disp')).not.toBeInTheDocument()
   })
+
+  // Swimlane-board UAT fix — a plan the engine cannot currently dispatch or
+  // that has nothing in flight (`plan_phase: 'stalled'`) gets its OWN warning
+  // chip + explanation, distinct from the awaiting_owner_correction one above
+  // — testers must not see two different stuck reasons rendered identically.
+  it('a stalled plan renders its own distinguishable warning chip + explanation, distinct from awaiting_owner_correction', () => {
+    renderBand({
+      plans: [makePlan({ id: 'plan-stalled', state: 'running', plan_phase: 'stalled' })],
+    })
+    expect(screen.getByText('Running')).toBeInTheDocument()
+    expect(screen.getByTestId('plan-phase-chip-plan-stalled')).toHaveTextContent('Stalled — needs a correction')
+
+    const explanation = screen.getByTestId('plan-phase-explanation-plan-stalled')
+    expect(explanation).toBeVisible()
+    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/stop this plan/i)
+    // Must never render the awaiting_owner_correction copy or a raw task ID.
+    expect(explanation.textContent).not.toMatch(/dead end/i)
+    expect(explanation.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
+  })
 })
 
 // ── S3 UAT finding — a FAILED plan never explained why. `failed_reason` was

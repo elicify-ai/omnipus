@@ -23,8 +23,8 @@ import {
   planDisplayColor,
   planDisplayLabel,
   planPhaseChip,
+  planPhaseExplanation,
   planSecondaryChipLabel,
-  AWAITING_OWNER_CORRECTION_EXPLANATION,
 } from '@/lib/planStateColors'
 import { cn } from '@/lib/utils'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -252,6 +252,11 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
           // gold Running badge. The other non-idle sub-phases
           // (dispatching/judging/synthesizing) render as a quieter info chip.
           const chip = planPhaseChip(activePlan)
+          // Swimlane-board UAT fix — `stalled` is a SECOND warning-tone
+          // phase (a live DAG nothing can currently dispatch, distinct from
+          // the judge dead end above); planPhaseExplanation resolves the
+          // phase-specific copy so the two conditions never share text.
+          const explanation = planPhaseExplanation(activePlan)
           // S3 UAT finding — `failed_reason` (e.g. `judge_rounds_exhausted`)
           // was on the wire but never rendered; the UI showed only the word
           // "Failed" with no explanation. Skip the user-cancel case — that
@@ -326,12 +331,12 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                 language text: what the plan is waiting for, and the one
                 REAL control available right now (Stop), never inventing UI
                 that doesn't exist for the three corrective verbs. */}
-            {chip?.tone === 'warning' && (
+            {explanation && (
               <p
                 data-testid={`plan-phase-explanation-${activePlan.id}`}
                 className="text-[11px] leading-snug text-[color:var(--color-warning)]"
               >
-                {AWAITING_OWNER_CORRECTION_EXPLANATION}
+                {explanation}
               </p>
             )}
 
