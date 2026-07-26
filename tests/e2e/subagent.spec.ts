@@ -225,14 +225,16 @@ test(
 test(
   '(c) live step counter: collapsed header step count increments during multi-step sub-turn',
   async ({ page }) => {
-    // Soft-skipped: known LLM timing flake under prolonged suite load (~12+ min
-    // wall-clock). The LLM occasionally takes >40s to emit the expected tool call,
-    // even though every test passes alone in 5-25s. Deterministic scenario
-    // providers (T4.1) are the real fix. Tracked: #155 (v0.2 hardening).
-    test.skip(
-      true,
-      'BLOCKED on #155 — LLM timing flake; see SKIP_ALLOWLIST',
-    );
+    // T0.1 (re-investigated): the `test.skip(true, ...)` that used to sit here
+    // ran BEFORE `test.slow()` below — since test.skip() throws/aborts test
+    // execution immediately, test.slow() (which triples the global 90s
+    // timeout to 270s) never actually executed. So the ">40s under load"
+    // flake this skip cited was never actually covered by the wider budget;
+    // the test was skipping itself with LESS headroom than it appeared to
+    // have on paper. Removing the skip lets test.slow() apply for real.
+    // See tests/e2e/README.md and the removed SKIP_ALLOWLIST entry (#155)
+    // for the prior reasoning — validated below via repeated real runs
+    // rather than assumed.
     requireApiKey(test);
     // test.slow() triples the global 90s test timeout to 270s. Subagent
     // delegation + execution can take 30-90s end-to-end under suite load even

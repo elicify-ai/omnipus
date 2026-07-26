@@ -25,6 +25,25 @@ async function ensureBuiltInExpanded(page: Page): Promise<void> {
   await expect(trigger).toHaveAttribute('aria-expanded', 'true', { timeout: 5_000 });
 }
 
+/**
+ * csrfHeaders — build the header object `page.request` calls need for
+ * state-changing requests. `page.request` shares the browser context's
+ * cookie jar, so the `omnipus-session` (auth) and `csrf` cookies written by
+ * global-setup.ts already ride along automatically — but the double-submit
+ * CSRF pattern additionally requires the SAME csrf value echoed back as an
+ * explicit `X-CSRF-Token` request header (src/lib/api.ts's withCsrfHeaders
+ * does exactly this for real browser-driven fetches). Since ADR-044 removed
+ * the JS-readable bearer token from localStorage entirely, there is no
+ * `Authorization: Bearer <token>` path left for a test to piggyback on —
+ * this cookie-header echo is the only way for `page.request` to pass the
+ * gateway's CSRF middleware.
+ */
+async function csrfHeaders(page: Page): Promise<Record<string, string>> {
+  const cookies = await page.context().cookies();
+  const csrfCookie = cookies.find((c) => c.name === 'csrf' || c.name === '__Host-csrf');
+  return csrfCookie ? { 'X-CSRF-Token': csrfCookie.value } : {};
+}
+
 test.beforeEach(async ({ page }) => {
   // HashRouter: routes live in the fragment, not the pathname.
   await page.goto('/#/agents');
@@ -130,28 +149,39 @@ test('(d) locked fields render read-only on core agents', async ({ page }) => {
   await expect(nameInput).toBeDisabled();
 });
 
-test('(e) deleted agent URL returns branded 404 with "Back to Agents" link', async ({ page }) => {
-  // Soft-skipped: the slideover refactor changed the /_app/agents/$agentId route
-  // to a transient "open slideover and navigate back to /agents" handler (see
-  // src/routes/_app/agents.$agentId.tsx). The route does not render a branded
-  // 404 page for unknown agent IDs — it silently opens an empty slideover and
-  // redirects to /#/agents. The test premise (a 404 page with a "Back to
-  // Agents" link) does not match the current product shape.
-  // Tracked: https://github.com/elicify-ai/omnipus/issues/427
-  test.skip(
-    true,
-    'BLOCKED on #427 — slideover refactor removed the branded 404 page for unknown agent IDs; see SKIP_ALLOWLIST',
-  );
+test('(e) deleted agent URL surfaces a not-found affordance in the agent profile slide-over', async ({ page }) => {
+  // The /_app/agents/$agentId route (src/routes/_app/agents.$agentId.tsx) is a
+  // transient handler: it opens the AgentProfile slide-over for the given id
+  // and immediately replaces the URL with /agents — there is no dedicated
+  // 404 route/page by design (issue #427 was the "branded 404 page" premise,
+  // which no longer matches the product's shape). The not-found affordance
+  // instead lives INSIDE the slide-over, driven by AgentProfile's isNotFound
+  // branch (src/components/agents/AgentProfile.tsx) — verified here to make
+  // sure that branch actually renders real content, not an empty panel.
   await page.goto('/#/agents/this-agent-does-not-exist-xyz');
 
-  // Should see a "not found" message, not crash the app
-  const notFoundMsg = page.locator('text=not found').or(page.locator('text=Not Found')).or(page.locator('text=Agent not found')).first();
-  await expect(notFoundMsg).toBeVisible({ timeout: 10_000 });
+  // The transient route always replaces back to /agents (never leaves a
+  // dead-end URL on the unknown id).
+  await expect(page).toHaveURL(/agents/, { timeout: 10_000 });
 
-  // Must have "Back to Agents" link (exact text per SKIP_ALLOWLIST note)
-  const backLink = page.getByRole('link', { name: 'Back to Agents' });
-  await expect(backLink).toBeVisible({ timeout: 5_000 });
-  await backLink.click();
+  const sheet = page.getByTestId('agent-profile-sheet');
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+
+  // Should see a "not found" message, not a blank slide-over.
+  const notFoundMsg = sheet.locator('text=Agent not found').first();
+  await expect(notFoundMsg).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.locator('text=This agent may have been deleted.')).toBeVisible();
+
+  // Must have a "Back to Agents" affordance. It's a button (not a
+  // navigational <a>) because the slide-over never actually leaves /agents —
+  // see the URL assertion above — so closing it is an in-app state change,
+  // not a route change.
+  const backButton = sheet.getByRole('button', { name: 'Back to Agents' });
+  await expect(backButton).toBeVisible({ timeout: 5_000 });
+  await backButton.click();
+
+  // Clicking it closes the slide-over and stays on the agents list.
+  await expect(sheet).not.toBeVisible({ timeout: 5_000 });
   await expect(page).toHaveURL(/agents/, { timeout: 5_000 });
 });
 
@@ -214,25 +244,16 @@ test('(f) name collision on Create Agent surfaces server 409 error in UI', async
 });
 
 test('(g) session with deleted agent shows read-only transcript and "Agent removed" banner', async ({ page }) => {
-  // Soft-skipped: the Agent-removed banner for sessions of deleted agents is not
-  // currently wired in the SPA. The session detail route loads the deleted agent
-  // as the default chat and does not surface `agent_removed` from the session
-  // detail response. Tracked: https://github.com/elicify-ai/omnipus/issues/103
-  // and noted in tests/e2e/SPA-GAPS.md.
-  test.skip(
-    true,
-    'BLOCKED on #103 — agent-removed banner for deleted-agent sessions is not yet wired in the SPA; see SKIP_ALLOWLIST',
-  );
+  // The agent-removed banner is wired end-to-end: the backend's getSession
+  // handler (pkg/gateway/rest.go) detects a ghost session (its agent_id no
+  // longer resolves in the live config) and sets agent_removed=true on
+  // SessionDetail; the /sessions/$sessionId route reads it and passes
+  // agentRemoved to <ChatScreen>, which renders the
+  // data-testid="agent-removed-banner" bar and disables the composer
+  // (src/components/chat/ChatScreen.tsx). Issue #103 tracked this gap; it is
+  // now closed.
 
-  // Read the Bearer token from localStorage so page.request calls can include
-  // it as an Authorization header. The CSRF middleware exempts Bearer-token
-  // requests (double-submit cookie only defends ambient cookie credentials),
-  // so this is both correct and necessary — page.request does NOT auto-add
-  // the X-Csrf-Token header that the double-submit pattern requires.
-  const bearerToken = await page.evaluate(() =>
-    localStorage.getItem('omnipus_auth_token') ?? ''
-  );
-  const authHeaders = { Authorization: `Bearer ${bearerToken}` };
+  const authHeaders = await csrfHeaders(page);
 
   // Step 1: Create a temporary agent via API. `soul` and `type` are required
   // since the v0.1.1 discriminated-union create contract (ADR-034); the wire
@@ -247,26 +268,56 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
       model: 'openrouter/google/gemini-2.0-flash-001',
     },
   });
+  expect(resp.ok(), `create agent failed: ${resp.status()} ${await resp.text()}`).toBeTruthy();
   const agent = await resp.json() as { id: string };
   const agentId = agent.id;
 
-  // Step 2: Create a session for this agent
-  const sessionResp = await page.request.post('/api/v1/sessions', {
+  // Step 2: Create a session for this agent. A freshly created agent is
+  // persisted (config.json + the in-memory config struct) synchronously
+  // before this POST returns, but the runtime agent Registry — the thing
+  // POST /sessions actually resolves the agent through
+  // (AgentLoop.GetAgentStore -> Registry.GetAgent) — is rebuilt on a
+  // slightly different path and can lag behind by a very short window
+  // (confirmed directly: an immediate back-to-back call can 400 with
+  // "agent ... not found", while the same call after ~100-300ms always
+  // succeeds). That lag is a backend timing detail orthogonal to the
+  // agent-removed banner this test exists to verify, so retry the create
+  // briefly instead of letting an unrelated timing hazard flake this test.
+  let sessionResp = await page.request.post('/api/v1/sessions', {
     headers: authHeaders,
     data: { agent_id: agentId },
   });
+  for (let attempt = 0; !sessionResp.ok() && attempt < 10; attempt++) {
+    const body = await sessionResp.text();
+    if (sessionResp.status() !== 400 || !/not found/i.test(body)) {
+      throw new Error(`create session failed: ${sessionResp.status()} ${body}`);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    sessionResp = await page.request.post('/api/v1/sessions', {
+      headers: authHeaders,
+      data: { agent_id: agentId },
+    });
+  }
+  expect(sessionResp.ok(), `create session failed: ${sessionResp.status()} ${await sessionResp.text()}`).toBeTruthy();
   const session = await sessionResp.json() as { id?: string; session?: { id: string } };
   const sessionId = session.id ?? session.session?.id;
+  expect(sessionId, 'session response had no id').toBeTruthy();
 
   // Step 3: Delete the agent
-  await page.request.delete(`/api/v1/agents/${agentId}`, { headers: authHeaders });
+  const deleteResp = await page.request.delete(`/api/v1/agents/${agentId}`, { headers: authHeaders });
+  expect(deleteResp.ok(), `delete agent failed: ${deleteResp.status()} ${await deleteResp.text()}`).toBeTruthy();
 
   // Step 4: Navigate to the session
   await page.goto(`/#/sessions/${sessionId}`);
   // Wait for the route to settle (URL must contain "sessions")
   await expect(page).toHaveURL(/sessions/, { timeout: 10_000 });
-  // Wait for the app shell to render (banner landmark = auth OK)
-  await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 });
+  // Wait for the app shell to render (main landmark = auth OK, not a blank
+  // page). This route renders the bare ChatScreen directly (no workspace_id
+  // on the session, so no WorkspaceTabContainer/ScreenHeader wrapper) —
+  // those are the only two components in the app that emit role="banner",
+  // so this screen never has one; `main` is the landmark this layout
+  // actually renders.
+  await expect(page.getByRole('main')).toBeVisible({ timeout: 10_000 });
 
   // Step 5: The banner must appear
   const banner = page.getByTestId('agent-removed-banner');

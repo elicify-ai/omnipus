@@ -302,6 +302,64 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     expect(msg?.content).toBe('Here is the analysis of...')
   })
 
+  // T24b regression (cancel-cross-channel.spec.ts:569 — "cancel cascades to
+  // awaited subagent"): the Stop button's render condition (ChatScreen.tsx:
+  // `isStreaming || cancelState.stopLabel === 'stopping'`) and
+  // useCancelState's minimum-display reset effect both key off the STORE's
+  // bucket-level `isStreaming`, which must clear the instant a cancel is
+  // issued — the SPA is documented to deliberately not wait for the
+  // server's `done` frame (see markLastMessageInterrupted's doc comment).
+  // The test above doesn't actually prove this: it forces the flat
+  // `isStreaming` field true via a raw setState call that bypasses the
+  // session bucket entirely, so the bucket's own isStreaming was false the
+  // whole time and the assertion passed for the wrong reason. This test
+  // drives isStreaming true through the REAL code path (sendMessage, which
+  // is what a live streaming turn actually uses) so the bucket genuinely
+  // starts at isStreaming:true with an assistant message already present —
+  // the "already exists" branch inside markLastMessageInterrupted, which is
+  // the branch every real Stop-button click hits (T21/T24a/T24b all already
+  // have an assistant message by the time Stop is clickable). Before the
+  // fix, that branch cleared only the message's own isStreaming and left
+  // the bucket's isStreaming (and therefore the foreground field the Stop
+  // button reads) stuck at true until a 'done' frame arrived — invisible to
+  // the flawed test above, but exactly what made the awaited-delegate e2e
+  // intermittently exceed its 5s window while waiting on the server to
+  // unwind a running subagent turn.
+  it('cancelStream clears bucket-level isStreaming synchronously even when an assistant message already exists (T24b: must not wait for the done frame)', () => {
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
+      // Starts a real turn: mints the assistant placeholder message
+      // (isStreaming:true) and sets isStreaming:true on BOTH the session
+      // bucket and the foreground field — the same state a live streaming
+      // turn (or T24b's awaited-delegate turn) is in when Stop is clicked.
+      useChatStore.getState().sendMessage('Hello, world!')
+    })
+    // Sanity: confirm the bucket itself (not just the foreground mirror) is
+    // really streaming, and an assistant message already exists — otherwise
+    // this test would silently hit the OTHER (already-correct) branch.
+    const preCancel = useChatStore.getState()
+    expect(preCancel.sessionsById[TEST_SESSION_ID]?.isStreaming).toBe(true)
+    expect(preCancel.messages.some((m) => m.role === 'assistant')).toBe(true)
+
+    act(() => {
+      useChatStore.getState().cancelStream()
+    })
+
+    const state = useChatStore.getState()
+    // No 'done' frame was ever delivered — if this is true, the clear was
+    // synchronous and local, not dependent on server round-trip latency.
+    expect(state.isStreaming).toBe(false)
+    expect(state.sessionsById[TEST_SESSION_ID]?.isStreaming).toBe(false)
+    const assistantMsg = state.messages.find((m) => m.role === 'assistant')
+    expect(assistantMsg?.status).toBe('interrupted')
+  })
+
   it('cancelStream calls connection.send with cancel frame', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Cancel during streaming (AC1 — WebSocket frame sent)
     const mockSend = vi.fn()

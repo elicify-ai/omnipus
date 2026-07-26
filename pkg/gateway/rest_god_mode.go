@@ -7,11 +7,9 @@
 package gateway
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -226,19 +224,31 @@ func (a *restAPI) setGodMode(w http.ResponseWriter, r *http.Request) {
 	// actually take effect until the boot-frozen availability atomic is
 	// recomputed on the next restart.
 	//
+	// triggerReloadAndWait (not a bare TriggerReload) — mirrors
+	// createAgent/updateAgent/updateAgentTools/putToolPolicies: a bare
+	// TriggerReload only enqueues the reload onto
+	// runningServices.manualReloadChan and returns immediately — the ACTUAL
+	// registry rebuild (which is what swaps each already-constructed agent
+	// instance's baked-in ToolPolicyCfg.GodMode flag — see
+	// agent.agentToolsCfgToPolicy, which floors every tool at "allow" only when
+	// GodModeActive was true AT INSTANCE-CONSTRUCTION TIME, not read fresh on
+	// every exec) happens on a separate goroutine. Without waiting here, a tool
+	// call dispatched the instant this handler responds 200 could still be
+	// evaluated under the PREVIOUS god-mode state for as long as that goroutine
+	// takes to run — the highest-blast-radius security control in the product
+	// must not report "done" before enforcement has actually flipped.
+	// triggerReloadAndWait already treats ErrReloadNotConfigured (unit tests /
+	// minimal embeddings without the full gateway reload pipeline wired) as a
+	// no-op, so a non-nil error here is always a genuine reload failure.
+	//
 	// Reload-failure semantics mirror putToolPolicies: the config IS persisted
 	// (safeUpdateConfigJSON already refreshed the in-memory config), so we never
-	// 500 — that would wrongly signal the write failed. ErrReloadNotConfigured is
-	// the no-reload-loop case (tests / minimal embeddings) and is benign. A
-	// genuine reload error is logged at Error: running agents may keep the prior
-	// override state until restart, which the operator must see in the logs.
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		if errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Debug("rest: god_mode persisted; live reload not configured on this loop", "error", err)
-		} else {
-			// Persisted, but live agents may keep the previous override state.
-			slog.Error("rest: reload after god_mode toggle failed", "error", err)
-		}
+	// 500 — that would wrongly signal the write failed. A genuine reload error
+	// is logged at Error: running agents may keep the prior override state
+	// until restart, which the operator must see in the logs.
+	if err := a.triggerReloadAndWait(); err != nil {
+		// Persisted, but live agents may keep the previous override state.
+		slog.Error("rest: reload after god_mode toggle failed", "error", err)
 	}
 
 	jsonOK(w, gen.GodModeUpdateResponse{

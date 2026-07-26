@@ -1452,6 +1452,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return produce(b, (draft) => {
           const m = draft.messagesById[lastMsgId!]
           if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
+          // T24b fix: bucket-level isStreaming must ALSO clear immediately
+          // here, exactly like the no-message placeholder branch above does —
+          // clearing only the message's own isStreaming left the BUCKET (and
+          // therefore the foreground `isStreaming` ChatScreen/useCancelState
+          // read for the Stop button's `isStreaming || stopLabel==='stopping'`
+          // render condition and its reset effect) gated on the server's
+          // terminal `done` frame. For an ordinary cancel that frame arrives
+          // in well under a second, but an AWAITED delegate cancel cascade
+          // (the server must first unwind the running subagent turn) can
+          // intermittently take longer than the 5s the e2e allots the button
+          // to disappear. Since a last assistant message already exists by
+          // the time Stop is clicked in every real scenario (T21/T24a/T24b
+          // all have one), this branch — not the placeholder one — is the one
+          // that actually runs, so it must carry the same immediate clear.
+          draft.isStreaming = false
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)

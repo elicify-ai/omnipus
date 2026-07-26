@@ -1471,13 +1471,25 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
 
-  // Input is enabled unless: agent removed, replaying, uploading, or gave up on reconnect.
-  // While reconnecting (fast or slow phase), input stays enabled — messages go to the queue.
-  // When the WS drops (network offline, gateway restart), the textarea must
-  // also disable, not just the Send button. Letting the user type into an input
-  // that can't dispatch is misleading; the "Connection lost" banner alone is
-  // easy to miss when the textarea looks fully interactive.
-  const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
+  // Input is enabled unless: agent removed, replaying, or gave up on reconnect.
+  // While reconnecting (fast or slow phase), input stays enabled — messages go to the
+  // outbound queue (useChatStore's outboundQueue/enqueueOutboundMessage) and are sent
+  // automatically once the connection recovers (drainOutboundQueue, wired in
+  // OmnipusRuntimeProvider's onConnected). See the outbound-queue-indicator banner
+  // below and composerPlaceholder's `canSendOrQueue` argument, both of which already
+  // treated "connected OR reconnecting/slow" as usable — but this flag itself required
+  // strict `isConnected`, so the actual `disabled` attribute silently blocked the very
+  // typing/sending those UI affordances promised, leaving the whole queue mechanism
+  // unreachable from real user interaction (#105). Only a fully-lost connection with no
+  // more automatic retries (`gave_up`), or the brief pre-first-connect / just-dropped
+  // window (isConnected:false with reconnectPhase still null — "Connecting to
+  // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
+  // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
+  const inputEnabled =
+    !agentRemoved &&
+    !isReplaying &&
+    !(reconnectPhase === 'gave_up') &&
+    (isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow')
 
   // Attach affordance gate — shared by the AddAttachment button AND the
   // drag-drop handlers/overlay below (same read-only conditions: agent

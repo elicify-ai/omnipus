@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
@@ -404,24 +403,31 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		return
 	}
 
-	// Re-wire the agent's tools so the email tools are (de)registered to match the
-	// new mailbox state. Reload is cheap and idempotent; ErrReloadNotConfigured is
-	// the normal no-op path in unit tests without the full reload pipeline.
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error(
-				"rest: mailbox configure reload failed",
-				"agent_id",
-				agentID,
-				"workspace_id",
-				workspaceID,
-				"error",
-				err,
-			)
-			jsonErr(w, http.StatusServiceUnavailable,
-				"config saved but in-memory reload failed; restart the gateway or retry")
-			return
-		}
+	// Re-wire the agent's tools so the email tools are (de)registered to match
+	// the new mailbox state. triggerReloadAndWait (not a bare TriggerReload) —
+	// mirrors createAgent/updateAgent/updateAgentTools: registerEmailToolsForAgent
+	// (pkg/agent/email_tools.go) only runs during NewAgentRegistry's per-instance
+	// construction, itself only reached via the async
+	// TriggerReload → executeReload → ReloadProviderAndConfig pipeline — a bare
+	// TriggerReload enqueues that work and returns immediately, so a client that
+	// enables a mailbox and immediately asks the agent to send an email could
+	// hit a "tool not registered" gap for as long as that goroutine takes to
+	// run. triggerReloadAndWait absorbs ErrReloadNotConfigured (the normal
+	// no-op path in unit tests without the full reload pipeline wired)
+	// internally, so a non-nil error here is always a genuine reload failure.
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error(
+			"rest: mailbox configure reload failed",
+			"agent_id",
+			agentID,
+			"workspace_id",
+			workspaceID,
+			"error",
+			err,
+		)
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but in-memory reload failed; restart the gateway or retry")
+		return
 	}
 
 	configured := strings.TrimSpace(persistedRef) != ""
@@ -518,18 +524,23 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 		slog.Error("rest: delete legacy mailbox credential", "agent_id", agentID, "error", err)
 	}
 
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error(
-				"rest: mailbox delete reload failed",
-				"agent_id",
-				agentID,
-				"workspace_id",
-				workspaceID,
-				"error",
-				err,
-			)
-		}
+	// triggerReloadAndWait (not a bare TriggerReload) — see setAgentMailbox's
+	// doc comment: registerEmailToolsForAgent only deregisters the removed
+	// mailbox's email tools during the async registry rebuild, so waiting here
+	// closes the same race in the other direction (a deleted mailbox's email
+	// tools staying live on the running instance). Best-effort: deletion has
+	// already durably persisted, so a genuine reload failure is logged, not
+	// surfaced as an error response (mirrors deleteAgent).
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error(
+			"rest: mailbox delete reload failed",
+			"agent_id",
+			agentID,
+			"workspace_id",
+			workspaceID,
+			"error",
+			err,
+		)
 	}
 
 	jsonOK(w, gen.OperationResult{Success: true})

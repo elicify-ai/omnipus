@@ -94,8 +94,14 @@ func newProviderValidationTestAPI(t *testing.T, providerID, upstreamBaseURL stri
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
-	// Wire reload so the PUT handler does not return 500.
+	// Wire reload so the PUT handler does not return 500. This func runs
+	// synchronously (unlike production's async reload pipeline), so it must
+	// clear the pending flag itself — otherwise triggerReloadAndWait's
+	// IsReloadPending() poll would never observe a clear and every PUT would
+	// block for its full 5s timeout (see seedProviderConfig in
+	// uat_fixes_test.go for the same fix with more detail).
 	al.SetReloadFunc(func() error {
+		defer al.ClearReloadPending()
 		raw, err := os.ReadFile(tmpDir + "/config.json")
 		if err != nil {
 			return err

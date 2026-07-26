@@ -6,15 +6,27 @@
  *   - No API responses failed Zod schema validation
  *   - No WS frames had an unrecognised type field
  *
- * The counters are exposed on window.__omnipus_test_hooks only when the SPA
- * is built with import.meta.env.DEV === true or MODE === 'test' (see src/lib/ws.ts
- * and src/lib/api.ts). The embedded production binary uses MODE=production, so
- * the hooks are absent there. When they are absent (getDroppedFrameCount returns
- * -1 via the null-coalesce in the evaluate), the test skips itself using
- * test.skip() — documented in SKIP_ALLOWLIST in skip-tracking.ts.
+ * The counters live on window.__omnipus_test_hooks. src/lib/ws.ts and
+ * src/lib/api.ts expose them whenever import.meta.env.DEV === true,
+ * MODE === 'test', OR the browser reports navigator.webdriver === true.
+ * That third condition is what makes the hooks available in THIS spec, which
+ * runs against the EMBEDDED PRODUCTION BINARY (MODE=production): Playwright's
+ * Chromium always sets navigator.webdriver = true, so WebDriver-controlled
+ * automation gets the hooks even though a real end user's browser — which
+ * does not set that flag — never does. This is the same opt-in surface
+ * src/lib/ws.ts already relies on for window.__ws_instances (see
+ * ws-reconnect.spec.ts), applied here to the schema-validation counters.
+ * Verified directly in the built bundle: `grep -o 'navigator.webdriver.\{0,60\}'
+ * pkg/gateway/spa/assets/index-*.js` shows the minified production build still
+ * carries the check (the DEV/test literals get folded away by Terser, leaving
+ * just the navigator.webdriver branch).
  *
- * To run this test against a dev-mode Vite server (where hooks ARE present):
- *   npx playwright test contract-counters --project=chromium
+ * Because the hooks are expected to be present under any Playwright run
+ * (against dev server or production binary alike), their absence is now a
+ * hard test FAILURE, not a skip — see the `hooksAvailable` assertion below.
+ * Previously this test soft-skipped itself when hooks were missing (tracked
+ * in SKIP_ALLOWLIST, issue #155); that assumption was stale and the entry has
+ * been removed — no soft-skip is permitted here per skip-tracking.ts policy.
  */
 
 import { test, expect, type Page } from '@playwright/test'
@@ -76,21 +88,22 @@ test('no schema-validation errors during authenticated page load + navigation', 
   // Wait for the app shell to render (banner landmark = AppShell header).
   await expect(page.getByRole('banner')).toBeVisible({ timeout: 20_000 })
 
-  // Check whether __omnipus_test_hooks are available (only in dev builds).
+  // The hooks must be present here — Playwright's Chromium sets
+  // navigator.webdriver=true, which src/lib/ws.ts / src/lib/api.ts both
+  // check to expose window.__omnipus_test_hooks even in production builds
+  // (see header comment). If this is ever false, the test-hook gate itself
+  // has regressed — fail hard rather than silently skipping.
   const hooksAvailable = await page.evaluate(() => {
     const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
     return typeof w.__omnipus_test_hooks?.getDroppedFrameCount === 'function'
   })
-
-  if (!hooksAvailable) {
-    test.skip(
-      true,
-      'window.__omnipus_test_hooks not present — production build does not expose counters. ' +
-        'Run against a Vite dev server (MODE=development) to exercise this test. ' +
-        'See SKIP_ALLOWLIST entry in skip-tracking.ts.'
-    )
-    return
-  }
+  expect(
+    hooksAvailable,
+    'window.__omnipus_test_hooks was not exposed. Expected navigator.webdriver=true ' +
+      '(set by Playwright automation) to trigger the test-hook gate in src/lib/ws.ts ' +
+      'and src/lib/api.ts even against the production build. If this assertion fails, ' +
+      'that gate has regressed — this must be fixed, not re-skipped.',
+  ).toBe(true)
 
   // Navigate to a second route to trigger more WS traffic and API calls.
   await page.goto('/#/settings')

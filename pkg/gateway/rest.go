@@ -2589,10 +2589,19 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// between TriggerReload (which may swap the live config) and the read below.
 	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.ModelName
 
-	// Persistence succeeded. Trigger reload so the in-memory config picks up the new agent.
-	// The "warning" field signals a partial success — frontend must check this field.
+	// Persistence succeeded. Trigger reload AND WAIT for it to actually land
+	// (mirrors deleteAgent, rest_auth.go's triggerReloadAndWait) so the new
+	// agent is guaranteed resolvable via the runtime registry (GetAgentStore /
+	// ResolveSessionStore, pkg/agent/loop.go) the instant this handler
+	// responds. A bare TriggerReload() only enqueues the reload onto
+	// runningServices.manualReloadChan and returns immediately — the actual
+	// registry swap happens on a separate goroutine — so a client that opens a
+	// session against this agent right after a 201 could otherwise get a
+	// spurious 400 "agent not found" for up to as long as that goroutine takes
+	// to run. The "warning" field signals a partial success — frontend must
+	// check this field.
 	var createReloadWarning string
-	if err := a.agentLoop.TriggerReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("config reload after agent create failed", "error", err)
 		createReloadWarning = fmt.Sprintf("config reload failed: %v", err)
 	}
@@ -3474,7 +3483,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	needsReload := req.Soul != nil
 	var reloadWarning string
 	if needsReload {
-		if err := a.agentLoop.TriggerReload(); err != nil {
+		// triggerReloadAndWait (not a bare TriggerReload) — mirrors createAgent
+		// and deleteAgent: TriggerReload alone only enqueues the reload and
+		// returns before the registry actually swaps, so the response-building
+		// reads of a.agentLoop.GetConfig() a few lines below (and any other
+		// request racing this one) would otherwise observe pre-update state.
+		if err := a.triggerReloadAndWait(); err != nil {
 			slog.Error("config reload after agent update failed", "error", err)
 			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
 		}
@@ -5727,8 +5741,24 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 			return
 		}
-		// Trigger reload so the in-memory config picks up the new API key.
-		if err := a.agentLoop.TriggerReload(); err != nil {
+		// Trigger reload AND WAIT for it (triggerReloadAndWait, not a bare
+		// TriggerReload — mirrors createAgent/updateAgent/deleteAgent/
+		// updateAgentTools): a bare TriggerReload only enqueues the reload and
+		// returns before the registry actually swaps. Per updateAgent's
+		// model-apply doc comment a few hundred lines up, persisting +
+		// SwapConfig alone does NOT touch an already-constructed agent
+		// instance's cached provider/model client — only the async
+		// TriggerReload → executeReload → ReloadProviderAndConfig →
+		// NewAgentRegistry rebuild does. Without waiting, a client that fixes a
+		// revoked/invalid API key here and immediately sends a chat message
+		// could still be served by the stale cached client (and the old,
+		// possibly-compromised key) for as long as that goroutine takes to
+		// run. triggerReloadAndWait absorbs ErrReloadNotConfigured (unit tests
+		// / minimal embeddings without the full reload pipeline wired)
+		// internally as a no-op, so a non-nil error here is always a genuine
+		// reload failure — preserving the existing 500 semantics below (the
+		// key IS persisted; only the live application failed).
+		if err := a.triggerReloadAndWait(); err != nil {
 			slog.Error("config reload after provider update failed", "error", err)
 			jsonErr(
 				w,
@@ -7084,33 +7114,34 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Trigger a reload so the agent's atomic toolPolicy pointer
-	// (pkg/agent/instance.go:290 — populated by ReloadProviderAndConfig)
-	// is swapped to the new policy. Without this the next turn's
-	// resolveToolPolicyAtExec / FilterToolsByPolicy still sees the previous
-	// snapshot, and (e.g.) an exec call freshly bumped to "ask" runs as
-	// "allow" because LoadToolPolicy returns the stale pointer. The earlier
-	// "no reload needed" claim was wrong — config-on-disk and the in-memory
-	// pointer are decoupled. Reload is cheap and idempotent.
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		// ErrReloadNotConfigured is normal in unit tests where the full gateway
-		// reload pipeline is not wired — treat it as a no-op and continue.
-		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error("agent tools update: reload failed — in-memory policy not updated",
-				"agent_id", agentID, "error", err)
-			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
-				if auditErr := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger, "agent.tools_policy",
-					map[string]any{"agent_id": agentID, "saved": true},
-					map[string]any{"agent_id": agentID, "reload_error": err.Error()},
-				); auditErr != nil {
-					slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
-				}
+	// Trigger a reload AND WAIT for it (triggerReloadAndWait, not a bare
+	// TriggerReload — mirrors createAgent/updateAgent/deleteAgent) so the
+	// agent's atomic toolPolicy pointer (pkg/agent/instance.go:290 —
+	// populated by ReloadProviderAndConfig) is actually swapped to the new
+	// policy before this handler responds. A bare TriggerReload only
+	// enqueues the reload and returns before the registry swap happens —
+	// without waiting, the next turn's resolveToolPolicyAtExec /
+	// FilterToolsByPolicy could still see the previous snapshot for as long
+	// as that swap takes to land, and (e.g.) an exec call freshly bumped to
+	// "ask" would run as "allow" because LoadToolPolicy returns the stale
+	// pointer. triggerReloadAndWait already treats ErrReloadNotConfigured
+	// (unit tests without the full gateway reload pipeline wired) as a
+	// no-op, so a non-nil error here is always a genuine reload failure.
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error("agent tools update: reload failed — in-memory policy not updated",
+			"agent_id", agentID, "error", err)
+		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			if auditErr := audit.EmitSecuritySettingChange(
+				r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": agentID, "saved": true},
+				map[string]any{"agent_id": agentID, "reload_error": err.Error()},
+			); auditErr != nil {
+				slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
 			}
-			jsonErr(w, http.StatusServiceUnavailable,
-				"config saved but in-memory reload failed; restart the gateway or retry")
-			return
 		}
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but in-memory reload failed; restart the gateway or retry")
+		return
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match

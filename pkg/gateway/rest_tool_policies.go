@@ -7,12 +7,10 @@
 package gateway
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -181,35 +179,43 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	// "denied" tool until a restart — a fail-open authorization bypass on a
 	// tightening edit. safeUpdateConfigJSON additionally registers the written
 	// hash with selfWriteReg to suppress the file-watcher reload, so an explicit
-	// TriggerReload is required. TriggerReload → executeReload →
-	// ReloadProviderAndConfig → NewAgentRegistry rebuilds every instance with the
-	// new GlobalPolicies, mirroring the delegation_policy path in updateAgent.
+	// reload is required.
+	//
+	// triggerReloadAndWait (not a bare TriggerReload) — mirrors
+	// createAgent/updateAgent/updateAgentTools/setGodMode: a bare TriggerReload
+	// only enqueues the reload onto runningServices.manualReloadChan and returns
+	// immediately — the actual registry rebuild (TriggerReload → executeReload →
+	// ReloadProviderAndConfig → NewAgentRegistry, which rebuilds every instance
+	// with the new GlobalPolicies) happens on a separate goroutine. Without
+	// waiting, a tool call dispatched the instant this handler responds 200
+	// could still be evaluated under the PREVIOUS global policy for as long as
+	// that goroutine takes to run — a tightening edit (e.g. exec: allow → deny)
+	// must be enforced before the success response, not merely persisted and
+	// queued. triggerReloadAndWait already treats ErrReloadNotConfigured (unit
+	// tests / minimal embeddings without the full gateway reload pipeline
+	// wired) as a no-op, so a non-nil error here is always a genuine reload
+	// failure.
 	//
 	// Reload-failure semantics mirror updateAgent's delegation_policy path: the
 	// config IS persisted, so we never 500 (that would wrongly signal the write
-	// failed). ErrReloadNotConfigured is the no-reload-loop case (tests / minimal
-	// embeddings) and is benign. A genuine reload error is logged at Error — it
-	// means running agents may keep the previous global policy until the next
-	// restart, which an operator must see in the logs.
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		if errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Debug("rest: tool policies persisted; live reload not configured on this loop",
-				"error", err)
-		} else {
-			slog.Error(
-				"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
-				"error",
-				err,
-			)
-		}
+	// failed). A genuine reload error is logged at Error — it means running
+	// agents may keep the previous global policy until the next restart, which
+	// an operator must see in the logs.
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error(
+			"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
+			"error",
+			err,
+		)
 	}
 
 	slog.Info("rest: global tool policies updated",
 		"policy_count", len(body.Policies),
 	)
 
-	// Return the persisted state. Changes take effect immediately because the
-	// TriggerReload above rebuilt every running agent with the new global policy.
+	// Return the persisted state. Changes take effect immediately because
+	// triggerReloadAndWait above waited for every running agent to be rebuilt
+	// with the new global policy.
 	// body.Policies is already map[string]GlobalToolPoliciesPolicies — pass directly.
 	respPolicies := make(map[string]gen.GlobalToolPoliciesPolicies)
 	for k, v := range body.Policies {
