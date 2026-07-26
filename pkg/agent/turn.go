@@ -508,6 +508,58 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 	return nil
 }
 
+// claimAnyTurnForSession scans activeTurnStates for ANY turnState matching
+// sessionID (transcriptSessionID equality — the same predicate
+// GetActiveTurnHookForSession/collectDescendantTurnIDs/InterruptSession all
+// share) that is still alive (IsAlive()) and successfully wins the
+// first-cancel-wins ClaimCancel() check.
+//
+// RequestCancel uses this as a fallback when the SINGLE hook
+// GetActiveTurnHookForSession resolved (root-preferring) could not be
+// claimed — most commonly because it already fired from an earlier,
+// unrelated cancel — while a DIFFERENT, live, never-canceled descendant (a
+// background/Critical async delegate is the common case: it shares the
+// root's transcriptSessionID but is a wholly separate turnState) still
+// shares the session. Without this fallback, RequestCancel's entire
+// descendant-cancellation cascade AND its turn_canceled transcript/audit
+// write live behind the wasFired gate computed from that ONE resolved hook
+// alone, so a claimable-but-never-tried descendant would be silently
+// skipped — precisely the bug class 78bddc82 already fixed for
+// KillBackgroundSessions (which fires unconditionally, independent of
+// wasFired, for exactly this reason), just for the native
+// InterruptSession/transcript cascade instead of the background-bash one.
+//
+// Root-preference does not apply here — unlike GetActiveTurnHookForSession,
+// this is a last-resort "is there ANYTHING left to claim" scan, not the
+// primary resolution, so the first live, claimable match in sync.Map's
+// (unspecified) iteration order is used; InterruptSession's own independent
+// Range scan (not this function) is what actually cascades the signal to
+// every matching turn regardless of which one was claimed here. Returns nil
+// when no turnState matches sessionID, or every match is already finished
+// or already claimed.
+func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
+	var claimed *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID != sessionID || !ts.IsAlive() {
+			return true
+		}
+		if ts.ClaimCancel() {
+			claimed = ts
+			return false // stop — one successful claim is enough
+		}
+		return true
+	})
+	if claimed == nil {
+		// Explicit nil-interface return: a nil *turnState boxed directly into
+		// TurnCancelHook would compare != nil to callers (classic Go
+		// interface-nil gotcha), silently defeating the `fallback != nil`
+		// check RequestCancel relies on.
+		return nil
+	}
+	return claimed
+}
+
 // getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
 // parentTurnID=="") matching sessionID's transcriptSessionID, or nil when no
 // root turn is currently active for the session — INCLUDING when the only

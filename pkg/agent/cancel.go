@@ -46,9 +46,24 @@ type CancelCanceller struct {
 
 // CancelOutcome is returned to the caller after a cancel attempt.
 type CancelOutcome struct {
-	Fired       bool     // true if a turn was actually targeted (ClaimCancel succeeded)
-	Descendants []string // turn IDs canceled (parent + sub-turns)
-	TurnID      string   // root turn ID; empty when Fired is false
+	// Fired is true if ANY turn sharing the session was actually claimed
+	// (ClaimCancel succeeded) and therefore targeted by the cascade below —
+	// NOT specifically the root/parent turn. The primary resolution
+	// (GetActiveTurnHookForSession) prefers the root when one is claimable,
+	// but the claimAnyTurnForSession fallback (see that function's doc
+	// comment) can claim a live, never-canceled descendant instead when the
+	// root has already fired from an earlier, unrelated cancel or no longer
+	// resolves at all. Either way Fired:true means the descendant-
+	// cancellation cascade and the turn_canceled transcript/audit write did
+	// run; Fired:false means no live, unclaimed turn existed for this
+	// session at all (a genuine no-op, e.g. everything already finished).
+	Fired       bool     // true if some turn was actually targeted (ClaimCancel succeeded)
+	Descendants []string // turn IDs canceled (root/claimed turn + all its sub-turns)
+	// TurnID is the ID of whichever turn was actually claimed — the root when
+	// GetActiveTurnHookForSession resolved and claimed it, or a descendant's
+	// ID when claimAnyTurnForSession's fallback had to claim one instead
+	// (root already fired / not found). Empty when Fired is false.
+	TurnID string
 
 	// BackgroundSessionsKilled and BackgroundSessionsFailed report the
 	// hooks.KillBackgroundSessions cascade's outcome (FR-B10/FR-B11/FR-B14).
@@ -240,6 +255,30 @@ func (al *AgentLoop) RequestCancel(
 		activeTurn = al.GetActiveTurnHookForSession(sessionID)
 	}
 	wasFired := activeTurn != nil && activeTurn.ClaimCancel()
+
+	// --- Fallback: claim ANY other live, unclaimed turn sharing this session
+	// (closes the same wasFired-gate bug class 78bddc82 fixed for
+	// KillBackgroundSessions, applied to the native cascade) ---
+	//
+	// GetActiveTurnHookForSession resolves exactly ONE hook (root-preferring)
+	// and wasFired above reflects ONLY that hook's own ClaimCancel result.
+	// That undercounts whenever a DIFFERENT turnState sharing sessionID is
+	// still alive and has never been claimed — e.g. the resolved root already
+	// fired from an earlier, unrelated cancel while a background/Critical
+	// async delegate (a separate turnState, same transcriptSessionID) is
+	// still genuinely running and was never signaled. Without this fallback,
+	// the entire descendant-cancellation cascade AND the turn_canceled
+	// transcript/audit write below are skipped purely because the ONE
+	// resolved hook couldn't be claimed, even though claimAnyTurnForSession's
+	// own scan (same predicate collectDescendantTurnIDs/InterruptSession use)
+	// would find a perfectly claimable descendant. See that function's doc
+	// comment for the full root-cause writeup.
+	if !wasFired && sessionID != "" {
+		if fallback := al.claimAnyTurnForSession(sessionID); fallback != nil {
+			activeTurn = fallback
+			wasFired = true
+		}
+	}
 
 	// --- Audit: attempt (always, even for duplicate or no-turn cancels) ---
 	audit.Emit(ctx, auditLogger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
