@@ -161,3 +161,56 @@ describe('parseFrameSafe — judge_verdict (ADR-049 D2/D4/R3 — NO session_id)'
     expect(getDroppedFrameCount()).toBe(1)
   })
 })
+
+/**
+ * Regression: every `plan_phase` the backend can emit must be accepted by the
+ * frame schema.
+ *
+ * `parseFrameSafe` DROPS any frame that fails `safeParse`, and the drop is
+ * whole-frame — not just the offending field. So a phase value missing from
+ * this enum silently discards the entire `plan_status` push for that plan,
+ * taking `state` and `progress` down with it. The UI then only catches up on
+ * its 15s poll, which is why this stayed invisible.
+ *
+ * `awaiting_owner_correction` was missing here while being a live value of
+ * `Plan.plan_phase` (pkg/plan/plan.go) that `websocket.go` forwards verbatim
+ * as `PlanPhase: p.PlanPhase` — found while adding `stalled`. Enumerated
+ * explicitly rather than spot-checked so a future phase added to the Go
+ * constants but not to the contract fails here instead of in production.
+ */
+describe('parseFrameSafe — plan_status accepts every emittable plan_phase', () => {
+  const phases = [
+    'dispatching',
+    'judging',
+    'synthesizing',
+    'idle',
+    'awaiting_owner_correction',
+    'stalled',
+  ] as const
+
+  it.each(phases)('accepts plan_phase=%s', (phase) => {
+    const frame = {
+      type: 'plan_status',
+      plan_id: 'p1',
+      state: 'running',
+      plan_phase: phase,
+      progress: 0.5,
+    }
+    const result = parseFrameSafe(JSON.stringify(frame))
+    expect(result, `plan_phase="${phase}" must not be dropped`).not.toBeNull()
+    expect(result?.type).toBe('plan_status')
+    expect(getDroppedFrameCount()).toBe(0)
+  })
+
+  it('still drops a genuinely unknown plan_phase', () => {
+    const frame = {
+      type: 'plan_status',
+      plan_id: 'p1',
+      state: 'running',
+      plan_phase: 'not_a_real_phase',
+      progress: 0.5,
+    }
+    expect(parseFrameSafe(JSON.stringify(frame))).toBeNull()
+    expect(getDroppedFrameCount()).toBe(1)
+  })
+})

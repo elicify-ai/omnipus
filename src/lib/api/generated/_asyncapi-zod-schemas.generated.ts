@@ -626,7 +626,7 @@ export const PlanStatusFrame = z
     type: z.literal("plan_status"),
     plan_id: z.string(),
     state: z.enum(["draft", "approved", "running", "done", "failed"]),
-    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "stalled"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "awaiting_owner_correction", "stalled"]),
     progress: z.number().min(0).max(1),
     paused_reason: z.string().optional(),
   })

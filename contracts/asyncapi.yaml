@@ -3360,6 +3360,7 @@ components:
             - judging
             - synthesizing
             - idle
+            - awaiting_owner_correction
             - stalled
         progress:
           type: number

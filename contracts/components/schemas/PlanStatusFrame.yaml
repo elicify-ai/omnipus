@@ -43,6 +43,7 @@ properties:
       - judging
       - synthesizing
       - idle
+      - awaiting_owner_correction
       - stalled
     description: >
       Runtime-only sub-phase while `state == running` (mirrors
