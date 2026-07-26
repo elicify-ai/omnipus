@@ -994,6 +994,10 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	patch := task.Patch{}
+	// Set when a plan DETACH (plan_id -> "") optimistically adds `status: inbox`
+	// to the patch; drives the ErrIllegalTransition retry at the Update below so
+	// a terminal/blocked member still detaches instead of 400ing.
+	detachResetsStatus := false
 	if req.Title != nil {
 		patch.Title = req.Title
 	}
@@ -1082,6 +1086,33 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
+		} else if req.Status == nil {
+			// DETACH (plan_id -> ""). Sibling of the plan-delete laundering
+			// hole: detaching a member without touching its status turns a
+			// `next` member of a draft/stopped plan into a STANDALONE `next`
+			// task, which requirePlanExecuting rightly permits (PlanID == ""
+			// means "not a plan member") and CheckQueuedTasks' ~60s drain then
+			// auto-dispatches — running work the Execute gate never approved.
+			// Reachable from the UI today: TaskDetailPanel's Plan dropdown ->
+			// "No plan" sends exactly this patch.
+			//
+			// Mirror detachMemberOnPlanDelete: a detached non-terminal member
+			// returns to triage rather than inheriting a dispatchable resting
+			// state it was never approved for. Applied on the SAME patch as the
+			// plan_id clear, so there is no window where the task is standalone
+			// and still `next`.
+			//
+			// Only when the caller did NOT also set `status` in the same
+			// request (an explicit status wins). Re-parenting plan A -> plan B
+			// is untouched — that takes the non-empty branch above.
+			// detachResetsStatus drives the ErrIllegalTransition retry at the
+			// Update call site: the store refuses this combined patch for
+			// `blocked`/`done`/`failed` (blocked may only leave via the store's
+			// own recompute; done is frozen), and those must still detach
+			// rather than 400 — history is never rewritten.
+			inbox := task.StatusInbox
+			patch.Status = &inbox
+			detachResetsStatus = true
 		}
 		patch.PlanID = req.PlanId
 	}
@@ -1137,6 +1168,18 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	updated, err := a.taskStore.Update(id, patch)
+	if err != nil && detachResetsStatus && errors.Is(err, task.ErrIllegalTransition) {
+		// The detach above optimistically added `status: inbox`. A terminal or
+		// `blocked` member legitimately refuses that (done is frozen; blocked
+		// may only leave via the store's own recompute), but the DETACH itself
+		// must still succeed rather than 400 — those states cannot be
+		// auto-dispatched anyway, so the laundering risk this reset exists to
+		// close does not apply to them. Retry with the plan_id clear alone and
+		// let recomputeBlockedStateLocked (which runs at the end of every
+		// Update) settle `blocked`.
+		patch.Status = nil
+		updated, err = a.taskStore.Update(id, patch)
+	}
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			jsonErr(w, http.StatusNotFound, "task not found")

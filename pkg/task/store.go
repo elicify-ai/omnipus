@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/adhocore/gronx"
 	"github.com/google/uuid"
@@ -277,6 +278,38 @@ func (s *Store) Get(id string) (*Task, error) {
 	return s.load(id)
 }
 
+// HasVisibleContent reports whether s contains at least one rune a human
+// would perceive as visible content (UAT round-2 S3 finding "invisible
+// codepoints bypass title validation"). strings.TrimSpace only strips
+// unicode.IsSpace, which is false for zero-width/format characters —
+// ZERO WIDTH SPACE (U+200B), ZERO WIDTH NON-JOINER (U+200C), ZERO WIDTH
+// JOINER (U+200D), WORD JOINER (U+2060), BOM / ZERO WIDTH NO-BREAK SPACE
+// (U+FEFF), and SOFT HYPHEN (U+00AD) are all Unicode category Cf (Format);
+// BRAILLE PATTERN BLANK (U+2800) renders as a blank glyph but is category So
+// (Symbol, other), not Cf, so it needs an explicit exception alongside Cf.
+// A title built entirely from these survives TrimSpace unchanged (every rune
+// has IsSpace()==false) and produces a visually-blank, unfindable/
+// unfilterable title/chip. This checks the semantic CLASS (whitespace +
+// format-control + the one Cf-adjacent exception), not a blacklist of the
+// specific codepoints a tester happened to try — a future zero-width
+// addition to Unicode is caught for free. Exported so pkg/plan (which
+// already imports this package for AcceptanceCriterion/NormalizeCriteria)
+// can apply the identical rule to Plan titles.
+func HasVisibleContent(s string) bool {
+	for _, r := range s {
+		switch {
+		case unicode.IsSpace(r):
+			continue
+		case r == '\u2800': // BRAILLE PATTERN BLANK — blank glyph, category So not Cf
+			continue
+		case unicode.In(r, unicode.Cf):
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // normalize applies field defaults and validates the entity. It does NOT touch
 // the filesystem (cycle checks are the caller's responsibility via the DAG
 // validator). Returns a user-facing error on invalid input.
@@ -286,9 +319,12 @@ func (t *Task) normalize() error {
 	// also existed here). A whitespace-only title (" \t ") is not user-facing
 	// content — reject it as empty rather than persisting a blank-looking
 	// board card; a legitimate title's incidental leading/trailing whitespace
-	// is silently normalized rather than rejected.
+	// is silently normalized rather than rejected. HasVisibleContent then
+	// catches the invisible/zero-width/format case TrimSpace itself misses
+	// (round-2 S3 finding above) — a title made ENTIRELY of those codepoints
+	// is rejected the same as "".
 	t.Title = strings.TrimSpace(t.Title)
-	if t.Title == "" {
+	if t.Title == "" || !HasVisibleContent(t.Title) {
 		return verr("title is required")
 	}
 	if len([]rune(t.Title)) > 200 {
@@ -719,9 +755,13 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		// Trim before validating (S2 UAT finding B sibling — see normalize()'s
 		// matching comment): a whitespace-only patch title is rejected as
 		// empty; a legitimate title's incidental leading/trailing whitespace
-		// is normalized away rather than persisted verbatim.
+		// is normalized away rather than persisted verbatim. HasVisibleContent
+		// then catches the invisible/zero-width/format case TrimSpace itself
+		// misses (round-2 S3 finding, see HasVisibleContent's doc comment) — a
+		// patch title made ENTIRELY of those codepoints is rejected the same
+		// as "".
 		trimmedTitle := strings.TrimSpace(*patch.Title)
-		if trimmedTitle == "" {
+		if trimmedTitle == "" || !HasVisibleContent(trimmedTitle) {
 			return nil, verr("title must not be empty")
 		}
 		if len([]rune(trimmedTitle)) > 200 {

@@ -158,6 +158,78 @@ func TestHandleSessions_RenameEmptyTitle(t *testing.T) {
 		"PUT with empty title must return 400; body=%s", w.Body.String())
 }
 
+// TestHandleSessions_RenameBlankishTitleRejected proves a session title made
+// only of whitespace or INVISIBLE runes is rejected, not just the empty string.
+//
+// A bare `req.Title == ""` check passed all of these, producing a session that
+// renders blank in the sidebar and cannot be found by name. This is the same
+// class of hole UAT round 2 found on plan/task titles (seven zero-width
+// codepoints sailed through `strings.TrimSpace`, which only strips
+// `unicode.IsSpace`), so this shares their predicate — task.HasVisibleContent —
+// rather than growing a second, weaker rule that drifts out of sync.
+//
+// Traces to: pkg/gateway/rest.go renameSession title validation.
+func TestHandleSessions_RenameBlankishTitleRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		// The invisible codepoints are written as JSON \uXXXX escapes, not literal
+		// bytes: a literal U+FEFF in Go source is an "illegal byte order mark"
+		// compile error, and the rest would be invisible in a diff. encoding/json
+		// decodes them into the real runes before validation runs.
+		{"spaces", `{"title":"   "}`},
+		{"tabs and newlines", `{"title":"\t\n \r\n"}`},
+		{"nbsp", `{"title":"\u00a0\u00a0"}`},
+		{"zero-width space", `{"title":"\u200b\u200b\u200b"}`},
+		{"zero-width non-joiner", `{"title":"\u200c"}`},
+		{"zero-width joiner", `{"title":"\u200d"}`},
+		{"word joiner", `{"title":"\u2060"}`},
+		{"BOM", `{"title":"\ufeff"}`},
+		{"soft hyphen", `{"title":"\u00ad"}`},
+		{"braille blank", `{"title":"\u2800\u2800"}`},
+		{"mixed invisibles", `{"title":" \u200b\ufeff\u00ad "}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api, cleanup := newTestRestAPI(t)
+			defer cleanup()
+			sessionID := createTestSession(t, api)
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/sessions/"+sessionID,
+				strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/sessions/" + sessionID
+			api.HandleSessions(w, r)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code,
+				"PUT with an invisible-only title (%s) must return 400; body=%s",
+				tc.name, w.Body.String())
+		})
+	}
+}
+
+// TestHandleSessions_RenameTitleTrimmed proves surrounding whitespace is
+// stripped rather than persisted, so " Real Title " and "Real Title" are not
+// two visually identical but distinct sessions.
+func TestHandleSessions_RenameTitleTrimmed(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	sessionID := createTestSession(t, api)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/sessions/"+sessionID,
+		strings.NewReader(`{"title":"   Real Title   "}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/sessions/" + sessionID
+	api.HandleSessions(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), `"Real Title"`,
+		"stored title must be trimmed; body=%s", w.Body.String())
+}
+
 // TestHandleSessions_RenameNotFound verifies that renaming a non-existent
 // session returns 404.
 //

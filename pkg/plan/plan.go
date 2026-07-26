@@ -434,8 +434,13 @@ func (p *Plan) normalize() error {
 	// legitimate title's incidental leading/trailing whitespace is silently
 	// normalized rather than rejected. This runs for every Store.Create
 	// caller (REST, plan engine, agent tools), not just the REST handler.
+	// task.HasVisibleContent then catches the invisible/zero-width/format
+	// case TrimSpace itself misses (UAT round-2 S3 finding — see that
+	// function's doc comment): a title made ENTIRELY of zero-width/format
+	// codepoints (or the Cf-adjacent BRAILLE PATTERN BLANK) is rejected the
+	// same as "".
 	p.Title = strings.TrimSpace(p.Title)
-	if p.Title == "" {
+	if p.Title == "" || !task.HasVisibleContent(p.Title) {
 		return verr("title is required")
 	}
 	if len([]rune(p.Title)) > maxPlanTitleRunes {

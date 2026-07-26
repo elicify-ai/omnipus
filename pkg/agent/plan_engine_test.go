@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1086,5 +1087,291 @@ func TestPlanEngine_PromoteReadyStandaloneTasks_SkipsPlanMembers(t *testing.T) {
 	}
 	if got.Status != task.StatusBlocked {
 		t.Fatalf("member status = %q, want still blocked (a PlanID-bearing task must be skipped by the standalone sweep)", got.Status)
+	}
+}
+
+// --- Round-1 UAT finding #5: "an executed plan silently stalls forever when
+// its members are in inbox" -------------------------------------------------
+//
+// Root cause (confirmed in code before this fix): dispatchReadyMembers only
+// ever looks at task.StatusNext; promoteReadyMembers only ever cascades a
+// DONE member's blocked_by dependents. Neither ever looks at
+// task.StatusInbox, which is exactly the status a task attached to a plan
+// (via task detail, or created with plan_id set) starts in — so an inbox
+// member of a running/approved plan was invisible to dispatch forever, with
+// no self-heal and no signal ("Running 0/N" forever).
+
+// TestPlanEngine_InboxMember_PromotedAndDispatched_AlreadyRunningPlan is the
+// per-tick-sweep half of the fix: a member attached to an ALREADY-running
+// plan (not just at Execute time) must be promoted and dispatched on the
+// very next processPlan pass — mirroring how promoteReadyStandaloneTasks
+// re-sweeps every tick rather than acting once. Before the fix, this test
+// fails: the inbox member is never dispatched and its status never leaves
+// inbox.
+func TestPlanEngine_InboxMember_PromotedAndDispatched_AlreadyRunningPlan(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner")
+	tk := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusInbox,
+	})
+
+	h.pe.processPlan(context.Background(), "p1")
+
+	calls := h.disp.callList()
+	if len(calls) != 1 || calls[0] != tk.ID {
+		t.Fatalf("dispatcher calls = %v, want exactly [%s] (an inbox member of a running plan must be "+
+			"promoted to next and dispatched, not left invisible forever)", calls, tk.ID)
+	}
+	got, err := h.tasks.Get(tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusInProgress {
+		t.Fatalf("member status = %q, want in_progress (promoted next -> claimed by dispatch)", got.Status)
+	}
+}
+
+// TestPlanEngine_ApprovedPlanWithInboxMembers_DispatchedOnExecute_NoManualDrag
+// reproduces Tester A's exact repro shape: 3 tasks attached to a plan (each
+// landing in inbox, task.normalize()'s default), each with a Prose criterion,
+// then Execute (approved -> running admission). All three must dispatch
+// immediately — no manual Inbox -> Next drag required. Before the fix, this
+// test fails: tryStartApprovedPlan's dispatchReadyMembers call sees zero
+// `next` members (all three are still inbox) and dispatches nothing.
+func TestPlanEngine_ApprovedPlanWithInboxMembers_DispatchedOnExecute_NoManualDrag(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "p1", Title: "Plan 1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateApproved,
+		DoD: []task.AcceptanceCriterion{planProseCriterion("all three members are done")},
+	})
+	var memberIDs []string
+	for i := 0; i < 3; i++ {
+		tk := mustCreateTask(t, h.tasks, &task.Task{
+			Title: fmt.Sprintf("member-%d", i), WorkspaceID: "ws", PlanID: "p1", Status: task.StatusInbox,
+			Criteria: []task.AcceptanceCriterion{planProseCriterion("done")},
+		})
+		memberIDs = append(memberIDs, tk.ID)
+	}
+
+	h.pe.Tick(context.Background())
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != plan.StateRunning {
+		t.Fatalf("state = %q, want running (approved plan must auto-tick to running)", got.State)
+	}
+	calls := h.disp.callList()
+	if len(calls) != 3 {
+		t.Fatalf("dispatcher calls = %v, want all 3 members dispatched on Execute with no manual drag", calls)
+	}
+	for _, id := range memberIDs {
+		found := false
+		for _, c := range calls {
+			if c == id {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("member %q was never dispatched; calls = %v", id, calls)
+		}
+	}
+}
+
+// TestPlanEngine_InboxMember_WithUnmetDependency_StaysBlockedNotDispatched
+// pins requirement 2: a member with an unmet blocked_by dependency must
+// never be promoted to a dispatchable state, even though it starts in
+// inbox. promoteInboxMembers delegates to the ordinary task.Store.Update
+// path, whose recomputeBlockedStateLocked runs unconditionally as the
+// terminal step of every Update — so setting Status: next on a task with an
+// unmet dependency is immediately re-derived to `blocked` by that SAME
+// write. It must promote later via the existing cascade once the dependency
+// completes, never before.
+func TestPlanEngine_InboxMember_WithUnmetDependency_StaysBlockedNotDispatched(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner")
+	dep := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "dependency", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusInProgress,
+	})
+	dependent := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "dependent", WorkspaceID: "ws", PlanID: "p1",
+		Status: task.StatusInbox, BlockedBy: []string{dep.ID},
+	})
+
+	h.pe.processPlan(context.Background(), "p1")
+
+	got, err := h.tasks.Get(dependent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusBlocked {
+		t.Fatalf("dependent status = %q, want blocked (an unmet dependency must never be promoted to dispatchable)",
+			got.Status)
+	}
+	for _, id := range h.disp.callList() {
+		if id == dependent.ID {
+			t.Fatalf("dependent was dispatched despite an unmet dependency: calls = %v", h.disp.callList())
+		}
+	}
+}
+
+// TestPlanEngine_PromoteInboxMembers_GateRejectsNonDispatchablePlans is the
+// mandated regression: requirement 3 says PermitsMemberDispatch() must
+// remain the sole authority on whether a plan may promote/dispatch anything
+// — a draft, terminal (done/failed), or paused-running plan must promote
+// NOTHING. Calls promoteInboxMembers directly (rather than through
+// processPlan/Tick, which already filter most of these states before ever
+// reaching it) so the method's OWN internal gate is what's under test, not
+// just its callers' outer filtering.
+func TestPlanEngine_PromoteInboxMembers_GateRejectsNonDispatchablePlans(t *testing.T) {
+	h := newTestPlanEngine(t)
+	tk := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusInbox,
+	})
+
+	cases := []*plan.Plan{
+		{ID: "p1", Title: "draft", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateDraft},
+		{ID: "p1", Title: "done", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateDone},
+		{
+			ID: "p1", Title: "failed", WorkspaceID: "ws", OwnerAgentID: "owner",
+			State: plan.StateFailed, FailedReason: plan.FailedReasonStoppedByUser,
+		},
+		{
+			ID: "p1", Title: "paused-running", WorkspaceID: "ws", OwnerAgentID: "owner",
+			State: plan.StateRunning, PausedReason: "owner_disabled",
+		},
+	}
+	for _, p := range cases {
+		if promoted := h.pe.promoteInboxMembers(p, []task.Task{*tk}); promoted {
+			t.Fatalf("state=%s paused_reason=%q: promoteInboxMembers returned true, want false (must promote nothing)",
+				p.State, p.PausedReason)
+		}
+	}
+
+	got, err := h.tasks.Get(tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusInbox {
+		t.Fatalf("task status = %q, want inbox (untouched by every non-dispatchable plan state)", got.Status)
+	}
+	if len(h.disp.callList()) != 0 {
+		t.Fatalf("expected no dispatch for any non-dispatchable plan state, got %v", h.disp.callList())
+	}
+}
+
+// --- Round-1 UAT finding #5, "ALSO" half: a genuinely stalled running plan
+// must say so, not spin on "Running 0/N" forever --------------------------
+
+// TestPlanEngine_StallSurfaced_WhenNoMemberIsDispatchableOrInFlight covers a
+// stall that survives the inbox-promotion fix above: a member blocked on a
+// dependency OUTSIDE this plan's own member set (a standalone task nobody is
+// running) can never be resolved by this plan's own dispatch loop. The
+// engine must persist a plain-language reason (HandoverText) and wake the
+// owner exactly once per distinct condition (no repeat wake on an unchanged
+// tick), then clear the note once the plan can make progress again.
+func TestPlanEngine_StallSurfaced_WhenNoMemberIsDispatchableOrInFlight(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner")
+	// A standalone task OUTSIDE the plan that nobody is running — the
+	// dependency this plan's own dispatch loop can never itself resolve.
+	outsideBlocker := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "outside blocker", WorkspaceID: "ws", Status: task.StatusInbox,
+	})
+	stuck := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "stuck member", WorkspaceID: "ws", PlanID: "p1",
+		Status: task.StatusBlocked, BlockedBy: []string{outsideBlocker.ID},
+	})
+
+	h.pe.processPlan(context.Background(), "p1")
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got.HandoverText, stallHandoverNotePrefix) {
+		t.Fatalf("HandoverText = %q, want a stall note (prefix %q)", got.HandoverText, stallHandoverNotePrefix)
+	}
+	if !strings.Contains(got.HandoverText, stuck.ID) {
+		t.Fatalf("HandoverText = %q, want it to name the stuck member %q", got.HandoverText, stuck.ID)
+	}
+	events := h.notif.eventList()
+	stallWakes := 0
+	for _, e := range events {
+		if e.SourceKind == "plan_stalled" {
+			stallWakes++
+		}
+	}
+	if stallWakes != 1 {
+		t.Fatalf("expected exactly 1 plan_stalled wake event, got %d (events=%+v)", stallWakes, events)
+	}
+
+	// A second pass with UNCHANGED state must not re-wake the owner.
+	h.pe.processPlan(context.Background(), "p1")
+	stallWakes = 0
+	for _, e := range h.notif.eventList() {
+		if e.SourceKind == "plan_stalled" {
+			stallWakes++
+		}
+	}
+	if stallWakes != 1 {
+		t.Fatalf("expected the stall wake to be deduped on an unchanged tick, got %d total", stallWakes)
+	}
+
+	// Once the plan can make progress again (the blocking dependency
+	// completes and the member becomes dispatchable), the stall note clears
+	// and the member dispatches.
+	done := task.StatusDone
+	if _, uerr := h.tasks.Update(outsideBlocker.ID, task.Patch{Status: &done}); uerr != nil {
+		t.Fatal(uerr)
+	}
+	if _, uerr := h.tasks.AdvanceUnblocked(stuck.ID); uerr != nil {
+		t.Fatal(uerr)
+	}
+	h.pe.processPlan(context.Background(), "p1")
+
+	got, err = h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(got.HandoverText, stallHandoverNotePrefix) {
+		t.Fatalf("HandoverText = %q, want the stall note cleared once the plan is unstuck", got.HandoverText)
+	}
+	dispatchedStuck := false
+	for _, id := range h.disp.callList() {
+		if id == stuck.ID {
+			dispatchedStuck = true
+		}
+	}
+	if !dispatchedStuck {
+		t.Fatalf("expected the previously-stuck member to be dispatched once unblocked, calls = %v", h.disp.callList())
+	}
+}
+
+// TestPlanEngine_StallNotSurfaced_WhenMemberInFlight is the negative case: a
+// non-terminal, non-all-done plan with an in_progress member is normal
+// mid-flight progress, not a stall — HandoverText must stay untouched and no
+// plan_stalled wake must fire.
+func TestPlanEngine_StallNotSurfaced_WhenMemberInFlight(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreateRunningPlan(t, h.plans, "p1", "owner")
+	mustCreateTask(t, h.tasks, &task.Task{
+		Title: "in flight", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusInProgress,
+	})
+
+	h.pe.processPlan(context.Background(), "p1")
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HandoverText != "" {
+		t.Fatalf("HandoverText = %q, want empty (an in-flight member is not a stall)", got.HandoverText)
+	}
+	for _, e := range h.notif.eventList() {
+		if e.SourceKind == "plan_stalled" {
+			t.Fatalf("unexpected plan_stalled wake for a plan with an in-flight member: %+v", e)
+		}
 	}
 }

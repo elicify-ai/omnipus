@@ -348,16 +348,20 @@ function GraphViewInner({
     return <GraphPlanEmptyState />
   }
 
-  // Nothing to graph: no DAG-relevant nodes. One-time tasks with no
-  // dependencies (`layout.unlinked`) are deliberately NOT rendered on the DAG
-  // canvas — they live on the Board/List — so an all-unlinked workspace shows
-  // the empty state here rather than a canvas full of nothing. When SOME (but
-  // not all) visible tasks are unlinked, `layout.nodes.length > 0` so we fall
-  // through to the canvas below, which surfaces the excluded count via the
-  // `graph-unlinked-notice` banner (S3 UAT fix #9) instead of letting them
-  // vanish with no cue.
+  // Nothing to graph: no DAG-relevant nodes. Tasks that are neither a member
+  // of a Plan nor linked to another task by a dependency (`layout.unlinked`)
+  // are deliberately NOT rendered on the DAG canvas — they live on the
+  // Board/List — so an all-unlinked workspace shows the empty state here
+  // rather than a canvas full of nothing. That empty state distinguishes
+  // "genuinely no tasks" from "all-unlinked" via `layout.unlinked.length`
+  // (see `GraphEmptyState`'s `unlinkedCount` prop) so it never claims zero
+  // tasks exist when some do, just none of them qualify for the canvas. When
+  // SOME (but not all) visible tasks are unlinked, `layout.nodes.length > 0`
+  // so we fall through to the canvas below, which surfaces the excluded
+  // count via the `graph-unlinked-notice` banner (S3 UAT fix #9) instead of
+  // letting them vanish with no cue.
   if (layout.nodes.length === 0) {
-    return <GraphEmptyState />
+    return <GraphEmptyState unlinkedCount={layout.unlinked.length} />
   }
 
   return (
@@ -423,16 +427,28 @@ function GraphUnlinkedNotice({ count }: { count: number }) {
       <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-3 py-1 text-[11px] text-[var(--color-muted)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur">
         <Info size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
         <span>
-          {count} {count === 1 ? 'task' : 'tasks'} not shown here — no dependencies. See the
-          Board or List.
+          {count} {count === 1 ? 'task' : 'tasks'} not shown here — not in a plan and not
+          linked by a dependency. See the Board or List.
         </span>
       </div>
     </div>
   )
 }
 
-/** Tasteful empty state — points the user to the Board to create work. */
-function GraphEmptyState() {
+/**
+ * Tasteful empty state — points the user to the Board to create work.
+ *
+ * `unlinkedCount` distinguishes two truly different situations that both
+ * land here via `layout.nodes.length === 0`: genuinely zero graphable tasks
+ * (`unlinkedCount` 0/undefined — "No tasks yet" is accurate) vs. every
+ * visible task existing but none qualifying for the canvas because none is
+ * in a Plan or linked by a dependency (`unlinkedCount > 0` — "No tasks yet"
+ * would be false, since `layout.unlinked` proves tasks DO exist). Same
+ * qualifying-conditions vocabulary as `GraphUnlinkedNotice` so the two
+ * surfaces tell one consistent story.
+ */
+function GraphEmptyState({ unlinkedCount = 0 }: { unlinkedCount?: number }) {
+  const hasUnlinked = unlinkedCount > 0
   return (
     <div
       className="absolute inset-0 flex items-center justify-center p-6"
@@ -446,11 +462,12 @@ function GraphEmptyState() {
           </div>
         </div>
         <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
-          No tasks yet
+          {hasUnlinked ? 'No dependencies to graph yet' : 'No tasks yet'}
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
-          Create a task on the Board and its dependencies will graph here — laid
-          out left to right, with live status colour and a traceable critical path.
+          {hasUnlinked
+            ? 'These tasks are not in a plan and not linked by a dependency, so there is nothing to graph yet. Add either on the Board and they will appear here — laid out left to right, with live status colour and a traceable critical path.'
+            : 'Create a task on the Board and its dependencies will graph here — laid out left to right, with live status colour and a traceable critical path.'}
         </p>
       </div>
     </div>

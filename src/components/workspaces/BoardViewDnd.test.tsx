@@ -30,9 +30,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView, canDropTransition, buildBoardAnnouncements, boardKeyboardCoordinateGetter } from './BoardView'
+import { ApiError } from '@/lib/api-error'
 import type { Task, Plan } from '@/lib/api'
 import { STATUS_ORDER, STATUS_LABELS } from '@/lib/statusColors'
 import type {
@@ -345,10 +346,11 @@ describe('buildBoardAnnouncements — screen-reader message text', () => {
     expect(msg).toBeUndefined()
   })
 
-  it('onDragEnd announces the destination column on a successful drop', () => {
+  it('onDragEnd announces only the mechanical drop, never a completed "moved" claim (UAT round-2 N2 — the real outcome isn\'t known synchronously)', () => {
     const announcements = buildBoardAnnouncements(rootTasks)
     const msg = announcements.onDragEnd?.(makeEndEvent('task-1', 'done'))
-    expect(msg).toBe('Task "Draggable task" was moved to the Done column.')
+    expect(msg).toBe('Task "Draggable task" was dropped on the Done column. Confirming…')
+    expect(msg).not.toMatch(/was moved/i)
   })
 
   it('onDragEnd announces a plain "was dropped" when not released over a column', () => {
@@ -520,6 +522,112 @@ describe('BoardView — real keyboard drag-and-drop, end-to-end (UAT Finding 1)'
       fireEvent.keyDown(card, { code: 'Escape', key: 'Escape' })
 
       expect(onTaskMove).not.toHaveBeenCalled()
+    })
+  })
+})
+
+// ── Outcome live region — UAT round-2 N2 ────────────────────────────────────
+//
+// The `role="status"` region dnd-kit's own `Announcements` populates
+// (`buildBoardAnnouncements`) narrates drag MECHANICS ONLY (covered above —
+// it never claims "moved"). These tests cover the SEPARATE, board-owned
+// `data-testid="board-move-outcome"` region that announces the REAL result —
+// exactly once, only once it's actually known — driving the fix for: "a
+// screen-reader user is told the move succeeded when it was rejected and the
+// card snapped back."
+async function dragOneColumnRight(card: HTMLElement) {
+  fireEvent.keyDown(card, { code: 'Space', key: ' ' })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  fireEvent.keyDown(card, { code: 'ArrowRight', key: 'ArrowRight' })
+  fireEvent.keyDown(card, { code: 'Space', key: ' ' })
+}
+
+async function dragColumnsRight(card: HTMLElement, times: number) {
+  fireEvent.keyDown(card, { code: 'Space', key: ' ' })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  for (let i = 0; i < times; i++) {
+    fireEvent.keyDown(card, { code: 'ArrowRight', key: 'ArrowRight' })
+  }
+  fireEvent.keyDown(card, { code: 'Space', key: ' ' })
+}
+
+describe('BoardView — outcome live region (UAT round-2 N2: never announce a moved that did not happen)', () => {
+  it('does NOT announce "moved" until the async onTaskMove promise actually resolves', async () => {
+    await withMockedBoardRects(async () => {
+      let resolveMove!: () => void
+      const pending = new Promise<void>((resolve) => {
+        resolveMove = resolve
+      })
+      const onTaskMove = vi.fn().mockReturnValue(pending)
+      const task = baseTask({ id: 'task-1', title: 'Draggable task', status: 'inbox' })
+      renderBoard({ tasks: [task], onTaskMove })
+
+      const card = screen.getByText('Draggable task').closest('[role="button"]') as HTMLElement
+      card.focus()
+      await dragOneColumnRight(card)
+
+      expect(onTaskMove).toHaveBeenCalledTimes(1)
+      // The mutation hasn't settled yet — the outcome region must NOT
+      // already claim success (this is the exact bug: announcing "moved"
+      // before the result is known).
+      const region = screen.getByTestId('board-move-outcome')
+      expect(region).not.toHaveTextContent(/moved/i)
+
+      resolveMove()
+      await waitFor(() => expect(region).toHaveTextContent('Task "Draggable task" was moved to the Next column.'))
+    })
+  })
+
+  it('announces the REAL rejection reason (never "moved") when the async onTaskMove promise rejects — same wording a sighted user would see toasted', async () => {
+    await withMockedBoardRects(async () => {
+      const conflict = new ApiError(409, 'This conflicts with the current state. Please refresh and try again.', {
+        body: JSON.stringify({
+          error:
+            'task_executor: parent plan is not in a dispatchable state (approved/running, unpaused): plan "plan-9" is draft (paused_reason="")',
+        }),
+      })
+      const onTaskMove = vi.fn().mockRejectedValue(conflict)
+      const task = baseTask({ id: 'task-1', title: 'Draggable task', status: 'inbox', plan_id: 'plan-9' })
+      renderBoard({ tasks: [task], onTaskMove })
+
+      const card = screen.getByText('Draggable task').closest('[role="button"]') as HTMLElement
+      card.focus()
+      await dragOneColumnRight(card)
+
+      const region = screen.getByTestId('board-move-outcome')
+      // Never claims success at any point on the way to the real (failure) outcome.
+      expect(region).not.toHaveTextContent(/was moved/i)
+
+      await waitFor(() =>
+        expect(region).toHaveTextContent(
+          'Task "Draggable task" could not be moved to the Next column: This plan is still a draft — Execute it (from the Plans band above) before this task can run. It remains in the Inbox column.',
+        ),
+      )
+      // Still never flipped to a false "moved" claim after settling.
+      expect(region).not.toHaveTextContent(/was moved/i)
+    })
+  })
+
+  it('announces a SYNCHRONOUS transition-guard rejection (e.g. dropping into Blocked) immediately, with no onTaskMove call at all', async () => {
+    await withMockedBoardRects(async () => {
+      const onTaskMove = vi.fn()
+      const onMoveRejected = vi.fn()
+      const task = baseTask({ id: 'task-1', title: 'Draggable task', status: 'inbox' })
+      renderBoard({ tasks: [task], onTaskMove, onMoveRejected })
+
+      const card = screen.getByText('Draggable task').closest('[role="button"]') as HTMLElement
+      card.focus()
+      // inbox(0) -> next(1) -> in_progress(2) -> blocked(3): 3 ArrowRights.
+      await dragColumnsRight(card, 3)
+
+      expect(onTaskMove).not.toHaveBeenCalled()
+      expect(onMoveRejected).toHaveBeenCalledTimes(1)
+      // Known synchronously — no waitFor/network round trip needed.
+      const region = screen.getByTestId('board-move-outcome')
+      expect(region).toHaveTextContent(
+        'Task "Draggable task" could not be moved to the Blocked column: Blocked is set automatically when a dependency is unmet — you can’t move a task here. It remains in the Inbox column.',
+      )
+      expect(region).not.toHaveTextContent(/was moved/i)
     })
   })
 })

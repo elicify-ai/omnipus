@@ -241,6 +241,74 @@ func TestPlan_Store_TitleTrimming(t *testing.T) {
 	})
 }
 
+// TestPlan_Store_InvisibleOnlyTitleRejected is the pkg/plan regression for
+// UAT round-2 S3 finding "invisible codepoints bypass title validation":
+// strings.TrimSpace only strips unicode.IsSpace, so a title built entirely
+// from zero-width/format codepoints (ZERO WIDTH SPACE U+200B and siblings,
+// plus the Cf-adjacent BRAILLE PATTERN BLANK U+2800) survived it unchanged
+// and produced a visually-blank, unfindable/unfilterable plan chip — the
+// tester created five this way, all HTTP 201. task.HasVisibleContent (shared
+// with pkg/task, which already imports it for AcceptanceCriterion) now
+// closes this on both Create and Update, mirroring the whitespace-only fix
+// above rather than replacing it. Codepoints are spelled as \\u escapes (not
+// embedded raw) so the fixture is legible in a plain terminal/diff.
+func TestPlan_Store_InvisibleOnlyTitleRejected(t *testing.T) {
+	const (
+		zwsp    = "\u200b" // ZERO WIDTH SPACE (Cf)
+		zwnj    = "\u200c" // ZERO WIDTH NON-JOINER (Cf)
+		zwj     = "\u200d" // ZERO WIDTH JOINER (Cf)
+		wj      = "\u2060" // WORD JOINER (Cf)
+		bom     = "\ufeff" // BOM / ZERO WIDTH NO-BREAK SPACE (Cf)
+		shy     = "\u00ad" // SOFT HYPHEN (Cf)
+		braille = "\u2800" // BRAILLE PATTERN BLANK (So, Cf-adjacent)
+	)
+	invisibleOnly := []string{
+		zwsp + zwsp + zwsp,    // the tester's literal repro: three ZWSPs
+		zwnj + zwj + wj + bom, // ZWNJ + ZWJ + word joiner + BOM
+		shy,
+		braille + braille,
+		"  " + zwsp + "  " + shy + "  " + braille + "  ", // mixed with real whitespace
+	}
+
+	t.Run("Create rejects an invisible-only title", func(t *testing.T) {
+		for _, title := range invisibleOnly {
+			s := newStore(t)
+			p := mkPlan(title, "ws-1", "agent-a")
+			err := s.Create(p)
+			if err == nil {
+				t.Fatalf("expected validation error for invisible-only title %q, got nil", title)
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("title %q: expected ErrValidation, got %v", title, err)
+			}
+		}
+	})
+
+	t.Run("Update/patch rejects an invisible-only title", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Original Title", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		blank := zwsp + zwsp + zwsp
+		_, err := s.Update(p.ID, Patch{Title: &blank})
+		if err == nil {
+			t.Fatal("expected validation error for invisible-only patch title, got nil")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+		// The rejected patch must not have landed on disk.
+		reloaded, getErr := s.Get(p.ID)
+		if getErr != nil {
+			t.Fatalf("Get after rejected patch: %v", getErr)
+		}
+		if reloaded.Title != "Original Title" {
+			t.Fatalf("title changed despite rejected patch: %q", reloaded.Title)
+		}
+	})
+}
+
 func TestPlan_SameWorkspaceFK(t *testing.T) {
 	s := newStore(t)
 	p := mkPlan("FK Plan", "ws-1", "agent-a")

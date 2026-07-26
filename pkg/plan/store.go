@@ -309,8 +309,13 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		// a legitimate title's incidental leading/trailing whitespace is
 		// normalized away rather than persisted verbatim. This runs for every
 		// Store.Update caller, not just the REST PUT handler.
+		// task.HasVisibleContent then catches the invisible/zero-width/format
+		// case TrimSpace itself misses (UAT round-2 S3 finding — see that
+		// function's doc comment): a patch title made ENTIRELY of zero-width/
+		// format codepoints (or the Cf-adjacent BRAILLE PATTERN BLANK) is
+		// rejected the same as "".
 		trimmedTitle := strings.TrimSpace(*patch.Title)
-		if trimmedTitle == "" {
+		if trimmedTitle == "" || !task.HasVisibleContent(trimmedTitle) {
 			return nil, verr("title must not be empty")
 		}
 		if len([]rune(trimmedTitle)) > maxPlanTitleRunes {

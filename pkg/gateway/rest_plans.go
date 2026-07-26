@@ -801,6 +801,38 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 // cannot be deleted (plan.Store.Delete rejects it, mapped to 409 here); a
 // non-running delete clears plan_id on member tasks (best-effort, SD-A5,
 // mirrors the removed clearMilestoneOnTasks).
+//
+// S1 release-blocker fix (UAT round 2): the cascade used to ONLY clear
+// plan_id and leave everything else untouched. A member sitting in `next`
+// (triaged but never individually approved — its only "approval" was ever
+// the PLAN's own approve gate) would come out of the cascade standalone
+// (PlanID=="") AND still `next`, which is exactly the state the ~60s
+// heartbeat drain (TaskExecutor.CheckQueuedTasks, task.Filter{Status: next})
+// auto-dispatches — laundering an unapproved/cancelled plan member into an
+// autonomously-executed standalone task and bypassing the Execute approval
+// gate entirely. requirePlanExecuting's plan-state gate (pkg/agent/
+// task_executor.go) is correctly a no-op for a standalone task (PlanID=="")
+// — that half is by design; the bug was handing a plan member that
+// dispatchable, ungated resting state in the first place.
+//
+// Fix: a non-terminal member is detached AND reset to `inbox` (re-triage
+// required — it must go through Next/Execute again as a standalone task, on
+// its own merits, same as any other freshly-created task) in the SAME
+// task.Patch/Update call that clears plan_id, so there is no intermediate
+// standalone-and-next state for the drain to observe between two separate
+// writes. `blocked` is a store-DERIVED side-state (recomputeBlockedStateLocked
+// runs unconditionally at the end of every task.Store.Update) that can only
+// be left via the store's own internal recompute hatch, never a public
+// Status patch (validateTransition rejects blocked->anything from a non-
+// internal caller) — a currently-blocked member's combined patch is rejected
+// for that reason alone, not a real failure; detachMemberOnPlanDelete falls
+// back to a plan_id-only patch for it and lets the store's own recompute
+// resolve `blocked` correctly (to `next` once genuinely unblocked, otherwise
+// staying `blocked` — either way never dispatchable, since CheckQueuedTasks
+// only ever drains StatusNext). Terminal members (`done`, `failed`) are never
+// resurrected or rewritten — `done` is frozen at the store level and a
+// combined patch on either is rejected the same way, falling back to the
+// plan_id-only clear that preserves their history untouched.
 func (a *restAPI) handlePlanDelete(w http.ResponseWriter, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid plan ID")
@@ -823,28 +855,67 @@ func (a *restAPI) handlePlanDelete(w http.ResponseWriter, id string) {
 		return
 	}
 
-	// SD-A5: clear plan_id on this plan's (former) member tasks. Best-effort
-	// striped-lock RMW per task, mirroring clearMilestoneOnTasks
-	// (rest_milestones.go, removed) — pkg/plan deliberately holds no task-store
-	// handle (see plan.Store.Delete's doc comment), so this is the REST layer's
-	// job.
+	// SD-A5 (+ S1 fix above): clear plan_id on this plan's (former) member
+	// tasks, resetting any non-terminal, non-blocked member to `inbox` in the
+	// same RMW cycle. Best-effort per task — pkg/plan deliberately holds no
+	// task-store handle (see plan.Store.Delete's doc comment), so this is the
+	// REST layer's job — but a failure here is never a dispatch-safety hole:
+	// a member whose reset failed still carries the now-deleted plan's ID, and
+	// every dispatch path (CheckQueuedTasks, requirePlanExecuting/
+	// planForGate) fails CLOSED when a task's PlanID cannot be resolved to a
+	// live plan (plan.ErrNotFound), so an orphaned reference can never
+	// auto-execute — it just needs a manual re-triage/plan_id clear later.
+	// 204 is still returned in that case: the plan itself IS gone (the
+	// requested operation succeeded), the residual state is safe, and
+	// failing the whole delete over a best-effort cleanup step would make the
+	// plan appear permanently stuck for what is, at worst, a data-hygiene
+	// follow-up — but every such failure is logged at Error (not Warn) since
+	// it is exactly the class of leak this fix closes and must not go quiet.
 	if a.taskStore != nil {
 		members, lerr := a.taskStore.List(task.Filter{PlanID: id})
 		if lerr != nil {
-			slog.Warn("rest: plan delete: list former member tasks failed", "id", id, "error", lerr)
+			slog.Error("rest: plan delete: list former member tasks failed; any next/in_progress member remains attached to the deleted plan_id (fails closed, cannot auto-dispatch, but needs manual re-triage)",
+				"plan_id", id, "error", lerr)
 		} else {
-			empty := ""
 			for _, t := range members {
-				if _, uerr := a.taskStore.Update(t.ID, task.Patch{PlanID: &empty}); uerr != nil {
-					slog.Warn("rest: plan delete: clear plan_id on member task failed",
-						"plan_id", id, "task_id", t.ID, "error", uerr)
-				}
+				a.detachMemberOnPlanDelete(id, t.ID)
 			}
 		}
 	}
 
 	a.auditPlan("plan.delete", id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// detachMemberOnPlanDelete clears taskID's plan_id and, unless the task is
+// terminal (done/failed) or currently sitting in the derived `blocked`
+// side-state, resets it to `inbox` — in ONE task.Patch/Update call, so the
+// drain can never observe an intermediate standalone-and-next state (see
+// handlePlanDelete's doc comment for the full S1 rationale). The combined
+// patch is attempted first so the decision is made against the store's own
+// FRESH on-disk status (validateTransition/recomputeBlockedStateLocked),
+// never a possibly-stale snapshot from the List call above. If the store
+// rejects the combined patch as an illegal transition — the only two ways
+// that happens are leaving `done` (frozen) or leaving `blocked` other than
+// via the store's internal recompute hatch — this falls back to a plan_id-
+// only patch, which always succeeds for those cases and, for a `blocked`
+// member, still runs recomputeBlockedStateLocked unconditionally (letting
+// the store itself resolve `blocked` correctly rather than this handler
+// hand-writing it). Any OTHER error (I/O, not-found — the task was deleted
+// concurrently, etc.) is logged at Error: the member remains attached to the
+// now-deleted plan_id, which fails closed everywhere dispatch is gated (see
+// handlePlanDelete's doc comment) but does need a manual follow-up.
+func (a *restAPI) detachMemberOnPlanDelete(planID, taskID string) {
+	empty := ""
+	inbox := task.StatusInbox
+	_, err := a.taskStore.Update(taskID, task.Patch{PlanID: &empty, Status: &inbox})
+	if err != nil && errors.Is(err, task.ErrIllegalTransition) {
+		_, err = a.taskStore.Update(taskID, task.Patch{PlanID: &empty})
+	}
+	if err != nil {
+		slog.Error("rest: plan delete: detach member task failed; task still references the deleted plan_id (fails closed, cannot auto-dispatch, but needs manual re-triage)",
+			"plan_id", planID, "task_id", taskID, "error", err)
+	}
 }
 
 // handlePlanApprove handles POST /api/v1/plans/{id}/approve. Runs the tiered

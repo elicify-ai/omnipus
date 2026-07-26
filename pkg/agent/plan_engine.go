@@ -778,6 +778,19 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 			map[string]any{"plan_id": planID, "error": lerr.Error()})
 		return
 	}
+	// Round-1 UAT finding #5 fix: a member attached to the plan before/at
+	// Execute lands in `inbox` (task.normalize()'s default) — promote it to
+	// `next` immediately on admission so the very first dispatch wave below
+	// actually reaches it, rather than waiting for the next tick's
+	// processPlan pass to notice it (see promoteInboxMembers' doc comment).
+	if pe.promoteInboxMembers(updated, tasks) {
+		tasks, lerr = pe.taskStore.List(task.Filter{PlanID: updated.ID})
+		if lerr != nil {
+			logger.WarnCF("plan_engine", "could not re-list member tasks after inbox promotion on start",
+				map[string]any{"plan_id": planID, "error": lerr.Error()})
+			return
+		}
+	}
 	pe.dispatchReadyMembers(ctx, updated.ID, tasks)
 	pe.touchActivity(updated.ID)
 }
@@ -859,6 +872,21 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 		return
 	}
 
+	// Round-1 UAT finding #5 fix: promote every inbox member of THIS
+	// dispatchable plan to `next` before the ready/blocked-cascade pass and
+	// dispatch below run — see promoteInboxMembers' own doc comment. This is
+	// the per-tick sweep (not a one-shot at Execute/approval): a member
+	// attached to an already-running plan gets promoted here on the very
+	// next pass, exactly like one attached before Execute.
+	if pe.promoteInboxMembers(p, tasks) {
+		tasks, err = pe.taskStore.List(task.Filter{PlanID: planID})
+		if err != nil {
+			logger.WarnCF("plan_engine", "processPlan: re-list member tasks after inbox promotion failed",
+				map[string]any{"plan_id": planID, "error": err.Error()})
+			return
+		}
+	}
+
 	if pe.promoteReadyMembers(tasks) {
 		tasks, err = pe.taskStore.List(task.Filter{PlanID: planID})
 		if err != nil {
@@ -888,7 +916,16 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 
 	if allMembersTerminal(tasks) {
 		pe.beginPlanJudgeRound(p, tasks)
+		return
 	}
+
+	// Round-1 UAT finding #5, "ALSO" half: the DAG is not all-terminal (real
+	// work remains) yet nothing was dispatched this pass — if that is because
+	// nothing is dispatchable or in-flight at all (not a transient dispatch
+	// error, which would still have found a `next` member to retry), the plan
+	// cannot make progress and must say so rather than spin on "Running 0/N"
+	// forever. See surfaceStallIfAny's doc comment.
+	pe.surfaceStallIfAny(p, tasks)
 }
 
 // promoteReadyMembers re-runs AdvanceBlockedDependents (pkg/task/blocked_by.go)
@@ -916,6 +953,74 @@ func (pe *PlanEngine) promoteReadyMembers(tasks []task.Task) (advancedAny bool) 
 		}
 	}
 	return advancedAny
+}
+
+// promoteInboxMembers promotes every member task of a DISPATCHABLE plan
+// (p.PermitsMemberDispatch()) that is still sitting in the derived-nothing
+// `inbox` status to `next` (round-1 UAT finding #5: "an executed plan
+// silently stalls forever when its members are in inbox"). A task attached
+// to a plan — whether at Execute time (attached before/at approval) or
+// later, to an ALREADY-running plan (attached via the task detail panel) —
+// lands in `inbox` by default (task.normalize()); NEITHER dispatchReadyMembers
+// (only ever looks at `next`) NOR promoteReadyMembers above (only ever
+// cascades a DONE member's blocked dependents) ever look at `inbox`, so
+// without this an inbox member is invisible to the plan engine forever — the
+// plan sits at "Running 0/N" with no self-heal and no signal.
+//
+// Being a member of a plan the engine considers dispatchable IS the
+// commitment `next` represents for a standalone task (there is no separate
+// per-member approval step in this product) — so promoting a dispatchable
+// plan's inbox member to `next` is completing the state transition Execute
+// already authorized, not a policy relaxation.
+//
+// Gated STRICTLY by p.PermitsMemberDispatch() — the plan-dispatch gate stays
+// the sole authority on whether a plan may promote/dispatch anything at all;
+// a draft, cap-waiting-approved, done, or failed plan, or a paused running
+// plan, promotes NOTHING. Every caller of this function has already re-read
+// the plan's live State/PausedReason under planDecisionMu in the same
+// critical section (mirrors dispatchReadyMembers' own doc comment on why
+// that re-check is sufficient) — this is the same "single source of truth,
+// checked once more defensively at the point of use" pattern used throughout
+// this file.
+//
+// Delegates the actual write to the ordinary task.Store.Update path — NOT a
+// bespoke direct write — so every existing invariant keeps applying
+// unconditionally: inbox -> next is already a legal lifecycle transition
+// (validateTransition, store.go), and recomputeBlockedStateLocked (store.go)
+// runs as the UNCONDITIONAL terminal step of every Update, so a member whose
+// blocked_by set has an unmet dependency is immediately and correctly
+// re-derived to `blocked` by this SAME write — this function never inspects
+// BlockedBy itself, and therefore can never promote a member whose
+// dependencies are unmet. That member then promotes later via the EXISTING
+// cascade (AdvanceBlockedDependents / promoteReadyMembers above) exactly like
+// any other blocked member, once its dependency completes — no new
+// promotion path is introduced for that case.
+//
+// Runs on EVERY processPlan pass (the per-tick sweep AND the reactive
+// task_status_changed handler both call processPlan) — not a one-shot at
+// Execute/approval — so a member attached to an ALREADY-running plan gets
+// the identical self-heal on the very next pass, not just a plan's first
+// dispatch wave. tryStartApprovedPlan additionally calls this once,
+// immediately on approved->running admission, so a plan's initial member
+// wave does not have to wait for the next tick to be promoted and dispatched.
+func (pe *PlanEngine) promoteInboxMembers(p *plan.Plan, tasks []task.Task) (promotedAny bool) {
+	if !p.PermitsMemberDispatch() {
+		return false
+	}
+	next := task.StatusNext
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Status != task.StatusInbox {
+			continue
+		}
+		if _, err := pe.taskStore.Update(t.ID, task.Patch{Status: &next}); err != nil {
+			logger.WarnCF("plan_engine", "promote inbox member to next failed",
+				map[string]any{"plan_id": p.ID, "task_id": t.ID, "error": err.Error()})
+			continue
+		}
+		promotedAny = true
+	}
+	return promotedAny
 }
 
 // promoteReadyStandaloneTasks re-derives the `blocked`/`next` state of every
@@ -1018,6 +1123,124 @@ func allMembersTerminal(tasks []task.Task) bool {
 		}
 	}
 	return true
+}
+
+// stallHandoverNotePrefix marks a Plan.HandoverText value written by
+// surfaceStallIfAny below — distinguishes "this is our own stall note, safe
+// to compare for de-dup/clear" from any OTHER text a different code path
+// wrote into HandoverText (e.g. the plan-judge's UNMET steering text, or a
+// terminal-brake wind-down summary), which must never be clobbered or
+// mistaken for a stall note.
+const stallHandoverNotePrefix = "[stalled] "
+
+// planStallReason inspects a RUNNING, dispatchable plan's freshest member
+// snapshot (taken by the caller AFTER this pass's own inbox-promotion and
+// blocked-cascade attempts, immediately before dispatch) and reports a
+// plain-language reason the plan is stuck, or "" when it is not. "Stuck"
+// here means: the DAG is NOT all-terminal (the caller checks
+// allMembersTerminal first — a genuinely finished DAG goes to the plan
+// judge, not here) AND no member is currently dispatchable (`next`) or in
+// flight (`in_progress`) — i.e. this pass's dispatchReadyMembers call is
+// guaranteed to have been a complete no-op.
+//
+// This is the "ALSO: THE SILENT PART IS ITS OWN BUG" half of round-1 UAT
+// finding #5: even with inbox members now self-promoting
+// (promoteInboxMembers), a member can still be legitimately `blocked` on a
+// dependency this plan's own dispatch loop will never itself resolve (e.g. a
+// blocker outside this plan's member set that nobody is running), or an
+// inbox member whose promotion attempt itself failed (already logged at the
+// point of failure). Either is a genuine "no progress possible without help"
+// condition, and must not render as an indefinitely-spinning "Running" chip
+// with nothing to explain why.
+func planStallReason(tasks []task.Task) string {
+	var blockedIDs, inboxIDs []string
+	for i := range tasks {
+		switch tasks[i].Status {
+		case task.StatusNext, task.StatusInProgress:
+			return "" // something is dispatchable or already running - not stalled
+		case task.StatusBlocked:
+			blockedIDs = append(blockedIDs, tasks[i].ID)
+		case task.StatusInbox:
+			inboxIDs = append(inboxIDs, tasks[i].ID)
+		}
+	}
+	if len(blockedIDs) == 0 && len(inboxIDs) == 0 {
+		return "" // no non-terminal, non-dispatchable member found
+	}
+	var sb strings.Builder
+	sb.WriteString("This plan has no dispatchable or in-flight members, so it cannot make progress right now.")
+	if len(blockedIDs) > 0 {
+		fmt.Fprintf(&sb, " %d member(s) are blocked on an unmet dependency this plan cannot itself resolve: %s.",
+			len(blockedIDs), strings.Join(blockedIDs, ", "))
+	}
+	if len(inboxIDs) > 0 {
+		fmt.Fprintf(&sb, " %d member(s) could not be promoted from inbox: %s.",
+			len(inboxIDs), strings.Join(inboxIDs, ", "))
+	}
+	sb.WriteString(" A correction (adjust dependencies, or Stop and re-author) is needed to unstick it.")
+	return sb.String()
+}
+
+// surfaceStallIfAny persists planStallReason's verdict onto p.HandoverText
+// and wakes the owner exactly once per distinct stall condition — mirroring
+// this file's other owner-wake decision points (plan_judge_unmet/
+// plan_judge_met/plan_<failed_reason>/plan_stopped_by_user) with a further
+// one (plan_stalled, FR-059's intent extended to this case): a running plan
+// that can make no progress at all is exactly the kind of condition that
+// must be surfaced rather than silently spun on.
+//
+// De-duped by comparing against the CURRENTLY persisted HandoverText (as
+// read by the caller at the top of processPlan, under planDecisionMu, so
+// this is race-free within one pass) — an unchanged stall condition across
+// ticks re-wakes no one; a materially different one (a different blocked/
+// inbox member set) does. Clears a stale stall note (recognized via
+// stallHandoverNotePrefix, so this never touches text any OTHER path wrote)
+// once the plan is no longer stalled.
+//
+// NOTE for the SPA/contracts owners: Plan.HandoverText (pkg/plan/plan.go) is
+// NOT currently exposed on the wire — it has no field in
+// contracts/components/schemas/Plan.yaml and pkg/gateway/rest.go's plan
+// response mapping never reads it (true for every other writer of this
+// field too, not just this one). Rendering an "awaiting_owner_correction"-
+// style always-visible chip + plain-language body for a stall therefore
+// needs, in addition to this backend signal: (1) a wire-visible field —
+// either expose `handover_text` generically, or add a new closed-enum
+// `plan_phase` value (e.g. "stalled") the way `awaiting_owner_correction`
+// was added, regenerated via contracts/components/schemas/Plan.yaml +
+// scripts/gen-contracts.sh; (2) pkg/gateway/rest.go's plan-to-wire mapping
+// reading the new field; (3) a frontend chip + copy mirroring
+// src/lib/planStateColors.ts's planPhaseChip/AWAITING_OWNER_CORRECTION_EXPLANATION
+// pattern. None of that is implemented here (pkg/plan and the SPA are
+// outside this fix's file ownership) — but the owner agent IS already woken
+// today, via the existing async-notifier "system"/"plan:<id>" channel this
+// file uses for every other decision point, with the SAME plain-language
+// reason this note carries.
+//
+// Caller must hold planDecisionMu and must only call this once
+// allMembersTerminal(tasks) and planStuckAfterMemberCancel(tasks) have both
+// already been ruled out (processPlan's own call order guarantees this).
+func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
+	reason := planStallReason(tasks)
+	if reason == "" {
+		if strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix) {
+			cleared := ""
+			if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &cleared}); err != nil {
+				logger.WarnCF("plan_engine", "could not clear stale stall note",
+					map[string]any{"plan_id": p.ID, "error": err.Error()})
+			}
+		}
+		return
+	}
+	note := stallHandoverNotePrefix + reason
+	if p.HandoverText == note {
+		return // already surfaced this exact condition - no repeat wake
+	}
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note}); err != nil {
+		logger.WarnCF("plan_engine", "could not persist stall note",
+			map[string]any{"plan_id": p.ID, "error": err.Error()})
+		return
+	}
+	pe.wakeOwner(p.ID, p.OwnerAgentID, fmt.Sprintf("Plan %q is stalled.\n\n%s", p.Title, reason), "plan_stalled")
 }
 
 // --- Plan-level judge round (SD-B8) ---------------------------------------

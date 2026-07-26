@@ -26,6 +26,7 @@ import {
   updateTask,
   deletePlan,
   isApiError,
+  taskMoveErrorMessage,
   tasksQueryKeys,
   plansQueryKeys,
   workspacesQueryKeys,
@@ -67,6 +68,14 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const [planSlideOver, setPlanSlideOver] = useState<{ open: boolean; plan: Plan | null }>({ open: false, plan: null })
 
   // Kanban drag-to-column status change.
+  //
+  // UAT round-2 N1: this reuses the same message mapper BoardView's own
+  // drag-end live-region announcement uses (`taskMoveErrorMessage`) so a
+  // sighted user's toast and a screen-reader user's announcement never say
+  // two different things about the same rejected drop. See
+  // `taskMoveErrorMessage`'s doc comment (src/lib/api.ts) for exactly which
+  // 409 causes this distinguishes and why the generic ApiError 409 default
+  // ("refresh and try again") is actively wrong for the plan-gate case.
   const moveMutation = useMutation({
     mutationFn: ({ task, status }: { task: Task; status: Task['status'] }) =>
       updateTask(task.id, { status }),
@@ -75,8 +84,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
     },
     onError: (err) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to move task'
-      addToast({ message: msg, variant: 'error' })
+      addToast({ message: taskMoveErrorMessage(err, plans), variant: 'error' })
     },
   })
 
@@ -363,7 +371,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             altitude="top-level"
             hasActiveFilter={hasActiveFilter}
             onTaskClick={(task) => setSelectedTaskId(task.id)}
-            onTaskMove={(task, status) => moveMutation.mutate({ task, status })}
+            onTaskMove={(task, status) => moveMutation.mutateAsync({ task, status })}
             onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })}
           />
         ) : (

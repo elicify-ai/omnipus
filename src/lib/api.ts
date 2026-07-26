@@ -22,7 +22,7 @@
 // (or err.isAuthError() / err.isNotFound() / err.isRateLimited() / etc)
 // rather than regex-matching err.message — see src/lib/api-error.ts.
 
-import { ApiError, isApiError as isApiErrorFn } from './api-error'
+import { ApiError, isApiError as isApiErrorFn, getErrorMessage } from './api-error'
 export { ApiError, isApiError, getErrorMessage } from './api-error'
 import { maybeDevToast } from './dev-toast'
 import { logError } from './telemetry'
@@ -2129,6 +2129,136 @@ export async function runTask(id: string): Promise<Task> {
       "This task can't be run right now — it may already be running, or be an in-plan member (its plan drives its start, not a standalone run).",
     )
   }
+}
+
+// ── Board drag-to-column move: 409 message mapping (UAT round-2 N1/N2) ─────
+//
+// The board's drag-to-column move (BoardView.tsx -> WorkspaceTasksTab.tsx's
+// moveMutation) PATCHes `status` straight through `updateTask` above — it
+// does NOT go through `runTask`'s `friendlyConflictError` wrapper, so a plan
+// member dragged into `in_progress` hit the generic
+// `ApiError.fromResponse` 409 default ("This conflicts with the current
+// state. Please refresh and try again.") verbatim. That default is actively
+// WRONG for this endpoint's most common 409 cause (see below) — refreshing
+// can never fix it — so this is a dedicated mapper, not a reuse of
+// `friendlyConflictError` (whose single hardcoded string-per-endpoint
+// shape can't express "different message per plan state").
+//
+// pkg/gateway/rest_tasks.go's handleTaskPatch returns 409 from exactly two
+// call sites (verified by reading the handler, not assumed) when the PATCH
+// sets `status: in_progress` and StartTaskNow then fails:
+//   1. `agent.ErrDispatchCapReached` — the global dispatch semaphore is
+//      full. Genuinely transient congestion; retrying shortly can help.
+//   2. `agent.ErrPlanNotExecuting` / `agent.ErrPlanStateUnresolvable` — the
+//      S1 plan-state gate (pkg/agent/task_executor.go's
+//      `requirePlanExecuting`, commit 5d77f26a) refusing dispatch because
+//      the task's parent plan isn't `approved`/`running`-and-unpaused.
+//      Refreshing NEVER helps here — the plan itself has to change state
+//      (Execute a draft, restart an eligible stopped plan, or re-enable a
+//      disabled owner agent to clear a pause).
+// `pkg/task/store.go`'s plain `Update` (what this PATCH ultimately calls)
+// has no optimistic-concurrency/version check at all — illegal lifecycle
+// transitions there resolve to `task.ErrValidation` (400 Bad Request via
+// `isTaskValidationErr`), never 409 — so there is currently no THIRD,
+// generic-concurrency 409 cause on this endpoint to confuse with the above
+// two. (`src/lib/queryClient.ts`'s retry-exclusion comment already
+// documents this same overload for the RETRY question — that finding
+// stands; nothing here changes retry behavior, only display text, and both
+// causes are read from the same plain-text `{"error": string}` body that
+// comment says has "no machine-readable field distinguishing the two
+// cases" — true for a structured/typed field, but the two sentinel error
+// strings ARE textually distinguishable, which is all a display mapper
+// needs.)
+//
+// Exported (not `friendlyConflictError`-private) because BOTH the toast
+// (WorkspaceTasksTab's moveMutation.onError) and the screen-reader live
+// region (BoardView's own post-drop announcement) need the IDENTICAL text —
+// a screen-reader user must never hear a different reason than the sighted
+// toast shows for the same rejected drop.
+export function describeTaskMoveConflict(err: unknown, plans: Plan[]): string | undefined {
+  if (!isApiErrorFn(err) || err.status !== 409 || !err.body) return undefined
+
+  let raw = err.body
+  try {
+    const parsed = JSON.parse(err.body) as { error?: unknown; message?: unknown }
+    if (typeof parsed.error === 'string') raw = parsed.error
+    else if (typeof parsed.message === 'string') raw = parsed.message
+  } catch {
+    // Not JSON (H3-FE already guards the oversized/binary cases upstream in
+    // ApiError.fromResponse) — fall back to the raw text as-is.
+  }
+
+  if (raw.includes('global dispatch cap reached')) {
+    return 'Too many tasks are starting at once — the server is at its dispatch limit. Try moving this task again in a moment.'
+  }
+
+  // Mirrors task_executor.go's ErrPlanNotExecuting wrap exactly:
+  //   "...parent plan is not in a dispatchable state (approved/running, unpaused): plan "<id>" is <state> (paused_reason="<reason>")"
+  const gateMatch = raw.match(
+    /parent plan is not in a dispatchable state.*?: plan "([^"]*)" is (\w+) \(paused_reason="([^"]*)"\)/,
+  )
+  if (gateMatch) {
+    const [, planId, state, pausedReason] = gateMatch
+    // PermitsMemberDispatch (pkg/plan/plan.go) checks PausedReason FIRST,
+    // before State — a paused plan is refused regardless of state, so this
+    // takes precedence here too.
+    if (pausedReason) {
+      if (pausedReason === 'owner_disabled') {
+        return "This plan is paused because its owner agent is disabled — re-enable the agent to resume this plan's tasks."
+      }
+      return `This plan is paused (${pausedReason}) — resolve that before this task can run.`
+    }
+    switch (state) {
+      case 'draft':
+        return 'This plan is still a draft — Execute it (from the Plans band above) before this task can run.'
+      case 'done':
+        return "This plan has already finished — its tasks can't be started this way."
+      case 'failed': {
+        // Cross-reference the already-loaded plans list (BoardView already
+        // receives it) for `failed_reason` — the gate's own message doesn't
+        // carry it, and it's the difference between "Restart the plan" (a
+        // real, offered action for `stopped_by_user`) and "not restartable"
+        // (every other failure reason — PlanActionButton offers no restart
+        // for those either, US-9 Acceptance 2).
+        const plan = plans.find((p) => p.id === planId)
+        return plan?.failed_reason === 'stopped_by_user'
+          ? 'This plan was stopped — Restart it (from the Plans band above) before this task can run.'
+          : "This plan has failed and can't be restarted — its tasks can no longer run."
+      }
+      default:
+        // A future 6th plan state the client doesn't know about yet — fall
+        // through to the generic-but-honest 409 fallback below rather than
+        // guessing at a state-specific message we can't stand behind.
+        return undefined
+    }
+  }
+
+  // Mirrors ErrPlanStateUnresolvable's wrap: "...parent plan's state could not be verified: plan "<id>": <err>"
+  if (raw.includes("parent plan's state could not be verified")) {
+    return "This plan's current state couldn't be verified — try moving this task again in a moment."
+  }
+
+  return undefined
+}
+
+/**
+ * The single message both the move-conflict toast (WorkspaceTasksTab) and
+ * the drag-and-drop live-region announcement (BoardView) render for a failed
+ * board move — `describeTaskMoveConflict`'s specific mapping when it
+ * recognizes the 409 body, else an honest, non-committal fallback that never
+ * repeats `ApiError`'s generic 409 default ("refresh and try again") since
+ * that claim is exactly what's false for the plan-gate case above. Non-409
+ * errors (500s, network failures, etc.) fall through to the ordinary
+ * `getErrorMessage` priority (ApiError.userMessage > Error.message >
+ * fallback) unchanged.
+ */
+export function taskMoveErrorMessage(err: unknown, plans: Plan[]): string {
+  const specific = describeTaskMoveConflict(err, plans)
+  if (specific) return specific
+  if (isApiErrorFn(err) && err.status === 409) {
+    return 'This move was rejected by the server — the task or its plan may be in a state that does not allow it right now.'
+  }
+  return getErrorMessage(err, 'Failed to move task')
 }
 
 // ── Task evidence & judge verdicts (ADR-049 D2, Planning & Goals) ───────────

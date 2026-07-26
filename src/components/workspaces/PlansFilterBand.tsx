@@ -375,7 +375,18 @@ function PlanFilterTile({
           </span>
         )}
 
-        <span className="line-clamp-2 text-sm font-medium leading-snug text-[var(--color-secondary)]">
+        {/* Round-2 UAT finding (S3): this span is a direct child of a COLUMN-
+            direction flex container with `items-start` (not `stretch`), so
+            its used width is `fit-content`, floored by `min-width: auto` =
+            min-content = the full unbroken-string width — a 200-char title
+            with no spaces bled ~2183px past the 196px tile into neighbouring
+            tiles (paint bleed, not a layout collapse — tile widths stayed
+            uniform). Same fix as TaskCard.tsx: `min-w-0` removes the
+            min-content floor; `wrap-anywhere` (overflow-wrap: anywhere) is
+            the wrapping mode the spec requires browsers to factor into
+            min-content sizing itself, so line-clamp-2 can actually clip
+            within the tile instead of overflowing it. */}
+        <span className="line-clamp-2 min-w-0 wrap-anywhere text-sm font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
 
@@ -418,7 +429,9 @@ function PlanFilterTile({
           <AlertDialogHeader>
             <AlertDialogTitle>Clear this plan?</AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently deletes “{plan.title}”. Member tasks are not deleted, but lose their plan grouping. This cannot be undone.
+              This permanently deletes “{plan.title}”. Member tasks are not deleted — any that
+              haven’t finished return to the Inbox for triage, and none of them start running.
+              This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

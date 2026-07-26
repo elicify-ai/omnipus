@@ -937,10 +937,19 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 	if !decodeAndValidate(w, r, "SessionRenameRequest", &req, validateEnabled) {
 		return
 	}
-	if req.Title == "" {
+	// A bare `== ""` check is not enough: "   " and invisible/zero-width runes
+	// (ZWSP, ZWNJ, word joiner, BOM, soft hyphen, U+2800 …) both pass it and
+	// produce a session that renders blank and is unfindable in the sidebar.
+	// Same class of hole UAT found on plan/task titles — task.HasVisibleContent
+	// is the shared predicate, so this stays fixed with them rather than
+	// drifting into a second, weaker rule.
+	req.Title = strings.TrimSpace(req.Title)
+	if !task.HasVisibleContent(req.Title) {
 		jsonErr(w, http.StatusBadRequest, "title is required")
 		return
 	}
+	// Length is checked AFTER trimming so trailing padding can't push an
+	// otherwise-valid title over the limit.
 	if len(req.Title) > 256 {
 		jsonErr(w, http.StatusBadRequest, "title too long (max 256 characters)")
 		return

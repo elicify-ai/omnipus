@@ -13,6 +13,39 @@ set -uo pipefail
 REF="${1:-HEAD}"
 GATE="${2:-all}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
+
+# --- whole-run mutex ------------------------------------------------------
+# This worker is SHARED: every operator/session drives the same machine, and a
+# run's state is keyed by shard NAME, not by run. Two overlapping runs therefore
+# corrupt each other in at least three ways, all observed on 2026-07-26 when a
+# `<ref> e2e` run overlapped a `sendfile-fix all` run:
+#   1. $REPO_DIR — both hard-reset the SAME checkout to different SHAs, so the
+#      loser builds/tests the other run's code. The `HEAD:` line above proves
+#      only what was checked out at START, not that it survived the run.
+#   2. /tmp/omnipus-ci — the gateway BINARY both e2e gates build to. Rebuilt
+#      underneath a run already launching shards from it.
+#   3. /tmp/omnipus-e2e-<shard> — each shard `rm -rf`s its OMNIPUS_HOME and
+#      seeds a FRESH master key. Doing that under a live gateway from the other
+#      run yields exactly `credentials: decryption failed — wrong master key?`
+#      → provider injection rejected → `POST /auth/login` 500 → the shard fails
+#      at onboarding and reads as a code regression. It is not one.
+# Serialising whole runs fixes all three at once, and is far safer than
+# per-run path scoping (tests/e2e/setup.ts hardcodes /tmp/omnipus-ci).
+# FD 9 is held for the lifetime of this process; the lock releases on exit.
+_LOCKFILE=/tmp/runci.lock
+exec 9>"$_LOCKFILE" || { echo "cannot open $_LOCKFILE"; exit 2; }
+if ! flock -n 9; then
+  echo "another runci.sh is already running on this worker (lock: $_LOCKFILE):"
+  pgrep -af 'bash /cache/runci.sh' | grep -v "^$$ " || true
+  echo "waiting for it to finish (this run will start automatically)…"
+  # Bounded wait: better to queue than to silently corrupt both runs. If the
+  # holder is wedged, the timeout surfaces it instead of blocking forever.
+  if ! flock -w 5400 9; then
+    echo "timed out after 90m waiting for the worker lock — is a run wedged?" >&2
+    exit 2
+  fi
+fi
+echo "worker lock acquired (pid $$)"
 TAGS="goolm,stdjson"
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
 export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
@@ -199,8 +232,39 @@ _e2e_build() {
   # Force the chromium revision the installed @playwright/test expects (the caret range in
   # package.json may resolve past the image-baked revision). Cached after the first run;
   # shared by all shards via the image-level $PLAYWRIGHT_BROWSERS_PATH.
+  #
+  # Use the REPO-LOCAL playwright, never bare `npx` — the image bakes a pinned GLOBAL
+  # playwright at /usr/bin/playwright (Dockerfile: npm install -g @playwright/test@1.49.0).
+  # `npx playwright` can resolve that global binary, which installs the revision IT wants
+  # and exits 0, leaving the revision the test runner actually needs absent. That is not
+  # hypothetical: on 2026-07-26 the image held chromium 1148 (global 1.49.0) + 1228 while
+  # the local runner wanted 1223, and the whole e2e gate reported 48 phantom "failures"
+  # across 5 shards — every one of them `browserType.launch: Executable doesn't exist`,
+  # each "failing" in 4-6ms because no browser ever started. Infra noise indistinguishable
+  # from a real regression at a glance.
   log "e2e: install matching chromium"
-  npx playwright install chromium || return 1
+  local pw=./node_modules/.bin/playwright
+  [ -x "$pw" ] || { echo "e2e: $pw missing or not executable — npm ci must run first" >&2; return 1; }
+  # chromium_headless_shell is a SEPARATE download from chromium; the suite launches it
+  # directly, so installing only `chromium` leaves the headless path broken.
+  "$pw" install chromium chromium-headless-shell || return 1
+
+  # A zero exit above is NOT proof the right browser landed — installing the WRONG
+  # revision also exits 0. Verify the exact revision this runner resolves is on disk,
+  # and fail loudly (naming the path) rather than handing the shards a broken browser.
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const root = process.env.PLAYWRIGHT_BROWSERS_PATH || "";
+    const want = require("./node_modules/playwright-core/browsers.json").browsers
+      .filter(b => b.name === "chromium" || b.name === "chromium-headless-shell");
+    let bad = 0;
+    for (const b of want) {
+      const dir = path.join(root, `${b.name.replace(/-/g, "_")}-${b.revision}`);
+      if (!fs.existsSync(dir)) { console.error(`MISSING ${b.name} rev ${b.revision} at ${dir}`); bad++; }
+      else console.log(`ok ${b.name} rev ${b.revision}`);
+    }
+    process.exit(bad ? 1 : 0);
+  ' || { echo "e2e: required browser revision absent after install — see MISSING above" >&2; return 1; }
 }
 
 # Reap any still-running shard gateways by EXACT pid from their pidfiles. Never

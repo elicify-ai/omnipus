@@ -19,6 +19,7 @@ import {
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
+import { taskMoveErrorMessage } from '@/lib/api'
 import type { Task, Agent, Plan } from '@/lib/api'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import { cn } from '@/lib/utils'
@@ -161,6 +162,23 @@ export function canDropTransition(from: TaskStatus, to: TaskStatus): { ok: boole
  * drag lifecycle over the given root tasks. Pure and exported so the message
  * text is unit-testable without mounting `DndContext` (dnd-kit's pointer DnD
  * cannot be driven faithfully in jsdom — see BoardViewDnd.test.tsx).
+ *
+ * UAT round-2 N2 fix: `onDragEnd` here fires SYNCHRONOUSLY the instant a drag
+ * is released — before `StatusColumnsRow.handleDragEnd` has even checked
+ * `canDropTransition`, let alone before the (async, network-round-trip)
+ * `onTaskMove` mutation has resolved. It previously announced "was moved to
+ * the X column" unconditionally whenever the drop landed over a column —
+ * which is a claim of a completed, successful state change dnd-kit cannot
+ * possibly know yet, and one that's straightforwardly FALSE for a rejected
+ * drop (an illegal transition like dropping onto `blocked`, e.g., OR a 409
+ * from the plan-state gate, e.g.) — the card visually snaps back but a
+ * screen-reader user had already been told "moved". This function now only
+ * ever describes the MECHANICAL drop event (neutral, always true at this
+ * instant) — the actual outcome ("was moved" / "could not be moved: <reason>")
+ * is announced separately, once it's actually known, via the dedicated
+ * `role="status"` region `StatusColumnsRow` renders and updates from
+ * `handleDragEnd` (covering BOTH the synchronous transition-guard rejection
+ * and the asynchronous mutation result) — see that function's own comment.
  */
 export function buildBoardAnnouncements(rootTasks: Task[]): Announcements {
   const taskTitle = (id: string | number) => rootTasks.find((t) => t.id === id)?.title ?? 'the task'
@@ -178,8 +196,11 @@ export function buildBoardAnnouncements(rootTasks: Task[]): Announcements {
     onDragEnd({ active, over }) {
       if (!over) return `Task "${taskTitle(active.id)}" was dropped.`
       const label = columnLabel(over.id)
+      // Deliberately NOT "was moved" — the drop is only mechanical fact at
+      // this instant; the real outcome is announced separately, once known
+      // (see this function's doc comment).
       return label
-        ? `Task "${taskTitle(active.id)}" was moved to the ${label} column.`
+        ? `Task "${taskTitle(active.id)}" was dropped on the ${label} column. Confirming…`
         : `Task "${taskTitle(active.id)}" was dropped.`
     },
     onDragCancel({ active }) {
@@ -213,8 +234,18 @@ interface BoardViewProps {
    * the empty-state copy ("no tasks match the filter" vs "no tasks yet"). */
   hasActiveFilter?: boolean
   onTaskClick: (task: Task) => void
-  /** Persist a drag-to-column status change. Required for kanban DnD. */
-  onTaskMove?: (task: Task, newStatus: TaskStatus) => void
+  /**
+   * Persist a drag-to-column status change. Required for kanban DnD.
+   *
+   * UAT round-2 N2: MAY return a Promise (WorkspaceTasksTab wires this to
+   * `moveMutation.mutateAsync`, not the old fire-and-forget `.mutate`) — a
+   * rejected promise is what lets the board's own live region (see
+   * `StatusColumnsRow.handleDragEnd`) announce the REAL outcome instead of
+   * dnd-kit's drop-instant announcement claiming success it can't yet know.
+   * A caller that still passes a fire-and-forget `void` function keeps
+   * working exactly as before (awaiting a non-promise resolves immediately).
+   */
+  onTaskMove?: (task: Task, newStatus: TaskStatus) => Promise<unknown> | void
   /** Surface a rejected drop (e.g. dropping into `blocked`). */
   onMoveRejected?: (reason: string) => void
 }
@@ -346,7 +377,7 @@ interface StatusColumnsRowProps {
   agents: Agent[]
   altitude: BoardAltitude
   onTaskClick: (task: Task) => void
-  onTaskMove?: (task: Task, newStatus: TaskStatus) => void
+  onTaskMove?: (task: Task, newStatus: TaskStatus) => Promise<unknown> | void
   onMoveRejected?: (reason: string) => void
 }
 
@@ -365,6 +396,16 @@ function StatusColumnsRow({
   onMoveRejected,
 }: StatusColumnsRowProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null)
+  // UAT round-2 N2 fix: the outcome live region. This is the ONLY signal a
+  // screen-reader user gets about whether a drop actually succeeded — the
+  // card visually snaps back to its origin column on refusal, so sight gives
+  // no other cue. Updated exactly once per drop, only once the outcome is
+  // actually known: synchronously for a `canDropTransition` guard refusal,
+  // or once the (possibly async) `onTaskMove` promise settles. Never set
+  // optimistically at drag-end — that was the bug (see
+  // `buildBoardAnnouncements`'s doc comment for the other half of this fix,
+  // which stopped dnd-kit's OWN drop announcement from claiming "moved").
+  const [moveOutcome, setMoveOutcome] = useState('')
 
   const sensors = useSensors(
     // A small activation distance lets a plain click still open the detail panel
@@ -398,71 +439,115 @@ function StatusColumnsRow({
     if (!event.over || !dragged) return
     const targetStatus = String(event.over.id) as TaskStatus
     if (targetStatus === dragged.status) return
+
+    const targetLabel = COLUMNS.find((c) => c.status === targetStatus)?.label ?? targetStatus
+    const originLabel = COLUMNS.find((c) => c.status === dragged.status)?.label ?? dragged.status
+
     const verdict = canDropTransition(dragged.status, targetStatus)
     if (!verdict.ok) {
       if (verdict.reason) onMoveRejected?.(verdict.reason)
+      // Known synchronously — no network round trip needed to report this.
+      setMoveOutcome(
+        `Task "${dragged.title}" could not be moved to the ${targetLabel} column: ${verdict.reason ?? 'that move is not allowed'} It remains in the ${originLabel} column.`,
+      )
       return
     }
-    onTaskMove?.(dragged, targetStatus)
+
+    // `onTaskMove` may return a Promise (WorkspaceTasksTab wires this to
+    // `moveMutation.mutateAsync`) — dnd-kit's own `onDragEnd` can't be async,
+    // but this component can still track the eventual result to drive the
+    // live region. `taskMoveErrorMessage` is the SAME mapper the toast uses
+    // (WorkspaceTasksTab's moveMutation.onError), so a sighted user's toast
+    // and a screen-reader user's announcement always say the identical thing
+    // about the same rejected drop.
+    void Promise.resolve(onTaskMove?.(dragged, targetStatus)).then(
+      () => {
+        setMoveOutcome(`Task "${dragged.title}" was moved to the ${targetLabel} column.`)
+      },
+      (err: unknown) => {
+        const reason = taskMoveErrorMessage(err, plans)
+        setMoveOutcome(
+          `Task "${dragged.title}" could not be moved to the ${targetLabel} column: ${reason} It remains in the ${originLabel} column.`,
+        )
+      },
+    )
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      // closestCenter (rather than the DndContext default of
-      // rectIntersection) is dnd-kit's own recommended pairing for the
-      // keyboard sensor — it resolves the teleported drag rect from
-      // `boardKeyboardCoordinateGetter` to the target column predictably,
-      // without requiring pixel-perfect rect overlap.
-      collisionDetection={closestCenter}
-      accessibility={{
-        screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
-        announcements,
-      }}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveTask(null)}
-    >
-      {/* `min-h-0` lets this row take exactly the wrapper's remaining
-          height (after the header) rather than growing with content —
-          required for each StatusColumn's own `overflow-y-auto` below to
-          actually bound and scroll (Finding 3). */}
-      <div className="flex flex-1 min-h-0">
-        {COLUMNS.map((col) => (
-          <StatusColumn
-            key={col.status}
-            config={col}
-            tasks={tasks.filter((t) => t.status === col.status)}
-            plans={plans}
-            agents={agents}
-            altitude={altitude}
-            activeTask={activeTask}
-            onTaskClick={onTaskClick}
-          />
-        ))}
-      </div>
-      <DragOverlay dropAnimation={null}>
-        {activeTask ? (
-          // A purely VISUAL clone that follows the cursor while dragging —
-          // the "real" draggable card stays in place underneath (dimmed via
-          // opacity-40 in DraggableTaskCard).
-          <div aria-hidden="true" className="opacity-90 rotate-2 cursor-grabbing">
-            <TaskCard
-              task={activeTask}
+    <>
+      <DndContext
+        sensors={sensors}
+        // closestCenter (rather than the DndContext default of
+        // rectIntersection) is dnd-kit's own recommended pairing for the
+        // keyboard sensor — it resolves the teleported drag rect from
+        // `boardKeyboardCoordinateGetter` to the target column predictably,
+        // without requiring pixel-perfect rect overlap.
+        collisionDetection={closestCenter}
+        accessibility={{
+          screenReaderInstructions: BOARD_SCREEN_READER_INSTRUCTIONS,
+          announcements,
+        }}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveTask(null)}
+      >
+        {/* `min-h-0` lets this row take exactly the wrapper's remaining
+            height (after the header) rather than growing with content —
+            required for each StatusColumn's own `overflow-y-auto` below to
+            actually bound and scroll (Finding 3). */}
+        <div className="flex flex-1 min-h-0">
+          {COLUMNS.map((col) => (
+            <StatusColumn
+              key={col.status}
+              config={col}
+              tasks={tasks.filter((t) => t.status === col.status)}
               plans={plans}
               agents={agents}
-              altitude="top-level"
-              onClick={() => {}}
-              // Never render the ADR-052 action button on the purely-visual
-              // drag ghost — it's aria-hidden and unreachable anyway; an
-              // interactive-looking control following the cursor mid-drag
-              // would just be visual noise.
-              showActions={false}
+              altitude={altitude}
+              activeTask={activeTask}
+              onTaskClick={onTaskClick}
             />
-          </div>
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+          ))}
+        </div>
+        <DragOverlay dropAnimation={null}>
+          {activeTask ? (
+            // A purely VISUAL clone that follows the cursor while dragging —
+            // the "real" draggable card stays in place underneath (dimmed via
+            // opacity-40 in DraggableTaskCard).
+            <div aria-hidden="true" className="opacity-90 rotate-2 cursor-grabbing">
+              <TaskCard
+                task={activeTask}
+                plans={plans}
+                agents={agents}
+                altitude="top-level"
+                onClick={() => {}}
+                // Never render the ADR-052 action button on the purely-visual
+                // drag ghost — it's aria-hidden and unreachable anyway; an
+                // interactive-looking control following the cursor mid-drag
+                // would just be visual noise.
+                showActions={false}
+              />
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+      {/*
+        UAT round-2 N2 — the confirmed drag OUTCOME live region. Deliberately
+        a SEPARATE DOM node from dnd-kit's own internal accessibility live
+        region (the one `buildBoardAnnouncements` feeds, which only narrates
+        drag MECHANICS — pick up / hover / drop / cancel — and never claims
+        an outcome it can't know yet). This one is updated exactly once per
+        drop, only once `handleDragEnd` actually knows whether the move
+        succeeded, failed the synchronous transition guard, or was rejected
+        by the server — so a screen-reader user, who gets NO other signal
+        when a refused drop's card visually snaps back, always hears the
+        real result and never a false "moved" followed by a contradiction.
+        `sr-only` (visually hidden, still in the accessibility tree).
+      */}
+      <div role="status" aria-live="polite" data-testid="board-move-outcome" className="sr-only">
+        {moveOutcome}
+      </div>
+    </>
   )
 }
 

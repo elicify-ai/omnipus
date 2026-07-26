@@ -443,6 +443,12 @@ describe('GraphView — unlinked-count notice (S3 UAT fix #9)', () => {
 
     const notice = screen.getByTestId('graph-unlinked-notice')
     expect(notice).toHaveTextContent('2 tasks not shown here')
+    // Reason must state BOTH qualifying conditions (isDagRelevant: plan
+    // membership OR a dependency link) — not just the empirically-dominant
+    // one. A tester found a real workspace where 14/15 rendered nodes had
+    // zero dependencies and rendered solely via plan membership, proving
+    // "no dependencies" alone was a misleading reason.
+    expect(notice).toHaveTextContent('not in a plan and not linked by a dependency')
     expect(notice).toHaveTextContent(/Board.*List/)
   })
 
@@ -450,7 +456,9 @@ describe('GraphView — unlinked-count notice (S3 UAT fix #9)', () => {
     const tasks = [makeTask({ id: 'a', plan_id: 'plan-x' }), makeTask({ id: 'lone' })]
     renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} collapseOrphans />)
 
-    expect(screen.getByTestId('graph-unlinked-notice')).toHaveTextContent('1 task not shown here')
+    const notice = screen.getByTestId('graph-unlinked-notice')
+    expect(notice).toHaveTextContent('1 task not shown here')
+    expect(notice).toHaveTextContent('not in a plan and not linked by a dependency')
   })
 
   it('renders no notice when every visible task is DAG-relevant', () => {
@@ -470,11 +478,20 @@ describe('GraphView — unlinked-count notice (S3 UAT fix #9)', () => {
     expect(screen.queryByTestId('graph-unlinked-notice')).toBeNull()
   })
 
-  it('still shows the full empty state (not the notice) when every visible task is unlinked', () => {
+  it('still shows the full empty state (not the notice) when every visible task is unlinked, with copy that does not falsely claim zero tasks', () => {
+    // Regression for the finding: 3 unlinked tasks (0 in a plan, 0 dependency
+    // links) rendered a heading reading "No tasks yet" — literally false when
+    // a stat tile elsewhere on the same screen correctly reads "3 tasks". The
+    // empty state must key off `layout.unlinked.length` (non-zero here) to
+    // show copy that matches what actually happened, not the generic
+    // genuinely-empty message.
     const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b' })]
     renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} collapseOrphans />)
 
     expect(screen.getByTestId('graph-empty-state')).toBeInTheDocument()
     expect(screen.queryByTestId('graph-unlinked-notice')).toBeNull()
+    expect(screen.queryByText('No tasks yet')).toBeNull()
+    expect(screen.getByText('No dependencies to graph yet')).toBeInTheDocument()
+    expect(screen.getByText(/not in a plan and not linked by a dependency/)).toBeInTheDocument()
   })
 })

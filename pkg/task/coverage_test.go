@@ -1198,6 +1198,103 @@ func TestUpdateTitleTrimmed(t *testing.T) {
 	assert.Equal(t, "Renamed Task", got.Title, "persisted Title must be trimmed")
 }
 
+// TestHasVisibleContent is the unit-level regression for UAT round-2 S3
+// finding "invisible codepoints bypass title validation": strings.TrimSpace
+// only strips unicode.IsSpace, so a title built entirely from zero-width /
+// format characters (all IsSpace()==false) survived it unchanged. Covers the
+// exact seven codepoints the tester verified empirically, plus the flip side
+// (real content, and mixed visible+invisible) so the fix doesn't overreach
+// into rejecting legitimate titles that merely CONTAIN a zero-width rune.
+// Codepoints are spelled as \u escapes (not embedded raw) so the fixture is
+// legible in a plain terminal/diff rather than rendering as blank/invisible.
+func TestHasVisibleContent(t *testing.T) {
+	const (
+		zwsp    = "\u200b" // ZERO WIDTH SPACE (Cf)
+		zwnj    = "\u200c" // ZERO WIDTH NON-JOINER (Cf)
+		zwj     = "\u200d" // ZERO WIDTH JOINER (Cf)
+		wj      = "\u2060" // WORD JOINER (Cf)
+		bom     = "\ufeff" // BOM / ZERO WIDTH NO-BREAK SPACE (Cf)
+		shy     = "\u00ad" // SOFT HYPHEN (Cf)
+		braille = "\u2800" // BRAILLE PATTERN BLANK (So, Cf-adjacent)
+	)
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty string", "", false},
+		{"real whitespace only", "   \t\n  ", false},
+		{"ZERO WIDTH SPACE U+200B only", zwsp + zwsp + zwsp, false},
+		{"ZERO WIDTH NON-JOINER U+200C only", zwnj, false},
+		{"ZERO WIDTH JOINER U+200D only", zwj, false},
+		{"WORD JOINER U+2060 only", wj, false},
+		{"BOM / ZWNBSP U+FEFF only", bom, false},
+		{"SOFT HYPHEN U+00AD only", shy, false},
+		{"BRAILLE PATTERN BLANK U+2800 only", braille, false},
+		{"all seven mixed with real whitespace", "  " + zwsp + zwnj + zwj + wj + bom + shy + braille + "  ", false},
+		{"ordinary visible text", "Ship the epic", true},
+		{"visible text padded with real whitespace", "  hi  ", true},
+		{"visible text with an embedded ZWSP", "Hello" + zwsp + "World", true},
+		{"single visible char amid invisible ones", zwsp + "A" + zwsp, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := HasVisibleContent(c.in)
+			assert.Equal(t, c.want, got, "HasVisibleContent(%q)", c.in)
+		})
+	}
+}
+
+// TestCreateTitleInvisibleOnlyRejected is the store-Create regression for the
+// same finding: a title consisting only of invisible/zero-width/format
+// codepoints must be rejected exactly like "" or a real-whitespace-only
+// title, not merely blacklisting the specific codepoints a tester tried.
+func TestCreateTitleInvisibleOnlyRejected(t *testing.T) {
+	const (
+		zwsp    = "\u200b"
+		zwnj    = "\u200c"
+		zwj     = "\u200d"
+		wj      = "\u2060"
+		bom     = "\ufeff"
+		shy     = "\u00ad"
+		braille = "\u2800"
+	)
+	invisibleOnly := []string{
+		zwsp + zwsp + zwsp,    // three ZWSPs (the tester's literal repro)
+		zwnj + zwj + wj + bom, // ZWNJ + ZWJ + word joiner + BOM
+		shy,                   // soft hyphen alone
+		braille + braille,     // braille pattern blank (Cf-adjacent, category So)
+		"  " + zwsp + "  " + shy + "  " + braille + "  ", // mixed with real whitespace
+	}
+	for _, title := range invisibleOnly {
+		t.Run(fmt.Sprintf("title=%q", title), func(t *testing.T) {
+			s := newStore(t)
+			tk := mkTask(title, "ws")
+			err := s.Create(tk)
+			require.Error(t, err, "expected invisible-only title to be rejected")
+			assert.True(t, errors.Is(err, ErrValidation))
+		})
+	}
+}
+
+// TestUpdateTitleInvisibleOnlyRejected mirrors
+// TestCreateTitleInvisibleOnlyRejected for the Patch path, and proves the
+// rejected patch never lands on disk.
+func TestUpdateTitleInvisibleOnlyRejected(t *testing.T) {
+	s := newStore(t)
+	tk := mkTask("Original Title", "ws")
+	mustCreate(t, s, tk)
+
+	invisibleOnly := "\u200b\u200b\u200b" // three ZWSPs
+	_, err := s.Update(tk.ID, Patch{Title: ptr(invisibleOnly)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrValidation))
+
+	got, getErr := s.Get(tk.ID)
+	require.NoError(t, getErr)
+	assert.Equal(t, "Original Title", got.Title, "title must not change on a rejected patch")
+}
+
 func TestUpdatePriorityOutOfRange(t *testing.T) {
 	// Traces to: store.go line 539 — priority 1-5 on update
 	s := newStore(t)
