@@ -5081,6 +5081,76 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /media/workspace/{workspace_id}/{media_id}:
+    get:
+      operationId: serveWorkspaceMediaFile
+      summary: Serve a workspace media-library file by workspace + media ID
+      description: >
+        Resolves a media://workspace/<workspace_id>/<media_id> ref through
+        the owning workspace's media library and streams the underlying file
+        with the correct Content-Type (FR-028). The split path shape keeps
+        the workspace and media IDs independently validated while
+        preserving the opaque ref for resolution. Returns 403 if the caller
+        is not scoped to the owning workspace, 404 if the ref is unknown or
+        no workspace library is available for it, and 500 if the workspace
+        library exists but could not be opened (a genuine backend failure,
+        distinct from a routine absent ref) or if the entry is stranded
+        (manifest present, bytes quarantined — a server-side data-integrity
+        fault).
+      tags:
+      - Workspace Media
+      security: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID that owns the media-library entry.
+        example: ws-123
+      - name: media_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The opaque media-library entry ID (not a path — no slashes or dots).
+        example: "a1b2c3d4-e5f6-4789-a123-b4c5d6e7f890"
+      responses:
+        '200':
+          description: Media file content streamed with appropriate Content-Type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Bad request — invalid workspace_id or media_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden — caller workspace does not own this media ref.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          description: Media store not available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /schedules:
     get:
       operationId: listSchedules
@@ -5559,6 +5629,12 @@ paths:
         Removes a single media-library entry (raw bytes + manifest entry) from
         the workspace library. Emits a media.delete audit event (FR-033).
         Idempotent against a concurrently-deleted entry (404 if not found).
+        Returns the deleted entry's projection — including a degraded-success
+        case where the manifest entry was committed-removed but the final
+        on-disk unlink of the already-quarantined file failed; from the
+        client's perspective the item is gone (a follow-up GET 404s) even
+        though a 500 is not returned for it, so the body is the only signal
+        of exactly what was deleted.
       tags:
       - Workspace Media
       security:
@@ -5577,12 +5653,18 @@ paths:
           type: string
         description: Media-library entry ID.
       responses:
-        '204':
-          description: The media-library entry (bytes + manifest) was deleted.
+        '200':
+          description: The media-library entry (bytes + manifest) was deleted. Body is the deleted entry's projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaLibraryEntry'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /workspaces/{id}/delegation:
     get:

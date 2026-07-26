@@ -170,6 +170,99 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	assert.Equal(t, "mia", got.AgentID, "failed worker-owner PUT must not change stored owner")
 }
 
+// seedHeartbeatJob creates a persisted, heartbeat-kind schedule for
+// (workspaceID, agentID) via AddJobFull, then re-stamps Payload.Kind to
+// heartbeatJobKind — AddJobFull always stamps a fresh job's kind as
+// "agent_turn" (see ReconcileHeartbeatSchedules's own create path, which
+// does the identical re-stamp), so a direct AddJobFull result would not yet
+// read as a heartbeat job without this second step. Mirrors the pattern
+// heartbeat_fixes_test.go uses to seed heartbeat jobs directly.
+func seedHeartbeatJob(t *testing.T, cs *cron.CronService, workspaceID, agentID string) *cron.CronJob {
+	t.Helper()
+	job, err := cs.AddJobFull(cron.JobSpec{
+		Name:        heartbeatJobName(workspaceID, agentID),
+		Schedule:    cron.CronSchedule{Kind: "every", EveryMS: i64p(600000)},
+		Message:     "heartbeat body",
+		AgentID:     agentID,
+		SessionMode: cron.SessionModeContinue,
+	})
+	require.NoError(t, err)
+	job.Payload.Kind = heartbeatJobKind
+	require.NoError(t, cs.UpdateJob(job))
+	stored, ok := cs.GetJob(job.ID)
+	require.True(t, ok)
+	return &stored
+}
+
+// TestSchedulesAPI_Update400HeartbeatOwnerReassignment is the FIX 2 guard
+// test: PUT /api/v1/schedules/{id} must reject reassigning owner_agent_id on
+// a heartbeat-kind job (its (workspace, agent) pair is fixed by construction
+// — heartbeatJobName / ReconcileHeartbeatSchedules), because allowing it
+// would desync the job's name from its AgentID, which
+// workspaceIDFromHeartbeatJobName then silently (pre-FIX-2: with zero log
+// signal) resolves to an unrecoverable "" workspace on the job's very next
+// fire.
+func TestSchedulesAPI_Update400HeartbeatOwnerReassignment(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+	job := seedHeartbeatJob(t, cs, "ws-1", "mia")
+
+	updateBody := gen.ScheduleUpdate{OwnerAgentId: ptr("max")}
+	buf, _ := json.Marshal(updateBody)
+
+	r := withUser(
+		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf)),
+		"alice",
+	)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "heartbeat",
+		"the rejection message must reference why (heartbeat-kind job)")
+
+	// The stored job's owner AND name must be untouched — no partial mutation
+	// leaked through before the guard fired.
+	got, ok := cs.GetJob(job.ID)
+	require.True(t, ok)
+	assert.Equal(t, "mia", got.AgentID, "failed heartbeat-owner PUT must not change stored owner")
+	assert.Equal(
+		t,
+		heartbeatJobName("ws-1", "mia"),
+		got.Name,
+		"job name must stay in sync with its (unreassigned) owner",
+	)
+}
+
+// TestSchedulesAPI_Update200HeartbeatJob_SameOwnerAndOtherFields is the
+// narrow-scope complement to the FIX 2 guard above: it must reject ONLY an
+// actual owner_agent_id reassignment (a value differing from the job's
+// current AgentID) — a PUT that repeats the SAME owner, or edits unrelated
+// fields (e.g. the message body), must still succeed.
+func TestSchedulesAPI_Update200HeartbeatJob_SameOwnerAndOtherFields(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+	job := seedHeartbeatJob(t, cs, "ws-1", "mia")
+
+	sameOwner := "mia"
+	newMessage := "updated heartbeat body"
+	updateBody := gen.ScheduleUpdate{OwnerAgentId: &sameOwner, Message: &newMessage}
+	buf, _ := json.Marshal(updateBody)
+
+	r := withUser(
+		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf)),
+		"alice",
+	)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	got, ok := cs.GetJob(job.ID)
+	require.True(t, ok)
+	assert.Equal(t, "mia", got.AgentID)
+	assert.Equal(t, "updated heartbeat body", got.Payload.Message)
+}
+
 // Note: ptr() helper is provided by rest_tasks.go as ptr[T any](v T) *T — use that.
 
 func TestSchedulesAPI_InvalidTrigger400(t *testing.T) {

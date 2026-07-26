@@ -1091,6 +1091,18 @@ const FALLBACK_SID = import.meta.env.MODE === 'test' ? '__default' : null
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
 let unknownFrameCount = 0
+
+// agentIdAtLastMintSend records the agent that was active when the most recent
+// session-minting message went out (a send with no session_id). The
+// `session_started` ack for that mint carries the agent the SERVER resolved,
+// and adopting it unconditionally lets a late ack silently override a newer
+// explicit user choice: pick Mia, send, switch the picker to Jim, then the
+// in-flight ack (resolved under Mia) snaps the picker back to Mia and the next
+// turn runs as an agent the user did not choose. Explicit user intent must win
+// over a stale server echo, so the ack only adopts frame.agent_id while the
+// selection is still the one the mint was sent under. null means "no mint in
+// flight" (the ordinary case, where adopting the server's answer is correct).
+let agentIdAtLastMintSend: string | null = null
 const UNKNOWN_FRAME_TOAST_THRESHOLD = 5
 
 export const useChatStore = create<ChatStore>((set, get) => {
@@ -2252,6 +2264,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
           return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
         })
         useSessionStore.getState().setActiveSession(pendingSid, activeAgentId)
+        // Remember what this mint went out under, so its session_started ack
+        // can tell "server resolved an agent we didn't have" from "the user
+        // has since picked a different one" (see agentIdAtLastMintSend).
+        agentIdAtLastMintSend = activeAgentId ?? null
 
         const payload2 = {
           type: 'message' as const,
@@ -2743,7 +2759,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // before (byte-for-byte unchanged from the pre-fix logic).
           //
           // Register in session store and create the bucket.
-          useSessionStore.getState().setActiveSession(newSid, frame.agent_id ?? useSessionStore.getState().activeAgentId)
+          //
+          // Only adopt the server's agent while the selection is still the one
+          // this mint was sent under. If the user switched the picker while the
+          // ack was in flight, their newer explicit choice wins — a stale echo
+          // must not silently reassign the agent out from under them.
+          const currentAgentId = useSessionStore.getState().activeAgentId
+          const userReselected =
+            agentIdAtLastMintSend !== null && currentAgentId !== agentIdAtLastMintSend
+          agentIdAtLastMintSend = null
+          useSessionStore
+            .getState()
+            .setActiveSession(newSid, userReselected ? currentAgentId : (frame.agent_id ?? currentAgentId))
           // Bucket is lazily created by first withBucket call; ensure it exists now
           // so the foreground syncs immediately.
           // FR-21 / T21–T25: session_started fires when the server begins a new turn

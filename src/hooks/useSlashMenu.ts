@@ -181,6 +181,44 @@ const GHOST_TEXT_PLACEHOLDER = '<message>'
 // silently drift from this one.
 export const SECTION_CAP = 8
 
+// Root-cause fix (cancel-cross-channel T24a investigation, sendfile-fix):
+// the composer's `inputEnabled` (ChatScreen.tsx) depends only on the WS
+// being connected — never on this hook's own `['commands','web']` query
+// having resolved — so a fast typed "/new"+Enter (or any other client
+// command) right after the composer becomes usable can race ahead of that
+// separate REST fetch. Before this fix, `interceptClientCommand` could only
+// recognize a client command by name-matching the FETCHED `commands` list
+// (`allCommands` below); during that ordinary, transient "hasn't resolved
+// yet" window `commands` is still `[]`, the lookup failed, the caller never
+// called `preventDefault()`, and the literal text (e.g. "/new") was sent to
+// the backend as an ordinary chat message — silently minting/continuing a
+// session under whatever agent was active at that moment, discarding a
+// subsequent agent switch once the (now-stale) ack for that phantom message
+// arrived and re-synced the picker.
+//
+// This is a fixed, frontend-owned contract, not backend metadata: every one
+// of these names is already hardcoded in `runClientCommand`'s switch
+// below — the fetched list only supplies PALETTE display text/aliases, never
+// the actual client-side behavior. Recognizing them here too (independent of
+// whether the fetch has landed) closes the race without changing what
+// happens once real data is available: a successful fetch's own entry is
+// still matched first (this fallback is only consulted when that lookup
+// fails), and the CONFIRMED-error degradation the "commandsError" tests
+// pin (only the two synthetic client-only entries survive a permanent
+// backend outage) is untouched — this fallback is skipped whenever the
+// query has actually errored, see interceptClientCommand below.
+const CLIENT_COMMAND_FALLBACK: Record<string, string> = {
+  new: 'new',
+  clear: 'clear',
+  help: 'help',
+  model: 'model',
+  agents: 'agents',
+  skills: 'skills',
+  cancel: 'cancel',
+  resume: 'resume',
+  workspace: 'workspace',
+}
+
 // Deferred item 4: prefix-then-substring matching, shared by all three
 // sections (commands/skills/agents) so "@assist" can find "Code Assistant"
 // the same way "/assist" can find a "/assistant-setup" command or an
@@ -765,7 +803,22 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const def = allCommands.find(
       (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
     )
-    if (!def) return false
+    if (!def) {
+      // CLIENT_COMMAND_FALLBACK's doc comment (above) explains why: the
+      // fetched `commands` list can still be mid-flight here even though the
+      // composer already accepts input (`inputEnabled` only waits on the WS),
+      // so a fast "/new"+Enter must still resolve locally instead of leaking
+      // to the backend as chat text. Skipped once the query has CONFIRMED
+      // errored — that stays the deliberate "commandsError" degradation
+      // (only the two synthetic client-only entries survive a permanent
+      // backend outage), unchanged from before this fix.
+      const fallbackName = commandsError ? undefined : CLIENT_COMMAND_FALLBACK[typedNameLower]
+      if (!fallbackName) return false
+      composerRuntime.setText('')
+      setInputValue('')
+      runClientCommand(fallbackName)
+      return true
+    }
     composerRuntime.setText('')
     setInputValue('')
     runClientCommand(def.name)

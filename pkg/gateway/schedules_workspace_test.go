@@ -22,6 +22,8 @@ package gateway
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,8 +31,31 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
+
+// withCapturedWarnLog wires pkg/logger to a temp file (console disabled) for
+// the duration of the test, mirroring the pattern established in
+// rest_workspace_delete_media_test.go (FIX 1 there: a bare slog.Error is
+// invisible on a real backgrounded gateway — slog.SetDefault is never called
+// anywhere — so any log a test needs to actually observe must go through
+// pkg/logger's file sink instead of being asserted against stdout). Returns
+// the log file path; the caller reads it after exercising the code under
+// test.
+func withCapturedWarnLog(t *testing.T) string {
+	t.Helper()
+	logFile := filepath.Join(t.TempDir(), "captured.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	require.NoError(t, logger.EnableFileLogging(logFile))
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+	return logFile
+}
 
 // --- resolveScheduleWorkspaceID: pure-function coverage ---------------------
 
@@ -77,6 +102,56 @@ func TestResolveScheduleWorkspaceID_UnboundChannel_ReturnsEmpty(t *testing.T) {
 	}
 	job := cron.CronJob{Payload: cron.CronPayload{Channel: "telegram"}}
 	assert.Equal(t, "", resolveScheduleWorkspaceID(cfg, job))
+}
+
+// TestResolveScheduleWorkspaceID_UnboundChannel_NoLog is the negative
+// complement to the FIX 3 regression test below: a channel instance that
+// DOES still exist but simply carries no WorkspaceID is the ordinary
+// "never bound to a workspace" state (true of every global, workspace-
+// unbound channel instance) — it must NOT log, or every fire of a schedule
+// on such a channel would spam a WARN for a perfectly normal configuration.
+func TestResolveScheduleWorkspaceID_UnboundChannel_NoLog(t *testing.T) {
+	logFile := withCapturedWarnLog(t)
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelInstanceConfig{
+			"telegram": {Type: "telegram", Enabled: true}, // no WorkspaceID
+		},
+	}
+	job := cron.CronJob{Payload: cron.CronPayload{Channel: "telegram"}}
+	assert.Equal(t, "", resolveScheduleWorkspaceID(cfg, job))
+
+	logged, err := os.ReadFile(logFile)
+	require.NoError(t, err)
+	assert.Empty(t, string(logged),
+		"an unbound-but-present channel instance is the ordinary state, not a regression — it must not log")
+}
+
+// TestResolveScheduleWorkspaceID_ChannelInstanceDeleted_LogsWarn_ReturnsEmpty
+// is the FIX 3 regression test: a schedule's Payload.Channel names an
+// instance that no longer exists in cfg.Channels at all (the operator
+// deleted or renamed it after the schedule was created) — a REGRESSION from
+// a previously working binding. Before the fix this fell through to the
+// same silent "" as a schedule that never had a channel at all; the fix
+// requires this specific case to also emit a WARN so the regression is
+// discoverable, while still never fabricating a workspace id.
+func TestResolveScheduleWorkspaceID_ChannelInstanceDeleted_LogsWarn_ReturnsEmpty(t *testing.T) {
+	logFile := withCapturedWarnLog(t)
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelInstanceConfig{
+			"telegram.sales": {Type: "telegram", Enabled: true, WorkspaceID: "sales"},
+		},
+	}
+	job := cron.CronJob{
+		ID:      "job-deleted-channel-1",
+		Payload: cron.CronPayload{Channel: "telegram.marketing", To: "chat-1"}, // no longer in cfg.Channels
+	}
+	assert.Equal(t, "", resolveScheduleWorkspaceID(cfg, job))
+
+	logged, err := os.ReadFile(logFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(logged), "no longer exists in config")
+	assert.Contains(t, string(logged), "telegram.marketing")
+	assert.Contains(t, string(logged), "job-deleted-channel-1")
 }
 
 // TestResolveScheduleWorkspaceID_NoChannel_ReturnsEmpty asserts a schedule
@@ -129,6 +204,47 @@ func TestResolveScheduleWorkspaceID_HeartbeatKindButNameMismatch_ReturnsEmpty(t 
 		Payload: cron.CronPayload{Kind: heartbeatJobKind},
 	}
 	assert.Equal(t, "", resolveScheduleWorkspaceID(nil, job))
+}
+
+// TestWorkspaceIDFromHeartbeatJobName_NameAgentMismatch_LogsWarn is the FIX 2
+// logging test companion to the ReturnsEmpty case above: the mismatch must
+// ALSO log a WARN — silently returning "" gave zero operator-visible signal
+// that a heartbeat-kind job's name and AgentID had drifted apart, regardless
+// of how that drift arose (hand-edited store data, or — pre the FIX 2 write
+// guard on PUT /schedules/{id} — a caller reassigning owner_agent_id).
+func TestWorkspaceIDFromHeartbeatJobName_NameAgentMismatch_LogsWarn(t *testing.T) {
+	logFile := withCapturedWarnLog(t)
+	job := cron.CronJob{
+		ID:      "job-mismatch-1",
+		Name:    "heartbeat:acme-corp:mia",
+		AgentID: "someone-else",
+		Payload: cron.CronPayload{Kind: heartbeatJobKind},
+	}
+	assert.Equal(t, "", workspaceIDFromHeartbeatJobName(job))
+
+	logged, err := os.ReadFile(logFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(logged), "does not match its own agent id")
+	assert.Contains(t, string(logged), "job-mismatch-1")
+}
+
+// TestWorkspaceIDFromHeartbeatJobName_NonHeartbeatJob_NoLog is the negative
+// complement: a plain (non-heartbeat) schedule is the overwhelmingly common
+// case on every fire and must never log here — logging it would spam a WARN
+// for every ordinary user schedule.
+func TestWorkspaceIDFromHeartbeatJobName_NonHeartbeatJob_NoLog(t *testing.T) {
+	logFile := withCapturedWarnLog(t)
+	job := cron.CronJob{
+		ID:      "job-plain-1",
+		Name:    "daily report",
+		AgentID: "mia",
+		Payload: cron.CronPayload{Message: "run"},
+	}
+	assert.Equal(t, "", workspaceIDFromHeartbeatJobName(job))
+
+	logged, err := os.ReadFile(logFile)
+	require.NoError(t, err)
+	assert.Empty(t, string(logged), "a plain non-heartbeat schedule must never log here")
 }
 
 // TestResolveScheduleWorkspaceID_HeartbeatKind_PrefersNameOverChannel

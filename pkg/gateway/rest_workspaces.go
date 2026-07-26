@@ -1415,44 +1415,85 @@ type agentLoopAccessor interface {
 	GetSessionStore() *session.UnifiedStore
 }
 
-// deleteHeartbeatSessionAnyStore deletes a standing heartbeat session, trying
-// the shared session store first — every heartbeat session is created there
-// as of the eager-creation fix (see the FIX comment on the enable-path
-// NewHeartbeatSession call above in HandleWorkspaces) — and falling back to
-// the agent's legacy per-agent store so a heartbeat session provisioned on an
-// existing install BEFORE that fix shipped still gets released on
-// disable/GC-prune/workspace-delete instead of being silently stranded there
-// forever (no separate migration is needed: this fallback IS the migration,
-// applied lazily at the point each such session is naturally released).
-// Returns nil as soon as either store reports a successful delete; returns an
-// error only when neither store had the session, so callers can keep their
-// existing log-and-continue policy unchanged.
+// deleteHeartbeatSessionAnyStore deletes a standing heartbeat session,
+// checking BOTH the shared session store and the agent's legacy per-agent
+// store UNCONDITIONALLY (no short-circuit) — every heartbeat session is
+// created in the shared store as of the eager-creation fix (see the FIX
+// comment on the enable-path NewHeartbeatSession call above in
+// HandleWorkspaces), but an install that had already provisioned a session
+// under the OLD code (legacy per-agent store) before that fix shipped can end
+// up with the SAME session ID present in BOTH stores: the first heartbeat
+// fire's pickSession calls GetOrCreateScheduledSession(id, owner) against the
+// SHARED store, which does not find the legacy copy (different store
+// instance) and mints a second, independent session directory under the
+// identical ID instead. From that point the shared copy is the live one, but
+// the legacy copy still sits on disk and must also be released — a
+// short-circuit "return as soon as one store succeeds" leaves it there
+// forever the moment the shared delete succeeds first, which defeats the
+// whole point of this fallback (it exists precisely to migrate that
+// dual-copy population, not just the simpler single-copy one).
+//
+// Each store is checked for the session's existence before attempting a
+// delete on it, so "this store never had the session" is distinguished from
+// "this store had it and failed to remove it": DeleteSession's not-found
+// error carries no sentinel to test against (a plain fmt.Errorf), so
+// existence is determined here directly via os.Stat against the store's own
+// BaseDir() rather than parsed out of an error string. This also fixes the
+// masking defect in the previous version: there, if the shared store's
+// delete failed for a REAL reason (I/O error, permission error) while the
+// legacy store happened to also hold a copy and deleted cleanly, the
+// function returned nil (success) and the real shared-store failure was
+// silently swallowed. Now a genuine failure in either store is always
+// surfaced, regardless of what the other store did.
+//
+// Returns nil once every store that HAD the session successfully released
+// it (a store that never had it is not an error). Returns a joined error if
+// any store's stat or delete genuinely failed. Returns an error if neither
+// store had the session at all (nothing to migrate, but also nothing
+// released — worth the caller's existing log-and-continue Warn).
 func deleteHeartbeatSessionAnyStore(al agentLoopAccessor, agentID, sessionID string) error {
-	tryDelete := func(store *session.UnifiedStore) (bool, error) {
+	// Reject IDs that could escape a store's base directory before ever
+	// stat-ing them. Mirrors session.validateSessionID's rules; that
+	// function is unexported and applied inside DeleteSession itself, but
+	// existence here is checked directly against each store's BaseDir()
+	// below (ahead of any call into DeleteSession), so the same rejection
+	// is duplicated narrowly at this boundary rather than relied upon from
+	// across the package.
+	if sessionID == "" || strings.Contains(sessionID, "/") || strings.Contains(sessionID, "\\") ||
+		strings.Contains(sessionID, "..") {
+		return fmt.Errorf("invalid heartbeat session id %q for agent %q", sessionID, agentID)
+	}
+
+	tryDelete := func(store *session.UnifiedStore) (deleted bool, err error) {
 		if store == nil {
 			return false, nil
 		}
-		if err := store.DeleteSession(sessionID); err != nil {
-			return false, err
+		dir := filepath.Join(store.BaseDir(), sessionID)
+		if _, statErr := os.Stat(dir); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return false, nil // absent from this store: not a failure
+			}
+			return false, fmt.Errorf("stat session %q: %w", sessionID, statErr)
+		}
+		if delErr := store.DeleteSession(sessionID); delErr != nil {
+			return false, fmt.Errorf("delete session %q: %w", sessionID, delErr)
 		}
 		return true, nil
 	}
 
-	ok, sharedErr := tryDelete(al.GetSessionStore())
-	if ok {
-		return nil
+	// Both stores are always attempted — the dual-copy case (the entire
+	// reason this fallback exists) requires both deletes to run every time,
+	// not just until the first one succeeds.
+	sharedDeleted, sharedErr := tryDelete(al.GetSessionStore())
+	legacyDeleted, legacyErr := tryDelete(al.GetAgentStore(agentID))
+
+	if sharedErr != nil || legacyErr != nil {
+		return errors.Join(sharedErr, legacyErr)
 	}
-	ok, legacyErr := tryDelete(al.GetAgentStore(agentID))
-	if ok {
-		return nil
+	if !sharedDeleted && !legacyDeleted {
+		return fmt.Errorf("no session store had session %q for agent %q", sessionID, agentID)
 	}
-	if sharedErr != nil {
-		return sharedErr
-	}
-	if legacyErr != nil {
-		return legacyErr
-	}
-	return fmt.Errorf("no session store available for agent %q", agentID)
+	return nil
 }
 
 // deduplicateStrings removes duplicate strings (case-sensitive) while preserving

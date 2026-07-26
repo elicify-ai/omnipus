@@ -816,6 +816,38 @@ func pluralSuffix(n int) string {
 	return "ies"
 }
 
+// installSlogBridge installs logger.NewSlogHandler() as log/slog's
+// process-wide default handler, so every bare `slog.Warn/Info/Error(...)`
+// call site — ~1200 of them, across this package and every other package the
+// gateway process links in (agent loop, sysagent tools, media library,
+// etc.) — forwards into pkg/logger's zerolog sink instead of silently
+// writing to log/slog.Default()'s zero-value stderr-only handler.
+//
+// Nothing in this repo calls slog.SetDefault in production code without
+// this: on the documented backgrounded launch form (`./omnipus gateway
+// --allow-empty &`), stderr is not captured anywhere, so every bare slog
+// call was permanently invisible. RunContextWithOptions calls this
+// immediately after logger.EnableFileLogging succeeds — before any
+// subsequent subsystem boot code has a chance to log — so every downstream
+// slog call for the rest of this process's life lands in
+// $OMNIPUS_HOME/logs/gateway.log (or wherever EnableFileLogging pointed).
+//
+// Deliberately not restored via defer on shutdown: the orphan-GC ticker
+// started later in RunContextWithOptions (and any other long-lived
+// background goroutine started during boot) keeps calling bare slog after
+// RunContextWithOptions itself returns in an in-process test rerun, and
+// those calls should stay bridged for as long as they run rather than
+// reverting the instant this function unwinds. Production processes never
+// return from RunContextWithOptions except at actual process exit, where
+// restoring the previous default would have no observable effect anyway.
+//
+// See logger.SlogHandler's doc comment for the level/attribute mapping, and
+// slog_bridge_wiring_test.go for the file-appears-in-gateway.log proof
+// (both with and without this function called).
+func installSlogBridge() {
+	slog.SetDefault(slog.New(logger.NewSlogHandler()))
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -840,6 +872,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		panic(fmt.Errorf("error enabling file logging: %w", err))
 	}
 	defer logger.DisableFileLogging()
+
+	// Bridge log/slog's process-wide default into pkg/logger's zerolog sink
+	// (console + $OMNIPUS_HOME/logs/gateway.log, just enabled above) — see
+	// installSlogBridge's doc comment for why.
+	installSlogBridge()
 
 	// Construct and unlock the credential store BEFORE loading config, per the
 	// documented credential boot contract (ADR-004).

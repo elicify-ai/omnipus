@@ -649,10 +649,27 @@ func resolveScheduleWorkspaceID(cfg *config.Config, job cron.CronJob) string {
 	if channel == "" || cfg == nil {
 		return ""
 	}
-	if inst, ok := cfg.Channels[channel]; ok {
-		return inst.WorkspaceID
+	inst, ok := cfg.Channels[channel]
+	if !ok {
+		// FIX 3: the schedule names a channel instance that no longer exists
+		// in config at all — the operator deleted or renamed it after the
+		// schedule was created. That is a REGRESSION from a previously
+		// working binding, and left unlogged it is byte-identical to "this
+		// schedule never had a channel context", which is the normal,
+		// silent, zero-signal case just above (channel == ""). Do NOT
+		// fabricate a workspace id in its place; just make the regression
+		// visible. (An instance that DOES still exist but simply carries no
+		// WorkspaceID — the common case for a channel never bound to a
+		// workspace — is not logged: that is not a regression, it is the
+		// ordinary "unbound" state, returned via inst.WorkspaceID below.)
+		logger.WarnCF(
+			"gateway",
+			"scheduled run: schedule's bound channel instance no longer exists in config; workspace unresolved",
+			map[string]any{"job_id": job.ID, "job_name": job.Name, "channel": channel},
+		)
+		return ""
 	}
-	return ""
+	return inst.WorkspaceID
 }
 
 // workspaceIDFromHeartbeatJobName extracts the workspace id encoded in a
@@ -668,15 +685,44 @@ func resolveScheduleWorkspaceID(cfg *config.Config, job cron.CronJob) string {
 // name that does not match the expected shape (e.g. hand-edited store data
 // or a stale AgentID after a heartbeat reassignment mid-flight).
 func workspaceIDFromHeartbeatJobName(job cron.CronJob) string {
-	if job.Payload.Kind != heartbeatJobKind || job.AgentID == "" {
+	if job.Payload.Kind != heartbeatJobKind {
+		// Not a heartbeat job at all — this is the overwhelmingly common
+		// case for every plain user schedule, so it is deliberately NOT
+		// logged (would be pure noise on every non-heartbeat fire).
+		return ""
+	}
+	// From here on the job claims to BE a heartbeat job, so every remaining
+	// "" return is a name/AgentID mismatch on a job that should be
+	// internally consistent by construction (heartbeatJobName, the
+	// reconciler's sole writer of this shape) — a config-integrity signal
+	// worth an operator's attention regardless of how it arose (FIX 2):
+	// hand-edited store data, a stale AgentID surviving a heartbeat
+	// reassignment mid-flight (ReconcileHeartbeatSchedules never mutates an
+	// existing job's AgentID in place — see its "Update in place" comment —
+	// so this path is reconcile-safe on its own), or a caller reassigning
+	// owner_agent_id through PUT /schedules/{id} before the FIX 2 guard on
+	// that endpoint existed.
+	if job.AgentID == "" {
+		logger.WarnCF("gateway", "heartbeat-kind job has no owning agent id; cannot resolve workspace from its name",
+			map[string]any{"job_id": job.ID, "job_name": job.Name})
 		return ""
 	}
 	rest := strings.TrimPrefix(job.Name, heartbeatJobNamePrefix)
 	if rest == job.Name {
+		logger.WarnCF(
+			"gateway",
+			"heartbeat-kind job name is missing the expected \"heartbeat:\" prefix; workspace cannot be resolved",
+			map[string]any{"job_id": job.ID, "job_name": job.Name, "agent_id": job.AgentID},
+		)
 		return "" // name doesn't carry the expected "heartbeat:" prefix at all
 	}
 	suffix := ":" + job.AgentID
 	if !strings.HasSuffix(rest, suffix) {
+		logger.WarnCF(
+			"gateway",
+			"heartbeat-kind job name does not match its own agent id; workspace cannot be resolved",
+			map[string]any{"job_id": job.ID, "job_name": job.Name, "agent_id": job.AgentID},
+		)
 		return ""
 	}
 	return strings.TrimSuffix(rest, suffix)
@@ -1148,6 +1194,30 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 	var req gen.ScheduleUpdate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Heartbeat-immutability guard: a heartbeat-kind job's (workspace, agent)
+	// pair is fixed by construction — the reconciler names it
+	// "heartbeat:<workspaceID>:<agentID>" (heartbeatJobName) and treats that
+	// pairing as immutable for the job's lifetime; a reassignment there is
+	// always a remove-and-recreate under a new name (ReconcileHeartbeatSchedules),
+	// never an in-place AgentID mutation. This endpoint has no such
+	// discipline: letting a caller reassign owner_agent_id here would desync
+	// the job's name from its AgentID, which is exactly the drift
+	// workspaceIDFromHeartbeatJobName treats as "workspace unresolvable" (it
+	// refuses to guess and returns "", now also logged at WARN) — silently
+	// losing the workspace stamp on the job's session at its very next fire.
+	// Reject the reassignment outright instead of persisting an inconsistent
+	// job; the workspace's own Team tab (member_configs) is the only place a
+	// heartbeat's owning agent is meant to change, and that path removes and
+	// recreates the job under the correct name via the reconciler.
+	if req.OwnerAgentId != nil && *req.OwnerAgentId != job.AgentID && isHeartbeatJob(job) {
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			"owner_agent_id cannot be reassigned on a heartbeat-kind schedule (managed via the workspace's member_configs, not this endpoint)",
+		)
 		return
 	}
 

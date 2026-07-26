@@ -51,6 +51,25 @@ var ErrCrossWorkspaceRef = errors.New("media store: caller workspace does not ow
 // but is structurally malformed (not "media://workspace/<ws>/<id>").
 var ErrInvalidWorkspaceRef = errors.New("media store: malformed workspace media ref")
 
+// ErrNotFound is returned by the resolver methods (Resolve/ResolveWithMeta/
+// ResolveWithOpts/ResolveWithMetaOpts) when a ref is well-formed — and, for
+// workspace refs, has already passed the FR-028a caller-workspace guard —
+// but genuinely does not resolve to any known entry: a legacy ref absent
+// from the global registry, or a workspace ref for which no library
+// provider is wired at all, or a wired provider that reports no resolver
+// for the given workspace. This is the ROUTINE absent-ref case and callers
+// map it to HTTP 404.
+//
+// It is deliberately distinct from a resolution-path FAILURE — e.g. a wired
+// provider returning a non-nil error because the owning workspace's
+// library could not be opened (disk error, corrupt manifest, permission
+// denied). That failure means "resolution could not be completed", not
+// "this media never existed", and must NOT be wrapped in ErrNotFound: doing
+// so would let a real backend fault masquerade as a routine 404, exactly
+// the confusion this sentinel exists to prevent. See
+// FileMediaStore.resolveWorkspaceRef for where the two are told apart.
+var ErrNotFound = errors.New("media store: unknown ref")
+
 // WorkspaceLibraryResolver is the path-level read contract the media store
 // needs from a workspace media library (pkg/media/library.Library implements
 // it). It resolves a workspace-prefixed ref to its on-disk path plus

@@ -4337,6 +4337,59 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
+    path: "/media/workspace/:workspace_id/:media_id",
+    alias: "serveWorkspaceMediaFile",
+    description: `Resolves a media://workspace/&lt;workspace_id&gt;/&lt;media_id&gt; ref through the owning workspace&#x27;s media library and streams the underlying file with the correct Content-Type (FR-028). The split path shape keeps the workspace and media IDs independently validated while preserving the opaque ref for resolution. Returns 403 if the caller is not scoped to the owning workspace, 404 if the ref is unknown or no workspace library is available for it, and 500 if the workspace library exists but could not be opened (a genuine backend failure, distinct from a routine absent ref) or if the entry is stranded (manifest present, bytes quarantined — a server-side data-integrity fault).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "media_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — invalid workspace_id or media_id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Forbidden — caller workspace does not own this media ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Media store not available.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/notifications",
     alias: "listNotifications",
     requestFormat: "json",
@@ -7238,7 +7291,7 @@ Returns HTTP 201 on success.
     method: "delete",
     path: "/workspaces/:id/media/:media_id",
     alias: "deleteWorkspaceMedia",
-    description: `Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found).
+    description: `Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found). Returns the deleted entry&#x27;s projection — including a degraded-success case where the manifest entry was committed-removed but the final on-disk unlink of the already-quarantined file failed; from the client&#x27;s perspective the item is gone (a follow-up GET 404s) even though a 500 is not returned for it, so the body is the only signal of exactly what was deleted.
 `,
     requestFormat: "json",
     parameters: [
@@ -7253,7 +7306,7 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: z.void(),
+    response: MediaLibraryEntry,
     errors: [
       {
         status: 401,
@@ -7263,6 +7316,11 @@ Returns HTTP 201 on success.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],

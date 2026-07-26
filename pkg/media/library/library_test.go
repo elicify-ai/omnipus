@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1295,5 +1296,391 @@ func TestWorkspaceLibrary_CascadeDelete_SelfHealsStrandedEntry(t *testing.T) {
 	}
 	if got := len(lib.List()); got != 0 {
 		t.Fatalf("List() length after CascadeDelete = %d, want 0", got)
+	}
+}
+
+// ── STRANDED-SKIP FIX regression test (review): reconcileStragglersLocked
+// used to have no error return, so a failed l.removeFile on a stray
+// quarantine file was only logger.WarnCF'd — the id stayed in BOTH
+// l.manifest and l.stranded. Neither CascadeDelete's ids-collection loop
+// nor OrphanGC's age-sweep checked l.stranded before processing an id, so
+// the still-stranded id then entered the normal delete path:
+// l.renameFile(rawPath, quarantinePath) hit os.ErrNotExist (the real bytes
+// are at the OLD quarantine path, not rawPath), got treated as the benign
+// "already gone" case, and phase 2 removed the manifest entry and counted
+// its bytes as freed even though the stray file was NEVER touched — a
+// false-success deletion. This test provokes exactly that: a stranded
+// entry whose straggler reconcile ALSO fails (via WithFileRemover, scoped
+// to only that entry's stray file so a healthy sibling entry's own
+// cascade-delete is unaffected), then asserts CascadeDelete does not
+// launder it into success. ──────────────────────────────────────────────
+
+func TestWorkspaceLibrary_CascadeDelete_ReconcileFailure_DoesNotLaunderStrandedEntry(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+
+	failPersist := new(bool)
+	failRollback := new(bool)
+	failReconcileRemove := new(bool)
+	var strandedIDFilter string
+	persistErr := errors.New("simulated persist failure")
+	rollbackErr := errors.New("simulated rollback rename failure")
+	reconcileRemoveErr := errors.New("simulated reconcile remove failure")
+
+	lib, err := library.New(home, workspaceID,
+		library.WithClock(func() time.Time { return now }),
+		library.WithManifestWriter(func(path string, data []byte, perm os.FileMode) error {
+			if *failPersist {
+				return persistErr
+			}
+			return os.WriteFile(path, data, perm)
+		}),
+		library.WithFileRenamer(func(oldpath, newpath string) error {
+			base := filepath.Base(oldpath)
+			isRollback := strings.HasPrefix(base, ".delete-") ||
+				strings.HasPrefix(base, ".cascade-") ||
+				strings.HasPrefix(base, ".gc-")
+			if isRollback && *failRollback {
+				return rollbackErr
+			}
+			return os.Rename(oldpath, newpath)
+		}),
+		library.WithFileRemover(func(path string) error {
+			matchesStranded := strandedIDFilter != "" && strings.Contains(filepath.Base(path), strandedIDFilter)
+			if *failReconcileRemove && matchesStranded {
+				return reconcileRemoveErr
+			}
+			return os.Remove(path)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// Strand stranded.txt via the same compound-rollback-failure recipe as
+	// the sibling ErrEntryStranded tests above.
+	_, strandedEntry := uploadFixture(t, lib, "stranded.txt", []byte("aaa"))
+	strandedID := mediaID(t, strandedEntry)
+	strandedIDFilter = strandedID
+	*failPersist, *failRollback = true, true
+	if _, delErr := lib.Delete(strandedID); delErr == nil {
+		t.Fatal("Delete() error = nil, want the compound failure to be provoked")
+	}
+	*failPersist, *failRollback = false, false
+
+	// A second, healthy entry so the assertions can distinguish "everything
+	// laundered" from "only the stranded one was wrongly processed".
+	_, normalEntry := uploadFixture(t, lib, "normal.txt", []byte("bbbbb"))
+	normalID := mediaID(t, normalEntry)
+
+	// Now make the straggler-reconcile removal of the stranded entry's
+	// stray file fail — the exact gap the review flagged.
+	*failReconcileRemove = true
+
+	deleted, bytesFreed, cascadeErr := lib.CascadeDelete()
+
+	if cascadeErr == nil {
+		t.Fatal("CascadeDelete() error = nil, want an error: the straggler reconcile failed " +
+			"and must not be laundered into success")
+	}
+	if !errors.Is(cascadeErr, reconcileRemoveErr) {
+		t.Fatalf("CascadeDelete() error = %v, want it to wrap the injected reconcile remove failure", cascadeErr)
+	}
+
+	for _, e := range deleted {
+		if e.Id != nil && e.Id.String() == strandedID {
+			t.Fatalf("CascadeDelete() deleted = %+v, want the still-stranded entry %s NOT reported as deleted "+
+				"(its bytes were never touched — the reconcile remove failed)", deleted, strandedID)
+		}
+	}
+
+	wantBytes := int64(len("bbbbb")) // only the normal entry — never the untouched stranded bytes
+	if bytesFreed != wantBytes {
+		t.Fatalf("CascadeDelete() bytesFreed = %d, want %d (must not overclaim the untouched stranded bytes)",
+			bytesFreed, wantBytes)
+	}
+
+	// The stranded id must still be reported as stranded — not silently
+	// dropped from tracking, and not resurrected as a routine ErrNotFound.
+	if _, getErr := lib.Get(strandedID); !errors.Is(getErr, library.ErrEntryStranded) {
+		t.Fatalf("Get(%q) after failed reconcile = %v, want ErrEntryStranded (still genuinely stranded)",
+			strandedID, getErr)
+	}
+
+	// The normal entry must have been cascade-deleted successfully — one
+	// already-broken entry must not block the rest of the library.
+	if _, getErr := lib.Get(normalID); !errors.Is(getErr, library.ErrNotFound) {
+		t.Fatalf("Get(%q) after CascadeDelete = %v, want ErrNotFound (normal entry deleted)", normalID, getErr)
+	}
+
+	// The stray quarantine file must still be physically on disk — proving
+	// bytesFreed didn't lie.
+	dirEntries, err := os.ReadDir(lib.Path())
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", lib.Path(), err)
+	}
+	found := false
+	for _, de := range dirEntries {
+		if strings.HasPrefix(de.Name(), ".delete-") && strings.Contains(de.Name(), strandedID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf(
+			"stray quarantine file for %s missing from disk — bytesFreed claimed success but the file is gone?",
+			strandedID,
+		)
+	}
+
+	// A later reconcile (remove failure cleared) must complete the
+	// original delete exactly once — proving the "later successful
+	// reconcile counts the same bytes a SECOND time" follow-on defect is
+	// also closed (nothing double-counts because nothing was ever
+	// wrongly removed from the manifest in the first place).
+	*failReconcileRemove = false
+	deleted2, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+	if gcErr != nil {
+		t.Fatalf("OrphanGC() error = %v, want nil", gcErr)
+	}
+	sawStranded := false
+	for _, e := range deleted2 {
+		if e.Id != nil && e.Id.String() == strandedID {
+			sawStranded = true
+		}
+	}
+	if !sawStranded {
+		t.Fatalf(
+			"OrphanGC() deleted = %+v, want it to finally include the reconciled stranded entry %s",
+			deleted2,
+			strandedID,
+		)
+	}
+	if _, getErr := lib.Get(strandedID); !errors.Is(getErr, library.ErrNotFound) {
+		t.Fatalf("Get(%q) after successful reconcile = %v, want ErrNotFound", strandedID, getErr)
+	}
+}
+
+// ── PER-ID RESTORE FIX regression test (review): OrphanGC's persist-failure
+// rollback used to replace l.manifest WHOLESALE with a snapshot scoped only
+// to the current GC batch (`l.manifest = snapshot`), silently discarding
+// every OTHER cataloged entry — live-refcount entries, not-yet-aged
+// entries — from memory until the next process restart. CascadeDelete's
+// own persist-failure rollback already restored per-id; this test proves
+// OrphanGC now matches it, with more than one manifest entry present (the
+// scenario the original review noted had no test coverage at all). ───────
+
+func TestWorkspaceLibrary_OrphanGC_PersistFailure_PreservesUnrelatedEntries(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	workspaceID := uuid.NewString()
+	failPersist := new(bool)
+	persistErr := errors.New("simulated persist failure")
+
+	lib, err := library.New(home, workspaceID,
+		library.WithClock(func() time.Time { return now }),
+		library.WithManifestWriter(func(path string, data []byte, perm os.FileMode) error {
+			if *failPersist {
+				return persistErr
+			}
+			return os.WriteFile(path, data, perm)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// entryA will age out; entryB is referenced (refcount 1) and must
+	// survive regardless of age — it is NOT part of this GC batch at all.
+	_, entryA := uploadFixture(t, lib, "orphan.bin", []byte("orphan"))
+	idA := mediaID(t, entryA)
+	_, entryB := uploadFixture(t, lib, "kept.bin", []byte("kept-data"))
+	idB := mediaID(t, entryB)
+	if _, incErr := lib.IncrementRefcount(idB); incErr != nil {
+		t.Fatalf("IncrementRefcount(%q) error = %v", idB, incErr)
+	}
+
+	now = now.Add(31 * 24 * time.Hour)
+	*failPersist = true
+	deleted, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+	if gcErr == nil {
+		t.Fatal("OrphanGC() error = nil, want an error when persist fails")
+	}
+	if !errors.Is(gcErr, persistErr) {
+		t.Fatalf("OrphanGC() error = %v, want it to wrap the injected persist failure", gcErr)
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("OrphanGC() deleted = %#v, want nil/empty on a hard persist failure", deleted)
+	}
+
+	// The bug: l.manifest = snapshot would leave ONLY idA (the GC batch) in
+	// memory, wiping idB. Both entries must survive.
+	list := lib.List()
+	if len(list) != 2 {
+		t.Fatalf("List() length after failed persist = %d, want 2 (idB must not be wiped): %+v", len(list), list)
+	}
+	if _, getErr := lib.Get(idA); getErr != nil {
+		t.Fatalf("Get(idA) after failed persist = %v, want nil (rolled back, not deleted)", getErr)
+	}
+	if _, getErr := lib.Get(idB); getErr != nil {
+		t.Fatalf(
+			"Get(idB) after failed persist = %v, want nil (must survive — it was never part of this GC batch)",
+			getErr,
+		)
+	}
+	if refcount, rcErr := lib.Refcount(idB); rcErr != nil || refcount != 1 {
+		t.Fatalf("Refcount(idB) after failed persist = %d, %v, want 1, nil", refcount, rcErr)
+	}
+
+	// Prove it round-trips through disk too, not just an in-memory patch:
+	// re-open from the still-correct on-disk manifest.json (persistLocked
+	// never actually committed the failed write).
+	*failPersist = false
+	reopened, reopenErr := library.New(home, workspaceID, library.WithClock(func() time.Time { return now }))
+	if reopenErr != nil {
+		t.Fatalf("re-open library: %v", reopenErr)
+	}
+	if got := len(reopened.List()); got != 2 {
+		t.Fatalf("re-opened List() length = %d, want 2", got)
+	}
+}
+
+// ── UPLOAD-LEAK FIX regression tests (review): ".upload-*" temp files used
+// to be created via os.CreateTemp OUTSIDE l.mu, so reconcileStragglersLocked
+// deliberately excluded the prefix entirely — a directory scan under l.mu
+// could not tell a genuine leak (crashed/interrupted upload) apart from a
+// concurrent in-flight upload without racing the write, so a leaked temp
+// file was permanently unreclaimable. These two tests prove both halves of
+// the fix: an ACTIVE upload's temp file survives a concurrent GC pass, and
+// a LEAKED one (simulating a crash from a prior process) is reclaimed. ───
+
+// gatedReader is a test-only io.Reader that blocks on its first Read call
+// until the test closes gate, letting the test synchronize with the exact
+// moment uploadInternal has created (and registered) its temp file but has
+// not yet read any of the upload body.
+type gatedReader struct {
+	data      []byte
+	offset    int
+	gate      chan struct{}
+	started   chan struct{}
+	didSignal bool
+}
+
+func (r *gatedReader) Read(p []byte) (int, error) {
+	if !r.didSignal {
+		r.didSignal = true
+		close(r.started)
+	}
+	<-r.gate
+	if r.offset >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.offset:])
+	r.offset += n
+	return n, nil
+}
+
+func TestWorkspaceLibrary_UploadTempFile_NotReclaimedWhileInFlight(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	lib, _, _ := newWorkspaceLibrary(t, &now)
+
+	data := []byte("concurrent-upload-body")
+	reader := &gatedReader{data: data, gate: make(chan struct{}), started: make(chan struct{})}
+
+	uploadDone := make(chan struct{})
+	var uploadEntry gen.MediaLibraryEntry
+	var uploadErr error
+	go func() {
+		defer close(uploadDone)
+		_, uploadEntry, uploadErr = lib.UploadFixture("slow.bin", reader)
+	}()
+
+	<-reader.started // temp file created + registered in l.inFlightUploads; Read is blocked
+
+	var tempName string
+	entries, err := os.ReadDir(lib.Path())
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", lib.Path(), err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".upload-") {
+			tempName = e.Name()
+		}
+	}
+	if tempName == "" {
+		t.Fatal("expected an .upload-* temp file to exist while the upload is in flight")
+	}
+
+	// Run OrphanGC concurrently with the still-in-flight upload — it must
+	// NOT remove the active temp file out from under it.
+	if _, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true}); gcErr != nil {
+		t.Fatalf("OrphanGC() during in-flight upload error = %v", gcErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(lib.Path(), tempName)); statErr != nil {
+		t.Fatalf("in-flight upload temp file removed by concurrent OrphanGC: %v", statErr)
+	}
+
+	close(reader.gate) // let the upload proceed to completion
+	<-uploadDone
+	if uploadErr != nil {
+		t.Fatalf("UploadFixture() error = %v, want nil (must complete despite the concurrent GC pass)", uploadErr)
+	}
+	id := mediaID(t, uploadEntry)
+	got, _, readErr := lib.Read(id)
+	if readErr != nil {
+		t.Fatalf("Read() after concurrent GC error = %v", readErr)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("Read() = %q, want %q", got, data)
+	}
+
+	// The temp file must be gone now — renamed to its final rawPath by the
+	// (now-complete) upload.
+	if _, statErr := os.Stat(filepath.Join(lib.Path(), tempName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("temp file %q still present after upload completed", tempName)
+	}
+}
+
+func TestWorkspaceLibrary_OrphanGC_ReclaimsLeakedUploadTempFile(t *testing.T) {
+	now := time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC)
+	lib, _, _ := newWorkspaceLibrary(t, &now)
+
+	// Simulate a temp file leaked by a crashed/interrupted upload from a
+	// PRIOR process — created directly on disk, bypassing the Library API
+	// entirely, so it is guaranteed not to be in this process's
+	// l.inFlightUploads registry (which starts empty for every Library
+	// instance — see that field's doc for why that is the correct model).
+	if err := os.MkdirAll(lib.Path(), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	leakedName := ".upload-" + uuid.NewString()
+	leakedPath := filepath.Join(lib.Path(), leakedName)
+	leakedBytes := []byte("leaked-partial-upload")
+	if err := os.WriteFile(leakedPath, leakedBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(leaked temp) error = %v", err)
+	}
+
+	// Also upload one real, referenced entry so OrphanGC has normal
+	// manifest work to do in the same call, proving the leak-sweep runs
+	// alongside the existing reconcile rather than instead of it.
+	_, entry := uploadFixture(t, lib, "keep.bin", []byte("kept"))
+	id := mediaID(t, entry)
+	if _, incErr := lib.IncrementRefcount(id); incErr != nil {
+		t.Fatalf("IncrementRefcount() error = %v", incErr)
+	}
+
+	deleted, err := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+	if err != nil {
+		t.Fatalf("OrphanGC() error = %v", err)
+	}
+	if len(deleted) != 0 {
+		t.Fatalf("OrphanGC() deleted = %#v, want empty (the referenced entry must survive; the leaked temp "+
+			"file has no manifest entry to report)", deleted)
+	}
+	if _, statErr := os.Stat(leakedPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("leaked upload temp file %q still present after OrphanGC", leakedPath)
+	}
+	if _, getErr := lib.Get(id); getErr != nil {
+		t.Fatalf("Get(%q) after OrphanGC = %v, want nil (referenced entry preserved)", id, getErr)
 	}
 }

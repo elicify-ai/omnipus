@@ -284,8 +284,13 @@ func (s *FileMediaStore) ResolveWithMetaOpts(ref string, opts ResolveOpts) (stri
 // resolveWorkspaceRef enforces the FR-028a guard and, when a library
 // provider is wired, delegates to the owning workspace's library. Without a
 // provider the ref is unresolvable from the global registry (workspace refs
-// are never registered there), so it surfaces as the standard unknown-ref
-// error — after the guard has already authorized the caller.
+// are never registered there), so it surfaces as ErrNotFound — after the
+// guard has already authorized the caller. A provider that IS wired but
+// returns an error (the owning workspace's library could not be opened —
+// disk error, corrupt manifest, permission denied) is a genuine resolution
+// FAILURE, not a routine absent ref, and is deliberately left unwrapped by
+// ErrNotFound (or any other sentinel) so callers can tell the two apart —
+// see ErrNotFound's doc.
 func (s *FileMediaStore) resolveWorkspaceRef(ref string, opts ResolveOpts) (string, MediaMeta, error) {
 	workspaceID, _, ok := ParseWorkspaceRef(ref)
 	if !ok {
@@ -298,28 +303,31 @@ func (s *FileMediaStore) resolveWorkspaceRef(ref string, opts ResolveOpts) (stri
 	provider := s.libraryProvider
 	s.libProvMu.RUnlock()
 	if provider == nil {
-		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
+		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
 	resolver, err := provider(workspaceID)
 	if err != nil {
 		return "", MediaMeta{}, fmt.Errorf("media store: workspace library %q unavailable: %w", workspaceID, err)
 	}
 	if resolver == nil {
-		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
+		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
 	return resolver.ResolvePathWithCaller(ref, opts.CallerWorkspace)
 }
 
 // resolveLegacyWithMeta is the pre-Rev4 global-registry lookup. It performs
 // no membership check (legacy refs carry no workspace), preserving the
-// exact behavior every legacy call-site relies on (FR-029).
+// exact behavior every legacy call-site relies on (FR-029). An absent ref is
+// wrapped in ErrNotFound so callers (e.g. the gateway's serveMedia) can
+// distinguish this routine "never existed" case from a genuine resolution
+// failure elsewhere in the same function family — see ErrNotFound's doc.
 func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	entry, ok := s.refs[ref]
 	if !ok {
-		return "", MediaMeta{}, fmt.Errorf("media store: unknown ref: %s", ref)
+		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
 	return entry.path, entry.meta, nil
 }

@@ -764,6 +764,110 @@ func TestWorkspaceDelete_Cascade_SharedStore(t *testing.T) {
 	assert.Error(t, err, "heartbeat session must be deleted from the shared store by cascade delete")
 }
 
+// TestWorkspaceDelete_Cascade_DualCopy is the FIX 1 regression test: it seeds
+// the SAME session ID in BOTH the legacy per-agent store and the shared
+// session store — the exact population deleteHeartbeatSessionAnyStore's
+// legacy fallback exists to remediate, per its own doc comment, and the
+// scenario neither TestWorkspaceDelete_Cascade (legacy-only) nor
+// TestWorkspaceDelete_Cascade_SharedStore (shared-only) above exercises.
+//
+// This dual-copy state arises in production when an install provisioned a
+// heartbeat session under the OLD code (legacy per-agent store) before the
+// eager-creation fix shipped: the first heartbeat fire's pickSession then
+// calls GetSessionStore().GetOrCreateScheduledSession(id, owner), which does
+// not find the legacy copy (a different UnifiedStore instance) and mints a
+// SECOND, independent session directory under the IDENTICAL id in the shared
+// store instead of reusing the legacy one. From that point the shared copy
+// is the live one the workspace's session_id addresses, but the legacy copy
+// still sits on disk.
+//
+// Before FIX 1, deleteHeartbeatSessionAnyStore tried the shared store first,
+// succeeded, and returned immediately on that single success — leaving the
+// legacy copy permanently orphaned. This test asserts workspace-delete
+// cascade now removes BOTH copies.
+func TestWorkspaceDelete_Cascade_DualCopy(t *testing.T) {
+	api, cs := buildHeartbeatTestAPI(t)
+	const agentID = "mia"
+	const wsID = "01JXDUALCOPYTESTWSID00001"
+
+	// Seed the LEGACY copy first (simulating the OLD eager-creation code
+	// path), capturing the session id it was assigned.
+	legacyMeta := createHeartbeatSessionForAgent(t, api.agentLoop, agentID, wsID)
+
+	// Seed a SECOND, independent copy under the IDENTICAL id in the shared
+	// store — exactly what pickSession's first-fire continue-mode lookup
+	// does in production (schedules.go, GetOrCreateScheduledSession) when it
+	// cannot find the legacy copy under that id.
+	sharedStore := api.agentLoop.GetSessionStore()
+	require.NotNil(t, sharedStore)
+	sharedMeta, err := sharedStore.GetOrCreateScheduledSession(legacyMeta.ID, agentID)
+	require.NoError(t, err)
+	require.Equal(t, legacyMeta.ID, sharedMeta.ID,
+		"the dual-copy setup requires an identical session id in both stores")
+
+	// Seed the workspace on disk with the heartbeat pointing at that shared
+	// (now-live) id — same id the legacy copy also uses.
+	wsDir := filepath.Join(api.homePath, "workspaces")
+	require.NoError(t, os.MkdirAll(wsDir, 0o700))
+	ws := workspace.Workspace{
+		ID: wsID, Name: "Dual Copy WS", Status: "active",
+		CoreTeam: []string{agentID},
+		MemberConfigs: map[string]workspace.MemberConfig{
+			agentID: {Heartbeat: &workspace.MemberHeartbeat{
+				Enabled:         true,
+				IntervalMinutes: 10,
+				Body:            "Check.",
+				SessionID:       legacyMeta.ID,
+			}},
+		},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}
+	wsData, err := json.MarshalIndent(ws, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), wsData, 0o600))
+
+	// Seed the cron job too, keeping this test structurally aligned with its
+	// two siblings above (not itself under test here).
+	everyMS := int64(10) * 60_000
+	enabled := true
+	cronJobName := heartbeatJobName(wsID, agentID)
+	_, err = cs.AddJobFull(cron.JobSpec{
+		Name:      cronJobName,
+		Schedule:  cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
+		Message:   "Check.",
+		AgentID:   agentID,
+		SessionID: legacyMeta.ID,
+		Enabled:   &enabled,
+	})
+	require.NoError(t, err, "seed heartbeat cron job")
+	for _, j := range cs.ListJobs(true) {
+		if j.Name == cronJobName {
+			j.Payload.Kind = heartbeatJobKind
+			require.NoError(t, cs.UpdateJob(&j))
+		}
+	}
+
+	// Verify setup: BOTH copies exist before delete.
+	legacyStore := api.agentLoop.GetAgentStore(agentID)
+	require.NotNil(t, legacyStore)
+	_, err = legacyStore.GetMeta(legacyMeta.ID)
+	require.NoError(t, err, "legacy copy must exist before workspace delete")
+	_, err = sharedStore.GetMeta(legacyMeta.ID)
+	require.NoError(t, err, "shared copy must exist before workspace delete")
+
+	// DELETE /api/v1/workspaces/{wsID}
+	w := deleteWorkspaceViaAPI(t, api, wsID)
+	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+
+	// FIX 1: BOTH copies must be gone — not just the shared one.
+	_, sharedErrAfter := sharedStore.GetMeta(legacyMeta.ID)
+	assert.Error(t, sharedErrAfter, "shared copy must be deleted by cascade delete")
+	_, legacyErrAfter := legacyStore.GetMeta(legacyMeta.ID)
+	assert.Error(t, legacyErrAfter,
+		"FIX 1: legacy copy must ALSO be deleted by cascade delete — the pre-fix short-circuit "+
+			"returned as soon as the shared copy succeeded and left this one orphaned forever")
+}
+
 // ---------------------------------------------------------------------------
 // T-I3: MemorySettingsPUT_NoSiblingClobber
 // ---------------------------------------------------------------------------

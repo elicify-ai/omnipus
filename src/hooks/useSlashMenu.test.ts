@@ -65,6 +65,18 @@ let skillsOverride: typeof mockSkills | null = null
 // doesn't apply here either.
 let commandsQueryIsError = false
 
+// Race-window regression (sendfile-fix investigation): distinct from
+// commandsQueryIsError above — this simulates the query PENDING (in flight,
+// no data and no error yet), the ordinary state on every fresh page load
+// between the composer becoming enabled (gated only on the WS connecting,
+// ChatScreen.tsx's `inputEnabled` — NOT on this fetch) and the
+// `/api/v1/commands?surface=web` response landing. `commandsQueryIsError`
+// models a CONFIRMED, permanent failure (deliberately degrades to only the
+// two synthetic client-only entries per the "commandsError" describe block
+// below); this flag models the ordinary, transient, non-error "hasn't
+// resolved YET" window a fast typed "/new"+Enter can land inside.
+let commandsQueryStillLoading = false
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
@@ -73,9 +85,9 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (opts.enabled === false) return { data: [], isError: false, refetch: vi.fn() }
       const key = opts.queryKey
       if (Array.isArray(key) && key[0] === 'commands') {
-        return commandsQueryIsError
-          ? { data: undefined, isError: true, refetch: vi.fn() }
-          : { data: mockCommands, isError: false, refetch: vi.fn() }
+        if (commandsQueryIsError) return { data: undefined, isError: true, refetch: vi.fn() }
+        if (commandsQueryStillLoading) return { data: undefined, isError: false, refetch: vi.fn() }
+        return { data: mockCommands, isError: false, refetch: vi.fn() }
       }
       if (Array.isArray(key) && key[0] === 'skills') return { data: skillsOverride ?? mockSkills, isError: false, refetch: vi.fn() }
       if (Array.isArray(key) && key[0] === 'agents') return { data: mentionAgentsOverride ?? mockAgents, isError: false, refetch: vi.fn() }
@@ -149,6 +161,7 @@ beforeEach(() => {
     })
   })
   commandsQueryIsError = false
+  commandsQueryStillLoading = false
   mentionAgentsOverride = null
   skillsOverride = null
 })
@@ -820,6 +833,116 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
     // Two-modes contract: /workspace must land in 'workspaces' mode, not
     // 'sessions' — this is the whole point of the openWorkspaceSwitcher split.
     expect(useUiStore.getState().searchModalMode).toBe('workspaces')
+  })
+})
+
+// Root-cause regression (cancel-cross-channel T24a investigation,
+// sendfile-fix): ChatScreen.tsx's `inputEnabled` gate is
+// `!agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') &&
+// isConnected` — it depends ONLY on the WS being connected, never on this
+// hook's own `['commands','web']` query having resolved. So the composer
+// accepts (and can submit) input the instant the socket connects, which can
+// easily be BEFORE the separate REST fetch for the commands list lands —
+// e.g. a fast typed "/new"+Enter (or Playwright's `input.fill('/new');
+// input.press('Enter')`, which has no reason to wait on it either) right
+// after page load.
+//
+// Before the fix: `allCommands` was built from `[resume, workspace,
+// ...commands]` where `commands` defaults to `[]` until the query resolves
+// — during that ordinary, non-error loading window, "/new" was not found in
+// `allCommands`, `interceptClientCommand()` returned false, and the
+// caller's `onSubmit`/Send handlers only call `e.preventDefault()` when it
+// returns true — so the literal text "/new" fell through and was sent to
+// the backend as an ordinary chat message. Because this happens before the
+// user has (necessarily) picked a specific agent, that phantom message
+// mints/continues a session bound to whatever agent is currently active
+// (typically the default), and the session_started ack for it can arrive
+// AFTER a later, correct agent switch and silently revert the picker/active
+// agent back to the default — the exact "picker showed Jim, then the turn
+// ran as Mia" symptom from the T24a investigation.
+//
+// This is DISTINCT from the "commandsError" describe block above: that
+// block models a CONFIRMED, permanent query failure, where the team
+// deliberately decided most client commands should degrade (see its own
+// doc comment). This block models the ordinary, transient "hasn't resolved
+// YET" window, which is not a confirmed failure and was never a deliberate
+// degradation — it is the actual bug.
+describe('useSlashMenu — client commands before the commands query resolves (loading-window race)', () => {
+  it('intercepts "/new" locally even though the commands query has not resolved yet', () => {
+    commandsQueryStillLoading = true
+    const composerRuntime = makeComposerRuntime('/new')
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(composerRuntime.setText).toHaveBeenCalledWith('')
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('intercepts the legacy "/clear" alias for "/new" while the commands query is still loading', () => {
+    commandsQueryStillLoading = true
+    const composerRuntime = makeComposerRuntime('/clear')
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(startNewSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('intercepts "/cancel" while the commands query is still loading', () => {
+    commandsQueryStillLoading = true
+    const composerRuntime = makeComposerRuntime('/cancel')
+    const cancelIfStreaming = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, cancelIfStreaming })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
+  })
+
+  it('intercepts "/agents" (opens the picker) while the commands query is still loading', () => {
+    commandsQueryStillLoading = true
+    const composerRuntime = makeComposerRuntime('/agents')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(useUiStore.getState().agentSelectorOpen).toBe(true)
+  })
+
+  it('still does NOT intercept "/new" once the commands query has CONFIRMED errored (preserves the deliberate commandsError degradation above)', () => {
+    commandsQueryIsError = true
+    const composerRuntime = makeComposerRuntime('/new')
+    const startNewSession = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(startNewSession).not.toHaveBeenCalled()
+  })
+
+  it('does not intercept an unknown slash token while the commands query is still loading', () => {
+    commandsQueryStillLoading = true
+    const composerRuntime = makeComposerRuntime('/zzz hi')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
   })
 })
 

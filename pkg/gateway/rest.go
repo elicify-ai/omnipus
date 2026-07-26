@@ -1396,13 +1396,20 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	if shared := a.agentLoop.GetSessionStore(); shared != nil {
 		sharedMetas, err := shared.ListSessions()
 		if err != nil {
-			// Logged and collected, not fatal by itself: a shared-store read
-			// failure should not hide sessions the legacy per-agent store can
-			// still serve — same partial-failure posture AgentLoop.ListAllSessions
-			// takes across its own store scan. Escalated to a 500 below only if
-			// NO store yields any data at all (see the errs check after both
-			// scans) — otherwise a real backend failure would silently present
-			// as "this agent has zero sessions", which is fake data.
+			// Logged and collected. This used to be treated as non-fatal
+			// whenever the OTHER store still produced data, on the theory
+			// that a partial list beats an empty one — but the shared store
+			// is the PRIMARY home for sessions minted after the migration
+			// described in this function's doc comment, so "legacy store
+			// still has data" typically means "most of this agent's real
+			// sessions are the ones now missing". A 200 built from whatever
+			// the healthy store returned would look complete to the caller
+			// (the SPA has no way to tell "all sessions" from "some
+			// sessions") while silently omitting the majority — reintroducing
+			// one level up the exact bug this function was written to fix.
+			// See the escalation check after both scans: ANY store error now
+			// aborts with 500 rather than risk a caller trusting an
+			// incomplete list as complete.
 			slog.Warn("rest: list agent sessions: shared store", "agent_id", agentID, "error", err)
 			errs = append(errs, fmt.Errorf("shared: %w", err))
 		}
@@ -1433,13 +1440,22 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		}
 	}
 
-	// A store error alongside data from the OTHER store is a partial result,
-	// worth a 200 with whatever real data is available (logged above). Only
-	// when every consulted store errored AND none produced anything is this a
-	// genuine failure — reporting 200+[] in that case would tell the caller
-	// "this agent has no sessions" when the true answer is "unknown".
-	if len(metas) == 0 && len(errs) > 0 {
-		slog.Error("rest: list agent sessions: all stores failed", "agent_id", agentID, "errors", errs)
+	// ANY store read failure escalates to a 500, even when the OTHER store
+	// produced data. The wire shape for this endpoint is a bare
+	// `type: array, items: Session` (contracts/openapi.yaml) — unlike e.g.
+	// ChannelEntry's per-entry Degraded/DegradedReason fields (rest.go's
+	// applyDegradedOverlay), a JSON array has no sibling slot to carry a
+	// "this list is incomplete" signal, and changing the response to a
+	// wrapped object would be a breaking wire-shape change for every
+	// existing caller. Given that choice, silently returning whatever the
+	// healthy store has — indistinguishable on the wire from "this really is
+	// the complete list" — is worse than an honest 500: a partial 200 here
+	// would repeat, one layer up, the exact bug this function was written to
+	// fix (see the doc comment above). A future wire-shape change to carry an
+	// explicit partial/degraded flag is a legitimate alternative but requires
+	// a coordinated SPA update, not a decision to make unilaterally here.
+	if len(errs) > 0 {
+		slog.Error("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
 		return
 	}
@@ -9313,8 +9329,32 @@ func (a *restAPI) serveMedia(
 			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
 			return
 		}
-		slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
-		jsonErr(w, http.StatusNotFound, "media not found")
+		if errors.Is(err, media.ErrNotFound) || errors.Is(err, library.ErrNotFound) {
+			// Both sentinels mean the same thing at two different layers:
+			// media.ErrNotFound is FileMediaStore's own "no provider/resolver
+			// wired, or the ref is absent from the legacy global registry"
+			// (see FileMediaStore.resolveWorkspaceRef/resolveLegacyWithMeta);
+			// library.ErrNotFound is the owning workspace library reporting
+			// its manifest has no such id (Library.ResolvePathWithCaller).
+			// Either way this is a genuine, routine absent ref — 404 is
+			// correct and matches the workspace-media handlers' own mapping
+			// for the same library.ErrNotFound sentinel
+			// (rest_workspace_media.go's handleWorkspaceMediaGet/Delete).
+			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusNotFound, "media not found")
+			return
+		}
+		// Anything else is a genuine resolution FAILURE, not a routine
+		// absent ref — most notably FileMediaStore.resolveWorkspaceRef's
+		// "workspace library %q unavailable: %w" when a wired provider
+		// itself errors (disk/library-open failure). Collapsing that into
+		// the same 404 the block above returns would report "this media
+		// never existed" for what is actually "the server could not check".
+		// media.ErrNotFound is deliberately NEVER used to wrap that error —
+		// see its doc comment — so this catch-all is unreachable for a
+		// routine absent ref and only fires on a real backend fault.
+		slog.Error("rest: media: resolve failed", "ref", logRef, "error", err.Error())
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

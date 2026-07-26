@@ -147,6 +147,21 @@ var (
 // OrphanGC/CascadeDelete) takes the lock and scans the directory.
 var stragglerPrefixes = []string{".delete-", ".cascade-", ".gc-"}
 
+// uploadTempPrefix is the leaked-temp-file prefix uploadInternal creates
+// before a manifest entry exists (UPLOAD-LEAK FIX, review). Unlike
+// stragglerPrefixes above, an ".upload-<uuid>" name has no embedded
+// manifest id — parseStragglerID does not match it — so
+// reconcileStragglersLocked recognizes and reconciles it via a dedicated
+// check against l.inFlightUploads instead (see that field's doc for why
+// the check is race-free).
+const uploadTempPrefix = ".upload-"
+
+// isUploadTempName reports whether name is one of uploadInternal's
+// ".upload-<uuid>" temp files.
+func isUploadTempName(name string) bool {
+	return strings.HasPrefix(name, uploadTempPrefix)
+}
+
 // refcount is the invariant-bearing non-negative integer refcount for a
 // manifest entry. The package-private constructor newRefcount validates
 // the invariant once at construction; subsequent mutations are
@@ -339,6 +354,27 @@ type Library struct {
 	// itself is not persisted (there is no wire schema field for it; the
 	// manifest is defined to contain accurate entries only).
 	stranded map[string]string
+	// inFlightUploads is the in-memory set of ".upload-*" temp-file
+	// basenames currently being written by an active uploadInternal call
+	// (UPLOAD-LEAK FIX, review). Membership is added and removed under l.mu in the
+	// SAME critical section that creates/removes the on-disk temp file, so
+	// reconcileStragglersLocked's directory scan (which also runs under
+	// l.mu.Lock() for its entire duration — see that function's own doc)
+	// can never observe a ".upload-*" name on disk without ALSO being able
+	// to consult whether it is registered here: either the scan's ReadDir
+	// happens strictly before registration (the file does not exist yet —
+	// nothing to see) or strictly after it (both the on-disk file and the
+	// registration are visible together, because both were produced inside
+	// the same l.mu.Lock() section in uploadInternal). There is no window
+	// where the file exists without being registered, so the scan can
+	// safely reclaim a genuinely leaked temp file (a crashed/interrupted
+	// upload, possibly from an earlier process) while never touching one
+	// still being written by this process. Not persisted — a fresh Library
+	// starts with this empty, which is correct: nothing in a brand-new
+	// process can be mid-upload yet, so every ".upload-*" name found at
+	// Load time is, by construction, a leftover from before this process
+	// started.
+	inFlightUploads map[string]struct{}
 }
 
 type Option func(*Library)
@@ -399,13 +435,14 @@ func New(home, workspaceID string, options ...Option) (*Library, error) {
 		return nil, err
 	}
 	library := &Library{
-		path:          filepath.Join(workspaceDir, "media"),
-		workspaceID:   workspaceID,
-		manifest:      make(map[string]manifestEntry),
-		now:           time.Now,
-		removeFile:    os.Remove,
-		renameFile:    os.Rename,
-		writeManifest: fileutil.WriteFileAtomic,
+		path:            filepath.Join(workspaceDir, "media"),
+		workspaceID:     workspaceID,
+		manifest:        make(map[string]manifestEntry),
+		now:             time.Now,
+		removeFile:      os.Remove,
+		renameFile:      os.Rename,
+		writeManifest:   fileutil.WriteFileAtomic,
+		inFlightUploads: make(map[string]struct{}),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -503,19 +540,40 @@ func (l *Library) uploadInternal(
 	}
 
 	id := uuid.New()
-	temporary, createErr := os.CreateTemp(l.path, ".upload-*")
+	// UPLOAD-LEAK FIX (review): ".upload-*" temp files used to be created via
+	// os.CreateTemp OUTSIDE l.mu, which made a leaked one (a crashed or
+	// interrupted upload) permanently unreclaimable — reconcileStragglersLocked
+	// deliberately excluded the prefix because a directory scan under l.mu
+	// could not tell a genuine leak apart from a concurrent in-flight
+	// upload without racing the write. Fix: generate the temp name up
+	// front and register it in l.inFlightUploads AND create the (empty)
+	// file itself in the SAME l.mu.Lock() critical section — see the
+	// inFlightUploads field doc for why that closes the race. O_EXCL makes
+	// a UUID collision (astronomically unlikely) surface as an error
+	// instead of silently truncating an existing file.
+	tempName := ".upload-" + uuid.NewString()
+	temporaryPath := filepath.Join(l.path, tempName)
+	l.mu.Lock()
+	temporary, createErr := os.OpenFile(temporaryPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if createErr == nil {
+		l.inFlightUploads[tempName] = struct{}{}
+	}
+	l.mu.Unlock()
 	if createErr != nil {
 		return "", gen.MediaLibraryEntry{}, fmt.Errorf("media library: create upload: %w", createErr)
 	}
-	temporaryPath := temporary.Name()
 	keepTemporary := true
 	defer func() {
+		l.mu.Lock()
+		delete(l.inFlightUploads, tempName)
+		l.mu.Unlock()
 		if keepTemporary {
 			// LOW item (review): both errors used to be discarded with no
 			// logging at all — every sibling rollback in this file at least
-			// WarnCFs. A leaked ".upload-*" file is undiscoverable
-			// afterward (OrphanGC only walks manifest entries, never scans
-			// the directory for stray temp files).
+			// WarnCFs. A leaked ".upload-*" file is now discoverable by
+			// reconcileStragglersLocked (UPLOAD-LEAK FIX) via the inFlightUploads
+			// registry above, but a prompt best-effort cleanup here is
+			// still preferable to waiting for the next GC pass.
 			if closeErr := temporary.Close(); closeErr != nil {
 				logger.WarnCF("media-library", "upload temp file close failed", map[string]any{
 					"workspace_id": l.workspaceID,
@@ -947,21 +1005,52 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	reconciled, reconciledBytes, manifestChanged := l.reconcileStragglersLocked()
+	reconciled, reconciledBytes, manifestChanged, reconcileErr := l.reconcileStragglersLocked()
+	// withReconcileErr folds a straggler-reconcile failure into whatever
+	// this call is about to return, on every exit path below
+	// (STRANDED-SKIP FIX, review) — reconcileErr is a genuinely separate
+	// failure domain (best-effort straggler cleanup) from the main
+	// cascade, so it is joined rather than silently dropped, overwritten,
+	// or allowed to overwrite the main result.
+	withReconcileErr := func(err error) error {
+		switch {
+		case reconcileErr == nil:
+			return err
+		case err == nil:
+			return reconcileErr
+		default:
+			return errors.Join(err, reconcileErr)
+		}
+	}
 	if manifestChanged {
 		if persistErr := l.persistLocked(); persistErr != nil {
 			return reconciled, reconciledBytes,
-				fmt.Errorf("media library: persist after straggler reconcile: %w", persistErr)
+				withReconcileErr(fmt.Errorf("media library: persist after straggler reconcile: %w", persistErr))
 		}
 	}
 
 	ids := make([]string, 0, len(l.manifest))
 	for id := range l.manifest {
+		if _, stillStranded := l.stranded[id]; stillStranded {
+			// STRANDED-SKIP FIX (review): an id whose straggler reconcile
+			// above just FAILED (or one already stranded from before this
+			// call, whose reconcile also failed) must never enter the
+			// normal quarantine dance below — rawPath does not hold its
+			// bytes (they are at an OLD quarantine path instead), so
+			// l.renameFile(rawPath, quarantinePath) would return
+			// os.ErrNotExist, get treated as the benign "already gone"
+			// case, and phase 2 would delete the manifest entry and count
+			// its bytes as freed even though they were never touched —
+			// exactly the false-success laundering this fix closes. Skip
+			// it here; it stays cataloged (both in l.manifest and
+			// l.stranded) for a future reconcile to retry.
+			continue
+		}
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	if len(ids) == 0 {
-		return reconciled, reconciledBytes, nil
+		return reconciled, reconciledBytes, withReconcileErr(nil)
 	}
 
 	// Phase 1: quarantine every entry's raw file. l.manifest is untouched
@@ -999,7 +1088,7 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 				// already persisted successfully above if it ran, so no
 				// data is lost — only this particular call's summary omits
 				// it.
-				return nil, 0, combined
+				return nil, 0, withReconcileErr(combined)
 			}
 		} else {
 			item.quarantined = true
@@ -1029,7 +1118,7 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		}
 		// See the phase-1 hard-failure return above for why this is nil/0
 		// rather than reconciled/reconciledBytes.
-		return nil, 0, combined
+		return nil, 0, withReconcileErr(combined)
 	}
 
 	// FIX 3 (review): final-unlink failures used to be logged and then
@@ -1064,9 +1153,9 @@ func (l *Library) CascadeDelete() (entries []gen.MediaLibraryEntry, bytesFreed i
 		totalBytes += item.entry.size
 	}
 	if len(removeErrors) > 0 {
-		return out, totalBytes, errors.Join(removeErrors...)
+		return out, totalBytes, withReconcileErr(errors.Join(removeErrors...))
 	}
-	return out, totalBytes, nil
+	return out, totalBytes, withReconcileErr(nil)
 }
 
 // OrphanGC deletes every entry whose refcount is zero and whose
@@ -1090,15 +1179,37 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	reconciled, _, manifestChanged := l.reconcileStragglersLocked()
+	reconciled, _, manifestChanged, reconcileErr := l.reconcileStragglersLocked()
+	// See CascadeDelete's identical withReconcileErr helper doc
+	// (STRANDED-SKIP FIX, review) — reconcileErr is folded into whatever
+	// this call returns on every exit path below rather than silently
+	// dropped.
+	withReconcileErr := func(err error) error {
+		switch {
+		case reconcileErr == nil:
+			return err
+		case err == nil:
+			return reconcileErr
+		default:
+			return errors.Join(err, reconcileErr)
+		}
+	}
 	if manifestChanged {
 		if persistErr := l.persistLocked(); persistErr != nil {
-			return reconciled, fmt.Errorf("media library: persist after straggler reconcile: %w", persistErr)
+			return reconciled, withReconcileErr(
+				fmt.Errorf("media library: persist after straggler reconcile: %w", persistErr))
 		}
 	}
 
 	ids := make([]string, 0)
 	for id, entry := range l.manifest {
+		if _, stillStranded := l.stranded[id]; stillStranded {
+			// STRANDED-SKIP FIX (review): see CascadeDelete's identical
+			// guard — an id whose straggler reconcile just failed (or was
+			// already stranded and stayed that way) must not enter the
+			// age-based sweep below; its bytes are not at rawPath.
+			continue
+		}
 		if entry.refcount != 0 {
 			continue
 		}
@@ -1109,7 +1220,7 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return reconciled, nil
+		return reconciled, withReconcileErr(nil)
 	}
 	sort.Strings(ids)
 
@@ -1133,7 +1244,7 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 				// deliberately omitted from a hard-failure return so this
 				// unrelated phase-0 cleanup doesn't get folded into what is
 				// otherwise a genuine age-sweep failure.
-				return nil, combined
+				return nil, withReconcileErr(combined)
 			}
 		} else {
 			quarantined[id] = quarantinePath
@@ -1149,7 +1260,17 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 		delete(l.manifest, id)
 	}
 	if err := l.persistLocked(); err != nil {
-		l.manifest = snapshot
+		// PER-ID RESTORE FIX (review): restore ONLY the ids this batch
+		// touched, one at a time. `snapshot` is scoped to `ids` (the
+		// current age-out batch) — replacing l.manifest wholesale with it
+		// (the previous `l.manifest = snapshot`) would silently discard
+		// every OTHER cataloged entry (live-refcount entries, not-yet-aged
+		// entries) from memory until the next process restart.
+		// CascadeDelete's own persist-failure rollback a few lines away
+		// already restores per-id; OrphanGC must match it.
+		for id, entry := range snapshot {
+			l.manifest[id] = entry
+		}
 		failed := l.restoreQuarantined(quarantined)
 		combined := err
 		if len(failed) > 0 {
@@ -1159,7 +1280,7 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 			combined = errors.Join(err,
 				fmt.Errorf("%w: %d entries stranded after rollback failure", ErrEntryStranded, len(failed)))
 		}
-		return nil, combined
+		return nil, withReconcileErr(combined)
 	}
 
 	var removeErrors []error
@@ -1172,9 +1293,9 @@ func (l *Library) OrphanGC(config OrphanGCConfig) ([]gen.MediaLibraryEntry, erro
 	out = append(out, reconciled...)
 	out = append(out, deleted...)
 	if len(removeErrors) > 0 {
-		return out, errors.Join(removeErrors...)
+		return out, withReconcileErr(errors.Join(removeErrors...))
 	}
-	return out, nil
+	return out, withReconcileErr(nil)
 }
 
 // load (package-private) reads the manifest from disk and validates
@@ -1465,46 +1586,102 @@ func (l *Library) rebuildStrandedLocked() {
 // reconcileStragglersLocked is OrphanGC's (and CascadeDelete's) directory
 // scan for quarantine dotfiles that a prior Delete / CascadeDelete /
 // OrphanGC call left behind — the "OrphanGC only walks manifest entries,
-// so it never notices these" gap. Must be called with l.mu held for
-// writing; every caller that can produce one of these files (Delete,
+// so it never notices these" gap — AND (UPLOAD-LEAK FIX, review) for leaked
+// ".upload-*" temp files that uploadInternal's own defer-based cleanup
+// failed to remove. Must be called with l.mu held for writing; every
+// caller that can produce one of the quarantine-dotfile shapes (Delete,
 // CascadeDelete, OrphanGC) holds l.mu.Lock() for its entire quarantine ->
 // mutate -> persist -> final-unlink critical section, so any quarantine
 // file this scan observes is guaranteed to be a genuine leftover, never a
-// concurrent in-flight operation's file.
+// concurrent in-flight operation's file; the same holds for ".upload-*"
+// names by construction of l.inFlightUploads (see its field doc).
 //
-// Two shapes are reconciled by attempting l.removeFile on each:
+// Three shapes are reconciled, each by attempting l.removeFile on the
+// stray file:
 //   - Stranded (ErrEntryStranded): the id is STILL in l.manifest (a
 //     rollback restored the manifest mutation) and typically also in
 //     l.stranded already. Successfully removing the stray file completes
 //     the originally-failed delete: the (now provably byte-less) manifest
 //     entry is removed, l.stranded is cleared for it, and it is reported
 //     in the returned reclaimed slice so the caller's summary reflects it.
-//   - Clean leak: the id is NOT in l.manifest (a final-unlink step failed
-//     AFTER a manifest mutation that itself committed cleanly). Nothing to
-//     reconcile in the manifest; only the disk leak is cleaned, and its
-//     size is folded into bytesFreed without a synthesized manifest entry
-//     (there is no real entry left to report).
+//   - Clean leak (quarantine dotfile): the id is NOT in l.manifest (a
+//     final-unlink step failed AFTER a manifest mutation that itself
+//     committed cleanly). Nothing to reconcile in the manifest; only the
+//     disk leak is cleaned, and its size is folded into bytesFreed without
+//     a synthesized manifest entry (there is no real entry left to
+//     report).
+//   - Leaked upload temp file: an ".upload-<uuid>" name not present in
+//     l.inFlightUploads. It never had a manifest entry (uploadInternal
+//     creates it before one exists), so — like the clean-leak shape above
+//     — only the disk leak is cleaned and its size folded into bytesFreed.
+//     A name still present in l.inFlightUploads is left untouched: it is
+//     an active upload, not a leak.
 //
 // A file that still cannot be removed is left in place (and, for the
 // stranded shape, l.stranded keeps pointing at it) — this function never
 // gives up permanently, it just makes no progress on that one file until
-// a future call succeeds.
-func (l *Library) reconcileStragglersLocked() (reclaimed []gen.MediaLibraryEntry, bytesFreed int64, manifestChanged bool) {
-	dirEntries, err := os.ReadDir(l.path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+// a future call succeeds. Any such removal failure is now also joined
+// into the returned error (STRANDED-SKIP FIX, review) instead of only being logged,
+// so a caller can distinguish "nothing to reconcile" from "reconcile
+// failed" — see CascadeDelete/OrphanGC's own ids-collection loops, which
+// skip any id still in l.stranded after this call returns rather than
+// assuming a failed-but-only-logged reconcile silently succeeded. That
+// assumption was the root cause a stranded id could be laundered into a
+// false-success deletion: run through the normal quarantine dance, its
+// rename-from-rawPath hits os.ErrNotExist (the real bytes are at the OLD
+// quarantine path, not rawPath), gets treated as the benign "already gone"
+// case, and the manifest entry is removed with its bytes counted as freed
+// even though they were never touched.
+func (l *Library) reconcileStragglersLocked() (
+	reclaimed []gen.MediaLibraryEntry,
+	bytesFreed int64,
+	manifestChanged bool,
+	err error,
+) {
+	dirEntries, readErr := os.ReadDir(l.path)
+	if readErr != nil {
+		if !errors.Is(readErr, os.ErrNotExist) {
 			logger.WarnCF("media-library", "straggler reconcile: list directory failed", map[string]any{
 				"workspace_id": l.workspaceID,
-				"error":        err.Error(),
+				"error":        readErr.Error(),
 			})
+			return nil, 0, false, fmt.Errorf("media library: straggler reconcile: list directory: %w", readErr)
 		}
-		return nil, 0, false
+		return nil, 0, false, nil
 	}
+	var errs []error
 	for _, dirEntry := range dirEntries {
 		if dirEntry.IsDir() {
 			continue
 		}
 		name := dirEntry.Name()
+
+		if isUploadTempName(name) {
+			if _, active := l.inFlightUploads[name]; active {
+				continue
+			}
+			fullPath := filepath.Join(l.path, name)
+			var strayBytes int64
+			if info, statErr := dirEntry.Info(); statErr == nil {
+				strayBytes = info.Size()
+			}
+			if removeErr := l.removeFile(fullPath); removeErr != nil {
+				if !errors.Is(removeErr, os.ErrNotExist) {
+					logger.WarnCF("media-library",
+						"straggler reconcile: remove leaked upload temp file failed", map[string]any{
+							"workspace_id": l.workspaceID,
+							"path":         fullPath,
+							"error":        removeErr.Error(),
+						})
+					errs = append(errs, fmt.Errorf(
+						"media library: straggler reconcile: remove leaked upload temp file %s: %w", name, removeErr))
+				}
+				continue
+			}
+			bytesFreed += strayBytes
+			continue
+		}
+
 		id, ok := parseStragglerID(name)
 		if !ok {
 			continue
@@ -1522,6 +1699,7 @@ func (l *Library) reconcileStragglersLocked() (reclaimed []gen.MediaLibraryEntry
 					"path":         fullPath,
 					"error":        removeErr.Error(),
 				})
+				errs = append(errs, fmt.Errorf("media library: straggler reconcile: remove %s: %w", id, removeErr))
 				continue
 			}
 			// Already gone (e.g. a previous reconcile call raced ahead of
@@ -1538,19 +1716,21 @@ func (l *Library) reconcileStragglersLocked() (reclaimed []gen.MediaLibraryEntry
 		}
 		bytesFreed += strayBytes
 	}
-	return reclaimed, bytesFreed, manifestChanged
+	if len(errs) > 0 {
+		return reclaimed, bytesFreed, manifestChanged, errors.Join(errs...)
+	}
+	return reclaimed, bytesFreed, manifestChanged, nil
 }
 
 // parseStragglerID extracts the media id from a quarantine dotfile name
 // (".delete-<id>-<uuid>", ".cascade-<id>-<uuid>", ".gc-<id>-<uuid>" — see
 // Delete / CascadeDelete / OrphanGC's own quarantinePath construction).
-// Returns ok=false for anything else, including a live ".upload-*" temp
-// file — a different, unrelated leak category (see uploadInternal's own
-// defer-based cleanup) that this function deliberately does not touch:
-// unlike the quarantine dotfiles above, ".upload-*" files are created
-// OUTSIDE l.mu (uploadInternal writes the upload body before taking the
-// lock), so a directory scan under l.mu cannot safely assume one it finds
-// is not a concurrent in-flight upload.
+// Returns ok=false for anything else, including a ".upload-<uuid>" temp
+// file — a different, unrelated leak category with no embedded manifest
+// id at all (uploadInternal creates it before a manifest entry exists).
+// reconcileStragglersLocked recognizes and reconciles that shape
+// separately via isUploadTempName + l.inFlightUploads (UPLOAD-LEAK FIX, review) —
+// see the inFlightUploads field doc for why that check is race-free.
 func parseStragglerID(name string) (string, bool) {
 	for _, prefix := range stragglerPrefixes {
 		if !strings.HasPrefix(name, prefix) {

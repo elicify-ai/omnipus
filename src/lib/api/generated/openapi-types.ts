@@ -2130,6 +2130,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/workspace/{workspace_id}/{media_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve a workspace media-library file by workspace + media ID
+         * @description Resolves a media://workspace/<workspace_id>/<media_id> ref through the owning workspace's media library and streams the underlying file with the correct Content-Type (FR-028). The split path shape keeps the workspace and media IDs independently validated while preserving the opaque ref for resolution. Returns 403 if the caller is not scoped to the owning workspace, 404 if the ref is unknown or no workspace library is available for it, and 500 if the workspace library exists but could not be opened (a genuine backend failure, distinct from a routine absent ref) or if the entry is stranded (manifest present, bytes quarantined — a server-side data-integrity fault).
+         */
+        get: operations["serveWorkspaceMediaFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/schedules": {
         parameters: {
             query?: never;
@@ -2362,7 +2382,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a workspace media-library entry (FR-008)
-         * @description Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found).
+         * @description Removes a single media-library entry (raw bytes + manifest entry) from the workspace library. Emits a media.delete audit event (FR-033). Idempotent against a concurrently-deleted entry (404 if not found). Returns the deleted entry's projection — including a degraded-success case where the manifest entry was committed-removed but the final on-disk unlink of the already-quarantined file failed; from the client's perspective the item is gone (a follow-up GET 404s) even though a 500 is not returned for it, so the body is the only signal of exactly what was deleted.
          */
         delete: operations["deleteWorkspaceMedia"];
         options?: never;
@@ -12574,6 +12594,75 @@ export interface operations {
             };
         };
     };
+    serveWorkspaceMediaFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID that owns the media-library entry.
+                 * @example ws-123
+                 */
+                workspace_id: string;
+                /**
+                 * @description The opaque media-library entry ID (not a path — no slashes or dots).
+                 * @example a1b2c3d4-e5f6-4789-a123-b4c5d6e7f890
+                 */
+                media_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Media file content streamed with appropriate Content-Type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Bad request — invalid workspace_id or media_id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden — caller workspace does not own this media ref. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["404NotFound"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Media store not available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     listSchedules: {
         parameters: {
             query?: never;
@@ -13034,15 +13123,18 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The media-library entry (bytes + manifest) was deleted. */
-            204: {
+            /** @description The media-library entry (bytes + manifest) was deleted. Body is the deleted entry's projection. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["MediaLibraryEntry"];
+                };
             };
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     getWorkspaceDelegation: {
