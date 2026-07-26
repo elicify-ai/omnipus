@@ -369,10 +369,16 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
     renderBand({
       plans: [makePlan({ id: 'plan-parked2', state: 'running', plan_phase: 'awaiting_owner_correction' })],
     })
+    // The tooltip this fix replaces lived on the CHIP (not the explanation
+    // text below) — assert directly on the element that used to carry it.
+    const chip = screen.getByTestId('plan-phase-chip-plan-parked2')
+    expect(chip).not.toHaveAttribute('title')
+
     const explanation = screen.getByTestId('plan-phase-explanation-plan-parked2')
-    // Visible text content, not hidden behind a `title` attribute (dead on touch,
-    // easy to miss — the exact S2 complaint this fix responds to).
-    expect(explanation).not.toHaveAttribute('title')
+    // Must be genuinely visible — not merely present in the DOM with content
+    // but hidden via `hidden`/`display:none` (which `getByTestId` +
+    // `.textContent` alone would not catch).
+    expect(explanation).toBeVisible()
     expect(explanation.textContent).toMatch(/no in-app action/i)
     // Names the one REAL control available (Stop) instead of inventing UI for
     // the three corrective verbs, which have no exposed route/control yet.

@@ -312,6 +312,12 @@ describe('WorkspaceTasksTab — unplanned quick-create hint (S3 UAT)', () => {
     await user.click(await screen.findByRole('button', { name: 'select-plan-a' }))
 
     const hint = await screen.findByTestId('new-task-unplanned-hint')
+    // Must be genuinely visible — not merely present in the DOM with content
+    // but hidden via `hidden`/`display:none` (which `findByTestId` +
+    // `.textContent` alone would not catch). There is no companion "chip"
+    // for this hint (unlike the plan-phase explanation elsewhere), so there
+    // is no separate title-tooltip element to check here.
+    expect(hint).toBeVisible()
     expect(hint.textContent).toMatch(/unplanned/i)
     expect(hint.textContent).toMatch(/move to plan/i)
   })

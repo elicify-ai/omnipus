@@ -327,13 +327,19 @@ export interface SessionChatState {
   mergedReplayMessageIds?: Record<string, true>
   /**
    * ADR-049 D6/US-12: latest `goal_status` frame for this session, or
-   * null/undefined when no goal is active/it was cleared. Session-scoped —
-   * the frame always carries `session_id` (`goal_status` is in
+   * null/undefined when no goal is active. Session-scoped — the frame
+   * always carries `session_id` (`goal_status` is in
    * `SESSION_SCOPED_FRAME_TYPES`). Drives `GoalIndicator` (SD-C9): the
-   * component itself decides not to render when `state === 'cleared'`, so
-   * the reducer here just stores whatever frame arrives verbatim (mirrors
+   * reducer here just stores whatever frame arrives verbatim (mirrors
    * `rateLimitEvent`'s "store the raw event, let the renderer decide"
-   * pattern) rather than nulling it out on a 'cleared' state.
+   * pattern) — it never nulls this out on a `'cleared'` (or any other
+   * terminal) state. CORRECTION (regression review, post-bc66345f):
+   * GoalIndicator does NOT special-case `'cleared'` by hiding — it renders
+   * a dedicated `cleared` branch via `describeNonActiveState` (a stale
+   * comment here previously claimed otherwise). This field is a single
+   * scalar (not a map), so it cannot leak the way `goalPills` below could;
+   * it simply reflects the latest frame across all of the session's goals
+   * until the next one arrives, with no cap/eviction needed.
    *
    * Optional for the same reason as `toolCallOwnerMessageId`/
    * `mergedReplayMessageIds` above: several existing test fixtures construct
@@ -353,6 +359,24 @@ export interface SessionChatState {
    * `toolCallOwnerMessageId` above — pre-existing test fixtures construct a
    * `SessionChatState`-shaped bucket by hand; every read site falls back to
    * `{}` and every write site initializes it.
+   *
+   * BOUNDED (regression fix, bc66345f follow-up): before bc66345f the
+   * backend never emitted `goal_id`, so every frame landed on the shared
+   * `'_default'` key and simply overwrote it — cardinality was permanently
+   * 1. bc66345f correctly minted a stable, unique-per-generation `goal_id`
+   * (required for the multi-goal tray to work at all), which incidentally
+   * changed this map's cardinality to unbounded — nothing ever deleted an
+   * entry, so a long session accumulated one permanent, undismissable
+   * tombstone per completed/failed/cleared goal. `evictGoalPillsOverCap`
+   * (below) now caps cardinality at `GOAL_PILLS_CAP`, preferring to evict
+   * the oldest TERMINAL (`done`/`failed`/`cleared`) entries first — a
+   * terminal `goal_id` is retired for good (a new goal, `follow_up`, or
+   * Play always mints a fresh id rather than reusing one) so it can never
+   * receive another frame, making it safe to drop with no risk of
+   * clobbering a still-live goal. This is a memory-lifecycle bound, not a
+   * rendering decision: it does not touch whether/how a pill is displayed
+   * (that's `GoalPillTray`'s own short-lived display timer) — see the
+   * `case 'goal_status'` handler below for the full reasoning.
    */
   goalPills?: Record<string, GoalStatusFrame>
   /** ADR-049 D6/US-12: latest `loop_status` frame for this session. Same session-scoped/store-verbatim/optional-for-fixture-compat pattern as `goalStatus`. */
@@ -1125,6 +1149,89 @@ const FALLBACK_SID = import.meta.env.MODE === 'test' ? '__default' : null
 // On threshold (5), promotes to a user-visible warning toast.
 let unknownFrameCount = 0
 const UNKNOWN_FRAME_TOAST_THRESHOLD = 5
+
+// ── goalPills bound (regression fix, bc66345f follow-up) ──────────────────
+//
+// Authoritative terminal-state set per the wire contract
+// (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, 9
+// values): `done` (success), `failed` (a genuine budget/rounds-exhausted/
+// idle-expired brake), and `cleared` (a deliberate user-initiated stop —
+// added post-ADR-053 so it does NOT collapse into `failed`). All other
+// states (queued/active/waiting_on_user/judge_unavailable/re-planning/
+// judging) are non-terminal: the goal can still receive another frame.
+//
+// Exported (not just module-private) so `GoalPillTray.tsx` can key its own
+// short-lived "keep a terminal pill visible briefly, then stop rendering
+// it" display timer off the SAME authoritative set, rather than each site
+// maintaining its own copy of the enum that could drift.
+export const GOAL_TERMINAL_STATES: ReadonlySet<GoalStatusFrame['state']> = new Set([
+  'done',
+  'failed',
+  'cleared',
+])
+
+/**
+ * Hard cap on `goalPills`' cardinality. Before bc66345f every `goal_status`
+ * frame landed on the shared `'_default'` key (the backend never emitted
+ * `goal_id`), so this map's size was permanently 1. bc66345f correctly gave
+ * every goal a stable, unique-per-generation `goal_id` — required for the
+ * multi-goal pill tray to disambiguate goals at all — which incidentally
+ * changed the map's cardinality from 1 to UNBOUNDED: nothing ever deleted
+ * an entry, so a long-lived session accumulated one permanent,
+ * undismissable tombstone per completed/failed/cleared goal.
+ *
+ * 20 is comfortably above the backend's own global active-loop cap
+ * (`GoalStatusFrame.cap`, default 16 — the ceiling on simultaneously
+ * non-terminal goals+plans+loops), so under normal operation this never
+ * evicts a still-live (non-terminal) entry; it only ever trims accumulated
+ * terminal history once a session has run through more than 20 goals.
+ */
+const GOAL_PILLS_CAP = 20
+
+/**
+ * Bounds `goalPills` at `GOAL_PILLS_CAP`, called on every `goal_status`
+ * write (see `case 'goal_status'` below). This is a memory-lifecycle
+ * concern, NOT a rendering decision — it does not decide whether/how a
+ * pill is displayed (that stays `GoalPillTray`'s job, consistent with this
+ * file's "components decide whether/how to render each state" design). It
+ * decides only whether an entry is safe to garbage-collect, which is a
+ * question about the DATA's lifecycle (can this goal_id ever change again?)
+ * rather than the UI's (should this currently be shown?) — the two are
+ * orthogonal, and this function answers only the first.
+ *
+ * A terminal `goal_id` is retired for good (ADR-053: goal_id is unique per
+ * generation; a new goal, `follow_up`, or Play always mints a fresh id
+ * rather than reusing a terminated one), so it can never receive another
+ * frame — evicting the OLDEST terminal entries first (object key order —
+ * plain-string keys preserve insertion order) is therefore safe and can
+ * never clobber a still-live goal. Only if the map is still over cap after
+ * every terminal entry is gone (i.e. more non-terminal goals are
+ * simultaneously live than the cap allows, far beyond the backend's own
+ * default active-loop cap of 16) does this fall back to age-based eviction
+ * of the oldest entries regardless of state, so the bound holds
+ * unconditionally per requirement (b) — "regardless of" what the tray does.
+ */
+function evictGoalPillsOverCap(pills: Record<string, GoalStatusFrame>): Record<string, GoalStatusFrame> {
+  const keys = Object.keys(pills)
+  let overBy = keys.length - GOAL_PILLS_CAP
+  if (overBy <= 0) return pills
+  const next = { ...pills }
+  for (const key of keys) {
+    if (overBy <= 0) break
+    if (GOAL_TERMINAL_STATES.has(next[key].state)) {
+      delete next[key]
+      overBy--
+    }
+  }
+  if (overBy > 0) {
+    for (const key of Object.keys(next)) {
+      if (overBy <= 0) break
+      delete next[key]
+      overBy--
+    }
+  }
+  return next
+}
 
 export const useChatStore = create<ChatStore>((set, get) => {
   // ── Internal helpers that mutate a named session bucket ─────────────────────
@@ -4233,14 +4340,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // a session with 2 goals shows 2 pills. Also maintain the legacy
           // single `goalStatus` (latest frame across all goals) for back-compat
           // with GoalIndicator's loop-only rendering path. The tray/pill
-          // components decide whether/how to render each state — no
-          // special-casing here.
+          // components still decide whether/how to RENDER each state — no
+          // special-casing of that kind here (GoalPillTray owns the "keep a
+          // terminal pill visible briefly, then stop showing it" behaviour).
+          //
+          // What IS special-cased here, deliberately: `evictGoalPillsOverCap`
+          // (regression fix, bc66345f follow-up — see goalPills' doc comment
+          // above and the function's own comment for the full reasoning).
+          // Before bc66345f every frame shared the `'_default'` key, so this
+          // map never grew past 1 entry; bc66345f's stable per-generation
+          // `goal_id` (a correct, necessary fix — the multi-goal tray cannot
+          // work without it) incidentally made this map's cardinality
+          // unbounded, leaking one permanent tombstone per terminated goal
+          // (done/failed/cleared) with no way for the user to dismiss it.
+          // This is a memory-bound/GC decision (is this entry ever going to
+          // change again?), not a render decision (should it be shown right
+          // now?) — the render policy the comment above still refers to is
+          // untouched.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
           const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
           withBucket(targetSid, (b) => ({
             goalStatus: goalFrame,
-            goalPills: { ...(b.goalPills ?? {}), [pillKey]: goalFrame },
+            goalPills: evictGoalPillsOverCap({ ...(b.goalPills ?? {}), [pillKey]: goalFrame }),
           }))
           break
         }

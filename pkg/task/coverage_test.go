@@ -375,6 +375,37 @@ func TestSpawnReset_RejectsInProgress(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrAlreadyRunning), "in_progress → ErrAlreadyRunning")
 }
 
+func TestSpawnReset_DerivesBlockedStateWhenDependencyUnmet(t *testing.T) {
+	// Regression fix (code review on bc66345f): SpawnReset was the one
+	// status-writing path the S2 UAT finding A derivation fix missed — it set
+	// Status=StatusNext unconditionally, with no recomputeBlockedStateLocked
+	// call, unlike Create/updateLocked/RestartReset/AddDependency (see that
+	// function's own doc comment). Reached from the trigger scheduler (a
+	// recurring/once/every re-fire), this let a recurring-trigger task with a
+	// still-unmet dependency persist as a dispatchable `next` task
+	// indefinitely instead of landing on the derived `blocked` side-state the
+	// contract promises.
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	dep.Status = StatusNext // NOT done — the dependency is still unmet
+	mustCreate(t, s, dep)
+
+	tk := mkTask("recurring", "ws")
+	tk.Status = StatusDone // a prior run just finished
+	tk.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, tk)
+
+	reset, err := s.SpawnReset(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBlocked, reset.Status,
+		"SpawnReset must derive `blocked` (not `next`) when a blocked_by dependency is unmet")
+
+	// Verify persistence.
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBlocked, got.Status)
+}
+
 // ---- AppendTodo ------------------------------------------------------------
 
 func TestAppendTodo_AtomicAppend(t *testing.T) {
@@ -741,6 +772,46 @@ func TestDropOrphanEdges_WriteFailureSurfacesError(t *testing.T) {
 	require.NoError(t, gerr)
 	assert.Equal(t, []string{dep.ID}, got.BlockedBy,
 		"the orphan edge must remain on disk since the write never landed")
+}
+
+func TestDropOrphanEdges_PromotesBlockedTaskWhenOnlyBlockerOrphaned(t *testing.T) {
+	// Regression fix (code review on bc66345f): DropOrphanEdges writes
+	// blocked_by directly via MarshalIndent+WriteFileAtomic, bypassing
+	// updateLocked's terminal recomputeBlockedStateLocked step entirely —
+	// unlike every other blocked_by-mutating path in this package. Before the
+	// fix, a `blocked` task whose ONLY blocker was orphaned here was left on
+	// disk as `status: blocked` with an emptied `blocked_by` — a state
+	// AdvanceBlockedDependents can never rescue (it requires
+	// containsString(t.BlockedBy, completedID), unsatisfiable on an empty
+	// list): a permanently-stuck task with no self-heal path at all.
+	s := newStore(t)
+	dep := mkTask("dep", "ws")
+	dep.Status = StatusNext // not done — so tk correctly latches `blocked` at create
+	mustCreate(t, s, dep)
+
+	tk := mkTask("dependent", "ws")
+	tk.Status = StatusNext
+	tk.BlockedBy = []string{dep.ID}
+	mustCreate(t, s, tk)
+
+	setupGot, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, setupGot.Status, "setup: dependent must be blocked before the dep is orphaned")
+
+	// Remove dep's file out-of-band (simulate manual deletion / crash),
+	// bypassing Delete's cascade — dep is now an orphan reference.
+	require.NoError(t, removeFileRaw(s, dep.ID))
+
+	removed, err := s.DropOrphanEdges()
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed, "one orphan edge removed")
+
+	got, err := s.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.BlockedBy, "orphan edge dropped")
+	assert.Equal(t, StatusNext, got.Status,
+		"DropOrphanEdges must re-derive `next` rather than leaving `blocked` with an emptied "+
+			"blocked_by, which AdvanceBlockedDependents can never rescue")
 }
 
 // ---- cascadeDeleteEdges multi-dep logic ------------------------------------

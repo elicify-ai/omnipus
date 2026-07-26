@@ -244,8 +244,16 @@ describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the 
     useWorkspacesStore.setState({ activePlanId: 'plan-rp2' })
     renderTab()
 
+    // The tooltip this fix replaces lived on the CHIP (not the explanation
+    // text below) — assert directly on the element that used to carry it.
+    const chip = await screen.findByTestId('plan-phase-chip-plan-rp2')
+    expect(chip).not.toHaveAttribute('title')
+
     const explanation = await screen.findByTestId('plan-phase-explanation-plan-rp2')
-    expect(explanation).not.toHaveAttribute('title')
+    // Must be genuinely rendered/visible — not merely present in the DOM
+    // with content but hidden via `hidden`/`display:none` (which
+    // `findByTestId` + `.textContent` alone would not catch).
+    expect(explanation).toBeVisible()
     expect(explanation.textContent).toMatch(/no in-app action/i)
     expect(explanation.textContent).toMatch(/stop this plan/i)
     // Does not name the three corrective verbs as if they were reachable —

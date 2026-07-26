@@ -6,7 +6,19 @@
 // `shouldRetryMutation` previously mirrored the QUERY retry predicate exactly
 // (only 401/403/404 excluded), so an ordinary validation 400 was retried like
 // a transient failure. Fixed in src/lib/queryClient.ts: mutations now exclude
-// ANY 4xx, not just 401/403/404.
+// ANY 4xx, not just 401/403/404 — EXCEPT 408/429 (see the follow-up below).
+//
+// Follow-up regression (code review on the fix above): the blanket 4xx
+// exclusion over-corrected, discarding 408/429 too — both are documented,
+// retryable congestion signals on THIS backend (see
+// `RETRYABLE_MUTATION_4XX_STATUSES`'s doc comment in queryClient.ts for the
+// checked, not assumed, evidence: pkg/gateway/rest_tasks.go:1164's "409 —
+// dispatch cap exhausted (retryable congestion)" comment turned out to sit on
+// an endpoint that ALSO returns 409 for hard plan-state conflicts with no way
+// for the client to tell them apart, so 409 stays excluded; but
+// pkg/gateway/rest_clivalidate.go:133's 429 — with an explicit
+// `Retry-After` header — is unambiguous). The assertions below were
+// FLIPPED for 408/429 accordingly (see the comment on each).
 //
 // Unlike queryClient.retry.test.ts / queryClient.auth.test.ts (which hand-
 // replicate the predicate to avoid importing the side-effectful singleton),
@@ -17,11 +29,12 @@
 // production behaviour the way a hand-copied predicate could.
 //
 // Traces to: src/lib/queryClient.ts `shouldRetryMutation` / `shouldRetryQuery`
+// / `mutationRetryDelay`
 
 import { describe, it, expect } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { ApiError, ApiSchemaError } from './api'
-import { shouldRetryMutation, shouldRetryQuery } from './queryClient'
+import { shouldRetryMutation, shouldRetryQuery, mutationRetryDelay } from './queryClient'
 
 describe('shouldRetryMutation — unit', () => {
   it('does NOT retry a 400 (deterministic validation error, e.g. invalid owner_agent_id)', () => {
@@ -32,13 +45,35 @@ describe('shouldRetryMutation — unit', () => {
     expect(shouldRetryMutation(0, new ApiError(400))).toBe(false)
   })
 
-  it('does NOT retry other 4xx statuses either (409, 413, 422, 429) — not just 401/403/404', () => {
-    // Differentiation: proves the guard is "any 4xx", not the old
-    // 401/403/404-only allowlist that let 400/409/413/422/429 through.
+  it('does NOT retry 409, 413, or 422 — non-idempotent-unsafe/deterministic conflicts and validation errors', () => {
+    // 409 is DELIBERATELY still excluded even though some 409s on this
+    // backend are genuine congestion (agent.ErrDispatchCapReached): the very
+    // same PATCH /tasks/{id} endpoint also returns 409 for a hard plan-state
+    // conflict (agent.ErrPlanNotExecuting/ErrPlanStateUnresolvable), and the
+    // JSON error body carries no field distinguishing the two — blanket-
+    // retrying would blindly retry the state-conflict case too, and a 409
+    // meaning "already exists" must never be retried on a non-idempotent
+    // create. 413/422 are ordinary deterministic client errors.
     expect(shouldRetryMutation(0, new ApiError(409))).toBe(false)
     expect(shouldRetryMutation(0, new ApiError(413))).toBe(false)
     expect(shouldRetryMutation(0, new ApiError(422))).toBe(false)
-    expect(shouldRetryMutation(0, new ApiError(429))).toBe(false)
+  })
+
+  it('DOES retry 408 (Request Timeout) — FLIPPED from the prior blanket-4xx-exclusion pin', () => {
+    // FLIPPED (regression fix): 408 is an unambiguous "the server gave up
+    // waiting, try again" signal, not a validation error — retrying is safe
+    // and correct regardless of which endpoint returned it.
+    expect(shouldRetryMutation(0, new ApiError(408))).toBe(true)
+  })
+
+  it('DOES retry 429 (Too Many Requests) — FLIPPED from the prior blanket-4xx-exclusion pin', () => {
+    // FLIPPED (regression fix): the prior test asserted `toBe(false)` here,
+    // pinning the over-correction as if it were correct. 429 means
+    // rate-limited/congested, not rejected as invalid — this backend's own
+    // HandleSystemCliValidate in-flight cap (pkg/gateway/rest_clivalidate.go)
+    // returns exactly this status, with a `Retry-After` header, precisely so
+    // the caller retries shortly.
+    expect(shouldRetryMutation(0, new ApiError(429))).toBe(true)
   })
 
   it('does NOT retry 401/403/404 (still excluded, as before)', () => {
@@ -125,6 +160,73 @@ describe('shouldRetryMutation — integration (real TanStack QueryClient + real 
     // failureCount < 3 retries => up to 4 total calls; assert MORE than one
     // to prove retry is happening (differentiation from the 400 case above).
     expect(mutationFn.callCount()).toBeGreaterThan(1)
+  })
+
+  it('a mutation that always 429s (dispatch-cap congestion) IS retried end-to-end', async () => {
+    // BDD: Given a QueryClient wired with the real `shouldRetryMutation`,
+    // When the board's task-move mutation is rejected with ApiError(429)
+    // (e.g. rest_clivalidate.go's in-flight cap, or any future dispatch-cap
+    // 429), Then the mutationFn is retried — this is the exact scenario the
+    // blanket-4xx-exclusion regression silently broke.
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: 0 } },
+    })
+    const mutationFn = makeRejectingMutationFn(
+      new ApiError(429, 'too many concurrent validations in flight; retry shortly'),
+    )
+
+    const mutation = client.getMutationCache().build(client, { mutationFn: mutationFn.fn })
+    await expect(mutation.execute(undefined)).rejects.toThrow()
+
+    expect(mutationFn.callCount()).toBeGreaterThan(1)
+  })
+
+  it('a mutation that always 409s (dispatch-cap OR plan-state conflict, indistinguishable) is attempted exactly once', async () => {
+    // BDD: Given the SAME PATCH /tasks/{id} 409 the DoD requires checking
+    // (see shouldRetryMutation's doc comment), When it always fails, Then it
+    // is attempted exactly once — proving 409 was correctly left OUT of the
+    // retryable set despite some 409s on this backend being genuine
+    // congestion, because the client cannot tell which one it got.
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: shouldRetryMutation, retryDelay: 0 } },
+    })
+    const mutationFn = makeRejectingMutationFn(new ApiError(409, 'dispatch cap exhausted'))
+
+    const mutation = client.getMutationCache().build(client, { mutationFn: mutationFn.fn })
+    await expect(mutation.execute(undefined)).rejects.toThrow()
+
+    expect(mutationFn.callCount()).toBe(1)
+  })
+})
+
+describe('mutationRetryDelay — honours Retry-After', () => {
+  it('uses ApiError.retryAfterMs verbatim when present, ignoring the attempt number', () => {
+    // BDD: Given a 429 response whose Retry-After header parsed to 5000ms,
+    // When mutationRetryDelay computes the delay for ANY attempt number,
+    // Then it returns exactly 5000 — the server's stated wait, not a guess.
+    const err = new ApiError(429, 'rate limited', { retryAfterMs: 5000 })
+    expect(mutationRetryDelay(0, err)).toBe(5000)
+    expect(mutationRetryDelay(2, err)).toBe(5000)
+  })
+
+  it('falls back to exponential backoff when retryAfterMs is absent', () => {
+    const err = new ApiError(500, 'server unavailable')
+    expect(mutationRetryDelay(0, err)).toBe(1000)
+    expect(mutationRetryDelay(1, err)).toBe(2000)
+    expect(mutationRetryDelay(2, err)).toBe(4000)
+  })
+
+  it('falls back to exponential backoff for a non-ApiError', () => {
+    expect(mutationRetryDelay(0, new Error('network error'))).toBe(1000)
+  })
+
+  it('ignores a zero/negative retryAfterMs (already-expired Retry-After) and falls back', () => {
+    // ApiError.fromResponse itself never constructs a non-positive
+    // retryAfterMs (parseRetryAfterMs returns undefined instead), but
+    // mutationRetryDelay's own guard is defense-in-depth against a
+    // hand-constructed ApiError carrying one directly.
+    const err = new ApiError(429, 'rate limited', { retryAfterMs: 0 })
+    expect(mutationRetryDelay(0, err)).toBe(1000)
   })
 })
 

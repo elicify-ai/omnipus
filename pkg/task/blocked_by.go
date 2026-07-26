@@ -432,14 +432,31 @@ func (s *Store) DropOrphanEdges() (int, error) {
 		if len(t.BlockedBy) == 0 {
 			t.BlockedBy = nil
 		}
+
+		mu := s.lock.Get(id)
+		mu.Lock()
+		// Regression fix (code review on bc66345f): this function writes
+		// blocked_by directly via MarshalIndent + WriteFileAtomic, bypassing
+		// updateLocked's terminal recomputeBlockedStateLocked step entirely —
+		// unlike every other blocked_by-mutating path in this package. Left
+		// unfixed, a `blocked` task whose ONLY blockers were just orphaned
+		// here lands on disk as `status: blocked` with an emptied
+		// `blocked_by`, a state AdvanceBlockedDependents can never rescue (it
+		// requires containsString(t.BlockedBy, completedID), unsatisfiable on
+		// an empty list) — a permanently-stuck task with no self-heal path.
+		// recomputeBlockedStateLocked is a no-op for every status other than
+		// next/blocked, so this is safe to call unconditionally. Acquiring
+		// the lock before this call (rather than only around the write, as
+		// before) keeps the recompute and the write under the same critical
+		// section.
+		s.recomputeBlockedStateLocked(&t)
 		newData, merr := json.MarshalIndent(&t, "", "  ")
 		if merr != nil {
 			slog.Warn("task: DropOrphanEdges: marshal failed", "file", fileName, "error", merr)
 			failedFiles = append(failedFiles, fileName)
+			mu.Unlock()
 			continue
 		}
-		mu := s.lock.Get(id)
-		mu.Lock()
 		werr := fileutil.WithFlock(path, func() error {
 			return fileutil.WriteFileAtomic(path, newData, 0o600)
 		})

@@ -1321,6 +1321,16 @@ func (s *Store) SpawnReset(id string) (*Task, error) {
 	t.StartedAt = ""
 	t.CompletedAt = ""
 	t.FollowedUp = false
+	// Regression fix (code review on bc66345f): SpawnReset was the one
+	// status-writing path the S2 UAT finding A fix missed — Create,
+	// updateLocked, RestartReset, and AddDependency all derive the `blocked`
+	// side-state as their terminal step, but SpawnReset landed a task
+	// straight on `next` even when its blocked_by set has an unmet
+	// dependency. Reached from the trigger scheduler (a recurring/once/every
+	// re-fire), this let a recurring-trigger task with a still-unmet
+	// dependency persist as a dispatchable `next` task indefinitely. A no-op
+	// for a task with no blocked_by (or every blocker already `done`).
+	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {
 		return nil, err

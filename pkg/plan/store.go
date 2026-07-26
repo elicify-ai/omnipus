@@ -303,13 +303,20 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 	onDiskFailedReason := p.FailedReason
 
 	if patch.Title != nil {
-		if *patch.Title == "" {
+		// Trim before validating (S2 UAT finding B sibling — see plan.go's
+		// normalize() matching comment, mirrors task.Store.updateLocked's
+		// identical fix): a whitespace-only patch title is rejected as empty;
+		// a legitimate title's incidental leading/trailing whitespace is
+		// normalized away rather than persisted verbatim. This runs for every
+		// Store.Update caller, not just the REST PUT handler.
+		trimmedTitle := strings.TrimSpace(*patch.Title)
+		if trimmedTitle == "" {
 			return nil, verr("title must not be empty")
 		}
-		if len([]rune(*patch.Title)) > maxPlanTitleRunes {
+		if len([]rune(trimmedTitle)) > maxPlanTitleRunes {
 			return nil, verr("title must be %d characters or fewer", maxPlanTitleRunes)
 		}
-		p.Title = *patch.Title
+		p.Title = trimmedTitle
 	}
 	if patch.Goal != nil {
 		if len([]rune(*patch.Goal)) > maxPlanGoalRunes {

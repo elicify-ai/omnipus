@@ -157,6 +157,90 @@ func TestPlan_CreateValidation(t *testing.T) {
 	}
 }
 
+// TestPlan_Store_TitleTrimming is the store-layer regression for S2 UAT
+// finding B / the S4 review's Finding 1: title trimming must live in
+// pkg/plan itself (normalize()/updateLocked), not just at the REST handler,
+// so every caller — REST, the plan engine, agent tools — gets the same
+// behavior. Mirrors pkg/task/store_test.go's equivalent title-trim coverage.
+func TestPlan_Store_TitleTrimming(t *testing.T) {
+	t.Run("Create rejects a whitespace-only title", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("   \t  ", "ws-1", "agent-a")
+		err := s.Create(p)
+		if err == nil {
+			t.Fatal("expected validation error for whitespace-only title, got nil")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+	})
+
+	t.Run("Create stores a legitimate title trimmed", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("  Ship the epic  ", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if p.Title != "Ship the epic" {
+			t.Fatalf("in-memory Title = %q, want trimmed %q", p.Title, "Ship the epic")
+		}
+		got, err := s.Get(p.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Title != "Ship the epic" {
+			t.Fatalf("on-disk Title = %q, want trimmed %q", got.Title, "Ship the epic")
+		}
+	})
+
+	t.Run("Update/patch rejects a whitespace-only title", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Original Title", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		blank := "   \t  "
+		_, err := s.Update(p.ID, Patch{Title: &blank})
+		if err == nil {
+			t.Fatal("expected validation error for whitespace-only patch title, got nil")
+		}
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+		// The rejected patch must not have landed on disk.
+		reloaded, getErr := s.Get(p.ID)
+		if getErr != nil {
+			t.Fatalf("Get after rejected patch: %v", getErr)
+		}
+		if reloaded.Title != "Original Title" {
+			t.Fatalf("title changed despite rejected patch: %q", reloaded.Title)
+		}
+	})
+
+	t.Run("Update/patch stores a legitimate title trimmed", func(t *testing.T) {
+		s := newStore(t)
+		p := mkPlan("Original Title", "ws-1", "agent-a")
+		if err := s.Create(p); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		padded := "  Renamed Plan  "
+		updated, err := s.Update(p.ID, Patch{Title: &padded})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if updated.Title != "Renamed Plan" {
+			t.Fatalf("returned Title = %q, want trimmed %q", updated.Title, "Renamed Plan")
+		}
+		got, err := s.Get(p.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Title != "Renamed Plan" {
+			t.Fatalf("on-disk Title = %q, want trimmed %q", got.Title, "Renamed Plan")
+		}
+	})
+}
+
 func TestPlan_SameWorkspaceFK(t *testing.T) {
 	s := newStore(t)
 	p := mkPlan("FK Plan", "ws-1", "agent-a")

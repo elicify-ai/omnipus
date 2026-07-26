@@ -211,6 +211,78 @@ describe('ApiError.fromResponse — text fallback', () => {
   })
 })
 
+describe('ApiError.fromResponse — Retry-After header (regression: queryClient must be able to honour it)', () => {
+  // Regression fix (code review on bc66345f): the mutation retry predicate
+  // over-corrected to exclude ALL 4xx, including 429 — this backend sends a
+  // `Retry-After` header on at least one 429 path (rest_clivalidate.go's
+  // in-flight cap: `w.Header().Set("Retry-After", "1")`). Before this,
+  // ApiError dropped the header entirely, so queryClient.ts's mutation retry
+  // delay had no way to honour it even after 429 was carved back into the
+  // retryable set. These tests pin retryAfterMs end-to-end from the raw
+  // header string.
+  it('parses an integer-seconds Retry-After into milliseconds', async () => {
+    const res = new Response('{"error":"too many concurrent validations in flight; retry shortly"}', {
+      status: 429,
+      headers: { 'Content-Type': 'application/json', 'Retry-After': '1' },
+    })
+    const err = await ApiError.fromResponse(res)
+    expect(err.retryAfterMs).toBe(1000)
+  })
+
+  it('parses a multi-second integer Retry-After', async () => {
+    const res = new Response('rate limited', { status: 429, headers: { 'Retry-After': '30' } })
+    const err = await ApiError.fromResponse(res)
+    expect(err.retryAfterMs).toBe(30_000)
+  })
+
+  it('parses an HTTP-date Retry-After into a positive millisecond delta', async () => {
+    const future = new Date(Date.now() + 60_000).toUTCString()
+    const res = new Response('rate limited', { status: 429, headers: { 'Retry-After': future } })
+    const err = await ApiError.fromResponse(res)
+    expect(err.retryAfterMs).toBeGreaterThan(55_000)
+    expect(err.retryAfterMs).toBeLessThanOrEqual(60_000)
+  })
+
+  it('leaves retryAfterMs undefined when the header is absent', async () => {
+    const res = new Response('rate limited', { status: 429 })
+    const err = await ApiError.fromResponse(res)
+    expect(err.retryAfterMs).toBeUndefined()
+  })
+
+  it('leaves retryAfterMs undefined for an unparseable Retry-After value', async () => {
+    const res = new Response('rate limited', { status: 429, headers: { 'Retry-After': 'not-a-date' } })
+    const err = await ApiError.fromResponse(res)
+    expect(err.retryAfterMs).toBeUndefined()
+  })
+
+  it('leaves retryAfterMs undefined for a zero or already-past Retry-After', async () => {
+    const zero = await ApiError.fromResponse(
+      new Response('x', { status: 429, headers: { 'Retry-After': '0' } }),
+    )
+    expect(zero.retryAfterMs).toBeUndefined()
+
+    const past = new Date(Date.now() - 60_000).toUTCString()
+    const expired = await ApiError.fromResponse(
+      new Response('x', { status: 429, headers: { 'Retry-After': past } }),
+    )
+    expect(expired.retryAfterMs).toBeUndefined()
+  })
+
+  it('still captures Retry-After even on an oversized-body bailout (H3-FE early return)', async () => {
+    // Regression guard for the specific bug shape this fix could reintroduce:
+    // retryAfterMs must be computed ONCE up front in fromResponse, not only
+    // on the final return — otherwise any early bailout (oversized body,
+    // non-text content-type, binary sniff) would silently drop it.
+    const bigBody = 'x'.repeat(5000) // > MAX_BODY_BYTES (4 KiB)
+    const res = new Response(bigBody, {
+      status: 429,
+      headers: { 'Content-Length': String(bigBody.length), 'Retry-After': '2' },
+    })
+    const err = await ApiError.fromResponse(res)
+    expect(err.retryAfterMs).toBe(2000)
+  })
+})
+
 describe('ApiError extends Error properly', () => {
   it('is catchable as Error', () => {
     let caught: unknown

@@ -133,9 +133,48 @@ describe('ADR-052 §6.8 button matrix — planActionFor (plan-row data table, re
     expect(new Set([draftAction, runningAction, doneAction]).size).toBe(3)
   })
 
-  it('the exported PlanAction union has exactly the three ADR-documented values', () => {
-    const actions: PlanAction[] = ['execute', 'stop', 'play']
-    expect(actions).toEqual(['execute', 'stop', 'play'])
+  it('the exported PlanAction union has exactly the three ADR-documented values — proven by driving the real planActionFor(), not a re-asserted literal', () => {
+    // The previous version of this test (`const actions: PlanAction[] =
+    // ['execute','stop','play']; expect(actions).toEqual([...])`) was a pure
+    // tautology at runtime — TypeScript array literals aren't required to be
+    // exhaustive over a union, so it passed identically whether the
+    // `PlanAction` type had 3 members or a bogus 4th. It provided zero real
+    // coverage.
+    //
+    // This drives the REAL production decision function across every
+    // state/failed_reason combination this file's own data table above
+    // exercises (the actual source of every PlanAction value that can ever
+    // reach the UI) and asserts the resulting set of non-null actions is
+    // exactly the three ADR-documented values — a genuine, production-derived
+    // assertion instead of a self-referential literal.
+    //
+    // Known residual gap (documented, not hidden): `ACTION_COPY` — the
+    // `Record<PlanAction, ActionCopy>` in PlanActionButton.tsx whose keys
+    // would be the tightest possible runtime witness of the union's members —
+    // is not exported, so it can't be asserted here directly. A union member
+    // added as pure dead code (a type-level 4th value wired into ACTION_COPY/
+    // the mutation switch but never actually returned by planActionFor for any
+    // real state) is therefore still only caught by TypeScript's exhaustiveness
+    // checking (the `assertNever` default case + the `Record` type), i.e. by
+    // `npm run typecheck`, not by this or any other runtime test — that is an
+    // inherent limitation of asserting against erased types, not a gap specific
+    // to this test. Exporting `ACTION_COPY` (or its key list) would close it;
+    // flagged as a testability note rather than silently left as a blind spot.
+    const observedActions = new Set<PlanAction>(
+      (
+        [
+          planActionFor({ state: 'draft', failed_reason: undefined }),
+          planActionFor({ state: 'approved', failed_reason: undefined }),
+          planActionFor({ state: 'running', failed_reason: undefined }),
+          planActionFor({ state: 'failed', failed_reason: 'stopped_by_user' }),
+          planActionFor({ state: 'failed', failed_reason: 'judge_rounds_exhausted' }),
+          planActionFor({ state: 'failed', failed_reason: 'idle_expired' }),
+          planActionFor({ state: 'failed', failed_reason: undefined }),
+          planActionFor({ state: 'done', failed_reason: undefined }),
+        ] as const
+      ).filter((a): a is PlanAction => a !== null),
+    )
+    expect(observedActions).toEqual(new Set<PlanAction>(['execute', 'stop', 'play']))
   })
 })
 
@@ -205,15 +244,19 @@ describe('ADR-052 US-11 Acceptance 3 / FR-020 — PlanActionButton: confirm-moda
   })
 
   it('done plan renders no action button at all', () => {
-    const { container } = renderWithClient(<PlanActionButton plan={basePlan({ state: 'done' })} />)
-    expect(container.querySelectorAll('button').length).toBe(0)
+    // `screen.queryAllByRole`, not `container.querySelectorAll` — Radix
+    // components (e.g. the confirm-modal's AlertDialog) portal into
+    // `document.body`, outside `container`; a `container`-scoped query would
+    // silently miss any stray portalled button instead of proving none exist.
+    renderWithClient(<PlanActionButton plan={basePlan({ state: 'done' })} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
   it('a genuinely-failed plan (judge_rounds_exhausted) renders no action button — no Restart offered (US-9 Acceptance 2)', () => {
-    const { container } = renderWithClient(
+    renderWithClient(
       <PlanActionButton plan={basePlan({ state: 'failed', failed_reason: 'judge_rounds_exhausted' })} />,
     )
-    expect(container.querySelectorAll('button').length).toBe(0)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 })
 
@@ -288,15 +331,15 @@ describe('ADR-052 US-11 Acceptance 3 / FR-020 — TaskActionButton: confirm-moda
     expect(stopTaskMock).not.toHaveBeenCalled()
   })
 
-  it('cancelled standalone task: confirming Play calls restartTask(task.id) — the dedicated restart route (FR-028), not runTask', async () => {
+  it('cancelled standalone task: confirming Restart calls restartTask(task.id) — the dedicated restart route (FR-028), not runTask', async () => {
     const user = userEvent.setup()
     renderWithClient(
       <TaskActionButton task={baseTask({ id: 'task-12', status: 'failed', cancel_reason: 'stopped_by_user' })} />,
     )
 
-    await user.click(screen.getByRole('button', { name: 'Play task Fix the widget' }))
+    await user.click(screen.getByRole('button', { name: 'Restart task Fix the widget' }))
     expect(screen.getByText('Restart this task?')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Play' }))
+    await user.click(screen.getByRole('button', { name: 'Restart' }))
 
     await waitFor(() => expect(restartTaskMock).toHaveBeenCalledWith('task-12'))
     expect(runTaskMock).not.toHaveBeenCalled()
@@ -333,26 +376,30 @@ describe('ADR-052 US-11 Acceptance 3 / FR-020 — TaskActionButton: confirm-moda
     // exception: plan members carry no per-member controls in ANY status. The
     // plan owns lifecycle (a per-member cancel with dependents bricks the
     // plan). To adjust a member: Stop the plan → change → continue.
-    const { container } = renderWithClient(
+    // `screen.queryAllByRole`, not `container.querySelectorAll` — Radix
+    // components (e.g. the confirm-modal's AlertDialog) portal into
+    // `document.body`, outside `container`; a `container`-scoped query would
+    // silently miss any stray portalled button instead of proving none exist.
+    renderWithClient(
       <TaskActionButton task={baseTask({ id: 'task-15', status: 'in_progress', plan_id: 'plan-1' })} />,
     )
-    expect(container.querySelectorAll('button').length).toBe(0)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
     expect(stopTaskMock).not.toHaveBeenCalled()
   })
 
   it('an in-plan member that is NOT running renders no action button — the plan drives its start/restart (G4/FR-025)', () => {
-    const { container } = renderWithClient(<TaskActionButton task={baseTask({ status: 'next', plan_id: 'plan-1' })} />)
-    expect(container.querySelectorAll('button').length).toBe(0)
+    renderWithClient(<TaskActionButton task={baseTask({ status: 'next', plan_id: 'plan-1' })} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
   it('a done standalone task renders no action button at all', () => {
-    const { container } = renderWithClient(<TaskActionButton task={baseTask({ status: 'done' })} />)
-    expect(container.querySelectorAll('button').length).toBe(0)
+    renderWithClient(<TaskActionButton task={baseTask({ status: 'done' })} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
   it('a blocked standalone task renders no action button (backend-managed dependency, not user-actionable)', () => {
-    const { container } = renderWithClient(<TaskActionButton task={baseTask({ status: 'blocked' })} />)
-    expect(container.querySelectorAll('button').length).toBe(0)
+    renderWithClient(<TaskActionButton task={baseTask({ status: 'blocked' })} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
   it('cancelling the confirm dialog never calls any mutation', async () => {

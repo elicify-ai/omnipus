@@ -135,9 +135,15 @@ function describeNonActiveState(state: Exclude<GoalPillState, 'active'>): Status
 }
 
 export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
-  // No `cleared` literal survives in the 8-value pill enum (ADR-053) — the
-  // store clears the session bucket rather than this component matching a
-  // state value, so any non-null frame renders.
+  // CORRECTED (regression review): `cleared` is very much a live 9th enum
+  // value (UAT S3 fix, ADR-053 post-hoc addition — see `describeNonActiveState`'s
+  // `case 'cleared'` a few lines below, which this comment previously
+  // contradicted). The store does NOT clear the session bucket on a
+  // terminal frame either — `goalStatus` just holds whatever frame arrived
+  // last, terminal or not, until a newer one replaces it (chat.ts's
+  // `goalStatus` doc comment). So the actual rule is simpler than either
+  // claim: any non-null frame renders, `cleared` included, via its own
+  // dedicated branch below like every other non-active state.
   const showGoal = !!goalStatus
   const showLoop = !!loopStatus
 

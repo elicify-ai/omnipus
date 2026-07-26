@@ -133,9 +133,9 @@ describe('TaskActionButton — rendering per state (standalone)', () => {
     expect(screen.getByRole('button', { name: 'Run task Draft the memo' })).toBeInTheDocument()
   })
 
-  it('renders Play for a cancelled task', () => {
+  it('renders Restart for a cancelled task', () => {
     renderButton(makeTask({ status: 'failed', cancel_reason: 'stopped_by_user' }))
-    expect(screen.getByRole('button', { name: 'Play task Draft the memo' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restart task Draft the memo' })).toBeInTheDocument()
   })
 
   it('renders Stop for an in_progress task', () => {
@@ -194,12 +194,12 @@ describe('TaskActionButton — confirm-modal gating (ADR-052 FR-020) + chat-send
     expect(runTaskMock).not.toHaveBeenCalled()
   })
 
-  it('Play (cancelled) confirms into restartTask, not runTask', async () => {
+  it('Restart (cancelled) confirms into restartTask, not runTask', async () => {
     const user = userEvent.setup()
     renderButton(makeTask({ status: 'failed', cancel_reason: 'stopped_by_user' }))
-    await user.click(screen.getByRole('button', { name: 'Play task Draft the memo' }))
+    await user.click(screen.getByRole('button', { name: 'Restart task Draft the memo' }))
     const dialog = screen.getByRole('alertdialog')
-    await user.click(within(dialog).getByRole('button', { name: 'Play' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Restart' }))
     expect(restartTaskMock).toHaveBeenCalledWith('task-1')
     expect(runTaskMock).not.toHaveBeenCalled()
   })

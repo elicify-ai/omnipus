@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, type RenderResult } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { Node } from '@xyflow/react'
+import type { Edge, Node } from '@xyflow/react'
 import type { Task } from '@/lib/api'
 
 // Capture every `nodes` array React Flow is rendered with, by wrapping the
@@ -27,6 +27,13 @@ import type { Task } from '@/lib/api'
 // gesture (React Flow's pointer-based DnD cannot be driven faithfully in
 // jsdom — see the file-level comment above).
 const capturedNodesCalls: Node[][] = []
+// Every `edges` array React Flow is rendered with — captured alongside
+// `capturedNodesCalls` so tests can assert the ACTUAL edge set (source/
+// target pairs) GraphView hands to React Flow, not just that some edges
+// SVG layer element exists in the DOM (which React Flow renders regardless
+// of whether any edges were actually passed — see the "renders nodes +
+// edges" describe block below).
+const capturedEdgesCalls: Edge[][] = []
 // Every `fitView(options)` call made through `useReactFlow()` — including
 // GraphView's own S2-fix re-fit effect AND the <Controls> "fit view" button
 // (both go through this same hook) — recorded here so the re-fit tests below
@@ -41,6 +48,7 @@ vi.mock('@xyflow/react', async () => {
     ...actual,
     ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
       capturedNodesCalls.push(props.nodes as Node[])
+      capturedEdgesCalls.push((props.edges ?? []) as Edge[])
       return <actual.ReactFlow {...props} />
     },
     useReactFlow: (...args: Parameters<typeof actual.useReactFlow>) => {
@@ -84,6 +92,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   capturedNodesCalls.length = 0
+  capturedEdgesCalls.length = 0
   fitViewCalls.length = 0
 })
 
@@ -147,10 +156,16 @@ describe('GraphView — renders nodes + edges', () => {
 
   it('mounts the React Flow edge layer for a graph with dependencies', () => {
     // Note: React Flow only paints individual edge *paths* after nodes are
-    // measured, which jsdom does not do — so we assert the edges SVG layer is
-    // present (proving edges were handed to React Flow). The exact edge model
-    // (source/target/animation) is asserted deterministically against
-    // buildTaskGraph in taskGraph.test.ts.
+    // measured, which jsdom does not do — so the `.react-flow__edges` SVG
+    // layer element renders regardless of whether any edges were actually
+    // passed in (mutation-testing regression: `edges={[]}` still leaves this
+    // layer present, so asserting only its existence proves nothing). The
+    // load-bearing assertion is against the CAPTURED `edges` prop GraphView
+    // actually hands to React Flow — the real blocker->blocked edge GraphView
+    // computed from `blocked_by: ['a']`. The exact edge model (styling/
+    // animation) is asserted deterministically against buildTaskGraph in
+    // taskGraph.test.ts; this test's job is just proving GraphView wires that
+    // model THROUGH to React Flow's `edges` prop.
     const tasks = [
       makeTask({ id: 'a', title: 'Alpha' }),
       makeTask({ id: 'b', title: 'Bravo', blocked_by: ['a'] }),
@@ -160,6 +175,21 @@ describe('GraphView — renders nodes + edges', () => {
     )
     expect(container.querySelector('.react-flow__edges')).not.toBeNull()
     expect(container.querySelector('.react-flow__viewport')).not.toBeNull()
+
+    const lastEdges = capturedEdgesCalls[capturedEdgesCalls.length - 1]
+    expect(lastEdges).toHaveLength(1)
+    expect(lastEdges[0]).toMatchObject({ id: 'a->b', source: 'a', target: 'b' })
+  })
+
+  it('passes an EMPTY edges array to React Flow when no task blocks another (proves the edge count reflects real dependencies, not a fixed/hardcoded set)', () => {
+    const tasks = [
+      makeTask({ id: 'a', title: 'Alpha' }),
+      makeTask({ id: 'b', title: 'Bravo' }), // no blocked_by — no dependency
+    ]
+    renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+
+    const lastEdges = capturedEdgesCalls[capturedEdgesCalls.length - 1]
+    expect(lastEdges).toHaveLength(0)
   })
 })
 

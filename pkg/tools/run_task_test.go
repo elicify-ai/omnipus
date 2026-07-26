@@ -157,7 +157,26 @@ func TestRunTask_RejectsDoneTask(t *testing.T) {
 func TestRunTask_RejectsBlockedTask(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
-	tk := seedStandaloneTask(t, store, task.StatusBlocked, "worker")
+
+	// Seed a GENUINELY blocked task: an unmet blocker plus a dependent that
+	// names it. Seeding StatusBlocked directly no longer works — Store.Create
+	// derives `blocked` from blocked_by (the S2 UAT fix that made the lane
+	// reachable at all), so a task marked blocked with an EMPTY blocked_by is
+	// an inconsistent state and is correctly recomputed back to `next`. The
+	// old fixture seeded exactly that impossible state, so the tool saw a
+	// runnable task and this test failed for the wrong reason.
+	blocker := seedStandaloneTask(t, store, task.StatusNext, "worker")
+	tk := &task.Task{
+		Title: "dependent", Prompt: "do it", Action: task.ActionLLM,
+		AgentID: "worker", WorkspaceID: "ws-1", Status: task.StatusNext,
+		BlockedBy: []string{blocker.ID},
+	}
+	if err := store.Create(tk); err != nil {
+		t.Fatalf("seed dependent task: %v", err)
+	}
+	if tk.Status != task.StatusBlocked {
+		t.Fatalf("fixture precondition: dependent must derive to blocked, got %q", tk.Status)
+	}
 
 	tool := NewTaskRunTool(store)
 	tool.SetStartTaskNow(func(context.Context, string) (string, error) { return "sess", nil })

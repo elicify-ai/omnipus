@@ -77,7 +77,7 @@ const ACTION_COPY: Record<TaskAction, ActionCopy> = {
   },
   restart: {
     icon: Play,
-    label: 'Play',
+    label: 'Restart',
     pendingLabel: 'Restarting…',
     confirmTitle: 'Restart this task?',
     confirmDescription: (title) => `This re-runs "${title}" from scratch.`,

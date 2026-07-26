@@ -1205,12 +1205,28 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				slog.Error("rest: could not revert task status after StartTaskNow failure",
 					"id", id, "revert_to", revertStatus, "error", rErr)
 			}
-			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
-				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
 			httpStatus := http.StatusInternalServerError
-			if errors.Is(startErr, agent.ErrDispatchCapReached) {
+			switch {
+			case errors.Is(startErr, agent.ErrDispatchCapReached):
+				httpStatus = http.StatusConflict
+			case errors.Is(startErr, agent.ErrPlanNotExecuting), errors.Is(startErr, agent.ErrPlanStateUnresolvable):
+				// S1 plan-gate follow-up: a PATCH to in_progress on a plan
+				// member whose parent plan is not (or can no longer be
+				// verified as) approved/running/unpaused — e.g. a Kanban drag
+				// on a Draft plan's member, or a member of a plan the user
+				// already Stopped. 409 (state conflict), not 500: the request
+				// itself is well-formed, it conflicts with the plan's current
+				// state.
 				httpStatus = http.StatusConflict
 			}
+			// This is a client-triggered, one-shot rejection (bounded by
+			// request rate, not a background loop) — logging it at Warn here
+			// is the appropriate severity regardless of which error it was;
+			// see agent.ErrPlanNotExecuting's own doc comment for why the
+			// SAME error is intentionally logged quieter (Debug) inside
+			// TaskExecutor's periodic/event-driven callers.
+			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
+				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
 			jsonErr(w, httpStatus, startErr.Error())
 			return
 		}

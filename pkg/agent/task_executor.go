@@ -198,14 +198,70 @@ func (te *TaskExecutor) ClearEvidenceGateStreak(taskID string) {
 // ExecuteTask starts executing the dispatchable task identified by taskID. It
 // atomically claims the task (next→in_progress via ClaimForRun) and dispatches
 // it to the agent in a goroutine, gated by per-agent and global concurrency
-// controls.
+// controls. For a plan member task (PlanID != ""), it also enforces
+// requirePlanExecuting's plan-state gate — see that method's doc comment.
 func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
+	return te.executeTask(ctx, taskID, false)
+}
+
+// executeTaskPlanVerified is the ONE documented bypass of the plan-state gate
+// executeTask enforces (see requirePlanExecuting) — reserved EXCLUSIVELY for
+// PlanEngine.dispatchReadyMembers (plan_engine.go), via the planTaskDispatcher
+// interface. Every one of dispatchReadyMembers' own callers
+// (tryStartApprovedPlan, processPlan, AppendCorrection) re-reads the plan's
+// State (and, as of the paused-state follow-up, PausedReason) under
+// pe.planDecisionMu and returns early unless it is Approved-about-to-become-
+// Running or Running-and-unpaused, in the SAME critical section that then
+// calls dispatchReadyMembers — so re-verifying it a second time here would be
+// REDUNDANT, not safer.
+//
+// It is also not merely an optimization: TaskExecutor.planStore and
+// PlanEngine.planStore are two independently-wired fields (see SetPlanStore's
+// doc comment) that a boot-ordering bug could leave out of sync (e.g. the
+// gateway wires PlanEngine's but not TaskExecutor's). Without this bypass,
+// such a bug would make requirePlanExecuting fail closed on "no plan store
+// wired" for EVERY plan-engine-driven dispatch — silently stalling every plan
+// in the process despite the plan engine itself having correctly verified
+// the plan's state through its own, correctly-wired store. The bypass
+// decouples "the plan engine already knows this dispatch is authorized" from
+// "TaskExecutor's own independent plan-store wiring happens to agree".
+//
+// Do not add a second caller of this method without the same
+// planDecisionMu-held-state-check-immediately-before guarantee — every OTHER
+// caller of a dispatch primitive must go through ExecuteTask/StartTaskNow and
+// pay the real requirePlanExecuting check.
+func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID string) error {
+	return te.executeTask(ctx, taskID, true)
+}
+
+// executeTask is ExecuteTask's real body. planVerifiedUnderDecisionMu is true
+// ONLY via the executeTaskPlanVerified bypass above; every other caller goes
+// through ExecuteTask (which always passes false) and pays the
+// requirePlanExecuting check for any task naming a PlanID. This unexported
+// method has exactly those two callers in this file — there is no exported
+// or otherwise-reachable way to pass true from outside — so the bypass
+// cannot be reached by accident.
+func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVerifiedUnderDecisionMu bool) error {
 	t, err := te.store.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_executor: get task %q: %w", taskID, err)
 	}
 	if t.Status != task.StatusNext {
 		return fmt.Errorf("task_executor: task %q is %s, not next", taskID, t.Status)
+	}
+
+	// S1 UAT follow-up (primitive-level plan-state gate): the original
+	// bc66345f fix placed this gate ONLY in CheckQueuedTasks, one level ABOVE
+	// this function — every OTHER caller (advanceBlockedTasks after a
+	// completion, SpawnTriggeredRun's cron fire, the goal-loop redispatch
+	// below, and transitively a REST "run now") was left free to dispatch a
+	// Draft, terminal, or paused plan's member with no gate at all. See
+	// requirePlanExecuting's own doc for the full rationale; see
+	// executeTaskPlanVerified above for the one legitimate bypass.
+	if !planVerifiedUnderDecisionMu {
+		if gateErr := te.requirePlanExecuting(t); gateErr != nil {
+			return gateErr
+		}
 	}
 
 	// Guard: do not dispatch a task that still has unsatisfied dependencies.
@@ -373,7 +429,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isPlanGateRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -1492,16 +1548,37 @@ func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
 // readyBlockedCandidates returns the IDs of all `next` tasks that list
 // completedTaskID as a blocker AND whose ENTIRE blocked_by set is now `done`.
 func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string {
-	candidates, err := te.store.List(task.Filter{
-		Status:      task.StatusNext,
-		BlockedByID: completedTaskID,
-	})
-	if err != nil {
-		logger.WarnCF("task_executor", "Orchestrator: could not scan blocked tasks",
-			map[string]any{"completed_task_id": completedTaskID, "error": err.Error()})
-		return nil
+	// Scan BOTH `blocked` and `next` — either is a legitimate resting state for
+	// a dependent, and this used to scan only `next`.
+	//
+	//   blocked → a dependency was unmet, so the S2 UAT fix (pkg/task/store.go
+	//             derives `blocked` at Create and at the end of every
+	//             updateLocked) persisted it as blocked. This is the common
+	//             case here and scanning only `next` MISSED IT ENTIRELY,
+	//             silently killing this advance path for exactly the tasks it
+	//             exists to advance. CI caught it via
+	//             TestOrchestratorAdvance_StillBlockedWhenDepNotComplete.
+	//   next    → every dependency was already `done` when the task was
+	//             created, so the recompute never blocked it. Still a valid
+	//             candidate, and dropping it would break
+	//             TestOrchestratorAdvance_UnblockedTaskFoundAfterDep.
+	//
+	// The allSatisfied loop below re-verifies the FULL dependency set either
+	// way, so this filter is only a pre-narrowing — it must not be the thing
+	// that decides readiness.
+	var candidates []task.Task
+	for _, st := range []task.Status{task.StatusBlocked, task.StatusNext} {
+		batch, listErr := te.store.List(task.Filter{
+			Status:      st,
+			BlockedByID: completedTaskID,
+		})
+		if listErr != nil {
+			logger.WarnCF("task_executor", "Orchestrator: could not scan blocked tasks",
+				map[string]any{"completed_task_id": completedTaskID, "status": string(st), "error": listErr.Error()})
+			return nil
+		}
+		candidates = append(candidates, batch...)
 	}
-
 	var ready []string
 	for i := range candidates {
 		t := &candidates[i]
@@ -1522,11 +1599,20 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 
 // advanceBlockedTasks dispatches every `next` task whose full dependency set is
 // now satisfied by the completion of completedTaskID.
+//
+// ExecuteTask's own requirePlanExecuting gate (see its doc) is what prevents
+// this from re-opening the Stop leak the S1 fix was written to close: an
+// in-flight plan member that finishes (landing here via onTaskComplete) after
+// its plan was already Stopped/failed(stopped_by_user) must not have this
+// function dispatch its now-unblocked dependents just because they satisfy
+// their BlockedBy set — ExecuteTask itself now refuses that dispatch.
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		if err := te.ExecuteTask(ctx, taskID); err != nil {
-			logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
-				map[string]any{"task_id": taskID, "error": err.Error()})
+			if !isPlanGateRefusal(err) {
+				logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
+					map[string]any{"task_id": taskID, "error": err.Error()})
+			}
 		} else {
 			logger.InfoCF("task_executor", "Orchestrator: advanced blocked task",
 				map[string]any{"task_id": taskID, "unblocked_by": completedTaskID})
@@ -1592,6 +1678,17 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 // it to `in_progress` via a PATCH). It is the path taken when the UI hits
 // "Run" on a task that already has an assigned agent.
 //
+// For a plan member task (PlanID != ""), it also enforces
+// requirePlanExecuting's plan-state gate (see that method's doc) — unlike
+// ExecuteTask, StartTaskNow has NO bypass: its one production caller (the
+// REST PATCH-to-in_progress handler) is always a single, independent
+// dispatch decision, never one made immediately after verifying plan state
+// under planDecisionMu the way PlanEngine.dispatchReadyMembers is. This is
+// the fix for the bypass a REST PATCH to in_progress on a Draft (or
+// Stopped/paused) plan's member previously sailed straight through: the
+// launch block only ever checked the TASK's own status transition, never
+// its PlanID.
+//
 // Idempotency: if the task already has a SessionID the call is a no-op and
 // returns the existing session ID immediately without launching a second agent.
 //
@@ -1605,6 +1702,13 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	}
 	if t.AgentID == "" {
 		return "", fmt.Errorf("task_executor: StartTaskNow: task %q has no agent assigned", taskID)
+	}
+
+	// S1 UAT follow-up (see this function's own doc comment and
+	// requirePlanExecuting's): no bypass here, unlike ExecuteTask's
+	// executeTaskPlanVerified for the plan engine's own dispatch.
+	if gateErr := te.requirePlanExecuting(t); gateErr != nil {
+		return "", gateErr
 	}
 
 	// Idempotency guard: if a session already exists, don't create another one.
@@ -1751,7 +1855,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isPlanGateRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -1795,8 +1899,22 @@ func (te *TaskExecutor) runTaskFromInProgress(
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
 // fired. The task has already been reset to `next` by Store.SpawnReset; this
-// claims and dispatches it via the normal ExecuteTask path. ExecuteTask already
-// guards status==next and concurrency, so no additional gate is needed here.
+// claims and dispatches it via the normal ExecuteTask path. ExecuteTask
+// guards status==next, concurrency, AND (since the S1 primitive-level plan-
+// gate fix) the task's parent plan state via requirePlanExecuting — so a
+// cron-triggered plan member whose plan has since been stopped or paused is
+// refused here too, with no separate gate needed in this function.
+//
+// STALE-COMMENT CORRECTION: this used to claim "ExecuteTask already guards
+// status==next and concurrency, so no additional gate is needed here" as
+// its FULL justification. That was true before bc66345f (the original S1
+// fix), which added a plan-state gate but placed it one level ABOVE
+// ExecuteTask (in CheckQueuedTasks only) — for a while after that commit,
+// this comment was actively WRONG about this function's own safety: a plan
+// stopped/paused after its cron trigger fired had no gate at all here. The
+// primitive-level fix (this file, requirePlanExecuting) closes that gap;
+// this comment is updated to describe the CURRENT, actually-gated behavior
+// rather than repeat a claim that had quietly stopped being true.
 func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string) error {
 	return te.ExecuteTask(ctx, taskID)
 }
@@ -1822,31 +1940,97 @@ func (te *TaskExecutor) TryAcquireDispatchSema() (bool, func()) {
 	return te.dispatchSema.TryAcquire()
 }
 
-// executingPlanStates is the allow-list of plan.State values under which
-// CheckQueuedTasks may auto-dispatch a `next` PLAN MEMBER task (S1 fix, UAT
-// "PRIYA-GATE-never-executed" / "PRIYA-D8-race"). A member task's own Status
-// is user-settable independently of its parent plan's lifecycle — e.g. a
-// Kanban drag from Inbox straight to Next in the SPA — so task.StatusNext
-// alone is NOT proof the Execute approval gate was ever passed. Approved
-// (DoD/owner locked in, ready to run or cap-waiting) and Running (the engine
-// is actively dispatching under the plan judge) are the only two states in
-// which a human granted permission for autonomous execution; Draft (never
-// approved) and the two terminal states Done/Failed (which a user Stop also
-// lands on, via FailedReasonStoppedByUser) must never auto-dispatch a
-// member — see CheckQueuedTasks' doc for the full rationale.
-var executingPlanStates = map[plan.State]bool{ //nolint:gochecknoglobals
-	plan.StateApproved: true,
-	plan.StateRunning:  true,
+// ErrPlanNotExecuting is returned by requirePlanExecuting (and therefore by
+// ExecuteTask/StartTaskNow) when a plan MEMBER task's parent plan WAS
+// resolved but is not currently in a state that permits autonomous dispatch
+// — see plan.Plan.PermitsMemberDispatch for the full predicate (Draft never
+// approved; Done/Failed terminal, including Stop's failed(stopped_by_user);
+// or Approved/Running but PausedReason != "", FR-065). This is the ROUTINE,
+// expected refusal case: requirePlanExecuting logs it at Debug, not Warn (see
+// its own doc comment for why a per-call Warn here would be exactly the
+// "operators learn to ignore the log" problem CheckQueuedTasks' per-plan-
+// per-tick dedup exists to prevent, generalized to every OTHER dispatch
+// primitive that did not have a per-tick cache to hang a dedup on).
+var ErrPlanNotExecuting = errors.New("task_executor: parent plan is not in a dispatchable state (approved/running, unpaused)")
+
+// ErrPlanStateUnresolvable is returned by requirePlanExecuting (and therefore
+// by ExecuteTask/StartTaskNow) when a plan member task's parent plan could
+// NOT be resolved at all — no plan.Store wired, an I/O error, or the plan
+// was deleted out from under a task that still names it. Unlike
+// ErrPlanNotExecuting this IS anomalous — requirePlanExecuting logs it at
+// Warn — and fails CLOSED exactly the same way (never dispatch): a plan
+// member whose parent's live state cannot even be verified must not run just
+// because the verification itself failed.
+var ErrPlanStateUnresolvable = errors.New("task_executor: parent plan's state could not be verified")
+
+// isPlanGateRefusal reports whether err is one of requirePlanExecuting's own
+// sentinels. requirePlanExecuting already logs each at its own correct level
+// (Debug for the routine ErrPlanNotExecuting, Warn for the anomalous
+// ErrPlanStateUnresolvable) the instant it returns them; every ExecuteTask
+// caller in this file that otherwise blanket-Warns on "dispatch failed for
+// ANY reason" checks this first so the identical event is not logged a
+// second time at a mismatched (always-Warn) severity — the same quiet-
+// routine/loud-anomalous split CheckQueuedTasks' own per-tick plan cache
+// applies, generalized to callers with no such cache (advanceBlockedTasks
+// fires once per real task completion, not once per member per ~60s tick, so
+// there is no multiplicative blowup to dedupe here — one refused dispatch
+// attempt is one (Debug-level) log line, which is already the right
+// granularity).
+func isPlanGateRefusal(err error) bool {
+	return errors.Is(err, ErrPlanNotExecuting) || errors.Is(err, ErrPlanStateUnresolvable)
 }
 
-// planForGate resolves planID's current Plan for CheckQueuedTasks' plan-gate.
-// Returns an error (nil plan) when no plan.Store is wired — a minimal test
-// harness, or a boot sequence not yet past gateway.go's SetPlanStore wiring —
-// or when the lookup itself fails (I/O error, or the plan was deleted out
-// from under a task that still names it). Both cases are FAIL-CLOSED by the
-// caller: a plan member task whose parent plan's live state cannot be
-// verified must never auto-dispatch, matching SetPlanStore's own "will
-// remain fail-closed" convention for a nil store.
+// requirePlanExecuting is the plan-state gate shared by ExecuteTask and
+// StartTaskNow — the two primitives every dispatch path funnels through
+// (S1 UAT follow-up: the original bc66345f fix placed this gate ONLY in
+// CheckQueuedTasks, one level ABOVE these two primitives, leaving every
+// OTHER caller — a REST PATCH-to-in_progress via StartTaskNow,
+// advanceBlockedTasks' post-completion auto-advance, SpawnTriggeredRun's
+// cron fire, the goal-loop redispatch in runTask/runTaskFromInProgress —
+// free to dispatch a Draft/terminal/paused plan's member with no gate at
+// all). Moving the check here converts what were N independent audit
+// obligations (one per caller) into one shared check plus the ONE documented
+// bypass (executeTaskPlanVerified, for PlanEngine.dispatchReadyMembers).
+//
+// Returns nil immediately for a standalone task (t.PlanID == "") — the gate
+// only ever applies to a plan member task, exactly as CheckQueuedTasks' own
+// (now-shared) predicate does.
+//
+// Delegates the actual permission question to plan.Plan.PermitsMemberDispatch
+// — see that method's doc for why State alone (a bare map[plan.State]bool
+// that once lived here) is not sufficient: PausedReason is a same-State
+// side-flag a State-only predicate would miss entirely (the paused-plan
+// follow-up to this same S1 fix).
+func (te *TaskExecutor) requirePlanExecuting(t *task.Task) error {
+	if t.PlanID == "" {
+		return nil
+	}
+	p, err := te.planForGate(t.PlanID)
+	if err != nil {
+		logger.WarnCF("task_executor", "plan-state gate: could not resolve parent plan, failing closed",
+			map[string]any{"task_id": t.ID, "plan_id": t.PlanID, "error": err.Error()})
+		return fmt.Errorf("%w: plan %q: %v", ErrPlanStateUnresolvable, t.PlanID, err)
+	}
+	if !p.PermitsMemberDispatch() {
+		logger.DebugCF("task_executor", "plan-state gate: refusing dispatch, parent plan not in a dispatchable state",
+			map[string]any{
+				"task_id": t.ID, "plan_id": t.PlanID,
+				"plan_state": string(p.State), "paused_reason": p.PausedReason,
+			})
+		return fmt.Errorf("%w: plan %q is %s (paused_reason=%q)", ErrPlanNotExecuting, t.PlanID, p.State, p.PausedReason)
+	}
+	return nil
+}
+
+// planForGate resolves planID's current Plan for the plan-state gate
+// (CheckQueuedTasks' own copy and requirePlanExecuting alike). Returns an
+// error (nil plan) when no plan.Store is wired — a minimal test harness, or
+// a boot sequence not yet past gateway.go's SetPlanStore wiring — or when
+// the lookup itself fails (I/O error, or the plan was deleted out from under
+// a task that still names it). Both cases are FAIL-CLOSED by the caller: a
+// plan member task whose parent plan's live state cannot be verified must
+// never auto-dispatch, matching SetPlanStore's own "will remain fail-closed"
+// convention for a nil store.
 func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
 	if te.planStore == nil {
 		return nil, errors.New("task_executor: no plan store wired, cannot verify parent plan state")
@@ -1857,29 +2041,51 @@ func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
 // CheckQueuedTasks picks the highest-priority *dispatchable* `next` task per
 // agent and starts it. Called by the heartbeat service (pkg/heartbeat's
 // TaskDrainService) on an unconditional ~1-minute ticker — this is the
-// UNATTENDED auto-dispatch path, distinct from a deliberate single-task
-// dispatch (StartTaskNow / a direct ExecuteTask call from e.g. the plan
-// engine's own dispatchReadyMembers or a REST "run now" action), which this
-// function does not gate and must not: those callers already know exactly
-// why the specific task is being run right now.
+// UNATTENDED auto-dispatch path. It keeps its OWN copy of the plan-state gate
+// below (rather than relying solely on ExecuteTask's identical, now-shared
+// requirePlanExecuting check — see that method's doc) purely as a genuine
+// per-tick optimization: this loop already walks every dispatchable `next`
+// task across every agent/plan once per tick, so caching each distinct
+// PlanID's resolved state for the tick avoids N redundant plan.Store.Get
+// reads for a plan with N ready members. This is belt-and-braces with
+// requirePlanExecuting by design, not a duplicate authority — see
+// executeTask's own gate call for the primitive-level twin every OTHER
+// dispatch path (StartTaskNow, advanceBlockedTasks, SpawnTriggeredRun, the
+// goal-loop redispatch, and PlanEngine.dispatchReadyMembers via its
+// documented bypass) now goes through instead.
 //
 // Skips tasks whose blocked_by dependencies are not all `done`.
 //
-// S1 UAT fix (PRIYA-GATE-never-executed / PRIYA-D8-race): also skips any
-// task whose PlanID names a plan that is not currently in an executing state
-// (executingPlanStates — approved or running). Without this, a plan member
-// task's status is fully player-settable (a Kanban drag straight from Inbox
-// to Next) independent of the plan's own lifecycle, so this unattended drain
-// would dispatch a Draft plan's member the moment it turned `next` — the
-// Execute confirm dialog's promise that "member tasks will run ... without
-// further approval" only ever holds AFTER Execute was actually clicked. The
-// same gate closes the Stop leak: a Stop transitions the plan to the
-// terminal `failed` state (FailedReasonStoppedByUser) but only cancels
-// members already `in_progress` at that instant — a member still `next` at
-// the moment of Stop was previously left in the queue for this exact drain
-// to pick up and run to completion after the user had already stopped the
-// plan. Standalone tasks (PlanID == "") are entirely unaffected: the gate
-// only ever runs when PlanID is non-empty.
+// S1 UAT fix (PRIYA-GATE-never-executed / PRIYA-D8-race), plus the PAUSED-
+// state follow-up: also skips any task whose PlanID names a plan that
+// plan.Plan.PermitsMemberDispatch reports as not dispatchable (not
+// Approved/Running, or Approved/Running but PausedReason != "", FR-065).
+// Without this, a plan member task's status is fully player-settable (a
+// Kanban drag straight from Inbox to Next) independent of the plan's own
+// lifecycle, so this unattended drain would dispatch a Draft plan's member
+// the moment it turned `next` — the Execute confirm dialog's promise that
+// "member tasks will run ... without further approval" only ever holds AFTER
+// Execute was actually clicked. The same gate closes the Stop leak: a Stop
+// transitions the plan to the terminal `failed` state
+// (FailedReasonStoppedByUser) but only cancels members already `in_progress`
+// at that instant — a member still `next` at the moment of Stop was
+// previously left in the queue for this exact drain to pick up and run to
+// completion after the user had already stopped the plan. It also closes the
+// PAUSED leak: FR-065 pauses a plan WITHOUT moving it out of StateRunning
+// (see PausedReason's doc), so a State-only predicate would keep dispatching
+// a paused plan's members every tick — PermitsMemberDispatch checks both
+// fields together (plan.go's own doc explains why). Standalone tasks
+// (PlanID == "") are entirely unaffected: the gate only ever runs when
+// PlanID is non-empty.
+//
+// Log-level note: the routine "not yet approved / paused" case is logged at
+// Debug, ONCE PER PLAN in the cache-miss branch below — NOT once per member
+// task. A 20-member draft plan must not emit 20 WARN lines every ~60s for a
+// completely normal "user hasn't clicked Execute yet" state; that trains
+// operators to ignore the log. An UNRESOLVABLE plan (lookup error, no store
+// wired, deleted out from under the task) stays at Warn — that path is
+// genuinely anomalous and is also the fail-closed branch, which must stay
+// visible.
 //
 // Plan lookups are cached for the duration of one tick (rather than
 // re-resolving the same plan once per member task) since a single tick
@@ -1918,20 +2124,32 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 			if !cached {
 				var gerr error
 				p, gerr = te.planForGate(t.PlanID)
-				if gerr != nil {
+				switch {
+				case gerr != nil:
+					// Anomalous — no plan store wired, an I/O error, or the
+					// plan was deleted out from under a task that still
+					// names it. Stays at Warn: this fail-closed path is
+					// worth an operator's attention, unlike the routine
+					// "not yet approved / paused" case below.
 					logger.WarnCF("task_executor", "Heartbeat: could not resolve parent plan, skipping member task",
 						map[string]any{"task_id": t.ID, "plan_id": t.PlanID, "error": gerr.Error()})
 					p = nil
+				case !p.PermitsMemberDispatch():
+					// Routine, expected state (Draft never approved, a
+					// terminal state including Stop's
+					// failed(stopped_by_user), or Approved/Running but
+					// paused per FR-065) — Debug, not Warn, and logged ONCE
+					// HERE per plan on this tick's cache miss rather than
+					// once per member task below (see this function's own
+					// doc comment for why: N members of the same
+					// not-yet-approved plan must not multiply into N WARN
+					// lines every ~60s).
+					logger.DebugCF("task_executor", "Heartbeat: parent plan not in a dispatchable state, skipping its member tasks this tick",
+						map[string]any{"plan_id": t.PlanID, "plan_state": string(p.State), "paused_reason": p.PausedReason})
 				}
 				planCache[t.PlanID] = p
 			}
-			if p == nil || !executingPlanStates[p.State] {
-				state := "unresolved"
-				if p != nil {
-					state = string(p.State)
-				}
-				logger.WarnCF("task_executor", "Heartbeat: skipping plan member task, parent plan not in an executing state",
-					map[string]any{"task_id": t.ID, "plan_id": t.PlanID, "plan_state": state})
+			if !p.PermitsMemberDispatch() {
 				continue
 			}
 		}
@@ -1950,7 +2168,14 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 			continue
 		}
 
-		if err := te.ExecuteTask(ctx, t.ID); err != nil {
+		if err := te.ExecuteTask(ctx, t.ID); err != nil && !isPlanGateRefusal(err) {
+			// A plan-gate refusal is already logged by requirePlanExecuting at
+			// its own correct level (see isPlanGateRefusal's doc) — this
+			// branch's own pre-filter above means that case should be
+			// unreachable in practice, but the check is kept so a future
+			// change to the pre-filter fails safe (no duplicate/mismatched-
+			// severity log) rather than silently reintroducing the exact
+			// per-tick spam this function's log-level note warns against.
 			logger.WarnCF("task_executor", "Heartbeat: could not start task",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
 		}

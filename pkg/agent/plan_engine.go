@@ -91,6 +91,16 @@ type planTaskDispatcher interface {
 	// TaskExecutor.ClearEvidenceGateStreak's doc comment for why a Stop needs
 	// the same treatment those "ANY terminal disposition" call sites get.
 	ClearEvidenceGateStreak(taskID string)
+	// executeTaskPlanVerified is dispatchReadyMembers' OWN documented bypass
+	// of TaskExecutor's plan-state gate (requirePlanExecuting, task_executor.go)
+	// — unexported so only this package's real implementation
+	// (*TaskExecutor.executeTaskPlanVerified) and its test double
+	// (fakePlanDispatcher, plan_engine_test.go) can satisfy this interface at
+	// all, which is exactly the point: nothing outside pkg/agent can ever
+	// reach this bypass. See executeTaskPlanVerified's own doc comment for
+	// why dispatchReadyMembers — and ONLY dispatchReadyMembers — is safe
+	// calling this instead of ExecuteTask.
+	executeTaskPlanVerified(ctx context.Context, taskID string) error
 }
 
 // sessionCanceller is the narrow interface *AgentLoop.RequestCancelForSession
@@ -680,6 +690,14 @@ func (pe *PlanEngine) Tick(ctx context.Context) {
 			pe.processPlan(ctx, p.ID)
 		}
 	}
+	// REGRESSION FIX (blocked-derivation event-latch, code review on
+	// bc66345f): re-check every STANDALONE (no PlanID) `blocked` task on
+	// every tick, unconditionally — i.e. even when plans is empty. Plan
+	// MEMBER tasks already get an equivalent defensive re-check via
+	// promoteReadyMembers (called per running plan, above); see
+	// promoteReadyStandaloneTasks' doc comment for why a standalone task
+	// needs its own, plan-independent sweep.
+	pe.promoteReadyStandaloneTasks()
 	pe.idleExpirySweep()
 	pe.goalAndLoopIdleExpirySweep()
 }
@@ -900,6 +918,64 @@ func (pe *PlanEngine) promoteReadyMembers(tasks []task.Task) (advancedAny bool) 
 	return advancedAny
 }
 
+// promoteReadyStandaloneTasks re-derives the `blocked`/`next` state of every
+// STANDALONE (PlanID == "") task currently sitting in the derived `blocked`
+// side-state, once per engine Tick — regardless of whether any plan exists
+// or is running. Plan MEMBER tasks already get an equivalent defensive
+// re-check via promoteReadyMembers (called per RUNNING plan from processPlan,
+// scoped to that plan's own DONE members via a PlanID-filtered task.Filter);
+// a standalone task, by definition, falls outside that scope entirely, so it
+// needs its own plan-independent sweep. Tasks with a non-empty PlanID are
+// skipped here unconditionally so this never double-promotes a plan member
+// or fights promoteReadyMembers' own pass over the same task.
+//
+// This closes the regression the blocked-derivation persistence fix (S2 UAT
+// finding A) introduced: `blocked` became a durable, EVENT-triggered latch —
+// recomputeBlockedStateLocked only ever runs inside Create/updateLocked/
+// RestartReset/AddDependency/SpawnReset (see that function's own doc
+// comment), so a standalone dependent whose blocker completes via a path
+// that does not also re-trigger AdvanceBlockedDependents (a crash between
+// the blocker's `done` write and the cascade, or a direct-write path like
+// DropOrphanEdges) is stuck in `blocked` forever with no self-heal and no
+// user-facing escape — the store rejects a client PATCH back to `next`
+// (ErrBlockedNotSettable). Before the blocked-derivation fix, a dependent
+// simply stayed `next` and CheckQueuedTasks' own per-tick dependency check
+// re-verified it every heartbeat; `blocked` tasks are invisible to that
+// dispatch-side filter (task.Filter{Status: task.StatusNext}), so this sweep
+// is the replacement self-heal for the STANDALONE half of that lost
+// self-healing behavior.
+//
+// Reuses AdvanceUnblocked (pkg/task/store.go) rather than a third status
+// derivation, per the review's explicit ask: AdvanceUnblocked forces the
+// task to `next` under the internal allowBlockedSet hatch and then
+// unconditionally re-runs recomputeBlockedStateLocked as the terminal step
+// of updateLocked — which snaps the task straight back to `blocked` if a
+// dependency is genuinely still unmet. Calling it on every blocked
+// standalone task, every tick, is therefore a safe, idempotent no-op
+// whenever nothing has actually changed (the exact "re-checked every tick"
+// self-healing property the blocked-derivation fix took away), and a
+// correct promotion the moment a dependency really has completed.
+func (pe *PlanEngine) promoteReadyStandaloneTasks() {
+	tasks, err := pe.taskStore.List(task.Filter{Status: task.StatusBlocked})
+	if err != nil {
+		logger.WarnCF("plan_engine", "promoteReadyStandaloneTasks: list blocked tasks failed",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	for i := range tasks {
+		t := &tasks[i]
+		if t.PlanID != "" {
+			// Plan members are promoteReadyMembers' concern (per running
+			// plan); skip to avoid double-promoting or racing it.
+			continue
+		}
+		if _, err := pe.taskStore.AdvanceUnblocked(t.ID); err != nil {
+			logger.WarnCF("plan_engine", "promoteReadyStandaloneTasks: advance failed",
+				map[string]any{"task_id": t.ID, "error": err.Error()})
+		}
+	}
+}
+
 // dispatchReadyMembers dispatches every member task currently `next`
 // (FR-058). A task in `next` should always have every blocked_by dependency
 // satisfied already (the store's own recompute keeps that invariant), but
@@ -908,13 +984,24 @@ func (pe *PlanEngine) promoteReadyMembers(tasks []task.Task) (advancedAny bool) 
 // bounded by TaskExecutor's own global dispatch semaphore; a transient
 // ErrDispatchCapReached (or any other dispatch error) is logged and simply
 // retried on the next tick/event, never treated as fatal to the plan.
+//
+// Calls pe.dispatcher.executeTaskPlanVerified — NOT ExecuteTask — the ONE
+// documented bypass of TaskExecutor's plan-state gate (requirePlanExecuting).
+// Every caller of THIS function (tryStartApprovedPlan, processPlan,
+// AppendCorrection) has already re-read planID's live State (and
+// PausedReason) under pe.planDecisionMu, in the SAME critical section that
+// then calls this, immediately before doing so — re-verifying it a second
+// time inside ExecuteTask would be redundant, and would also make this
+// dispatch depend on TaskExecutor's OWN, independently-wired plan.Store
+// agreeing (see executeTaskPlanVerified's doc for why that's a real boot-
+// ordering risk, not just an optimization concern).
 func (pe *PlanEngine) dispatchReadyMembers(ctx context.Context, planID string, tasks []task.Task) (dispatchedAny bool) {
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusNext {
 			continue
 		}
-		if err := pe.dispatcher.ExecuteTask(ctx, t.ID); err != nil {
+		if err := pe.dispatcher.executeTaskPlanVerified(ctx, t.ID); err != nil {
 			logger.WarnCF("plan_engine", "member task dispatch failed (will retry)",
 				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
 			continue

@@ -4724,6 +4724,21 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
+		// WorkspaceID is already on taskCtx via tools.WithWorkspaceID (the task
+		// executor sets it on ctx before calling processTaskDirect — see
+		// runTask/runTaskFromInProgress's tools.WithWorkspaceID(ctx, t.WorkspaceID)
+		// calls in task_executor.go); thread it through processOptions
+		// explicitly too, mirroring processTaskDirectExternalCLI's identical
+		// field below, so runTurn's re-root block (loop.go ~6428) resolves the
+		// work dir from ts.opts.WorkspaceID via FindForAgentPreferring rather
+		// than falling through to workspace.FindForAgent's arbitrary
+		// sort.Strings(matches)[0] pick when the agent belongs to 2+
+		// workspaces. Without this, a native task run silently rooted in the
+		// WRONG workspace whenever the assigned agent had more than one
+		// CoreTeam membership — this field reads ts.opts, not the context, so
+		// leaving it unset here (while the external-CLI sibling below sets it)
+		// was the gap.
+		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
 	})
 }
 

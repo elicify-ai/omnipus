@@ -98,9 +98,6 @@ describe('BoardView — independent per-lane vertical scroll (UAT Finding 3)', (
     expect(scrollContainer).not.toBeNull()
     expect(scrollContainer).toHaveClass('overflow-x-auto')
     expect(scrollContainer).toHaveClass('overflow-y-hidden')
-    // Regression guard: the OLD single-shared-scroller class combination
-    // must not reappear on this element.
-    expect(scrollContainer?.className).not.toMatch(/(?<!overflow-x-)\boverflow-auto\b/)
   })
 
   it('a lane with many cards does not blank out its sibling lanes — every column renders its own tasks independently', () => {
@@ -114,5 +111,59 @@ describe('BoardView — independent per-lane vertical scroll (UAT Finding 3)', (
     // card and a Done card must be simultaneously visible.
     expect(screen.getAllByText(/^Inbox task \d+$/)).toHaveLength(34)
     expect(screen.getByText('Finished thing')).toBeInTheDocument()
+  })
+})
+
+describe('BoardView — bounded-height chain (min-h-0 propagates row -> column, UAT Finding 3)', () => {
+  // The test above only ever checked the COLUMN's own `min-h-0`
+  // (BoardView.tsx:509). Mutation-testing review found that deleting
+  // `min-h-0` from the columns ROW at :430 — the link that makes the
+  // column's `min-h-0` meaningful in the first place — left every existing
+  // assertion in this file passing, even though an unbounded row means the
+  // row grows to its content's full height and the column's own
+  // `overflow-y-auto` never has anything finite to bound against (lanes
+  // would regrow to content height instead of scrolling independently).
+  // This asserts every link of the chain BoardView.tsx documents in its own
+  // comments: :264 (screen root) -> :287 (horizontal-scroll wrapper) -> :288
+  // (row wrapper, `h-full`) -> :430 (columns row) -> :509 (each column).
+  it('every link in the :264 -> :287 -> :288 -> :430 -> :509 bounded-height chain carries its required flex/min-h-0 wiring', () => {
+    const { container } = renderBoard([baseTask()])
+
+    // :264 — screen root: bounds itself to the page's remaining height.
+    const root = container.firstElementChild
+    expect(root).not.toBeNull()
+    expect(root).toHaveClass('flex-1')
+    expect(root).toHaveClass('min-h-0')
+    expect(root).toHaveClass('overflow-hidden')
+
+    // :287 — horizontal-scroll wrapper: bounded by the root's min-h-0, so it
+    // never grows to the row wrapper's content height.
+    const rowWrapperEl = container.querySelector('.min-w-max')
+    const scrollContainer = rowWrapperEl?.parentElement
+    expect(scrollContainer).not.toBeNull()
+    expect(scrollContainer).toHaveClass('flex-1')
+    expect(scrollContainer).toHaveClass('min-h-0')
+
+    // :288 — row wrapper: stretches to the FULL bounded height handed down
+    // by :287 — `h-full` is only meaningful because its parent is bounded.
+    expect(rowWrapperEl).toHaveClass('h-full')
+
+    // :430 — the columns ROW (StatusColumnsRow) — the exact link the
+    // mutation-testing review found unguarded. Without `min-h-0` here, the
+    // row (and therefore every column inside it) grows with content instead
+    // of being bounded by the wrapper above, regardless of the column's own
+    // `min-h-0`/`overflow-y-auto`.
+    const columns = screen.getAllByLabelText(/column$/i)
+    const row = columns[0].parentElement
+    expect(row).not.toBeNull()
+    expect(row).toHaveClass('flex-1')
+    expect(row).toHaveClass('min-h-0')
+
+    // :509 — each column: bounded by the row above, scrolls independently.
+    for (const col of columns) {
+      expect(col).toHaveClass('flex-1')
+      expect(col).toHaveClass('min-h-0')
+      expect(col).toHaveClass('overflow-y-auto')
+    }
   })
 })

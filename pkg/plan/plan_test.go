@@ -267,6 +267,63 @@ func TestPlan_MatrixNeverWidens_FailedToApprovedStaysIllegal(t *testing.T) {
 	}
 }
 
+// TestPlan_PermitsMemberDispatch is a per-state table test for the S1/paused-
+// state gate predicate: every one of the 5 canonical states gets an EXPLICIT
+// expected value here, both unpaused and paused, so a future change to
+// PermitsMemberDispatch's behavior for any one state fails this test — not
+// just the exhaustive linter (which only catches a SIXTH state being added
+// to the switch with no case, a build-time guard; this locks in the
+// intended VALUE per existing state, a test-time guard). Uses the package's
+// own allStates enumeration (TestPlan_StateTransitions' fixture) rather than
+// a second hand-maintained list, so adding a state to allStates without
+// adding it here is itself caught by the length assertion below.
+func TestPlan_PermitsMemberDispatch(t *testing.T) {
+	expected := map[State]bool{
+		StateDraft:    false, // never approved
+		StateApproved: true,  // DoD/owner locked in — ready to run (or cap-waiting)
+		StateRunning:  true,  // engine dispatching under the plan judge
+		StateDone:     false, // terminal
+		StateFailed:   false, // terminal (includes Stop's failed(stopped_by_user))
+	}
+	if len(expected) != len(allStates) {
+		t.Fatalf("expected table has %d entries but allStates has %d — a state was added to one "+
+			"without the other", len(expected), len(allStates))
+	}
+	for _, s := range allStates {
+		want, ok := expected[s]
+		if !ok {
+			t.Fatalf("state %q has no entry in this test's expected table", s)
+		}
+		t.Run(string(s)+"_unpaused", func(t *testing.T) {
+			p := &Plan{State: s}
+			if got := p.PermitsMemberDispatch(); got != want {
+				t.Fatalf("PermitsMemberDispatch() with State=%s, PausedReason=\"\" = %v, want %v", s, got, want)
+			}
+		})
+		// FR-065 follow-up: a non-empty PausedReason must veto dispatch
+		// regardless of State — including the two states (Approved/Running)
+		// that would otherwise permit it. A paused Draft/Done/Failed plan
+		// stays false either way (it was already false unpaused).
+		t.Run(string(s)+"_paused", func(t *testing.T) {
+			p := &Plan{State: s, PausedReason: "owner_disabled"}
+			if got := p.PermitsMemberDispatch(); got {
+				t.Fatalf("PermitsMemberDispatch() with State=%s, PausedReason=\"owner_disabled\" = true, want false "+
+					"(FR-065: a paused plan neither dispatches nor judges)", s)
+			}
+		})
+	}
+}
+
+// TestPlan_PermitsMemberDispatch_NilPlan proves a nil *Plan (unresolved /
+// lookup-failed) permits nothing — the fail-closed contract callers rely on
+// when a plan member task's parent plan cannot even be looked up.
+func TestPlan_PermitsMemberDispatch_NilPlan(t *testing.T) {
+	var p *Plan
+	if p.PermitsMemberDispatch() {
+		t.Fatal("PermitsMemberDispatch() on a nil *Plan must return false (fail closed)")
+	}
+}
+
 // fakeTaskLister is a minimal TaskLister stub for ComputeProgress tests —
 // pkg/plan deliberately depends only on this interface, not a concrete
 // *task.Store, so this test proves that decoupling actually works (no import

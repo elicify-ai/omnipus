@@ -19,13 +19,28 @@
 // lives in `describePillState` below — an exhaustive switch with a `never`
 // default so a future 10th enum value fails typecheck.
 //
+// TERMINAL-PILL LIFETIME (regression fix, bc66345f follow-up): a terminal
+// pill (done/failed/cleared) stays visible for `TERMINAL_PILL_DISPLAY_MS` —
+// long enough to be the confirmation the user needs that a goal actually
+// finished — then this component stops rendering it (`useVisibleGoalPills`
+// below). It is NOT deleted from the store the instant it terminates (that
+// would deny the user the "goal met"/"cleared" confirmation), and the
+// underlying `goalPills` map is separately capped in chat.ts
+// (`evictGoalPillsOverCap`) so it can never grow unbounded even though this
+// component may still be showing (or have already hidden) any given entry.
+// This keeps the render-timing decision entirely in this component, per
+// chat.ts's stated design ("components decide whether/how to render each
+// state — no special-casing here") — the store still just stores frames
+// verbatim, forever, up to its own cap; only THIS file decides how long a
+// terminal one stays on screen.
+//
 // `aria-live="polite"` on the tray root announces state transitions to screen
 // readers without stealing focus.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, Hourglass, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
-import { useChatStore } from '@/store/chat'
+import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { cn } from '@/lib/utils'
 
@@ -180,13 +195,101 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   )
 }
 
+// ── Terminal-pill display window ──────────────────────────────────────────
+//
+// A terminal goal (done/failed/cleared) is the user's confirmation that
+// something just happened, so it must render for a beat — but the
+// regression this fixes was exactly that a terminal pill never went away
+// (chat.ts's `goalPills` map only grows; nothing ever deleted an entry).
+// This hook is the render-layer answer: after `TERMINAL_PILL_DISPLAY_MS`,
+// it drops a terminal goal_id out of what gets rendered — it does NOT
+// touch the store, so `goalPills` itself is unaffected (that map's own
+// bound is chat.ts's `evictGoalPillsOverCap`, a separate, size-based
+// concern — see that function's comment for why the two are independent).
+//
+// Mirrors the existing `useCancelState` house pattern (a
+// `MIN_STOPPING_DISPLAY_MS`-style minimum/brief display before a state
+// transition takes visible effect) rather than inventing a new idiom.
+const TERMINAL_PILL_DISPLAY_MS = 4_000
+
+function useVisibleGoalPills(goalPills: Record<string, GoalStatusFrame>): Record<string, GoalStatusFrame> {
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(() => new Set())
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    const timers = timersRef.current
+
+    // Arm a hide timer for every terminal goal_id that doesn't have one yet
+    // (a brand-new terminal frame, or one that arrived before this effect
+    // last ran). Once a goal_id is terminal it can never become non-terminal
+    // again (goal_id is unique per generation, ADR-053) — no branch here
+    // needs to reverse a hide once armed.
+    for (const [goalId, frame] of Object.entries(goalPills)) {
+      if (GOAL_TERMINAL_STATES.has(frame.state) && !timers.has(goalId) && !hiddenIds.has(goalId)) {
+        const timer = setTimeout(() => {
+          timers.delete(goalId)
+          setHiddenIds((prev) => {
+            const next = new Set(prev)
+            next.add(goalId)
+            return next
+          })
+        }, TERMINAL_PILL_DISPLAY_MS)
+        timers.set(goalId, timer)
+      }
+    }
+
+    // Reconcile against the CURRENT goalPills map: a goal_id can disappear
+    // from the store (evicted by `evictGoalPillsOverCap`'s own cap) without
+    // this component's timer ever having fired — drop its timer/hidden
+    // bookkeeping too, so this hook's local state never outlives the data
+    // it describes (otherwise hiddenIds would itself grow unbounded across
+    // a long session, reintroducing the exact class of leak this fix
+    // closes, just one layer up).
+    for (const [goalId, timer] of timers) {
+      if (!(goalId in goalPills)) {
+        clearTimeout(timer)
+        timers.delete(goalId)
+      }
+    }
+    setHiddenIds((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const goalId of prev) {
+        if (!(goalId in goalPills)) {
+          next.delete(goalId)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [goalPills, hiddenIds])
+
+  // Unmount: clear every outstanding timer so none fire (and call
+  // setState) after this component is gone.
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
+
+  if (hiddenIds.size === 0) return goalPills
+  const visible: Record<string, GoalStatusFrame> = {}
+  for (const [goalId, frame] of Object.entries(goalPills)) {
+    if (!hiddenIds.has(goalId)) visible[goalId] = frame
+  }
+  return visible
+}
+
 // ── GoalPillTray — bottom-right floating tray ─────────────────────────────────
 
 export function GoalPillTray() {
   const goalPills = useChatStore((s) => s.goalPills ?? {})
   const verdicts = useJudgeActivityStore((s) => s.verdicts)
+  const visiblePills = useVisibleGoalPills(goalPills)
 
-  const entries = Object.entries(goalPills)
+  const entries = Object.entries(visiblePills)
   if (entries.length === 0) return null
 
   // Find the latest goal-scoped verdict for correlation in the expanded view.

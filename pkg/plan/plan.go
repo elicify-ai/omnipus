@@ -15,6 +15,7 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -91,6 +92,44 @@ func IsValidState(s State) bool { return validStates[s] }
 // Plan freezes BOTH done and failed — a failed plan is never retried (F1 r2
 // of the spec reconciliation); the operator authors a fresh plan instead.
 func IsTerminal(s State) bool { return s == StateDone || s == StateFailed }
+
+// PermitsMemberDispatch reports whether p may currently have a `next` member
+// task dispatched for autonomous execution (S1 UAT fix "PRIYA-GATE-never-
+// executed"/"PRIYA-D8-race", plus its PAUSED-state follow-up).
+//
+// State alone is NOT sufficient: PausedReason is a same-State side-flag —
+// pausing a plan does NOT move it out of StateRunning (see PausedReason's own
+// doc comment; plan_engine.go's processPlan checks `p.PausedReason != ""`
+// completely independently of p.State, per FR-065: "a paused plan neither
+// dispatches nor judges"). A predicate keyed on State alone (the shape this
+// method replaces — a bare map[State]bool living in pkg/agent) would permit
+// dispatch of a paused-but-still-`running` plan, directly contradicting
+// FR-065 in the very code meant to enforce the control. Hosting the check
+// here, on the entity itself, means every caller sees BOTH fields together
+// and this class of bug cannot recur by keying on one of them.
+//
+// A nil p (unresolved/lookup-failed) permits nothing — callers that cannot
+// resolve the plan at all must fail closed exactly as they would for a
+// resolved plan sitting in a non-dispatchable state.
+//
+// Deliberately no `default` case: .golangci.yaml sets
+// exhaustive.default-signifies-exhaustive: true, so a default clause would
+// silently stop the exhaustive linter from ever catching a future sixth
+// State value added to the closed 5-value enum above (see State's own doc).
+// Every current value is named explicitly so a new one fails the BUILD, not
+// silently falls through here to a possibly-wrong answer.
+func (p *Plan) PermitsMemberDispatch() bool {
+	if p == nil || p.PausedReason != "" {
+		return false
+	}
+	switch p.State {
+	case StateApproved, StateRunning:
+		return true
+	case StateDraft, StateDone, StateFailed:
+		return false
+	}
+	return false
+}
 
 // legalPlanTransitions is the canonical state transition matrix (spec Part A
 // "State machine" table). Unlike task.Status's permissive-except-two-
@@ -387,6 +426,15 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 // touch the filesystem. Returns a user-facing error (wrapping ErrValidation)
 // on invalid input.
 func (p *Plan) normalize() error {
+	// Trim before validating (S2 UAT finding B sibling: the same
+	// untrimmed-`== ""` pattern that let a whitespace-only title through also
+	// existed here; mirrors task.Task.normalize's identical fix). A
+	// whitespace-only title (" \t ") is not user-facing content — reject it as
+	// empty rather than persisting a blank-looking, unfindable plan chip; a
+	// legitimate title's incidental leading/trailing whitespace is silently
+	// normalized rather than rejected. This runs for every Store.Create
+	// caller (REST, plan engine, agent tools), not just the REST handler.
+	p.Title = strings.TrimSpace(p.Title)
 	if p.Title == "" {
 		return verr("title is required")
 	}

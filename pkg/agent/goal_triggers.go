@@ -383,7 +383,13 @@ func (al *AgentLoop) runGoalAdjudication(
 	al.writeGoalVerdictTranscript(store, sessionID, verdict)
 
 	if verdict != nil && verdict.Met {
-		al.clearGoal(sessionID, store, "condition met")
+		// Use the constant, not a bare literal. clearGoal switches on this note
+		// to decide the terminal pill state, so a literal here means editing
+		// goalClearNoteMet would silently stop matching and reclassify a MET
+		// goal as `failed` — the exact drift the constant was introduced to
+		// prevent. (Its doc comment claimed both call sites were converted;
+		// this one was missed.)
+		al.clearGoal(sessionID, store, goalClearNoteMet)
 		return true
 	}
 

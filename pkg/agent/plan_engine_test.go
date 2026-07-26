@@ -89,6 +89,16 @@ func (f *fakePlanDispatcher) ClearEvidenceGateStreak(taskID string) {
 	f.clearedStreaks = append(f.clearedStreaks, taskID)
 }
 
+// executeTaskPlanVerified satisfies planTaskDispatcher's bypass method (S1
+// plan-gate follow-up, task_executor.go's requirePlanExecuting). This fake
+// has no plan-gate logic of its own to bypass — every test in this file that
+// exercises dispatchReadyMembers via fakePlanDispatcher is testing the plan
+// ENGINE's own decisions, not TaskExecutor's gate — so this is a plain alias
+// for ExecuteTask, recorded identically in f.calls.
+func (f *fakePlanDispatcher) executeTaskPlanVerified(ctx context.Context, taskID string) error {
+	return f.ExecuteTask(ctx, taskID)
+}
+
 func (f *fakePlanDispatcher) callList() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -969,5 +979,112 @@ func TestPlanEngine_BudgetExhausted_FailsPlan_M1(t *testing.T) {
 	got2, _ := h2.plans.Get("p2")
 	if got2.State == plan.StateFailed {
 		t.Fatalf("unbounded budget must NOT fail the plan, got failed (%s)", got2.FailedReason)
+	}
+}
+
+// --- Standalone blocked-task self-heal (regression, code review on bc66345f) ---
+
+// TestPlanEngine_Tick_PromotesStandaloneBlockedTaskWhenDepsAllDone proves the
+// REGRESSION 1 fix: bc66345f's blocked-derivation fix turned `blocked` into
+// an event-triggered latch (recomputeBlockedStateLocked only runs inside
+// Create/updateLocked/RestartReset/AddDependency/SpawnReset), and only PLAN
+// members got a per-tick defensive re-check (promoteReadyMembers, scoped by
+// PlanID). A STANDALONE task's dependent left `blocked` by a lost cascade
+// event (e.g. a crash between the blocker's `done` write and
+// AdvanceBlockedDependents) had no self-heal at all: it is invisible to
+// CheckQueuedTasks' task.Filter{Status: task.StatusNext}, and the store
+// rejects a client PATCH back to `next` (ErrBlockedNotSettable) — permanently
+// stuck. This test fails before the promoteReadyStandaloneTasks fix (Tick
+// never re-examines a blocked standalone task) and passes after it.
+func TestPlanEngine_Tick_PromotesStandaloneBlockedTaskWhenDepsAllDone(t *testing.T) {
+	h := newTestPlanEngine(t)
+
+	dep := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "dependency", WorkspaceID: "ws", Status: task.StatusNext,
+	})
+	dependent := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "dependent", WorkspaceID: "ws",
+		Status: task.StatusNext, BlockedBy: []string{dep.ID},
+	})
+	// Create-time recompute (S2 UAT finding A) must already have latched this
+	// to `blocked`, since dep is not yet done.
+	setupGot, err := h.tasks.Get(dependent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setupGot.Status != task.StatusBlocked {
+		t.Fatalf("setup: dependent status = %q, want blocked (unmet dep at create time)", setupGot.Status)
+	}
+
+	// Complete the blocker via a plain Update — deliberately NOT calling
+	// AdvanceBlockedDependents, simulating the lost-cascade event this
+	// regression describes.
+	if _, doneErr := h.tasks.Update(dep.ID, task.Patch{Status: ptrStatus(task.StatusDone)}); doneErr != nil {
+		t.Fatal(doneErr)
+	}
+
+	// Confirm the lost event really did leave the dependent stuck, before any
+	// re-check runs.
+	stillBlocked, err := h.tasks.Get(dependent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillBlocked.Status != task.StatusBlocked {
+		t.Fatalf("setup: dependent status = %q, want still blocked before any re-check runs", stillBlocked.Status)
+	}
+
+	h.pe.Tick(context.Background())
+
+	final, err := h.tasks.Get(dependent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != task.StatusNext {
+		t.Fatalf("dependent status after Tick = %q, want next (standalone blocked task must self-heal every tick)", final.Status)
+	}
+}
+
+// TestPlanEngine_PromoteReadyStandaloneTasks_SkipsPlanMembers is the negative
+// control: a task with a non-empty PlanID must NEVER be touched by the
+// standalone sweep, even when its own plan is not currently `running` (so
+// promoteReadyMembers' own per-running-plan pass in processPlan cannot have
+// reached it either) — plan members are exclusively promoteReadyMembers'
+// concern, and this proves the standalone sweep does not race or
+// double-promote them.
+func TestPlanEngine_PromoteReadyStandaloneTasks_SkipsPlanMembers(t *testing.T) {
+	h := newTestPlanEngine(t)
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "p1", Title: "Plan 1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateDraft,
+	})
+	dep := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "dependency", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusNext,
+	})
+	member := mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member", WorkspaceID: "ws", PlanID: "p1",
+		Status: task.StatusNext, BlockedBy: []string{dep.ID},
+	})
+	setupGot, err := h.tasks.Get(member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setupGot.Status != task.StatusBlocked {
+		t.Fatalf("setup: member status = %q, want blocked (unmet dep at create time)", setupGot.Status)
+	}
+
+	if _, doneErr := h.tasks.Update(dep.ID, task.Patch{Status: ptrStatus(task.StatusDone)}); doneErr != nil {
+		t.Fatal(doneErr)
+	}
+
+	// Call the standalone sweep directly — the plan is `draft`, so Tick's own
+	// per-plan loop (State==approved/running only) would never process it
+	// either, isolating this assertion to the sweep's own PlanID guard.
+	h.pe.promoteReadyStandaloneTasks()
+
+	got, err := h.tasks.Get(member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusBlocked {
+		t.Fatalf("member status = %q, want still blocked (a PlanID-bearing task must be skipped by the standalone sweep)", got.Status)
 	}
 }

@@ -1,11 +1,17 @@
 // GoalIndicator.test.tsx — ADR-049 D6/US-12/FR-094/SD-C9.
 //
 // Pure presentational component, driven entirely by props (goalStatus/
-// loopStatus). Covers the ADR-053 8-value pill enum (queued/active/
-// waiting_on_user/judge_unavailable/re-planning/judging/done/failed) —
-// superseding the original 4-value active/paused_judge_unavailable/
-// brake_fired/cleared set, no back-compat. There is no `cleared` literal
-// any more; "renders nothing" is instead covered by `goalStatus === null`.
+// loopStatus). Covers the ADR-053 9-value pill enum (queued/active/
+// waiting_on_user/judge_unavailable/re-planning/judging/done/failed/
+// cleared) — superseding the original 4-value active/
+// paused_judge_unavailable/brake_fired/cleared set, no back-compat.
+// CORRECTED (regression review): this comment previously claimed "there is
+// no `cleared` literal any more" — false as of the UAT S3 fix, which
+// re-added `cleared` as a 9th value specifically so a user-initiated
+// `/goal clear` renders as a deliberate stop, not a failure (see the
+// `cleared` describe block below). "Renders nothing" is still covered by
+// `goalStatus === null` — `cleared` is a normal non-null frame like any
+// other terminal state.
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -108,6 +114,34 @@ describe('GoalIndicator — failed state', () => {
   it('shows "failed"', () => {
     render(<GoalIndicator goalStatus={makeGoal({ state: 'failed' })} />)
     expect(screen.getByTestId('goal-indicator-failed')).toHaveTextContent('failed')
+  })
+})
+
+describe('GoalIndicator — cleared state', () => {
+  it('shows "cleared"', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'cleared' })} />)
+    expect(screen.getByTestId('goal-indicator-cleared')).toHaveTextContent('cleared')
+  })
+
+  // Regression guard (mutation-testing finding): a mutation that rendered
+  // `cleared` identically to `failed` (same testid `goal-indicator-failed`,
+  // same error/red tone, text "failed") passed every other test here,
+  // because nothing asserted `cleared`'s own testid/tone/text existed at
+  // all. `cleared` means the user deliberately stopped the goal — it MUST
+  // NOT read as a failure. This test fails under that exact mutation.
+  it('renders cleared DISTINCTLY from failed — different testid, different text, not the error/red tone', () => {
+    const { unmount } = render(<GoalIndicator goalStatus={makeGoal({ state: 'cleared' })} />)
+    const clearedLine = screen.getByTestId('goal-indicator-cleared')
+    expect(screen.queryByTestId('goal-indicator-failed')).not.toBeInTheDocument()
+    expect(clearedLine).toHaveTextContent('cleared')
+    expect(clearedLine).not.toHaveTextContent('failed')
+    expect(clearedLine.className).toContain('color-muted')
+    expect(clearedLine.className).not.toContain('color-error')
+    unmount()
+
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'failed' })} />)
+    const failedLine = screen.getByTestId('goal-indicator-failed')
+    expect(failedLine.className).toContain('color-error')
   })
 })
 
