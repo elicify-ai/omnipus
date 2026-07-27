@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,9 +239,22 @@ func TestHandleWorkspaceDelete_MediaCascadeSuccess_StillReturns204(t *testing.T)
 // wsDir was still (partially) on disk. Forces a genuine RemoveAll failure
 // via a read-only subdirectory (no write permission means the file inside
 // it cannot be unlinked) rather than mocking os.RemoveAll, so this proves
-// the real call site's behavior. Runs as a non-root user (uid 1000) in this
-// environment, so the permission denial is real, not a no-op root bypass.
+// the real call site's behavior against a genuine kernel-level failure.
+//
+// Skipped when running as root: root bypasses DAC permission checks, so the
+// chmod produces no error at all, RemoveAll succeeds, and the handler
+// correctly returns 204 — the test would fail for a reason unrelated to the
+// behavior it guards. That is exactly what happened in CI, which runs as root,
+// while it passed locally as uid 1000. The deterministic, uid-independent
+// coverage lives in TestHandleWorkspaceDelete_DirRemoveFailure_Injected below;
+// this variant is retained because it is the only one that proves the real
+// os.RemoveAll call site fails the way production would.
 func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip(
+			"root bypasses directory permissions; chmod cannot force a RemoveAll failure — see the _Injected variant",
+		)
+	}
 	api, auditDir := newTestAPIWithAuditor(t)
 	id := createWorkspaceViaAPI(t, api, "DirRemoveFailure", "")
 
@@ -278,6 +292,56 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(t, http.StatusNotFound, getW.Code,
 		"workspace record must be confirmed gone via GET despite the directory-removal 500")
+
+	events := readAuditEventsForTest(t, auditDir)
+	var deleteEvent map[string]any
+	for _, e := range events {
+		if e["event"] == "workspace.delete" {
+			deleteEvent = e
+			break
+		}
+	}
+	require.NotNil(t, deleteEvent)
+	deleteDetails, ok := deleteEvent["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, deleteDetails["media_cascade_failed"],
+		"this failure is directory-removal, not a media cascade failure")
+	assert.Equal(t, true, deleteDetails["dir_remove_failed"],
+		"audit details must flag the directory-removal failure")
+}
+
+// TestHandleWorkspaceDelete_DirRemoveFailure_Injected is the uid-independent
+// half of the FIX 3 coverage. The chmod-based test above cannot run as root
+// (root ignores directory permissions), which left CI — running as root — with
+// no coverage of this path at all. Injecting the failure through the
+// removeAllFn seam reproduces the same handler branch deterministically for any
+// uid, so the 500-not-204 guarantee is actually enforced by CI.
+func TestHandleWorkspaceDelete_DirRemoveFailure_Injected(t *testing.T) {
+	api, auditDir := newTestAPIWithAuditor(t)
+	id := createWorkspaceViaAPI(t, api, "DirRemoveInjected", "")
+
+	sentinel := errors.New("injected RemoveAll failure")
+	orig := removeAllFn
+	removeAllFn = func(string) error { return sentinel }
+	t.Cleanup(func() { removeAllFn = orig })
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r = r.WithContext(contextWithUser(r.Context(), "carol"))
+	w := httptest.NewRecorder()
+	api.handleWorkspaceDelete(w, r, id)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"a RemoveAll failure must surface as 500, not a silent 204; body: %s", w.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.NotEmpty(t, errResp.Error)
+
+	// The workspace record delete is independent of the directory wipe.
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	api.handleWorkspaceGet(getW, getR, id)
+	assert.Equal(t, http.StatusNotFound, getW.Code,
+		"workspace record must still be gone despite the directory-removal 500")
 
 	events := readAuditEventsForTest(t, auditDir)
 	var deleteEvent map[string]any

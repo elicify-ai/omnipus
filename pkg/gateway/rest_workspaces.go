@@ -37,6 +37,15 @@ import (
 // does not exist on disk. Callers use errors.Is(err, errWorkspaceNotFound).
 var errWorkspaceNotFound = errors.New("workspace not found")
 
+// removeAllFn indirects os.RemoveAll so tests can inject a deterministic
+// failure. A chmod-based test (make the parent dir r-x so its contents cannot
+// be unlinked) only produces EACCES for an unprivileged uid — CI runs as root,
+// which bypasses DAC permission checks entirely, so RemoveAll there succeeds and
+// the handler correctly returns 204. That made the delete-failure regression
+// test pass locally (uid 1000) and fail in CI. Mirrors the same seam in
+// pkg/session/unified.go.
+var removeAllFn = os.RemoveAll
+
 // defaultWorkspaceSeedMu serializes concurrent calls to ensureDefaultWorkspace
 // (e.g. from two racing gateway boots) so exactly one default workspace is created.
 var defaultWorkspaceSeedMu sync.Mutex
@@ -1328,7 +1337,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// unaffected: this only tracks whether the directory wipe itself, run
 	// unconditionally regardless of that distinction, actually succeeded.
 	dirRemoveFailed := false
-	if err := os.RemoveAll(wsDir); err != nil {
+	if err := removeAllFn(wsDir); err != nil {
 		dirRemoveFailed = true
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
 	}
