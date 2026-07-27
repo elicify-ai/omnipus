@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -351,5 +352,104 @@ func TestCaptureVideoCapability_RequiresSharedContextEnabled(t *testing.T) {
 			"CaptureVideoCapability = Capable=false after enabling shared-context capture, want true (reason=%q)",
 			got.Reason,
 		)
+	}
+}
+
+// TestVideoCapability_CachedExecPathFallback proves the fix for the
+// download-vs-launch mismatch (BrowserManager.VideoCapability, manager.go):
+// exec_resolver.go's resolve() checks $PATH for a system google-chrome/
+// chromium BEFORE falling back to the managed Chrome-for-Testing download,
+// so on a host with a system Chrome on $PATH the managed install root
+// ClassifyVideoCapability inspects is NEVER populated. Without reading
+// execPathCaches' already-resolved path, VideoCapability would permanently
+// misclassify a perfectly video-capable host as not_capable. Table-driven,
+// mirroring TestClassifyVideoCapabilityWithExec_Table's style.
+//
+// Regression proof: the first scenario below ("resolved system full Chrome
+// on $PATH") FAILS against the pre-fix VideoCapability (which reads only
+// cfg.ExecPath and ignores the execPathCaches success cache entirely) and
+// PASSES once VideoCapability falls back to m.execPath.cachedPath().
+func TestVideoCapability_CachedExecPathFallback(t *testing.T) {
+	if _, err := cftPlatform(); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	managedFullChrome := filepath.Join(string(filepath.Separator), "opt", "omnipus-chromium",
+		"131.0.6778.108", "chrome-linux64", "chrome")
+	managedHeadlessShell := filepath.Join(string(filepath.Separator), "opt", "omnipus-chromium",
+		"131.0.6778.108", "chrome-headless-shell-linux64", "chrome-headless-shell")
+
+	type scenario struct {
+		name            string
+		goos            string
+		cfgExecPath     string
+		cachedExecPath  string
+		wantCapable     bool
+		wantReasonMatch string // substring required in Reason when !wantCapable; "" to skip the check
+	}
+
+	scenarios := []scenario{
+		{
+			name:           "resolved system full Chrome on $PATH -> capable",
+			goos:           "linux",
+			cachedExecPath: "/usr/bin/google-chrome",
+			wantCapable:    true,
+		},
+		{
+			name:           "resolved managed full Chrome build -> capable",
+			goos:           "linux",
+			cachedExecPath: managedFullChrome,
+			wantCapable:    true,
+		},
+		{
+			name:            "resolved managed headless-shell build -> not capable",
+			goos:            "linux",
+			cachedExecPath:  managedHeadlessShell,
+			wantCapable:     false,
+			wantReasonMatch: "headless-shell",
+		},
+		{
+			name:        "no cached path and empty install root -> not capable (unchanged regression guard)",
+			goos:        "linux",
+			wantCapable: false,
+		},
+		{
+			name:            "explicit cfg.ExecPath still takes priority over the cached path",
+			goos:            "linux",
+			cfgExecPath:     managedHeadlessShell,
+			cachedExecPath:  "/usr/bin/google-chrome",
+			wantCapable:     false,
+			wantReasonMatch: "headless-shell",
+		},
+		{
+			name:           "non-linux via goosForCapability seam -> not capable regardless of cached path",
+			goos:           "darwin",
+			cachedExecPath: "/usr/bin/google-chrome",
+			wantCapable:    false,
+		},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			withCapabilitySeams(t, sc.goos)
+			mgr := newCapabilityTestManager(t)
+			mgr.cfg.ExecPath = sc.cfgExecPath
+			mgr.execPath.success = sc.cachedExecPath
+
+			got := mgr.VideoCapability()
+			if got.Capable != sc.wantCapable {
+				t.Fatalf("Capable = %v, want %v (reason: %q)", got.Capable, sc.wantCapable, got.Reason)
+			}
+			if !got.Capable {
+				if got.Reason == "" {
+					t.Fatalf("expected a non-empty operator-facing Reason when not capable (O-3)")
+				}
+				if sc.wantReasonMatch != "" && !strings.Contains(got.Reason, sc.wantReasonMatch) {
+					t.Fatalf("Reason = %q, want it to contain %q", got.Reason, sc.wantReasonMatch)
+				}
+			} else if got.Reason != "" {
+				t.Fatalf("Reason must be empty when Capable=true, got %q", got.Reason)
+			}
+		})
 	}
 }

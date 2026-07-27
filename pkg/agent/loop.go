@@ -1791,6 +1791,16 @@ func registerSharedTools(
 				if cfg.Tools.Browser.ExecPath != "" {
 					browserCfg.ExecPath = cfg.Tools.Browser.ExecPath
 				}
+				// ADR-052 D2/M1: PreferPackaged and TrustPathChrome are
+				// ALWAYS copied (bool fields, no "unset vs explicit false"
+				// distinction needed — the default-config zero value IS
+				// the security-hardened default). Without these the runtime
+				// resolver stays on its own defaults and the operator's
+				// config flips have no effect (SPEC-002). Both are wired
+				// every reload, not just at first-seed, so a Settings save
+				// takes effect without a gateway restart.
+				browserCfg.PreferPackaged = cfg.Tools.Browser.PreferPackaged
+				browserCfg.TrustPathChrome = cfg.Tools.Browser.TrustPathChrome
 				// Headless is intentionally NOT copied from
 				// cfg.Tools.Browser.Headless here: browser.DefaultConfig()
 				// always sets Headless=true, and a bare bool config field

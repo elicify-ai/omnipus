@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ai.omnipus.gateway.plist — launchd service template (ADR-052 Phase 3 / M4 macOS).
+
+  STATUS: TEMPLATE — not installable as-is. The @VARIABLES@ are substituted by
+  the macOS installer/packaging step (Phase 3 AC-7). This plist is a config
+  artifact only; it CANNOT be validated on the Linux devpod (no launchd). Real
+  install/test happens on a macOS runner (see deploy/macos/README.md).
+
+  Per ADR-052 D4 (macOS row): launchd plist; master.key 0600 is enforced by the
+  ADR-004 boot contract, NOT by this plist — the key file's mode is owned by the
+  gateway process at creation time.
+
+  Install (on macOS):
+    PLIST=~/Library/LaunchAgents/ai.omnipus.gateway.plist
+    install -m 0644 @PREFIX@/share/omnipus/launchd/ai.omnipus.gateway.plist "$PLIST"
+    launchctl bootstrap gui/$(id -u) "$PLIST"
+    launchctl enable  service-target/$(id -u)/ai.omnipus.gateway
+    launchctl kickstart -k service-target/$(id -u)/ai.omnipus.gateway
+
+  Uninstall:
+    launchctl bootout gui/$(id -u)/ai.omnipus.gateway
+    rm -f "$PLIST"
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.omnipus.gateway</string>
+
+    <!-- The gateway binary. With C3 option (ii) the signed .app's inner
+         executable; @PREFIX@ defaults to /usr/local. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PREFIX@/Applications/Omnipus.app/Contents/MacOS/omnipus</string>
+        <string>gateway</string>
+    </array>
+
+    <!-- master.key + config + browser profile live under $OMNIPUS_HOME.
+         User-scoped (no DynamicUser equivalent on macOS — the ADR-004 boot
+         contract needs a stable owner for master.key). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OMNIPUS_HOME</key>
+        <string>@OMNIPUS_HOME@</string>
+        <!-- Bind loopback only by default; operator edits to expose. -->
+        <key>OMNIPUS_GATEWAY_HOST</key>
+        <string>127.0.0.1</string>
+        <key>OMNIPUS_GATEWAY_PORT</key>
+        <string>5000</string>
+    </dict>
+
+    <!-- Run at login, keep alive (restart on exit). -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Per ADR-004: master.key must be 0600; enforce a sane umask for any
+         files the gateway creates at runtime. -->
+    <key>Umask</key>
+    <integer>63</integer> <!-- 0077 octal -->
+
+    <!-- Logging → files (launchd does not capture stdout/stderr to journald
+         the way systemd does; write to OMNIPUS_HOME/logs). -->
+    <key>StandardOutPath</key>
+    <string>@OMNIPUS_HOME@/logs/gateway.launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>@OMNIPUS_HOME@/logs/gateway.launchd.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

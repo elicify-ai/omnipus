@@ -174,7 +174,8 @@ func managedExecAllocatorOpts(cfg BrowserConfig) managedChromeCmdline {
 		args = append(args, "--headless", "--hide-scrollbars")
 	}
 	if cfg.ExtensionID != "" {
-		args = append(args,
+		args = append(
+			args,
 			"--allowlisted-extension-id="+cfg.ExtensionID,
 			"--enable-unsafe-extension-debugging",
 		)
@@ -268,11 +269,38 @@ type execPathCaches struct {
 	failUntil time.Time
 }
 
-// resolve returns the path to the Chromium binary chromedp should launch. See
-// BrowserManager.resolveExecPath's (manager.go) doc comment for the full
-// resolution order + rationale — this is that exact logic, factored onto a
-// reusable struct. Safe to call without the caller's bookkeeping lock held; the
-// only state it touches is this struct's own mu-guarded caches.
+// resolve returns the path to the Chromium binary chromedp should launch.
+// Full resolution order (ADR-052 D2/M1 — Phase 1, security review applied):
+//
+//  1. operator exec_path override            — explicit, trusted; always wins
+//  2. system Chrome on $PATH                 — operator's deliberate choice;
+//     gated by cfg.TrustPathChrome (SEC-ADR052-002 — opt-in to trust a
+//     non-package binary, default false). When TrustPathChrome is false
+//     (the default), a $PATH resolution is recorded at WARN-BROWSER-007
+//     and the resolver falls through to step 3 (package Chrome). When
+//     TrustPathChrome is true, $PATH wins above the package Chrome (the
+//     legacy M1 "operator autonomy" path, explicitly opted into).
+//  3. package-managed Chrome                 — NEW (ADR-052 D2): the
+//     pinned full Chrome-for-Testing that ships in the per-OS package, at
+//     <os.Executable()>/../chromium/. Verified against chrome.sha256 with
+//     constant-time compare (SEC-ADR052-001 fail-closed on missing/
+//     mismatched/malformed manifest). Outranks $PATH when cfg.PreferPackaged
+//     is true (M1).
+//  4. managed download (first-use)           — fallback for bare-binary /
+//     no-package installs.
+//  5. remote CDP                             — handled elsewhere (step 1's
+//     ExecPath is the explicit hook).
+//
+// SEC-ADR052-005/006: step 3 fails closed on missing chrome.sha256, a
+// symlinked binary/manifest, or a world-writable package root — any of
+// those makes the package Chrome unverifiable and the resolver falls
+// through to step 4.
+//
+// See BrowserManager.resolveExecPath's (manager.go) doc comment for the
+// legacy rationale; this is that exact logic, factored onto a reusable
+// struct plus the new step 3. Safe to call without the caller's bookkeeping
+// lock held; the only state it touches is this struct's own mu-guarded
+// caches.
 func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string, error) {
 	if cfg.ExecPath != "" {
 		info, err := os.Stat(cfg.ExecPath)
@@ -281,13 +309,15 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 		}
 		if info.IsDir() {
 			return "", fmt.Errorf(
-				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath)
+				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath,
+			)
 		}
 		// Exec-bit check is POSIX-only: on Windows os.FileMode does not carry
 		// Unix execute bits, so this guard would wrongly reject every .exe.
 		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			return "", fmt.Errorf(
-				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath)
+				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath,
+			)
 		}
 		return cfg.ExecPath, nil
 	}
@@ -324,6 +354,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// Operators can force the managed install path (skipping the $PATH lookup)
 	// by setting OMNIPUS_BROWSER_FORCE_MANAGED=1.
 	forceManaged := os.Getenv("OMNIPUS_BROWSER_FORCE_MANAGED") == "1"
+	pathResolved := ""
 	if !forceManaged {
 		for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
 			path, err := exec.LookPath(name)
@@ -338,10 +369,83 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 					})
 				continue
 			}
-			e.cacheSuccess(path)
-			return path, nil
+			pathResolved = path
+			break
 		}
 	}
+
+	// SEC-ADR052-002: gate the $PATH resolution by TrustPathChrome (default
+	// false — the security-hardened default). A false-default + unverified
+	// $PATH binary is the "trusted RCE-engine origin" the security review
+	// flagged: a multi-tenant developer box, a CI runner, or a compromised
+	// developer machine can plant a google-chrome script earlier on $PATH
+	// and the runtime would execute it before the verified package Chrome
+	// even gets considered. When TrustPathChrome is false, log WARN-BROWSER-
+	// 007 and discard the $PATH resolution — fall through to the verified
+	// package Chrome. Operators who actually want a custom Chrome set
+	// trust_path_chrome: true (or set cfg.ExecPath, which always wins).
+	if pathResolved != "" && !cfg.TrustPathChrome {
+		logger.WarnCF(
+			"browser",
+			"WARN-BROWSER-007: system Chrome on $PATH ignored — operator must set tools.browser.trust_path_chrome=true to use a non-package Chrome",
+			map[string]any{
+				"path_resolved": pathResolved,
+				"policy":        "trust_path_chrome=false",
+			},
+		)
+		pathResolved = ""
+	}
+
+	// Step 3 (ADR-052 D2 — package Chrome): inspect the runtime-computed
+	// package root. When cfg.PreferPackaged is true the package Chrome
+	// outranks $PATH (regardless of TrustPathChrome). When PreferPackaged
+	// is false but $PATH either missed or was discarded above, the package
+	// Chrome is the floor.
+	if pathResolved == "" || cfg.PreferPackaged {
+		pkgRoot, pkgStatus := packageChromeRootProbe()
+		if pkgStatus == ProbeUsable && pkgRoot != "" {
+			pkgBin, pkgSHA := findPackageChrome(pkgRoot)
+			if pkgBin != "" {
+				// SEC-ADR052-001 + SEC-ADR052-004: chrome.sha256 is REQUIRED
+				// for the package Chrome path (findPackageChrome refused
+				// the binary when the manifest is missing). Verify with
+				// the hardened parser + constant-time compare.
+				if verr := cachedVerifyChromeSHA256(pkgBin, pkgSHA); verr != nil {
+					logger.WarnCF("browser",
+						"package Chrome failed integrity verification — falling through to managed download",
+						map[string]any{
+							"binary":     pkgBin,
+							"sha256_man": pkgSHA,
+							"error":      verr.Error(),
+							"reason":     "WARN-CFTSHA-001",
+						})
+					// fall through to step 4
+				} else {
+					logger.InfoCF("browser", "using package-managed Chrome (ADR-052 D2 step 3)",
+						map[string]any{
+							"binary":          pkgBin,
+							"prefer_packaged": cfg.PreferPackaged,
+							"path_was_set":    pathResolved != "",
+						})
+					e.cacheSuccess(pkgBin)
+					return pkgBin, nil
+				}
+			}
+		}
+	}
+
+	// If step 2 found a system Chrome on $PATH and step 3 didn't override it
+	// (either because the package root was empty, or the package binary was
+	// absent, or PreferPackaged was false), return the PATH result now.
+	if pathResolved != "" {
+		e.cacheSuccess(pathResolved)
+		return pathResolved, nil
+	}
+
+	// Step 4 — managed download (first-use): bare-binary / no-package
+	// installs land here. The installer-side findInstalledBuild also runs
+	// chromeintegrity.VerifyChromeSHA256 when chrome.sha256 is present (ADR-052 M2), so the
+	// downloaded build's integrity is verified before it can ever launch.
 	installRoot := InstallRootForProfileDir(cfg.ProfileDir)
 	managedPath, err := EnsureChromium(ctx, installRoot)
 	if err != nil {
@@ -378,4 +482,23 @@ func (e *execPathCaches) cacheFailure(err error) {
 			"ttl_seconds": int64(execPathNegativeCacheTTL.Seconds()),
 			"error":       err.Error(),
 		})
+}
+
+// invalidate clears both resolution caches so the next resolution observes a
+// changed runtime policy immediately. Guarded by the cache mutex.
+func (e *execPathCaches) invalidate() {
+	e.mu.Lock()
+	e.success = ""
+	e.failErr = nil
+	e.failUntil = time.Time{}
+	e.mu.Unlock()
+}
+
+// cachedPath returns the last successfully-resolved Chromium binary path, or
+// "" if nothing has been resolved yet. It is a non-blocking snapshot and does
+// not probe the filesystem or network.
+func (e *execPathCaches) cachedPath() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.success
 }

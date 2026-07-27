@@ -647,7 +647,8 @@ func (lv *LiveView) attach(
 	// consts' doc) rendered every target regardless, which is why this was
 	// never needed before. Measured on real Chrome 150: 0 frames in 4s on an
 	// animating page without bringToFront; ~60fps with it.
-	err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+	err := lv.runCDP(
+		tabCtx, lv.mgr.PageTimeout(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.BringToFront().Do(ctx)
 		}),
@@ -938,7 +939,8 @@ func (lv *LiveView) rebindScreencastOnce(newCtx context.Context) (context.Contex
 	// --headless=new requirement as attach() — a newly-activated tab is
 	// hidden to the compositor until brought to front, and a hidden target
 	// produces zero screencast frames (see attach()'s comment).
-	err := lv.runCDP(newCtx, lv.mgr.PageTimeout(),
+	err := lv.runCDP(
+		newCtx, lv.mgr.PageTimeout(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.BringToFront().Do(ctx)
 		}),
@@ -1341,7 +1343,8 @@ func (lv *LiveView) resumeScreencast() bool {
 	})
 	go lv.runAckWorker(ackCtx, listenCtx)
 
-	err = lv.runCDP(tabCtx, lv.mgr.PageTimeout(),
+	err = lv.runCDP(
+		tabCtx, lv.mgr.PageTimeout(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			return page.BringToFront().Do(ctx)
 		}),

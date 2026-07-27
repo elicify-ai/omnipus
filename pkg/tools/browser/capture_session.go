@@ -322,7 +322,8 @@ func defaultEncoderStarter(
 	encoderURL := "chrome-extension://" + captureext.ExtensionID + "/encoder.html"
 
 	runCtx, cancel := context.WithTimeout(tab.ctx, captureStartTimeout)
-	runErr := chromedp.Run(runCtx,
+	runErr := chromedp.Run(
+		runCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)
 			return err

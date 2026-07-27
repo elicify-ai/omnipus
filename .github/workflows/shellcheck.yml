@@ -1,0 +1,75 @@
+# Shell script lint + bats test gate.
+#
+# ADR-052 Phase 1 review (finding TEST-001) added bats coverage for
+# scripts/install.sh and scripts/cft-bundle.sh. This workflow enforces
+# the lint and test contract on every PR + push to main, so a regression
+# to either script (POSIX violation, broken chrome bundling, install
+# abort path) is caught in CI rather than at release time.
+#
+# Two jobs:
+#   1. shellcheck — lints both scripts with `shellcheck -s sh`. install.sh
+#      is POSIX sh; cft-bundle.sh is bash. Both must exit 0.
+#   2. bats — runs both bats test suites. bats is installed via apt on
+#      ubuntu-latest. The suites use only bash/jq/sha256sum/dpkg stubs
+#      that the test harness scrubs in and out; no real network.
+name: Shellcheck + bats
+
+on:
+  pull_request: { }
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Lint install.sh (POSIX sh)
+        # install.sh is `#!/bin/sh` — POSIX-only. shellcheck must exit 0.
+        # We pass `-s sh` to force the sh dialect (the shebang on some
+        # CI images might be dash; explicit is safer).
+        run: shellcheck -s sh scripts/install.sh
+
+      - name: Lint cft-bundle.sh (bash)
+        # cft-bundle.sh is `#!/bin/bash` — bash dialect.
+        run: shellcheck -s bash scripts/cft-bundle.sh
+
+      - name: POSIX syntax check (dash + sh -n)
+        # Belt + suspenders: shellcheck misses some POSIX dialect issues
+        # (mawk-specific `continue` in if-blocks, non-POSIX `[ ... -o ]`),
+        # and `dash -n` is the definitive POSIX-sh parser on Ubuntu.
+        run: |
+          dash -n scripts/install.sh
+          sh -n scripts/install.sh
+
+      - name: Bash syntax check
+        run: bash -n scripts/cft-bundle.sh
+
+  bats:
+    name: bats (install + cft-bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install bats + zip
+        # bats 1.10 is in apt; zip is needed by cft-bundle_test.bats to
+        # build the fixture chrome zip.
+        run: sudo apt-get update && sudo apt-get install -y bats zip jq
+
+      - name: Run install_test.bats
+        run: bats scripts/install_test.bats
+
+      - name: Run cft-bundle_test.bats
+        run: bats scripts/cft-bundle_test.bats

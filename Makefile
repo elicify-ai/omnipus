@@ -1,3 +1,29 @@
+# =============================================================================
+# CANONICAL BUILD PATHS — there are exactly three. Use one of them.
+#
+#   make build          Local / dev / deploy-from-source. THE default.
+#   make release-build  Real release (goreleaser). Normally only CI runs this.
+#   make docker-build   Container image.
+#
+# Do NOT run a bare `go build ./cmd/omnipus/`. It skips this file's LDFLAGS,
+# which means:
+#   - no Version / GitCommit / BuildTime baked in — the binary cannot be
+#     traced back to a commit, and `omnipus doctor` will flag it as
+#     improperly built;
+#   - no `-s -w`, so the binary is ~48 MB LARGER for no benefit
+#     (measured 2026-07-21: 102 MB via make vs 150 MB via bare go build).
+#
+# Build tags are NOT optional. `goolm,stdjson` (GO_BUILD_TAGS below) are
+# required — without them pkg/channels/matrix is excluded and the build dies
+# with a misleading "build constraints exclude all Go files" error. Every
+# target here injects them for you; that is a reason to use the targets.
+#
+# Discretionary tags (append to GO_BUILD_TAGS, none are on by default):
+#   lite       drops WhatsApp native AND WebRTC live-browser video
+#   nogodmode  compiles out the sandbox-off ("god mode") toggle; for hosted
+#   bedrock    compiles in the real AWS Bedrock provider (stub without it)
+# =============================================================================
+
 .PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types spa-embed release-snapshot release-build
 
 # Build variables
@@ -177,31 +203,13 @@ build-lite: generate
 	GOOS=windows GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-windows-amd64.exe ./$(CMD_DIR)
 	@echo "Lite build complete"
 
-## build-linux-arm: Build for Linux ARMv7 (e.g. Raspberry Pi Zero 2 W 32-bit)
-build-linux-arm: generate
-	@echo "Building for linux/arm (GOARM=7)..."
-	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm ./$(CMD_DIR)
-	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm"
-
-## build-linux-arm64: Build for Linux ARM64 (e.g. Raspberry Pi Zero 2 W 64-bit)
-build-linux-arm64: generate
-	@echo "Building for linux/arm64..."
-	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./$(CMD_DIR)
-	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64"
-
-## build-linux-mipsle: Build for Linux MIPS32 LE
-build-linux-mipsle: generate
-	@echo "Building for linux/mipsle (softfloat)..."
-	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build $(GOFLAGS_NO_GOOLM) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle ./$(CMD_DIR)
-	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle)
-	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle"
-
-## build-pi-zero: Build for Raspberry Pi Zero 2 W (32-bit and 64-bit)
-build-pi-zero: build-linux-arm build-linux-arm64
-	@echo "Pi Zero 2 W builds: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm (32-bit), $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 (64-bit)"
+# Single-platform convenience targets (build-linux-arm, build-linux-arm64,
+# build-linux-mipsle, build-pi-zero) were removed 2026-07-21: every platform
+# they produced is already built by `build-all` below, they had zero
+# references anywhere in the repo, CI, or docs, and each extra entry point
+# was one more way for a build to diverge from the canonical one. To build a
+# single platform ad hoc, set GOOS/GOARCH on `build-all`'s recipe line, or
+# just run `make build-all` and take the artifact you need.
 
 ## build-all: Build omnipus for all platforms
 build-all: spa-embed generate

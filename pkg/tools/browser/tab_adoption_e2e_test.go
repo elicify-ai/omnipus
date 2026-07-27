@@ -208,7 +208,8 @@ func TestCloseTab_RealChromium_ClosingTab0KeepsBrowserAndSurvivorAlive(t *testin
 	survivorCtx, err := mgr.Session(defaultSessionID)
 	require.NoError(t, err)
 	var title string
-	require.NoError(t,
+	require.NoError(
+		t,
 		chromedp.Run(survivorCtx, chromedp.Navigate(srv.URL+"/booked"), chromedp.Title(&title)),
 		"the surviving tab must still be able to navigate after tab 0 was closed — the browser must not have died",
 	)

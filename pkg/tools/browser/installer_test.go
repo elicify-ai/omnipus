@@ -577,21 +577,46 @@ func TestInstaller_SelectDownloadBuild_LinuxDefaultsToFullChrome(t *testing.T) {
 	}
 }
 
-// TestInstaller_SelectDownloadBuild_NonLinuxDefaultsToHeadlessShell is the
-// counterpart guard: off linux, live-view video is never available
-// (ClassifyVideoCapability), so selectDownloadBuild must default to the
-// lighter chrome-headless-shell build rather than paying for a full-Chrome
-// download that platform can't use for capture anyway.
-func TestInstaller_SelectDownloadBuild_NonLinuxDefaultsToHeadlessShell(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		t.Skip("this assertion only applies off linux")
+// TestInstaller_SelectDownloadBuild_PerGOOS is the platform-selection guard
+// for selectDownloadBuild. It runs on every platform by injecting each GOOS
+// through the selectDownloadBuildGOOS test seam (mirrors goosForCapability /
+// layoutsGOOS) — the previous version keyed off the real runtime.GOOS and so
+// could not exercise the darwin branch on a linux CI host (and FAILED on a
+// macOS runner, which now also defaults to fullChrome per ADR-052 Phase 3).
+//
+// Expected mapping:
+//   - linux, darwin → fullChromeBuild() (downloadID "chrome") — linux is the
+//     validated tabCapture host; darwin bundles the Google-signed full Chrome
+//     sibling beside the .app (C3 option ii), capture-ready pending the
+//     darwinAudioVerified spike.
+//   - every other GOOS (windows, freebsd, …) → headlessShellBuild()
+//     (downloadID "chrome-headless-shell") — the lighter fallback, since
+//     tabCapture video is never available there.
+func TestInstaller_SelectDownloadBuild_PerGOOS(t *testing.T) {
+	tests := []struct {
+		name         string
+		goos         string
+		wantDownload string
+	}{
+		{"linux full chrome", "linux", cftFullChromeDownloadID},
+		{"darwin full chrome", "darwin", cftFullChromeDownloadID},
+		{"windows headless shell", "windows", cftDownloadID},
+		{"freebsd headless shell", "freebsd", cftDownloadID},
 	}
-	got := selectDownloadBuild()
-	if got.downloadID != cftDownloadID {
-		t.Fatalf(
-			"expected selectDownloadBuild to default to chrome-headless-shell (downloadID %q) off linux, got %q",
-			cftDownloadID,
-			got.downloadID,
-		)
+
+	prev := selectDownloadBuildGOOS
+	t.Cleanup(func() { selectDownloadBuildGOOS = prev })
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			selectDownloadBuildGOOS = tc.goos
+			got := selectDownloadBuild()
+			if got.downloadID != tc.wantDownload {
+				t.Fatalf(
+					"selectDownloadBuild(goos=%q): expected downloadID %q, got %q",
+					tc.goos, tc.wantDownload, got.downloadID,
+				)
+			}
+		})
 	}
 }

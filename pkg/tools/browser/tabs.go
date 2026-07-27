@@ -274,7 +274,8 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		if err := t.mgr.ValidateURL(ctx, finalURL); err != nil {
 			_ = chromedp.Run(tabCtx, chromedp.Navigate("about:blank"))
 			return tools.ErrorResult(fmt.Sprintf(
-				"browser_open_tab: redirect from %s landed on blocked URL: %s", rawURL, err))
+				"browser_open_tab: redirect from %s landed on blocked URL: %s", rawURL, err,
+			))
 		}
 	}
 
