@@ -2393,6 +2393,7 @@ export const MediaLibraryEntry = z.object({
   source: z.enum(["user_upload", "tool_output"]),
   refcount: z.number().int().gte(0).optional(),
   last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
+  status: z.enum(["available", "stranded"]),
 }).strict();
 export const MediaAttachmentRequest = z.object({
   media_id: z.string().max(36).uuid(),

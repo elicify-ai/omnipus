@@ -154,7 +154,7 @@ type turnState struct {
 	// been corrected with the real terminal status/duration — or it has been
 	// determined that no correction attempt was needed/possible (no
 	// transcript store, no session ID). isFinished flips the instant runTurn
-	// returns (its own `defer ts.Finish(false)`), but spawnSubTurn's cleanup
+	// returns (its own deferred Finish call), but spawnSubTurn's cleanup
 	// defer — which performs the correction via updateToolCallStatusWithRetry,
 	// up to ~935ms of retry backoff for async delegation — only runs AFTER
 	// that point, once spawnSubTurn itself returns. A reload/replay landing
@@ -1463,8 +1463,9 @@ func (ts *turnState) Finish(isHardAbort bool) {
 
 	// If handleCancel claimed this turn, fire the post-cancel callback exactly
 	// once. Swap the callback to nil under the write-lock so that concurrent or
-	// repeated Finish calls (e.g. the defer Finish(false) after a hard-abort
-	// Finish(true)) cannot invoke it a second time (FR-15).
+	// repeated Finish calls (e.g. runTurn's own deferred Finish call running
+	// after an explicit Finish(true) from a hard abort) cannot invoke it a
+	// second time (FR-15).
 	if ts.cancelFired.Load() {
 		ts.mu.Lock()
 		cb := ts.onCancelFinish

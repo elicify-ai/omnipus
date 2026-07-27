@@ -3119,6 +3119,12 @@ export interface components {
              * @description RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
              */
             readonly last_refcount_seen_at?: string;
+            /**
+             * @description Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
+             * @example available
+             * @enum {string}
+             */
+            readonly status: "available" | "stranded";
         };
         /**
          * MediaAttachmentRequest

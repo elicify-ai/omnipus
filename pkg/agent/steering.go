@@ -694,7 +694,7 @@ func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
 // record has not yet been corrected with the real terminal status/duration
 // (!ts.subTurnRecordPersisted.Load()). Collapsing those into a single
 // "isFinished" check reopens the exact bug this primitive exists to close:
-// runTurn's own `defer ts.Finish(false)` (loop.go) flips isFinished true and
+// runTurn's own deferred Finish call (loop.go) flips isFinished true and
 // fully returns BEFORE spawnSubTurn's own cleanup defer (subturn.go) even
 // begins correcting the placeholder ToolCall record written earlier by
 // DelegateTool.executeAsync — a correction that can take up to ~935ms of

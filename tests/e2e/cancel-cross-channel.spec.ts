@@ -503,10 +503,29 @@ async function assertCancelCascadesToSubagent(
   await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
 
   // Assert transcript.jsonl contains {type: "turn_canceled"} entry with a
-  // non-empty descendants_canceled array. Allow a short settling window (max 3s)
-  // for the transcript write to flush.
-  await page.waitForTimeout(3_000)
-
+  // non-empty descendants_canceled array.
+  //
+  // POLL for it rather than sleeping a fixed window then scanning once. Root
+  // cause (live-reproduced locally, server-side instrumented, 2026-07-27):
+  // RequestCancel's "graceful" cascade does not always write the
+  // turn_canceled entry quickly. When the cancel lands while the LLM still
+  // owes a response, the turn loop's gracefulTerminal branch (pkg/agent/loop.go,
+  // guarded by turnState.gracefulInterruptRequested) makes ONE more real LLM
+  // call — interruptHintMessage(), "Stop scheduling tools and provide a short
+  // final summary" — and only once THAT call returns does Finish() run and
+  // pkg/agent/cancel.go's onCancelFinish callback append the turn_canceled
+  // entry. That extra round-trip's latency is real, variable LLM latency, not
+  // bounded by the 3s/8s hard-abort escalation timers (those only fire the
+  // hard-abort *signal* at those marks — PHASE B/C in RequestCancel — the
+  // transcript write still waits for Finish() to actually run afterward).
+  // Locally reproduced latency for this exact scenario ranged from ~3ms to
+  // ~12.56s across otherwise-identical runs (same test, same prompts) — a
+  // fixed 3s sleep-then-check races that variance directly and is the
+  // confirmed cause of T24a/T24b's historical flakiness (fails, then often
+  // passes on retry — never a real absence of the cascade, always a
+  // too-early read). Poll on a ceiling well past the observed worst case
+  // instead of asserting less.
+  //
   // Discover this turn's session by diffing the sessions dir. A delegated
   // sub-turn can spawn its own ephemeral session dir, so there may be more than
   // one new dir — scan them (newest first) for the one whose transcript actually
@@ -515,39 +534,59 @@ async function assertCancelCascadesToSubagent(
   // (day-partitioned JSONL); the legacy transcript.jsonl name is also tried.
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const sessionsDir = path.join(OMNIPUS_HOME, 'sessions')
-  const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
-  const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
-  // Prefer newly-created dirs; fall back to all sessions if the diff is empty
-  // (e.g. the session dir already existed). Newest mtime first.
-  const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
-    .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
-    .sort((a, b) => b.m - a.m)
-    .map((x) => x.s)
 
-  let entries: TranscriptEntry[] = []
-  let chosenSession = ''
-  for (const sid of scanList) {
-    const dir = path.join(sessionsDir, sid)
-    const files = [path.join(dir, `${today}.jsonl`), path.join(dir, 'transcript.jsonl')]
-    let parsed: TranscriptEntry[] = []
-    for (const f of files) {
-      const p = readJsonl<TranscriptEntry>(f)
-      if (p.length > 0) {
-        parsed = p
+  function scanForCancelEntry(): {
+    entries: TranscriptEntry[]
+    chosenSession: string
+    scanList: string[]
+    newSessions: string[]
+  } {
+    const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
+    const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
+    // Prefer newly-created dirs; fall back to all sessions if the diff is empty
+    // (e.g. the session dir already existed). Newest mtime first.
+    const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
+      .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
+      .sort((a, b) => b.m - a.m)
+      .map((x) => x.s)
+
+    let entries: TranscriptEntry[] = []
+    let chosenSession = ''
+    for (const sid of scanList) {
+      const dir = path.join(sessionsDir, sid)
+      const files = [path.join(dir, `${today}.jsonl`), path.join(dir, 'transcript.jsonl')]
+      let parsed: TranscriptEntry[] = []
+      for (const f of files) {
+        const p = readJsonl<TranscriptEntry>(f)
+        if (p.length > 0) {
+          parsed = p
+          break
+        }
+      }
+      if (parsed.some((e) => e.type === 'turn_canceled')) {
+        entries = parsed
+        chosenSession = sid
         break
       }
+      // Keep the first non-empty transcript as a fallback for the error message.
+      if (entries.length === 0 && parsed.length > 0) {
+        entries = parsed
+        chosenSession = sid
+      }
     }
-    if (parsed.some((e) => e.type === 'turn_canceled')) {
-      entries = parsed
-      chosenSession = sid
-      break
-    }
-    // Keep the first non-empty transcript as a fallback for the error message.
-    if (entries.length === 0 && parsed.length > 0) {
-      entries = parsed
-      chosenSession = sid
-    }
+    return { entries, chosenSession, scanList, newSessions }
   }
+
+  // 30s ceiling: comfortably past the ~12.56s worst case observed locally,
+  // with headroom for CI-under-load variance, while staying well inside
+  // T24a/T24b's own 360s/420s test.setTimeout budgets.
+  const pollDeadline = Date.now() + 30_000
+  let scan = scanForCancelEntry()
+  while (!scan.entries.some((e) => e.type === 'turn_canceled') && Date.now() < pollDeadline) {
+    await page.waitForTimeout(500)
+    scan = scanForCancelEntry()
+  }
+  const { entries, chosenSession, scanList, newSessions } = scan
 
   const cancelledEntry = entries.find((e) => e.type === 'turn_canceled')
   if (!cancelledEntry) {
@@ -766,13 +805,30 @@ test(
     await expect(stopBtn).not.toBeVisible({ timeout: 15_000 })
     await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
 
-    // Allow audit flush (audit writes are synchronous on the gateway path, but
-    // give a short settling window).
-    await page.waitForTimeout(2_000)
-
-    // Read all audit entries written after we started.
-    const allEntries = readJsonl<AuditEntry>(auditPath)
-    const newEntries = allEntries.slice(entriesBefore)
+    // Poll for the audit flush rather than sleeping a fixed window then
+    // reading once. Root cause (see assertCancelCascadesToSubagent's matching
+    // comment above, and live local reproduction 2026-07-27): the
+    // turn.cancelled audit event is emitted from the SAME
+    // pkg/agent/cancel.go onCancelFinish callback as the transcript
+    // turn_canceled entry, which only fires once Finish() runs — and Finish()
+    // can be delayed behind one full extra "graceful wrap-up" LLM round-trip
+    // (pkg/agent/loop.go's gracefulTerminal branch) whose latency is real,
+    // variable LLM latency (locally observed: ~3ms to ~12.56s for the
+    // identical scenario). turn.cancel.attempt is emitted synchronously
+    // inside RequestCancel itself and is already present by the time the Stop
+    // button disappears; only turn.cancelled needs the poll. A fixed 2s sleep
+    // races that variance directly. Ceiling matches
+    // assertCancelCascadesToSubagent's 30s (comfortably past the observed
+    // worst case, well inside this test's own budget).
+    const pollDeadline = Date.now() + 30_000
+    let newEntries = readJsonl<AuditEntry>(auditPath).slice(entriesBefore)
+    while (
+      !newEntries.some((e) => e.event === 'turn.cancelled') &&
+      Date.now() < pollDeadline
+    ) {
+      await page.waitForTimeout(500)
+      newEntries = readJsonl<AuditEntry>(auditPath).slice(entriesBefore)
+    }
 
     // Assert: turn_cancel_attempt entry with was_fired: true.
     // events.go: EventTurnCancelAttempt = "turn.cancel.attempt"; struct tag json:"event"

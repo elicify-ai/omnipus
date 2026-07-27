@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // test fixture only — computing the same X-Goog-Hash the production verifier checks.
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/chromeintegrity"
 )
 
 // --- fixture helpers -------------------------------------------------------
@@ -452,6 +456,161 @@ func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *te
 		if strings.Contains(e.Name(), ".part-") || strings.HasSuffix(e.Name(), ".zip") {
 			t.Fatalf("expected no leftover temp/zip files after a rejected download, found %q", e.Name())
 		}
+	}
+}
+
+// TestInstaller_ExtractFailure_CleansUpPartialInstall is the FIX-CRIT-001
+// regression test: a zip whose FIRST entry is the real, valid, executable
+// chrome binary at the expected layout but whose SECOND entry is a
+// zip-slip path (extractZip must reject it) reproduces the exact incident
+// this fix closes — a disk-full or killed-mid-extract event that writes a
+// partial, already-executable binary before the failure aborts the walk.
+// Before this fix, EnsureChromiumBuild returned the extraction error but
+// left that partial build subdirectory on disk; findInstalledBuild's
+// permissive-missing-manifest posture (CORR-007, for genuine pre-existing
+// installs) would then treat it as "installed" on every subsequent boot,
+// forever — exactly the mechanism behind the real CI-worker disk-fill
+// incident described in the fix's own commit context.
+func TestInstaller_ExtractFailure_CleansUpPartialInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only path layout")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	build := fullChromeBuild()
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	// Entry 1: the real, valid chrome binary at the expected layout. This
+	// is what a naive "does the expected binary file exist?" check would
+	// see as "installed" if left behind.
+	goodHeader := &zip.FileHeader{Name: build.subdir(platform) + "/" + build.binaryPath()}
+	goodHeader.SetMode(0o755)
+	gw, err := zw.CreateHeader(goodHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, writeErr := gw.Write([]byte("#!/bin/sh\nexit 0\n")); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	// Entry 2: a zip-slip path extractZip must reject, aborting the walk
+	// partway through — after entry 1 already landed on disk.
+	evilHeader := &zip.FileHeader{Name: "../../evil"}
+	ew, err := zw.CreateHeader(evilHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, writeErr := ew.Write([]byte("evil")); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if closeErr := zw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	zipBytes := buf.Bytes()
+
+	root := t.TempDir()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Goog-Hash", googHashMD5Header(zipBytes))
+		_, _ = w.Write(zipBytes)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestFor(t, "131.0.6778.777", platform, map[string]string{
+			cftFullChromeDownloadID: srv.URL + "/zip",
+		}))
+	})
+	withManifestURL(t, srv.URL+"/manifest")
+
+	_, err = EnsureChromiumFullBuild(context.Background(), root)
+	if err == nil {
+		t.Fatal("expected EnsureChromiumFullBuild to fail on a zip-slip entry mid-archive")
+	}
+	if !strings.Contains(err.Error(), "extract") {
+		t.Fatalf("expected an extract-stage error, got: %v", err)
+	}
+
+	// The partial extraction (which DID write the real, executable chrome
+	// binary before the zip-slip entry aborted the walk) must not survive
+	// as a discoverable install.
+	if got := findInstalledBuild(root, platform, build); got != "" {
+		t.Fatalf("a partial/corrupted extraction must not be left behind as a discoverable install, got %q", got)
+	}
+
+	// The build's own extraction subdirectory must actually be gone from
+	// disk, not merely orphaned and silently ignored.
+	buildDir := filepath.Join(root, "131.0.6778.777", build.subdir(platform))
+	if _, statErr := os.Stat(buildDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected the partial extraction subdirectory to be removed, stat err: %v", statErr)
+	}
+}
+
+// TestInstaller_EnsureChromiumBuild_WritesIntegrityManifestOnSuccess is the
+// FIX-CRIT-001 regression test for the other half of the fix: before it,
+// EnsureChromiumBuild never wrote the chrome.sha256 manifest that
+// findInstalledBuild reads back, so a fresh managed download had nothing
+// for a LATER call to verify against — the integrity gate existed but was
+// never fed. A successful download must now leave a manifest that
+// (a) matches the installed binary's actual digest and (b) is directly
+// usable by chromeintegrity.VerifyChromeSHA256.
+func TestInstaller_EnsureChromiumBuild_WritesIntegrityManifestOnSuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only path layout")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+	build := fullChromeBuild()
+	content := []byte("#!/bin/sh\nexit 0\n# integrity manifest fixture\n")
+	zipBytes := buildZipFixture(t, build, platform, content)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Goog-Hash", googHashMD5Header(zipBytes))
+		_, _ = w.Write(zipBytes)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestFor(t, "131.0.6778.555", platform, map[string]string{
+			cftFullChromeDownloadID: srv.URL + "/zip",
+		}))
+	})
+	withManifestURL(t, srv.URL+"/manifest")
+
+	root := t.TempDir()
+	binPath, err := EnsureChromiumFullBuild(context.Background(), root)
+	if err != nil {
+		t.Fatalf("EnsureChromiumFullBuild: %v", err)
+	}
+
+	shaPath := build.sha256Path(root)
+	if shaPath == "" {
+		t.Fatal("expected a non-empty sha256Path for a non-empty install root")
+	}
+	raw, readErr := os.ReadFile(shaPath)
+	if readErr != nil {
+		t.Fatalf("expected chrome.sha256 to be written after a successful managed download, got: %v", readErr)
+	}
+
+	sum := sha256.Sum256(content)
+	wantDigest := hex.EncodeToString(sum[:])
+	if !strings.Contains(string(raw), wantDigest) {
+		t.Fatalf(
+			"expected the written manifest to contain the installed binary's actual digest %q, got %q",
+			wantDigest,
+			raw,
+		)
+	}
+
+	// The manifest must actually be usable by the shared verifier, not
+	// just present.
+	if verr := chromeintegrity.VerifyChromeSHA256(binPath, shaPath); verr != nil {
+		t.Fatalf("expected the freshly-written manifest to verify against the installed binary: %v", verr)
 	}
 }
 

@@ -409,8 +409,14 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 
 	// Trigger a reload so the in-memory config picks up the new user.
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Warn("onboarding: hot-reload after complete failed; token active after next restart", "error", err)
+	} else if !confirmed {
+		slog.Warn(
+			"onboarding: hot-reload after complete did not confirm within the poll window; "+
+				"new admin user may not be active until next restart",
+			"username", body.Admin.Username,
+		)
 	}
 
 	slog.Info("onboarding: completed", "username", body.Admin.Username)

@@ -81,7 +81,8 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 		slog.Error("rest: audit emit prompt guard change", "error", auditErr)
 	}
 
-	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
+	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
+	if reloadErr != nil {
 		slog.Info("rest: prompt guard level updated (restart required)", "level", string(body.Level))
 		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.PromptGuardUpdateResponse{
@@ -91,6 +92,11 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 			Warning:         &warnMsg,
 		})
 		return
+	}
+	if !confirmed {
+		slog.Warn("rest: hot-reload after prompt guard level update did not confirm within the poll window; "+
+			"running agents may still be enforcing the previous prompt-injection level",
+			"level", string(body.Level))
 	}
 
 	slog.Info("rest: prompt guard level updated", "level", string(body.Level))

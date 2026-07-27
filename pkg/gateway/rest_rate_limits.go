@@ -132,7 +132,8 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
+	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
+	if reloadErr != nil {
 		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 			newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
 			if err := audit.EmitSecuritySettingChange(
@@ -158,6 +159,14 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 			Warning:         &warnMsg,
 		})
 		return
+	}
+	if !confirmed {
+		slog.Warn("rest: hot-reload after rate limits update did not confirm within the poll window; "+
+			"running agents may still be enforcing the previous rate limits",
+			"daily_cost_cap_usd", oldCfg.DailyCostCapUSD,
+			"max_agent_llm_calls_per_hour", oldCfg.MaxAgentLLMCallsPerHour,
+			"max_agent_tool_calls_per_minute", oldCfg.MaxAgentToolCallsPerMinute,
+		)
 	}
 
 	// Build new snapshot for audit and response.

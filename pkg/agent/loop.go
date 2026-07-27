@@ -3132,7 +3132,22 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 func (al *AgentLoop) resolveWorkspaceIDForContinuation(msg bus.InboundMessage) string {
 	if msg.SessionID != "" {
 		if store := al.ResolveSessionStore(msg.SessionID); store != nil {
-			if meta, mErr := store.GetMeta(msg.SessionID); mErr == nil && meta != nil && meta.WorkspaceID != "" {
+			// FIX 1 (re-review of the re-review): a real meta-read failure
+			// (corrupt meta.json, decode error, I/O error — see
+			// pkg/session/unified.go's readMetaLocked) must not take the
+			// identical silent path as "this session legitimately has no
+			// workspace". os.ErrNotExist (no meta.json yet — a genuinely new
+			// session) is the one expected, silent case; anything else is a
+			// storage-integrity signal worth a WARN, matching the standard
+			// the WRITE side of this same data already holds itself to
+			// (pkg/gateway/schedules.go's stampScheduledSessionWorkspace).
+			if meta, mErr := store.GetMeta(msg.SessionID); mErr != nil {
+				if !errors.Is(mErr, os.ErrNotExist) {
+					logger.WarnCF("agent",
+						"continuation: could not read session meta while resolving workspace; workspace unresolved",
+						map[string]any{"session_id": msg.SessionID, "error": mErr.Error()})
+				}
+			} else if meta != nil && meta.WorkspaceID != "" {
 				return meta.WorkspaceID
 			}
 		}
@@ -4334,16 +4349,61 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 // ResolveSessionStore finds which UnifiedStore owns the given sessionID.
 // Checks the shared store first, then the main agent's legacy store, then
 // all other per-agent stores. Returns nil if the session cannot be found.
+//
+// FIX (silent-corruption gap): each probe below used to accept a store only
+// on err == nil, treating "session genuinely doesn't live here"
+// (os.ErrNotExist — the frequent, legitimate case for a session that hasn't
+// been created yet) and "session lives here but its meta.json is corrupt or
+// unreadable" (JSON decode error, I/O error, permission error) identically —
+// both fell through to the next probe, and a corrupt hit on the LAST probe
+// made the function return nil exactly as if the session never existed.
+// Callers (resolveWorkspaceIDForContinuation, ProcessScheduled,
+// processMessage's M4 block, processSystemMessage) then proceeded as if the
+// session had no workspace bound, silently dropping the binding — and their
+// own downstream WARN logging (which re-reads GetMeta expecting to
+// distinguish the same two cases) never fired, because they never got a
+// non-nil store to call GetMeta on in the first place.
+//
+// A non-ErrNotExist GetMeta error on a given store is itself strong evidence
+// that THIS store owns the session — readUnifiedMeta only reaches the JSON
+// decode (or a bare read failure past ENOENT) once sessionDir/meta.json
+// exists under that store's baseDir, so there is no reason to keep scanning
+// remaining stores for a "real" copy elsewhere: continuing to probe would
+// either find nothing (wasted work, same nil-after-corruption outcome) or,
+// in the pathological case of a duplicate session ID across stores, mask the
+// corruption behind an unrelated hit. So on a non-ErrNotExist error this
+// still returns the store immediately (log first) rather than falling
+// through — that is what makes the store reach the caller at all, which is
+// what makes the four downstream WARNs reachable. An out-of-scope
+// alternative — changing this function's signature to return the error too
+// — was rejected: it would ripple into pkg/gateway/websocket.go and
+// pkg/gateway/rest.go call sites outside this agent's edit scope for no
+// benefit over logging here and letting callers' own GetMeta re-read see the
+// identical error.
 func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore {
 	// Fast path: shared store owns new sessions.
 	if al.sharedSessionStore != nil {
 		if _, err := al.sharedSessionStore.GetMeta(sessionID); err == nil {
+			return al.sharedSessionStore
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF(
+				"agent",
+				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
+				map[string]any{"session_id": sessionID, "store": al.sharedSessionStore.BaseDir(), "error": err.Error()},
+			)
 			return al.sharedSessionStore
 		}
 	}
 	// Legacy fast path: main agent owns most old sessions.
 	if store := al.GetAgentStore(DefaultAgentID); store != nil {
 		if _, err := store.GetMeta(sessionID); err == nil {
+			return store
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF(
+				"agent",
+				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
+				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
+			)
 			return store
 		}
 	}
@@ -4357,6 +4417,13 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 			continue
 		}
 		if _, err := store.GetMeta(sessionID); err == nil {
+			return store
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF(
+				"agent",
+				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
+				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
+			)
 			return store
 		}
 	}
@@ -4627,11 +4694,11 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// doc comment above, which already (incorrectly, until this fix)
 	// described the callback as firing.
 	//
-	// Finish(false) is safe to add here: at THIS point (construction, right
+	// Calling Finish here is safe to add: at THIS point (construction, right
 	// before registerActiveTurn ran above) ts.cancelFunc/ts.providerCancel
 	// are still nil — cancel-propagation FIX 1 (external_dispatch.go's
 	// runExternalCLISubTurn) only wires them once dispatch actually starts,
-	// below. By the time this function returns and the deferred Finish(false)
+	// below. By the time this function returns and the deferred Finish call
 	// below actually RUNS, those fields are typically non-nil (set to the
 	// dispatch's own context.CancelFunc) — see this function's top doc
 	// comment's STALE-COMMENT CORRECTION note for the full explanation. That
@@ -4640,13 +4707,16 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// which is exactly what dispatchCancel's own `defer dispatchCancel()`
 	// below already guarantees happens — canceling an already-canceled
 	// context is a no-op, so calling it twice (once via that defer, once via
-	// Finish) is harmless. isHardAbort is false so the child-cascade branch
-	// is unreachable, and Finish's closeOnce.Do + the
-	// cancelFired-swap-then-nil-check around onCancelFinish make a second
+	// Finish) is harmless. Below (FIX 2), this call passes
+	// ts.hardAbortRequested() rather than a hardcoded false, so the
+	// child-cascade branch CAN run here when a hard abort was requested — but
+	// that is also safe: Finish's closeOnce.Do + the
+	// cancelFired-swap-then-nil-check around onCancelFinish make ANY repeated
 	// Finish call (e.g. a concurrent InterruptSessionHard elsewhere calling
-	// Finish(true) on this same ts via steering.go) idempotent — the
-	// identical safety runTurn's own `defer ts.Finish(false)` already relies
-	// on for the hard-abort-then-graceful-defer sequence (loop.go, "closeOnce.Do
+	// requestHardAbort on this same ts via steering.go, whether or not this
+	// site's own call also cascades) idempotent — the identical safety
+	// runTurn's own deferred Finish call already relies on for the
+	// hard-abort-then-deferred-Finish sequence (loop.go, "closeOnce.Do
 	// inside Finish makes repeated Finish calls safe" comment).
 	//
 	// Ordering matches runTurn's LIFO defer pattern (loop.go, "Execution
@@ -4657,9 +4727,25 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// fire — the same class of race that ordering guards against in
 	// runTurn. Defers execute LIFO, so writing Finish's defer first and
 	// clearActiveTurn's defer second makes clearActiveTurn run FIRST and
-	// Finish run LAST, exactly like runTurn's `defer ts.Finish(false)` /
-	// `defer al.clearActiveTurn(ts)` pair.
-	defer ts.Finish(false)
+	// Finish run LAST, exactly like runTurn's own Finish/clearActiveTurn pair.
+	//
+	// FIX 2: call Finish with ts.hardAbortRequested(), not a hardcoded false.
+	// InterruptSessionHard (the session-wide web-cancel escalation path;
+	// steering.go) hard-aborts a turn by calling ts.requestHardAbort() alone —
+	// it never calls ts.Finish(true) itself (only the legacy single-session
+	// HardAbort()/InterruptHard do that). For a turn hard-aborted that way,
+	// THIS deferred call is the only Finish call that will ever happen, so a
+	// hardcoded false silently mislabeled a genuine hard abort as a graceful
+	// finish — wrong for the cancelFired-gated onCancelFinish callback
+	// (cancel.go's RequestCancel), which threads its "graceful"/"hard"
+	// cancelMethod straight into the persisted turn_canceled transcript entry
+	// that pkg/gateway/replay.go renders back to the user as
+	// "Turn canceled (%s)". Must be wrapped in a closure: a bare
+	// `defer ts.Finish(ts.hardAbortRequested())` would evaluate
+	// hardAbortRequested() immediately at THIS defer statement (Go evaluates
+	// deferred arguments at registration time, not at call time) — i.e.
+	// always false, reproducing the exact bug this fixes.
+	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer al.clearActiveTurn(ts)
 
 	rtCfg := al.getSubTurnConfig()
@@ -5237,7 +5323,17 @@ func (al *AgentLoop) ProcessScheduled(
 	// resolvable workspace (no heartbeat identity, no channel binding) still
 	// correctly resolves to "" here — never fabricated.
 	workspaceID := ""
-	if meta, mErr := transcriptStore.GetMeta(sessionID); mErr == nil && meta != nil {
+	if meta, mErr := transcriptStore.GetMeta(sessionID); mErr != nil {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see resolveWorkspaceIDForContinuation's
+		// doc comment above for the full rationale and the WRITE-side standard
+		// (pkg/gateway/schedules.go's stampScheduledSessionWorkspace) this matches.
+		if !errors.Is(mErr, os.ErrNotExist) {
+			logger.WarnCF("agent",
+				"scheduled run: could not read session meta while resolving workspace; workspace unresolved",
+				map[string]any{"session_id": sessionID, "error": mErr.Error()})
+		}
+	} else if meta != nil {
 		workspaceID = meta.WorkspaceID
 	}
 
@@ -5436,7 +5532,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// and finally to "" — task_create then resolves the real default workspace.
 	workspaceID := ""
 	if transcriptStore != nil && transcriptSessionID != "" {
-		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr == nil && meta != nil {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see
+		// resolveWorkspaceIDForContinuation's doc comment (above,
+		// ~line 3099) for the full rationale.
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
+			if !errors.Is(mErr, os.ErrNotExist) {
+				logger.WarnCF("agent", "could not read session meta while resolving workspace; workspace unresolved",
+					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
+			}
+		} else if meta != nil {
 			workspaceID = meta.WorkspaceID
 		}
 	}
@@ -5936,7 +6041,17 @@ func (al *AgentLoop) processSystemMessage(
 	// callers that stamp workspace_id directly on the system message instead.
 	workspaceID := ""
 	if transcriptStore != nil && transcriptSessionID != "" {
-		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr == nil && meta != nil {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see
+		// resolveWorkspaceIDForContinuation's doc comment (above,
+		// ~line 3099) for the full rationale.
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
+			if !errors.Is(mErr, os.ErrNotExist) {
+				logger.WarnCF("agent",
+					"delegate-completion: could not read session meta while resolving workspace; workspace unresolved",
+					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
+			}
+		} else if meta != nil {
 			workspaceID = meta.WorkspaceID
 		}
 	}
@@ -6159,7 +6274,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	ts.setTurnCancel(turnCancel)
 
 	// NOTE: finalizeStreamer's defer is registered further below (after
-	// ts.Finish(false)/al.clearActiveTurn), not here — see that registration
+	// ts.Finish/al.clearActiveTurn), not here — see that registration
 	// site's comment for why the ORDER relative to Finish is load-bearing
 	// (FIX 1/5c live-verification finding).
 
@@ -6283,7 +6398,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	al.registerActiveTurn(ts)
 	// Execution order (LIFO defer — registered in reverse of desired run
 	// order): clearActiveTurn runs FIRST, then finalizeStreamer, then
-	// Finish(false) LAST.
+	// Finish LAST.
 	//
 	// clearActiveTurn must run before finalizeStreamer, which sends the
 	// "done" WS frame. IsAlive()/onCancelFinish are unaffected by
@@ -6303,13 +6418,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// "done" is sent closes that window: any cancel arriving after closes on
 	// nothing to claim.
 	//
-	// finalizeStreamer must still run BEFORE ts.Finish(false) — registered
-	// here, between clearActiveTurn and Finish. finalizeStreamer is what
-	// calls wsStreamer.Finalize(), which writes the assistant transcript
-	// entry (FIX 1). Finish(false)'s onCancelFinish callback
-	// (pkg/agent/cancel.go) is what writes the turn_canceled entry AND calls
-	// MarkLastEntryTruncated to flag the assistant entry. Both depend on the
-	// assistant entry already existing in transcript.jsonl:
+	// finalizeStreamer must still run BEFORE Finish — registered here,
+	// between clearActiveTurn and Finish. finalizeStreamer is what calls
+	// wsStreamer.Finalize(), which writes the assistant transcript entry
+	// (FIX 1). Finish's onCancelFinish callback (pkg/agent/cancel.go) is what
+	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
+	// the assistant entry. Both depend on the assistant entry already
+	// existing in transcript.jsonl:
 	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
 	//     assistant entry isn't there yet (silently succeeds as a no-op —
 	//     Truncated never gets set).
@@ -6324,9 +6439,28 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// turn_canceled -> assistant (wrong order) when finalizeStreamer ran
 	// after Finish's callback; user -> assistant -> turn_canceled (correct)
 	// with finalizeStreamer running first. closeOnce.Do inside Finish makes
-	// repeated Finish calls safe — the cancel path may have already called
-	// Finish(true); this deferred Finish(false) is then a no-op.
-	defer ts.Finish(false)
+	// repeated Finish calls safe — the cancel path (steering.go's legacy
+	// single-session HardAbort/InterruptHard) may have already called
+	// Finish(true) directly; this deferred call is then a harmless repeat of
+	// the same idempotent operation.
+	//
+	// FIX 2: pass ts.hardAbortRequested(), not a hardcoded false. The
+	// session-wide web-cancel escalation path (InterruptSessionHard,
+	// steering.go) hard-aborts a turn via ts.requestHardAbort() ALONE — it
+	// never calls ts.Finish(true) itself. For a turn hard-aborted that way,
+	// THIS deferred call is the ONLY Finish call that ever happens, so a
+	// hardcoded false silently mislabeled a genuine hard abort as a graceful
+	// finish: the onCancelFinish callback above computes cancelMethod from
+	// Finish's own isHardAbort argument, and that value is persisted verbatim
+	// as TranscriptEntry.CancelMethod, which pkg/gateway/replay.go renders
+	// back to the user as "Turn canceled (%s)" — so a hard-aborted turn was
+	// always reported to the user, and audited, as a graceful cancel. Must be
+	// a closure, not a bare `defer ts.Finish(ts.hardAbortRequested())`: Go
+	// evaluates deferred arguments at the defer statement's registration time
+	// (here, before the turn even starts), not when the deferred call
+	// actually runs at function exit — a bare form would always capture
+	// false and reproduce the exact bug this fixes.
+	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer ts.finalizeStreamer(ctx)
 	defer al.clearActiveTurn(ts)
 
@@ -8233,6 +8367,43 @@ turnLoop:
 				// skip-when-empty behavior exactly).
 				content := result.ContentForLLM()
 				if content == "" {
+					return
+				}
+
+				// FIX 3: a turn that was ever the target of a cancel claim
+				// (ts.cancelFired — set exactly once, and never reset, by
+				// ClaimCancel/handleCancel; see cancel.go's RequestCancel) must
+				// not spring back to life through this async completion. This
+				// closure captures the PARENT ts that dispatched the async
+				// tool call (delegate/background bash); the callback fires
+				// independently, on its own goroutine, whenever that tool
+				// finishes — which is routinely AFTER the user has already
+				// clicked Stop, since the whole point of async dispatch is
+				// that the parent turn moves on immediately (see executeAsync's
+				// doc comment in pkg/tools/delegate.go). Without this guard,
+				// Notify below publishes an inbound "system" message
+				// unconditionally, and processSystemMessage (this file) turns
+				// it into a BRAND NEW, fully-tooled turn — the agent can then
+				// narrate the delegation and even issue ANOTHER delegate call,
+				// seconds after being told to stop (live-reproduced: a third
+				// turn, ID parent+2, arriving ~3s after the cancel completed,
+				// calling delegate again). Skipping Notify here does not lose
+				// the async tool's own result: spawnSubTurn inherits the
+				// parent's TranscriptSessionID/TranscriptStore (subturn.go), so
+				// the child's own tool calls and final answer are already
+				// persisted to the SAME session's transcript via its own turn
+				// — only this callback's REACTIVE continuation turn is
+				// suppressed, which is exactly the behavior a canceled turn
+				// should have.
+				if ts.cancelFired.Load() {
+					logger.InfoCF("agent", "Suppressing async-notify continuation turn: originating turn was canceled",
+						map[string]any{
+							"tool":        asyncToolName,
+							"channel":     ts.channel,
+							"chat_id":     ts.chatID,
+							"agent_id":    ts.agent.ID,
+							"content_len": len(content),
+						})
 					return
 				}
 

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -560,6 +561,19 @@ func TestMissingChromeLibsELF_StructuralErrors(t *testing.T) {
 	zeroPheaders[56] = 0
 	zeroPheaders[57] = 0
 
+	// FIX-HIGH-002: corrupt the DT_STRTAB entry's value field so DT_NEEDED
+	// entries are collected but cannot be resolved to sonames. Per
+	// buildMinimalELF64's layout, the DT_* table starts at file offset 176
+	// (dynOff): entry 0 is DT_NEEDED (tag=1, val=0), entry 1 is DT_STRTAB
+	// (tag=5, val=strtab offset) at bytes [192:208], with the val field at
+	// [200:208]. Zeroing that val field leaves DT_NEEDED's collected entry
+	// (val=0) intact while making strtabOff==0 — the exact "DT_NEEDED
+	// entries WERE collected but DT_STRTAB is missing/out of range" shape.
+	corruptedStrtab := append([]byte(nil), good...)
+	for i := 200; i < 208; i++ {
+		corruptedStrtab[i] = 0
+	}
+
 	tests := []struct {
 		name        string
 		payload     []byte
@@ -577,10 +591,16 @@ func TestMissingChromeLibsELF_StructuralErrors(t *testing.T) {
 		{
 			name:    "e_phnum=0 (zero program headers)",
 			payload: zeroPheaders,
-			wantErr: false,
-			// Zero program headers → PT_DYNAMIC never found → dynSize==0
-			// → returns nil, nil (static-binary branch). The contract: no
-			// panic, no false-missing.
+			wantErr: true,
+			// FIX-HIGH-002: zero program headers is NOT expected for a
+			// Chrome-for-Testing binary (always dynamically linked, always
+			// carries PT_LOAD segments) — it now returns an error ("could
+			// not determine") rather than silently discarding the fact
+			// that the ELF is structurally anomalous. Before this fix the
+			// parser returned nil, nil here (indistinguishable from "no
+			// missing libs"), which is exactly the false-clean-bill-of-
+			// health bug this fix closes. The contract: no panic, no
+			// silent false-missing.
 		},
 		{
 			name:    "32-bit ELF (EI_CLASS=1) — parser is 64-bit-only",
@@ -590,6 +610,17 @@ func TestMissingChromeLibsELF_StructuralErrors(t *testing.T) {
 			// the 32-bit header with 64-bit widths). It returns the
 			// synthetic not-an-elf-binary entry — important: it does NOT
 			// panic.
+		},
+		{
+			name:    "DT_NEEDED collected but DT_STRTAB zero (corrupted string table pointer)",
+			payload: corruptedStrtab,
+			wantErr: true,
+			// FIX-HIGH-002: before this fix, a DT_STRTAB/DT_STRSZ that is
+			// zero/out-of-range discarded every already-collected
+			// DT_NEEDED entry and returned nil, nil — indistinguishable
+			// from "no dependencies at all". Now it returns an error so
+			// the caller surfaces a "could not determine" warning instead
+			// of a false-clean "0 missing libraries".
 		},
 	}
 
@@ -702,6 +733,144 @@ func TestCheckBrowserPackageChrome_NotAnELFBinary_SurfacesDiagnostic(t *testing.
 		"warning should mention ELF so operator knows what to investigate")
 }
 
+// TestDarwinMachOWarning_Table (FIX-HIGH-002) unit-tests darwinMachOWarning
+// directly against synthetic (missing, machoErr) pairs — the real Mach-O
+// parser (missingChromeLibsMachO) is darwin-build-tagged, so a Linux CI
+// host can never drive it end-to-end via checkBrowserPackageChrome; this
+// bypasses that restriction by feeding the parser's OUTPUT straight in.
+// Covers the exact bug this fix closes: before it, the notAMachOBinary case
+// returned nil (no warning at all — a corrupted/zeroed chrome binary
+// reported a clean doctor bill of health).
+func TestDarwinMachOWarning_Table(t *testing.T) {
+	tests := []struct {
+		name           string
+		missing        []string
+		machoErr       error
+		wantNil        bool
+		wantCode       string
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name:    "clean — no missing deps, no error",
+			missing: nil,
+			wantNil: true,
+		},
+		{
+			name:         "structural parse error",
+			machoErr:     errors.New("truncated load command 0"),
+			wantCode:     "WARN-BROWSER-005",
+			wantContains: []string{"could not parse", "truncated load command 0"},
+		},
+		{
+			name:           "not-a-Mach-O binary (FIX-HIGH-002 regression case)",
+			missing:        []string{notAMachOBinary},
+			wantCode:       "WARN-BROWSER-005",
+			wantContains:   []string{"not a valid Mach-O"},
+			wantNotContain: []string{"missing required macOS libraries"},
+		},
+		{
+			name:         "real missing dylibs",
+			missing:      []string{"@rpath/libmissing.dylib"},
+			wantCode:     "WARN-BROWSER-005",
+			wantContains: []string{"missing required macOS libraries", "libmissing.dylib"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := darwinMachOWarning(tc.missing, tc.machoErr)
+			if tc.wantNil {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got, "expected a warning for case %q", tc.name)
+			assert.Equal(t, tc.wantCode, got.code)
+			for _, s := range tc.wantContains {
+				assert.Contains(t, got.message, s)
+			}
+			for _, s := range tc.wantNotContain {
+				assert.NotContains(t, got.message, s)
+			}
+		})
+	}
+}
+
+// TestCheckBrowserPackageChrome_SymlinkedBinary_DistinctFromHashMismatch
+// (FIX-HIGH-003): a symlinked chrome binary at the leaf is a real
+// security event (SEC-ADR052-005 — a substituted binary), not a checksum
+// disagreement. Before this fix, VerifyChromeSHA256's symlink-refusal
+// error was folded into the generic "bundled chrome hash mismatch —
+// expected=X got=Y" message, which reads as ordinary bit-rot rather than
+// a security-relevant anomaly.
+func TestCheckBrowserPackageChrome_SymlinkedBinary_DistinctFromHashMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Symlink requires elevated privileges on Windows")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only ELF check; skipping on " + runtime.GOOS)
+	}
+
+	root := withSyntheticPackageChrome(t)
+	chromePath := filepath.Join(root, "chrome-linux64", "chrome")
+
+	// Move the real chrome binary aside and replace it with a symlink
+	// pointing back at it. Same bytes, same hash — the ONLY thing that
+	// changed is that the leaf is now a symlink.
+	realTarget := filepath.Join(root, "real-chrome")
+	require.NoError(t, os.Rename(chromePath, realTarget))
+	require.NoError(t, os.Symlink(realTarget, chromePath))
+
+	warnings := checkBrowserPackageChrome()
+	require.NotEmpty(t, warnings, "a symlinked binary must surface a warning")
+	var found *warning
+	for i := range warnings {
+		if warnings[i].code == "WARN-BROWSER-006" {
+			found = &warnings[i]
+		}
+	}
+	require.NotNil(t, found, "expected WARN-BROWSER-006 in %v", warnings)
+	assert.Contains(t, found.message, "symlink",
+		"a symlinked binary is a security event, not a hash mismatch — the message must say so")
+	assert.NotContains(t, found.message, "expected=",
+		"must not report a fabricated expected/got hash-mismatch pair for a symlink refusal")
+}
+
+// TestCheckBrowserPackageChrome_MalformedManifest_DistinctFromHashMismatch
+// (FIX-HIGH-003): an unparseable chrome.sha256 (garbage content) is a
+// different failure mode than a genuine digest DISAGREEMENT between a
+// well-formed manifest and the binary. Before this fix it was folded into
+// the same "hash mismatch — expected=X got=Y" message with both fields
+// left blank (parseManifestDigestBestEffort can't extract a digest from
+// garbage), which is actively confusing — it looks like a hash check ran
+// and both sides came back empty, not "the manifest itself is broken".
+func TestCheckBrowserPackageChrome_MalformedManifest_DistinctFromHashMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("synthetic-package test only meaningful on linux/darwin")
+	}
+
+	root := withSyntheticPackageChrome(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "chrome.sha256"),
+		[]byte("this is not a hex digest at all\n"),
+		0o644,
+	))
+
+	warnings := checkBrowserPackageChrome()
+	require.NotEmpty(t, warnings, "a malformed manifest must surface a warning")
+	var found *warning
+	for i := range warnings {
+		if warnings[i].code == "WARN-BROWSER-006" {
+			found = &warnings[i]
+		}
+	}
+	require.NotNil(t, found, "expected WARN-BROWSER-006 in %v", warnings)
+	assert.Contains(t, found.message, "parse",
+		"a malformed manifest is a parse failure, not a hash mismatch — the message must say so")
+	assert.NotContains(t, found.message, "expected=",
+		"must not report a fabricated expected/got hash-mismatch pair for a parse failure")
+}
+
 // withSyntheticPackageChrome builds a minimal chromium/ + chrome-linux64/chrome
 // + chrome.sha256 tree under t.TempDir() and points the doctor's
 // packageChromeRootOverride at it. The seam is auto-restored via
@@ -723,12 +892,22 @@ func TestCheckBrowserPackageChrome_NotAnELFBinary_SurfacesDiagnostic(t *testing.
 // "package chrome root"). All test artifacts live under this directory.
 func withSyntheticPackageChrome(t *testing.T) string {
 	t.Helper()
+	return withSyntheticPackageChromeContent(t, buildMinimalELF64(t, "libc.so.6"))
+}
+
+// withSyntheticPackageChromeContent is withSyntheticPackageChrome
+// parametrized on the chrome binary's raw content, so tests that need a
+// non-ELF (or non-Mach-O, when paired with the checkBrowserPackageChromeGOOS
+// seam) payload — e.g. the FIX-HIGH-002 "corrupt/zeroed binary" darwin
+// coverage — don't have to hand-roll the chromium/ + chrome.sha256 tree
+// layout themselves.
+func withSyntheticPackageChromeContent(t *testing.T, chrome []byte) string {
+	t.Helper()
 
 	root := filepath.Join(t.TempDir(), "chromium")
 	chromeDir := filepath.Join(root, "chrome-linux64")
 	require.NoError(t, os.MkdirAll(chromeDir, 0o755))
 
-	chrome := buildMinimalELF64(t, "libc.so.6")
 	chromePath := filepath.Join(chromeDir, "chrome")
 	require.NoError(t, os.WriteFile(chromePath, chrome, 0o755))
 

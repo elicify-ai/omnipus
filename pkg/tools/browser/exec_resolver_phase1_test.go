@@ -29,6 +29,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -510,6 +512,98 @@ func TestResolve_Step3_PackageRootMissingFallsThroughToManaged(t *testing.T) {
 	got, err := m.resolveExecPath(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, binPath, got, "missing package root must NOT interfere with the managed-install path")
+}
+
+// TestResolve_Step4_ManagedBinaryFailsProbe_NotCachedAsResolved is the
+// FIX-CRIT-001 regression test for step 4: unlike the $PATH step (which
+// runs `--version` on every candidate before accepting it), step 4
+// previously trusted EnsureChromium's return purely on the strength of
+// "the file exists and the executable bit is set" — the same shape of gap
+// that let a partial/corrupted extraction get cached as a working install
+// forever. This seeds a managed-install binary that passes every
+// filesystem check but fails to actually execute, and verifies
+// resolveExecPath surfaces an error (never the broken path) and never
+// populates the success cache with it.
+func TestResolve_Step4_ManagedBinaryFailsProbe_NotCachedAsResolved(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell-script test double")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	binDir := t.TempDir()
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		writeExecutable(t, filepath.Join(binDir, name), "#!/bin/sh\nexit 1\n")
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
+
+	withPackageChromeRoot(t, filepath.Join(t.TempDir(), "does-not-exist"))
+
+	cfg := newExecPathTestConfig(t, t.TempDir())
+	build := selectDownloadBuild()
+	versionRoot := filepath.Join(installRootFor(cfg), "131.0.6778.108")
+	brokenBin := build.binaryFullPath(versionRoot, platform)
+	require.NoError(t, os.MkdirAll(filepath.Dir(brokenBin), 0o755))
+	// Executable, present at the expected layout — passes every
+	// filesystem-only check findInstalledBuild performs — but fails to
+	// actually run.
+	writeExecutable(t, brokenBin, "#!/bin/sh\nexit 1\n")
+
+	m := &BrowserManager{cfg: cfg}
+	got, err := m.resolveExecPath(context.Background())
+	require.Error(t, err, "a managed binary that fails its --version probe must not resolve successfully")
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "probe", "error should mention the failed probe so the cause is diagnosable")
+	assert.Empty(t, m.execPath.cachedPath(), "a probe-failed managed binary must never populate the success cache")
+}
+
+// TestResolve_Step4_ManagedDownloadFailure_MentionsRejectedPathChrome is
+// the FIX-HIGH-004 regression test: tools.browser.trust_path_chrome=false
+// (the default) discards a working $PATH Chrome, logging WARN-BROWSER-007
+// — but if there is also no package Chrome AND the managed download
+// subsequently fails (e.g. an air-gapped/offline host), the error actually
+// returned to the caller/agent must say a working binary was rejected and
+// name the setting to flip. Before the fix, only the WARN log mentioned
+// it; the returned error was a bare manifest-fetch failure with no trace
+// of the discarded PATH binary.
+func TestResolve_Step4_ManagedDownloadFailure_MentionsRejectedPathChrome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell-script test double")
+	}
+
+	pathDir := t.TempDir()
+	pathBin := filepath.Join(pathDir, "chromium")
+	writeExecutable(t, pathBin, "#!/bin/sh\necho 'Chromium 131.0.6778.108'\nexit 0\n")
+	t.Setenv("PATH", pathDir)
+	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
+
+	// No package Chrome root at all.
+	withPackageChromeRoot(t, filepath.Join(t.TempDir(), "does-not-exist"))
+
+	// Force the managed-download manifest fetch to fail deterministically
+	// (a 500 response) rather than depending on the test sandbox's real
+	// network egress policy, simulating an air-gapped/offline host.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	prev := globalManifestURLForTesting
+	globalManifestURLForTesting = srv.URL
+	t.Cleanup(func() { globalManifestURLForTesting = prev })
+
+	cfg := newExecPathTestConfig(t, t.TempDir())
+	cfg.TrustPathChrome = false // explicit, matches the security-hardened default
+	m := &BrowserManager{cfg: cfg}
+
+	got, err := m.resolveExecPath(context.Background())
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), pathBin, "resolution failure must name the rejected $PATH binary")
+	assert.Contains(t, err.Error(), "trust_path_chrome",
+		"resolution failure must name the setting an operator needs to flip")
 }
 
 // --- chromeintegrity.VerifyChromeSHA256 direct coverage ---

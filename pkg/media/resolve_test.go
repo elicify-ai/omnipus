@@ -112,6 +112,77 @@ func TestResolver_RejectsCrossWorkspaceRef(t *testing.T) {
 	}
 }
 
+// TestIsCallerWorkspaceDenied_DistinguishesGuardDenialFromRoutineFailure is
+// the review FIX 4 regression test: pkg/media.IsCallerWorkspaceDenied must
+// report true for both FR-028a guard sentinels (a missing caller-workspace
+// context, and an explicit cross-workspace Spoofing attempt) reached through
+// the actual channel-facing entry point, ResolveWithCallerWorkspace — not
+// just the lower-level ResolveWithMetaOpts — and false for a routine
+// stale/missing ref (ErrNotFound) or any other unrelated error, so a caller
+// (e.g. a channel's SendMedia implementation) can tell a security-relevant
+// denial apart from an ordinary delivery failure with one check instead of
+// needing to know about and OR together two separate sentinel variables.
+func TestIsCallerWorkspaceDenied_DistinguishesGuardDenialFromRoutineFailure(t *testing.T) {
+	home := t.TempDir()
+	const wsA = "ws-owner"
+	const wsB = "ws-attacker"
+
+	lib, err := library.New(home, wsA, library.WithClock(fixedClock()))
+	if err != nil {
+		t.Fatalf("library.New: %v", err)
+	}
+	ref, _, uploadErr := lib.UploadFixture("secret.bin", strings.NewReader("workspace-only bytes"))
+	if uploadErr != nil {
+		t.Fatalf("UploadFixture: %v", uploadErr)
+	}
+
+	store := media.NewFileMediaStore()
+	store.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
+		if workspaceID != wsA {
+			return nil, media.ErrCrossWorkspaceRef
+		}
+		return lib, nil
+	})
+
+	// Cross-workspace spoofing attempt, via the real channel entry point.
+	if _, _, crossErr := store.ResolveWithCallerWorkspace(ref, wsB); !media.IsCallerWorkspaceDenied(crossErr) {
+		t.Fatalf("cross-workspace resolve error %v: want IsCallerWorkspaceDenied=true", crossErr)
+	}
+
+	// Missing caller-workspace context (empty string — ResolveWithCallerWorkspace
+	// has no *string, so "" is the nilable-equivalent legacy posture... but for
+	// a WORKSPACE ref, an empty callerWorkspace still triggers the guard, not
+	// the legacy bypass, since IsWorkspaceRef(ref) is true).
+	if _, _, missingErr := store.ResolveWithCallerWorkspace(ref, ""); !media.IsCallerWorkspaceDenied(missingErr) {
+		t.Fatalf("missing-context resolve error %v: want IsCallerWorkspaceDenied=true", missingErr)
+	}
+
+	// A routine stale/missing ref must NOT be reported as a guard denial.
+	staleRef := "media://workspace/" + wsA + "/" + "00000000-0000-0000-0000-000000000000"
+	_, _, staleErr := store.ResolveWithCallerWorkspace(staleRef, wsA)
+	if staleErr == nil {
+		t.Fatal("expected an error resolving a nonexistent media id")
+	}
+	if media.IsCallerWorkspaceDenied(staleErr) {
+		t.Fatalf("stale/missing ref error %v: want IsCallerWorkspaceDenied=false", staleErr)
+	}
+
+	// Any other unrelated error (e.g. a plain sentinel, or nil) must also be
+	// false — this is not a blanket "err != nil" check in disguise.
+	if media.IsCallerWorkspaceDenied(errors.New("some unrelated error")) {
+		t.Fatal("unrelated error: want IsCallerWorkspaceDenied=false")
+	}
+	if media.IsCallerWorkspaceDenied(nil) {
+		t.Fatal("nil error: want IsCallerWorkspaceDenied=false")
+	}
+
+	// Sanity: the legitimate same-workspace resolve must still succeed and
+	// must not be misreported as a denial.
+	if _, _, ownErr := store.ResolveWithCallerWorkspace(ref, wsA); ownErr != nil {
+		t.Fatalf("same-workspace resolve: unexpected error %v", ownErr)
+	}
+}
+
 // TestResolver_LegacyCallSites_UnaffectedByNilableContextParam asserts the
 // FR-029 nilable migration: legacy media://<uuid> resolution is identical
 // whether the call-site uses the legacy entry point or the new opts-bearing

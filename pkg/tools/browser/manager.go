@@ -6,6 +6,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -772,10 +773,36 @@ const chromiumProbeTimeout = 5 * time.Second
 // actually runs (see resolveExecPath's doc comment for the motivating
 // Ubuntu snap-redirector case). Bounded by chromiumProbeTimeout so a
 // hanging candidate cannot stall resolution indefinitely.
-func probeChromiumBinary(ctx context.Context, path string) bool {
+//
+// MEDIUM fix: returns a human-readable reason alongside ok (empty when
+// ok==true) so callers can log/report WHY the probe failed instead of one
+// generic line for every cause. Permission-denied (a real ACL/sandbox
+// misconfiguration), a broken binary that runs but exits non-zero (the
+// snap-stub case this function exists to catch), and a timed-out/canceled
+// probe (the process may be hung, or resolution itself was canceled) are
+// different operational problems with different fixes — collapsing them
+// into one message hides which one actually applies.
+func probeChromiumBinary(ctx context.Context, path string) (ok bool, reason string) {
 	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
 	defer cancel()
-	return exec.CommandContext(probeCtx, path, "--version").Run() == nil
+	err := exec.CommandContext(probeCtx, path, "--version").Run()
+	if err == nil {
+		return true, ""
+	}
+	switch {
+	case errors.Is(probeCtx.Err(), context.DeadlineExceeded):
+		return false, fmt.Sprintf("probe timed out after %s (binary may be hung)", chromiumProbeTimeout)
+	case errors.Is(probeCtx.Err(), context.Canceled):
+		return false, "probe was canceled"
+	case errors.Is(err, os.ErrPermission):
+		return false, fmt.Sprintf("permission denied executing %s", path)
+	default:
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return false, fmt.Sprintf("ran but exited with an error (%s) — binary present but broken", exitErr.Error())
+		}
+		return false, err.Error()
+	}
 }
 
 // Session returns the ACTIVE tab's context for the given browsing context

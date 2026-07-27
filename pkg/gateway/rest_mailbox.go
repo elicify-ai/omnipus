@@ -415,7 +415,7 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// run. triggerReloadAndWait absorbs ErrReloadNotConfigured (the normal
 	// no-op path in unit tests without the full reload pipeline wired)
 	// internally, so a non-nil error here is always a genuine reload failure.
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error(
 			"rest: mailbox configure reload failed",
 			"agent_id",
@@ -428,6 +428,13 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		jsonErr(w, http.StatusServiceUnavailable,
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
+	} else if !confirmed {
+		slog.Warn(
+			"rest: mailbox configure reload did not confirm within the poll window; "+
+				"email tools may not yet reflect the new mailbox state",
+			"agent_id", agentID,
+			"workspace_id", workspaceID,
+		)
 	}
 
 	configured := strings.TrimSpace(persistedRef) != ""
@@ -531,7 +538,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 	// tools staying live on the running instance). Best-effort: deletion has
 	// already durably persisted, so a genuine reload failure is logged, not
 	// surfaced as an error response (mirrors deleteAgent).
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error(
 			"rest: mailbox delete reload failed",
 			"agent_id",
@@ -540,6 +547,13 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			workspaceID,
 			"error",
 			err,
+		)
+	} else if !confirmed {
+		slog.Warn(
+			"rest: mailbox delete reload did not confirm within the poll window; "+
+				"deleted mailbox's email tools may still be live on the running instance",
+			"agent_id", agentID,
+			"workspace_id", workspaceID,
 		)
 	}
 

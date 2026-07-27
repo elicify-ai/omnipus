@@ -486,3 +486,74 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"unsupported OS/arch"* ]]
 }
+
+# ── MEDIUM fix regression coverage: disk-fill family ─────────────────────────
+#
+# Mirrors the Go installer's FIX-CRIT-001: a failure partway through
+# download/extract must never leave a partial, corrupted dist/chromium/
+# payload behind for a later run (or goreleaser's archive step) to pick up
+# by mistake, and a host that's already too low on disk to safely attempt
+# the ~150-200 MB download+extract should fail fast rather than partway
+# through.
+
+@test "cft-bundle.sh: a failure AFTER extraction removes the partial dist/chromium/ payload" {
+  # Simulate the exact incident this fix targets: unzip partially extracts
+  # (writes a real, executable chrome binary) and then fails outright —
+  # the disk-full-mid-extract shape. Before the STAGE cleanup trap, that
+  # partial chrome-linux64/chrome would survive on disk after the script
+  # exits non-zero, indistinguishable from a real (if incomplete) install.
+  cat > "$SCRUB_BIN/unzip" <<'STUB'
+#!/bin/bash
+if [ "$1" = "-v" ]; then
+  echo "UnZip stub 1.0"
+  exit 0
+fi
+dest=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d) shift; dest="$1"; shift ;;
+    -q) shift ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "$dest/chrome-linux64"
+printf '#!/bin/sh\necho partial\n' > "$dest/chrome-linux64/chrome"
+chmod +x "$dest/chrome-linux64/chrome"
+echo "unzip stub: simulating disk-full mid-extract" >&2
+exit 1
+STUB
+  chmod +x "$SCRUB_BIN/unzip"
+
+  run bash "$CFT_BUNDLE_SH" amd64
+  echo "status=$status output=$output"
+  [ "$status" -ne 0 ]
+  # The partial, executable binary the stub wrote must NOT survive — the
+  # whole dist/chromium/ tree must be gone, not just left half-populated.
+  [ ! -e "dist/chromium/chrome-linux64/chrome" ]
+  [ ! -d "dist/chromium" ]
+}
+
+@test "cft-bundle.sh: low disk space aborts before any network activity" {
+  # Fabricate a df report showing ~1MB free (well under the 1 GiB floor)
+  # so the preflight fires deterministically without needing to actually
+  # fill the test host's disk.
+  cat > "$SCRUB_BIN/df" <<'STUB'
+#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'df-stub 1.0\n'
+  exit 0
+fi
+printf '%s\n' "Filesystem     1024-blocks      Used Available Capacity Mounted on"
+printf '%s\n' "/dev/fake         1000000    999000      1000     100% /"
+STUB
+  chmod +x "$SCRUB_BIN/df"
+
+  run bash "$CFT_BUNDLE_SH" amd64
+  echo "status=$status output=$output"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"free"* ]]
+  [[ "$output" == *"disk space"* ]]
+  # Must fail BEFORE ever creating dist/chromium/ (no network/tool calls
+  # past the preflight).
+  [ ! -d "dist/chromium" ]
+}

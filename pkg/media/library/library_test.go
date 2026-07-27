@@ -118,8 +118,20 @@ func TestWorkspaceLibrary_Store_AnyFormat_Succeeds(t *testing.T) {
 	if lib.Path() != wantPath {
 		t.Fatalf("Path() = %q, want %q", lib.Path(), wantPath)
 	}
-	if got := len(lib.List()); got != len(formats) {
+	listed := lib.List()
+	if got := len(listed); got != len(formats) {
 		t.Fatalf("List() length = %d, want %d", got, len(formats))
+	}
+	// Review FIX 2: every healthy entry must report status=available (the
+	// projection default), never nil and never "stranded" — that value is
+	// reserved for entries the stranded registry actually knows about.
+	for _, entry := range listed {
+		if entry.Status == nil || *entry.Status != gen.Available {
+			t.Errorf("List() entry %q Status = %v, want %q", entry.Filename, entry.Status, gen.Available)
+		}
+	}
+	if got := lib.StrandedCount(); got != 0 {
+		t.Fatalf("StrandedCount() = %d, want 0 (nothing is stranded)", got)
 	}
 }
 
@@ -1159,9 +1171,23 @@ func TestWorkspaceLibrary_Delete_CompoundRollbackFailure_ReportsErrEntryStranded
 	}
 
 	// List() still shows the entry (it genuinely is still in the manifest) —
-	// only the byte-serving/mutation surfaces refuse it.
-	if got := len(lib.List()); got != 1 {
+	// only the byte-serving/mutation surfaces refuse it outright. Review
+	// FIX 2: List() now annotates it with status=stranded (rather than
+	// presenting it identically to a healthy entry), so a caller can tell
+	// the two apart without a separate per-id Get() round-trip that would
+	// just 500.
+	listed := lib.List()
+	if got := len(listed); got != 1 {
 		t.Fatalf("List() length = %d, want 1 (the stranded entry is still cataloged)", got)
+	}
+	if listed[0].Status == nil || *listed[0].Status != gen.Stranded {
+		t.Fatalf("List()[0].Status = %v, want %q (the stranded entry must be annotated, not shown as healthy)",
+			listed[0].Status, gen.Stranded)
+	}
+
+	// StrandedCount (review FIX 3) must reflect this same live state.
+	if got := lib.StrandedCount(); got != 1 {
+		t.Fatalf("StrandedCount() = %d, want 1", got)
 	}
 }
 

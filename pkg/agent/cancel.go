@@ -382,10 +382,18 @@ func (al *AgentLoop) RequestCancel(
 	interrupted, _ := al.InterruptSession(sessionID, hint)
 
 	// Defensive consistency check: the pre-computed descendants list must match
-	// what InterruptSession collected. A mismatch means a turn was added or removed
-	// in the narrow window between collectDescendantTurnIDs and InterruptSession —
-	// this should never happen in practice but is worth a WARN if it does.
-	if len(interrupted) != len(descendants) {
+	// what InterruptSession collected. A mismatch means a turn was added or
+	// removed in the narrow window between collectDescendantTurnIDs and
+	// InterruptSession — this should never happen in practice but is worth a
+	// WARN if it does.
+	//
+	// FIX 4: compare as SETS, not just lengths. A bare len(a) != len(b) check
+	// cannot catch a same-size swap — one descendant finishing while a
+	// DIFFERENT one is added in the same narrow window — which is exactly the
+	// race this check exists to catch: the two slices would have identical
+	// length but different membership, and the old check reported that as
+	// "consistent" and stayed silent.
+	if !descendantSetsMatch(interrupted, descendants) {
 		slog.Warn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt",
 			"session_id", sessionID,
 			"pre_collected", descendants,
@@ -484,6 +492,35 @@ func (al *AgentLoop) RequestCancel(
 		BackgroundSessionsKilled: int(atomic.LoadInt64(&backgroundSessionsKilled)),
 		BackgroundSessionsFailed: int(atomic.LoadInt64(&backgroundSessionsFailed)),
 	}, nil
+}
+
+// descendantSetsMatch reports whether a and b contain the same turn IDs,
+// ignoring order (FIX 4). Used by RequestCancel's descendants-consistency
+// check in place of a bare length comparison: two same-length slices can
+// still differ in MEMBERSHIP when one descendant finishes and a different one
+// is added inside the same narrow window the check exists to catch — a
+// same-size swap that len(a) != len(b) cannot distinguish from "nothing
+// changed". Duplicate turn IDs within a slice are treated as significant
+// (matched by count, not just presence) since collectDescendantTurnIDs/
+// InterruptSession should never emit one, so a duplicate appearing in only
+// one of the two lists is itself a genuine mismatch worth surfacing.
+func descendantSetsMatch(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, id := range a {
+		counts[id]++
+	}
+	for _, id := range b {
+		counts[id]--
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // RequestCancelForSession is a primitive-argument adapter for RequestCancel

@@ -33,6 +33,29 @@ import (
 // runtime-download path that doesn't ship a manifest by default.
 var ErrSHA256ManifestMissing = errors.New("chrome.sha256 integrity manifest missing or unreadable")
 
+// ErrSHA256ManifestMalformed is returned when a chrome.sha256 manifest was
+// found and read successfully but its content does not parse as a valid
+// digest line (see ParseChromeSHA256Manifest's grammar). Distinct from
+// ErrSHA256ManifestMissing (nothing to read at all) and from a genuine
+// digest mismatch (a well-formed manifest that simply disagrees with the
+// binary) — callers that fold all three into one message mislead the
+// operator about which remediation applies (FIX-HIGH-003).
+var ErrSHA256ManifestMalformed = errors.New("chrome.sha256 manifest is malformed")
+
+// ErrSHA256BinarySymlink is returned when binaryPath itself is a symlink at
+// the leaf (SEC-ADR052-005). This is a real security-relevant event — a
+// substituted binary — never a digest disagreement; callers must not
+// report it as a "hash mismatch" (FIX-HIGH-003).
+var ErrSHA256BinarySymlink = errors.New("refusing to verify a symlinked binary")
+
+// ErrSHA256VerificationFailed is returned when the integrity check could
+// not run to completion for a reason OTHER than a missing/malformed
+// manifest or a symlinked binary — binary Lstat failure, binary is a
+// directory, binary open failure, or a hashing I/O error. None of these
+// are a digest DISAGREEMENT; callers must not report a fabricated
+// expected/got pair for them (FIX-HIGH-003).
+var ErrSHA256VerificationFailed = errors.New("chrome integrity verification could not run")
+
 var errNoSHA256Line = errors.New("manifest contains no SHA-256 digest line")
 
 // ParseChromeSHA256Manifest extracts the canonical 64-char lowercase hex
@@ -165,29 +188,29 @@ func VerifyChromeSHA256(binaryPath, shaPath string) error {
 
 	want, parseErr := ParseChromeSHA256Manifest(raw)
 	if parseErr != nil {
-		return fmt.Errorf("parse sha256 manifest %s: %w", shaPath, parseErr)
+		return fmt.Errorf("%w: %s: %v", ErrSHA256ManifestMalformed, shaPath, parseErr)
 	}
 
 	// SEC-ADR052-005: refuse a symlinked binary at the leaf.
 	binInfo, lerr := os.Lstat(binaryPath)
 	if lerr != nil {
-		return fmt.Errorf("lstat binary %s: %w", binaryPath, lerr)
+		return fmt.Errorf("%w: lstat binary %s: %v", ErrSHA256VerificationFailed, binaryPath, lerr)
 	}
 	if binInfo.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to verify a symlinked binary at %s", binaryPath)
+		return fmt.Errorf("%w at %s", ErrSHA256BinarySymlink, binaryPath)
 	}
 	if binInfo.IsDir() {
-		return fmt.Errorf("binary path %s is a directory", binaryPath)
+		return fmt.Errorf("%w: binary path %s is a directory", ErrSHA256VerificationFailed, binaryPath)
 	}
 
 	f, openErr := os.Open(binaryPath)
 	if openErr != nil {
-		return fmt.Errorf("open binary %s: %w", binaryPath, openErr)
+		return fmt.Errorf("%w: open binary %s: %v", ErrSHA256VerificationFailed, binaryPath, openErr)
 	}
 	defer f.Close()
 	hasher := sha256.New()
 	if _, copyErr := io.Copy(hasher, f); copyErr != nil {
-		return fmt.Errorf("hash binary %s: %w", binaryPath, copyErr)
+		return fmt.Errorf("%w: hash binary %s: %v", ErrSHA256VerificationFailed, binaryPath, copyErr)
 	}
 	got := hex.EncodeToString(hasher.Sum(nil))
 

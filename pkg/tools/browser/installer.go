@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // integrity check only (matches the GCS-published Content-MD5), not a security signature — see verifyGoogHashMD5.
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -218,10 +220,31 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 	zipPath := filepath.Join(versionDir, build.downloadID+"-"+platform+".zip")
 	if dlErr := downloadFile(ctx, zipURL, zipPath); dlErr != nil {
 		_ = os.Remove(zipPath)
+		cleanupPartialInstall(versionDir, build, platform)
 		return "", fmt.Errorf("browser: download %s: %w", zipURL, dlErr)
 	}
 
 	if extractErr := extractZip(zipPath, versionDir); extractErr != nil {
+		// FIX-CRIT-001: a disk-full, killed-mid-extract, or otherwise
+		// partial extraction can leave the build's subdirectory containing
+		// a PARTIAL but already-executable binary — extractZip sets the
+		// exec bit from the zip entry's own mode at file-creation time,
+		// before the io.Copy that can later fail mid-write. Without this
+		// cleanup, findInstalledBuild's permissive-missing-manifest
+		// posture (CORR-007 — deliberately permissive so genuine
+		// pre-ADR-052 installs that predate a manifest aren't refused)
+		// would treat that partial tree as "installed" on every
+		// subsequent boot, forever — this is the exact mechanism behind a
+		// real incident where a full disk during extraction accumulated
+		// unusable, unverifiable, but "executable-looking" partial
+		// installs. Remove only THIS build's own extraction subdirectory
+		// (never the whole versionDir, which a sibling build — e.g. the
+		// other dual-download flavor — may already legitimately occupy)
+		// plus the zip itself, so a failed install can never be mistaken
+		// for a working one. See installer_test.go's
+		// TestInstaller_ExtractFailure_CleansUpPartialInstall.
+		_ = os.Remove(zipPath)
+		cleanupPartialInstall(versionDir, build, platform)
 		return "", fmt.Errorf("browser: extract %s: %w", zipPath, extractErr)
 	}
 	_ = os.Remove(zipPath)
@@ -229,12 +252,41 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 	binaryPath := build.binaryFullPath(versionDir, platform)
 	info, err := os.Stat(binaryPath)
 	if err != nil {
+		// Extraction reported success but the expected binary isn't where
+		// this build's layout says it should be (e.g. a CfT layout change,
+		// or a zip that extracted other entries but not this one). Same
+		// "never leave a partial, misleading tree behind" rationale as the
+		// extract-failure branch above.
+		cleanupPartialInstall(versionDir, build, platform)
 		return "", fmt.Errorf("browser: extracted archive missing %s: %w", binaryPath, err)
 	}
 	if info.Mode()&0o111 == 0 {
 		if err := os.Chmod(binaryPath, info.Mode()|0o755); err != nil {
 			return "", fmt.Errorf("browser: chmod +x %s: %w", binaryPath, err)
 		}
+	}
+
+	// FIX-CRIT-001: write the chrome.sha256 integrity manifest that THIS
+	// installRoot's findInstalledBuild will read back on every future
+	// resolution (chromiumBuild.sha256Path — one manifest per installRoot,
+	// the same contract the package-Chrome path uses). Before this,
+	// EnsureChromiumBuild never wrote the manifest it reads, so every
+	// managed download landed in CORR-007's permissive "manifest missing"
+	// branch forever — there was nothing for a LATER call to verify
+	// against, even on a perfectly healthy install. This closes that gap
+	// for every install performed by a binary carrying this fix; it does
+	// NOT retroactively add a manifest to installs performed by an older
+	// binary — those remain in the permissive back-compat branch exactly
+	// as before (CORR-007 is unchanged). Best-effort/non-fatal: by this
+	// point the binary is already verified via the MD5-checked download
+	// plus a clean extraction, so a manifest-write hiccup (e.g. the disk
+	// filling up at this exact instant) must not fail an otherwise-good
+	// installation — it only means the NEXT findInstalledBuild call falls
+	// back to the same permissive posture every pre-this-fix install has
+	// always had, not a regression.
+	if manErr := writeManagedInstallManifest(build, installRoot, binaryPath); manErr != nil {
+		logger.WarnCF("browser", "failed to write chrome.sha256 integrity manifest for managed chromium install",
+			map[string]any{"binary": binaryPath, "error": manErr.Error()})
 	}
 
 	logger.InfoCF("browser", "Chromium install complete",
@@ -245,6 +297,65 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 		})
 
 	return binaryPath, nil
+}
+
+// cleanupPartialInstall removes build's own extraction subdirectory under
+// versionDir (NOT versionDir itself, which a sibling build — the other
+// dual-download flavor, or a different already-installed version — may
+// legitimately occupy) after a failed download or extraction, so a partial
+// or corrupted install can never be mistaken for a working one by a later
+// findInstalledBuild call. Best-effort: a removal failure is logged, never
+// returned — the caller is already unwinding a real error and must not mask
+// it with a cleanup failure.
+func cleanupPartialInstall(versionDir string, build chromiumBuild, platform string) {
+	buildDir := filepath.Join(versionDir, build.subdir(platform))
+	if err := os.RemoveAll(buildDir); err != nil {
+		logger.ErrorCF("browser", "failed to clean up partial chromium install after a failed download/extract",
+			map[string]any{"dir": buildDir, "error": err.Error()})
+	}
+}
+
+// writeManagedInstallManifest computes binaryPath's SHA-256 and writes it to
+// build's manifest location under installRoot (chromiumBuild.sha256Path),
+// atomically (temp file + rename, mirroring downloadFile's own atomic-write
+// discipline) so a crash mid-write can never leave a half-written,
+// unparseable manifest where a clean absence used to be.
+func writeManagedInstallManifest(build chromiumBuild, installRoot, binaryPath string) error {
+	shaPath := build.sha256Path(installRoot)
+	if shaPath == "" {
+		return fmt.Errorf("empty install root, cannot place chrome.sha256 manifest")
+	}
+
+	f, err := os.Open(binaryPath)
+	if err != nil {
+		return fmt.Errorf("open %s for hashing: %w", binaryPath, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, copyErr := io.Copy(h, f); copyErr != nil {
+		return fmt.Errorf("hash %s: %w", binaryPath, copyErr)
+	}
+	digest := hex.EncodeToString(h.Sum(nil))
+
+	tmp, err := os.CreateTemp(installRoot, "chrome.sha256.part-*")
+	if err != nil {
+		return fmt.Errorf("create temp manifest in %s: %w", installRoot, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(digest + "\n"); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp manifest: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp manifest: %w", err)
+	}
+	if err := os.Rename(tmpPath, shaPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp manifest to %s: %w", shaPath, err)
+	}
+	return nil
 }
 
 // EnsureChromium ensures the agent's default managed Chromium binary is

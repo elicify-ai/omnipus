@@ -229,3 +229,69 @@ func TestHandleWorkspaceDelete_MediaCascadeSuccess_StillReturns204(t *testing.T)
 	require.True(t, ok)
 	assert.Equal(t, false, deleteDetails["media_cascade_failed"])
 }
+
+// TestHandleWorkspaceDelete_DirRemoveFailure_Returns500 is the FIX 3
+// regression test: os.RemoveAll(wsDir) failing (e.g. EBUSY/permission on
+// workspaces/<id>/work/, which a live agent turn may still be writing to)
+// used to only reach a slog.Warn — the response gate checked solely
+// mediaCascadeFailed, so a caller got a 204 "fully deleted" even though
+// wsDir was still (partially) on disk. Forces a genuine RemoveAll failure
+// via a read-only subdirectory (no write permission means the file inside
+// it cannot be unlinked) rather than mocking os.RemoveAll, so this proves
+// the real call site's behavior. Runs as a non-root user (uid 1000) in this
+// environment, so the permission denial is real, not a no-op root bypass.
+func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
+	api, auditDir := newTestAPIWithAuditor(t)
+	id := createWorkspaceViaAPI(t, api, "DirRemoveFailure", "")
+
+	wsDir := filepath.Join(api.homePath, "workspaces", id)
+	lockedDir := filepath.Join(wsDir, "work", "locked")
+	require.NoError(t, os.MkdirAll(lockedDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(lockedDir, "busy.txt"), []byte("x"), 0o600))
+	require.NoError(t, os.Chmod(lockedDir, 0o500)) // r-x: contents cannot be unlinked
+	t.Cleanup(func() {
+		_ = os.Chmod(lockedDir, 0o700)
+		_ = os.RemoveAll(wsDir)
+	})
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r = r.WithContext(contextWithUser(r.Context(), "carol"))
+	w := httptest.NewRecorder()
+	api.handleWorkspaceDelete(w, r, id)
+
+	// Before the fix this was an unconditional 204 even though wsDir was
+	// still (partially) on disk.
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	var errResp gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.NotEmpty(t, errResp.Error)
+
+	// The leftover file must genuinely still be on disk — proving the 500
+	// reflects reality, not a spurious failure.
+	_, statErr := os.Stat(filepath.Join(lockedDir, "busy.txt"))
+	assert.NoError(t, statErr, "the locked file must still exist — RemoveAll only partially succeeded")
+
+	// The authoritative workspace record delete is unaffected by the
+	// directory-wipe failure — a follow-up GET must still 404.
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	api.handleWorkspaceGet(getW, getR, id)
+	assert.Equal(t, http.StatusNotFound, getW.Code,
+		"workspace record must be confirmed gone via GET despite the directory-removal 500")
+
+	events := readAuditEventsForTest(t, auditDir)
+	var deleteEvent map[string]any
+	for _, e := range events {
+		if e["event"] == "workspace.delete" {
+			deleteEvent = e
+			break
+		}
+	}
+	require.NotNil(t, deleteEvent)
+	deleteDetails, ok := deleteEvent["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, deleteDetails["media_cascade_failed"],
+		"this failure is directory-removal, not a media cascade failure")
+	assert.Equal(t, true, deleteDetails["dir_remove_failed"],
+		"audit details must flag the directory-removal failure")
+}

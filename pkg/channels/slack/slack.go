@@ -191,10 +191,24 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 	for _, part := range msg.Parts {
 		localPath, _, err := store.ResolveWithCallerWorkspace(part.Ref, msg.WorkspaceID)
 		if err != nil {
-			logger.ErrorCF("slack", "Failed to resolve media ref", map[string]any{
-				"ref":   part.Ref,
-				"error": err.Error(),
-			})
+			// FR-028a: distinguish the caller-workspace membership guard's
+			// denial (a security-relevant Spoofing rejection) from a
+			// routine stale/missing ref, so it's greppable/auditable
+			// separately instead of folding into the same undifferentiated
+			// "N of M media parts failed to send" count as any other
+			// resolve failure.
+			if media.IsCallerWorkspaceDenied(err) {
+				logger.WarnCF("slack", "Media ref denied by caller-workspace guard", map[string]any{
+					"ref":              part.Ref,
+					"caller_workspace": msg.WorkspaceID,
+					"error":            err.Error(),
+				})
+			} else {
+				logger.ErrorCF("slack", "Failed to resolve media ref", map[string]any{
+					"ref":   part.Ref,
+					"error": err.Error(),
+				})
+			}
 			continue
 		}
 
@@ -235,15 +249,22 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 				"filename": filename,
 				"error":    err.Error(),
 			})
-			return fmt.Errorf("slack send media: %w", channels.ErrTemporary)
+			// CRITICAL fix (retry-duplication, sendfile-fix review): a
+			// genuine upload API failure no longer returns a bare
+			// ErrTemporary. If an earlier part in this message already
+			// uploaded (sentCount > 0), retrying the whole message would
+			// re-upload it, duplicating it for the user, so the failure is
+			// classified permanent instead. The real API error stays in
+			// the chain (was previously flattened away entirely).
+			return channels.ClassifyMediaSendError("slack", sentCount, err)
 		}
 		sentCount++
 	}
 
 	// sentCount < len(msg.Parts) means at least one part failed to resolve
 	// locally (the loop above only `continue`s past those failures; a
-	// genuine upload API failure returns immediately above, never reaching
-	// here).
+	// genuine upload API failure returns immediately above via
+	// ClassifyMediaSendError, never reaching here).
 	//
 	// Review fix (parity with Feishu/Matrix/Telegram, which shared this same
 	// convention): the original guard only caught sentCount==0 (total

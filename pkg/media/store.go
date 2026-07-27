@@ -254,6 +254,13 @@ func (s *FileMediaStore) ResolveWithMeta(ref string) (string, MediaMeta, error) 
 // sites: the caller-workspace context is the channel's bound workspace
 // (already on the channel config). It is a nilable semantics — empty
 // callerWorkspace preserves the legacy global-registry-only behavior.
+//
+// Review FIX 4: a caller that folds every returned error into one
+// undifferentiated failure count (as every current channel SendMedia
+// implementation does) loses the distinction between a routine stale/
+// missing ref and a security-relevant FR-028a caller-workspace denial.
+// Check IsCallerWorkspaceDenied(err) before bucketing a non-nil error as a
+// routine delivery failure.
 func (s *FileMediaStore) ResolveWithCallerWorkspace(
 	ref string,
 	callerWorkspace string,

@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -263,6 +264,103 @@ func TestSendMedia_PartialFailureReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, channels.ErrSendFailed,
 		"must be classified permanent so sendMediaWithRetry does not re-deliver the 2 already-successful parts")
 	assert.Len(t, caller.calls, 2, "the 2 resolvable parts must still have been sent")
+}
+
+// TestSendMedia_MidLoopSendFailureAfterPartialSuccessIsPermanent is the
+// CRITICAL sendfile-fix review regression test: a genuine Bot API failure
+// on part 2, after part 1 has already been sent successfully, must be
+// classified permanent (channels.ErrSendFailed) — not the bare
+// channels.ErrTemporary this used to return unconditionally. Manager's
+// sendMediaWithRetry has no per-part resume; retrying this exact msg would
+// re-resolve and re-send part 1, duplicating it for the user.
+func TestSendMedia_MidLoopSendFailureAfterPartialSuccessIsPermanent(t *testing.T) {
+	var sendPhotoCalls int
+	caller := &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			require.Contains(t, url, "sendPhoto", "only image parts are sent in this test")
+			sendPhotoCalls++
+			if sendPhotoCalls == 1 {
+				return successResponse(t), nil
+			}
+			return nil, errors.New(`api: 500 "Internal Server Error"`)
+		},
+	}
+	ch := newTestChannel(t, caller)
+
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	tmpDir := t.TempDir()
+	parts := make([]bus.MediaPart, 0, 2)
+	for _, name := range []string{"a.png", "b.png"} {
+		localPath := filepath.Join(tmpDir, name)
+		require.NoError(t, os.WriteFile(localPath, []byte("fake-png-content"), 0o644))
+		ref, err := store.Store(localPath, media.MediaMeta{Filename: name, ContentType: "image/png"}, "scope-1")
+		require.NoError(t, err)
+		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
+	}
+
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "12345",
+		Parts:  parts,
+	})
+
+	require.Error(t, err, "SendMedia must report the part-2 send failure")
+	assert.ErrorIs(t, err, channels.ErrSendFailed,
+		"a mid-loop send failure after a partial success must be classified permanent, "+
+			"or Manager.sendMediaWithRetry would retry and re-send part 1 (already delivered)")
+	assert.NotErrorIs(t, err, channels.ErrTemporary,
+		"must not ALSO match ErrTemporary — that would make the retry decision ambiguous")
+	assert.Equal(t, 2, sendPhotoCalls, "part 1 sent once, part 2 attempted once (then SendMedia returned)")
+}
+
+// TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning is the FR-028a
+// review regression test: a media ref denied by the caller-workspace
+// membership guard (media.IsCallerWorkspaceDenied) must get its own
+// distinct WARN log line naming it a workspace-boundary denial, instead of
+// being folded into the generic "Failed to resolve media ref" ERROR log
+// used for a routine stale/missing ref. Delivery semantics (permanent
+// ErrSendFailed, no retry) are unchanged either way.
+func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "telegram-media.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	require.NoError(t, logger.EnableFileLogging(logFile))
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	ch := newTestChannel(t, &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			t.Fatal("no Bot API call should be reached: the caller-workspace guard fires before any resolve")
+			return nil, nil
+		},
+	})
+	ch.SetMediaStore(media.NewFileMediaStore())
+
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "12345",
+		// WorkspaceID deliberately empty: a workspace-prefixed ref with no
+		// caller-workspace context trips the FR-028a guard
+		// (ErrWorkspaceContextRequired) before any media store provider is
+		// even consulted.
+		Parts: []bus.MediaPart{{Type: "image", Ref: "media://workspace/other-ws/some-id"}},
+	})
+
+	require.Error(t, err, "SendMedia must still report failure for a denied workspace ref")
+	assert.ErrorIs(t, err, channels.ErrSendFailed,
+		"a caller-workspace denial is permanent, same as any other local resolve failure")
+
+	logged, readErr := os.ReadFile(logFile)
+	require.NoError(t, readErr, "reading captured log file")
+	logStr := string(logged)
+	assert.Contains(t, logStr, "Media ref denied by caller-workspace guard",
+		"the FR-028a denial must get its own distinct WARN log line")
+	assert.NotContains(t, logStr, "Failed to resolve media ref",
+		"the denial must NOT also log the generic message (would defeat distinguishing it)")
 }
 
 func TestSend_EmptyContent(t *testing.T) {

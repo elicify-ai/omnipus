@@ -271,7 +271,13 @@ func TestParseMachODylibs_BigEndian(t *testing.T) {
 }
 
 // TestParseMachODylibs_NoLoadCommands verifies that a Mach-O with ncmds=0
-// returns nil (no dylibs, nothing to check) without error.
+// returns an error rather than silently reporting "no dylibs, nothing to
+// check". FIX-HIGH-002: zero load commands is not expected for a
+// Chrome-for-Testing Mach-O (always dynamically linked; a real Mach-O
+// executable always carries at least an LC_SEGMENT_64) — before this fix
+// the parser returned (nil, nil), indistinguishable from "no missing
+// libs", which is the same false-clean-bill-of-health shape as the ELF
+// parser's e_phnum==0 bug.
 func TestParseMachODylibs_NoLoadCommands(t *testing.T) {
 	const headerSize = machOHeaderSize64Test
 	buf := make([]byte, headerSize)
@@ -285,7 +291,7 @@ func TestParseMachODylibs_NoLoadCommands(t *testing.T) {
 	binary.LittleEndian.PutUint32(buf[28:32], 0)
 
 	dylibs, err := parseMachODylibs(bytesReaderAt(buf))
-	require.NoError(t, err)
+	require.Error(t, err, "ncmds=0 must surface an error, not a silent \"nothing to check\" pass")
 	assert.Nil(t, dylibs)
 }
 

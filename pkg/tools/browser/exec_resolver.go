@@ -361,11 +361,12 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 			if err != nil {
 				continue
 			}
-			if !probeChromiumBinary(ctx, path) {
+			if ok, reason := probeChromiumBinary(ctx, path); !ok {
 				logger.WarnCF("browser", "chromium candidate on PATH did not execute successfully — skipping",
 					map[string]any{
-						"name": name,
-						"path": path,
+						"name":   name,
+						"path":   path,
+						"reason": reason,
 					})
 				continue
 			}
@@ -384,6 +385,17 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// 007 and discard the $PATH resolution — fall through to the verified
 	// package Chrome. Operators who actually want a custom Chrome set
 	// trust_path_chrome: true (or set cfg.ExecPath, which always wins).
+	//
+	// FIX-HIGH-004: remember what (if anything) was discarded here so a
+	// LATER failure of every remaining resolution step (package Chrome
+	// absent/unverifiable, managed download failing — e.g. an air-gapped
+	// or offline host) can name it in the error actually returned to the
+	// caller/agent. Before this fix the discard was explained ONLY in the
+	// WARN log below: an operator whose managed download fails offline saw
+	// a bare network/manifest error with no hint that a working Chrome was
+	// sitting right there on $PATH the whole time, or which setting to
+	// flip to use it.
+	rejectedPathChrome := ""
 	if pathResolved != "" && !cfg.TrustPathChrome {
 		logger.WarnCF(
 			"browser",
@@ -393,6 +405,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 				"policy":        "trust_path_chrome=false",
 			},
 		)
+		rejectedPathChrome = pathResolved
 		pathResolved = ""
 	}
 
@@ -449,11 +462,52 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	installRoot := InstallRootForProfileDir(cfg.ProfileDir)
 	managedPath, err := EnsureChromium(ctx, installRoot)
 	if err != nil {
+		err = augmentWithRejectedPathChrome(err, rejectedPathChrome)
 		e.cacheFailure(err)
 		return "", err
 	}
+	// FIX-CRIT-001: mirror step 2's $PATH probe. EnsureChromium resolving a
+	// path — whether freshly downloaded or already installed on disk —
+	// only proves the file exists with the executable bit set: the exact
+	// filesystem-only check that let a partial/corrupted extraction get
+	// cached as a working install forever (see installer.go's
+	// EnsureChromiumBuild doc comment on cleanupPartialInstall). Actually
+	// EXECUTE the binary before trusting it as resolved, exactly like
+	// every $PATH candidate above — there is no further fallback after
+	// this step, so a broken managed binary must surface as a clear,
+	// actionable error rather than being handed to chromedp to fail later
+	// with an opaque exec error.
+	if ok, reason := probeChromiumBinary(ctx, managedPath); !ok {
+		probeErr := fmt.Errorf(
+			"managed chromium binary %s did not execute successfully (--version probe failed: %s); the install may be corrupt — remove %s and retry",
+			managedPath,
+			reason,
+			installRoot,
+		)
+		probeErr = augmentWithRejectedPathChrome(probeErr, rejectedPathChrome)
+		e.cacheFailure(probeErr)
+		return "", probeErr
+	}
 	e.cacheSuccess(managedPath)
 	return managedPath, nil
+}
+
+// augmentWithRejectedPathChrome (FIX-HIGH-004) wraps a managed-download or
+// probe failure with a mention of a working $PATH Chrome this resolution
+// discarded earlier under the default tools.browser.trust_path_chrome=false
+// policy, so the error actually surfaced to the caller/agent — not just the
+// WARN-BROWSER-007 log line — names both the rejected binary and the
+// setting an operator needs to flip to use it. A no-op when nothing was
+// rejected (rejectedPathChrome == "").
+func augmentWithRejectedPathChrome(err error, rejectedPathChrome string) error {
+	if rejectedPathChrome == "" {
+		return err
+	}
+	return fmt.Errorf(
+		"%w (a working system Chrome was found at %s but was not used because tools.browser.trust_path_chrome=false; set tools.browser.trust_path_chrome=true to allow it)",
+		err,
+		rejectedPathChrome,
+	)
 }
 
 // cacheSuccess records path as the resolved Chromium binary + clears any prior

@@ -716,8 +716,19 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "password change failed")
 		return
 	}
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Warn("auth: hot-reload after change-password failed", "error", err)
+	} else if !confirmed {
+		// FIX 4: previously silent — a timeout was indistinguishable from a
+		// confirmed reload (both returned a nil error), so nothing was ever
+		// logged for this case even though it means the in-memory config
+		// (and therefore the freshly-cleared token set) may not be fully
+		// live on every code path yet. gen.OperationResult below has no
+		// field to surface this to the HTTP caller (see
+		// triggerReloadAndWaitOutcome's doc comment) — this log line is the
+		// only durable record until that response type grows one.
+		slog.Warn("auth: hot-reload after change-password did not confirm within the poll window",
+			"username", user.Username)
 	}
 	// Revoke the caller's browser-side cookies. Old bearer tokens and session
 	// cookies are now invalid (hashes cleared above). The SPA must redirect to
@@ -837,21 +848,53 @@ func revokeUserToken(userMap map[string]any, presentedToken, presentedID string)
 	userMap["tokens"] = kept
 }
 
-// triggerReloadAndWait triggers a config reload and polls until
-// IsReloadPending() clears (indicating the in-memory config has been updated),
-// up to a 5-second deadline. Returns an error when the reload fails to start;
-// reload-completion timeout is treated as best-effort (we return nil so callers
-// are not blocked indefinitely).
+// reloadPollDeadline is the poll window triggerReloadAndWaitOutcome waits
+// for IsReloadPending() to clear before reporting confirmed=false. A var
+// (not an inlined 5*time.Second literal) purely so tests can shrink it
+// instead of sleeping out a real 5-second timeout to exercise that branch —
+// production always runs with the default below.
+var reloadPollDeadline = 5 * time.Second
+
+// triggerReloadAndWaitOutcome is triggerReloadAndWait's richer sibling: same
+// trigger-and-poll sequence, but the return additionally distinguishes a
+// CONFIRMED reload (IsReloadPending cleared before the deadline) from one
+// that merely timed out still pending.
 //
-// The special case "reload not configured" (reloadFunc == nil) is treated as a
-// no-op rather than an error: this condition is normal in unit tests where the
-// full gateway reload pipeline is not wired. Production always configures the
-// reload function during startup.
-func (a *restAPI) triggerReloadAndWait() error {
+// FIX 4 (HIGH, live re-review): triggerReloadAndWait's plain `error` return
+// made these two outcomes indistinguishable — both returned nil — and all
+// 16 existing call sites across this package treat err == nil as "the
+// change is live," returning 200 accordingly. executeReload (tool-policy
+// validation, credential re-injection, channel restarts) can plausibly
+// exceed the poll window on a busy gateway, so god-mode, global tool
+// policies, rate limits, prompt guard, mailbox, agent CRUD, etc. could all
+// report "applied" while the OLD config was still in force.
+//
+// triggerReloadAndWait itself keeps its EXACT original signature and
+// behavior (confirmed is discarded below; err == nil on both a confirmed
+// reload and an unconfirmed timeout) rather than being changed in place:
+// 15 of its 16 call sites live in files outside this fix's scope (rest.go,
+// rest_god_mode.go, rest_mailbox.go, rest_rate_limits.go,
+// rest_session_scope.go, rest_onboarding.go, rest_prompt_guard.go,
+// rest_tool_policies.go), so changing the shared signature would force a
+// mechanical edit to every one of them just to keep the package compiling.
+// Worse, most respond with a wire type that has no field to carry the
+// distinction at all — HandleChangePassword's own gen.OperationResult
+// (Success/Error/Validation only) is one example; only
+// rest_prompt_guard.go's response type happens to already have a
+// RequiresRestart/Warning slot, and giving the others one would need a
+// contracts/openapi.yaml change (Constraint #8), disproportionate to this
+// fix. triggerReloadAndWaitOutcome exists so a caller that CAN act on the
+// distinction has a real signal to read instead of only nil — today that is
+// HandleChangePassword's own log line (see its call site); a future pass
+// touching one of the other 15 callers can adopt it for that caller's
+// response too.
+func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if errors.Is(err, agent.ErrReloadNotConfigured) {
-			// Unit-test environment — no reload pipeline wired; treat as no-op.
-			return nil
+			// Unit-test environment — no reload pipeline wired; nothing is
+			// pending to confirm, so this is a confirmed no-op, not an
+			// unconfirmed one.
+			return true, nil
 		}
 		if errors.Is(err, agent.ErrReloadAlreadyInProgress) {
 			// Another reload is in flight; poll until it completes rather than
@@ -859,16 +902,37 @@ func (a *restAPI) triggerReloadAndWait() error {
 			// Fall through to the polling loop below.
 		} else {
 			slog.Error("config reload failed", "error", err)
-			return err
+			return false, err
 		}
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(reloadPollDeadline)
 	for time.Now().Before(deadline) {
 		if !a.agentLoop.IsReloadPending() {
-			return nil
+			return true, nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	// Reload may still be running; return nil so callers are not blocked indefinitely.
-	return nil
+	// Reload may still be running — the exact ambiguity FIX 4 closes.
+	// confirmed=false with a nil error: callers that only check err keep
+	// their original "not blocked indefinitely" behavior; callers that
+	// check confirmed can now tell the two outcomes apart.
+	return false, nil
+}
+
+// triggerReloadAndWait triggers a config reload and polls until
+// IsReloadPending() clears (indicating the in-memory config has been updated),
+// up to reloadPollDeadline. Returns an error when the reload fails to start;
+// reload-completion timeout is treated as best-effort (we return nil so callers
+// are not blocked indefinitely) — this is triggerReloadAndWaitOutcome with the
+// confirmed/unconfirmed distinction discarded; see that function's doc comment
+// for why this wrapper is kept with its original signature rather than changed
+// in place.
+//
+// The special case "reload not configured" (reloadFunc == nil) is treated as a
+// no-op rather than an error: this condition is normal in unit tests where the
+// full gateway reload pipeline is not wired. Production always configures the
+// reload function during startup.
+func (a *restAPI) triggerReloadAndWait() error {
+	_, err := a.triggerReloadAndWaitOutcome()
+	return err
 }

@@ -337,6 +337,7 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 
 	chatKind := c.getChatKind(msg.ChatID)
 
+	sentCount := 0
 	for _, part := range msg.Parts {
 		fileInfo, err := c.uploadMedia(ctx, chatKind, msg.ChatID, part, msg.WorkspaceID)
 		if err != nil {
@@ -348,7 +349,21 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 			if errors.Is(err, channels.ErrSendFailed) {
 				return err
 			}
-			return fmt.Errorf("qq send media: %w", channels.ErrTemporary)
+			// CRITICAL fix (retry-duplication, sendfile-fix review): a
+			// genuine upload API failure (Transport error, bad/undecodable
+			// response) no longer returns a bare ErrTemporary.
+			// ClassifyMediaSendError checks sentCount — if an earlier part
+			// in this message already reached QQ (uploaded AND posted),
+			// retrying the whole message (sendMediaWithRetry has no
+			// per-part resume) would re-upload and re-post it, duplicating
+			// it for the user. In that case the failure is classified
+			// permanent (ErrSendFailed) so the manager does not retry at
+			// all. Only when nothing has been sent yet (sentCount == 0)
+			// does the failure keep its normal ErrTemporary retry
+			// classification. The real API error stays in the chain either
+			// way, instead of being flattened to an opaque "temporary
+			// failure".
+			return channels.ClassifyMediaSendError("qq", sentCount, err)
 		}
 
 		if err := c.sendUploadedMedia(ctx, chatKind, msg.ChatID, part, fileInfo); err != nil {
@@ -357,10 +372,25 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 				"chat_id": msg.ChatID,
 				"error":   err.Error(),
 			})
-			return fmt.Errorf("qq send media: %w", channels.ErrTemporary)
+			// Same reasoning as the upload failure above: the file for
+			// THIS part has already reached QQ's CDN by this point (only
+			// the follow-up post failed), so if an earlier part also fully
+			// sent (sentCount > 0), a bare retry of the whole message would
+			// duplicate it.
+			return channels.ClassifyMediaSendError("qq", sentCount, err)
 		}
+		sentCount++
 	}
 
+	// Unlike Telegram/Feishu/Matrix/Slack, QQ never `continue`s past a
+	// per-part failure — every failure path above returns immediately
+	// (a local resolve/stat/read failure inside uploadMedia is already
+	// wrapped in channels.ErrSendFailed and returned directly; a genuine
+	// upload/send API failure returns via ClassifyMediaSendError above), so
+	// sentCount == len(msg.Parts) is guaranteed whenever this point is
+	// reached and no post-loop shortfall guard (as Telegram/Feishu/Matrix/
+	// Slack need for their `continue`-based local-failure handling) applies
+	// here.
 	return nil
 }
 
@@ -417,6 +447,18 @@ func (c *QQChannel) buildMediaUpload(part bus.MediaPart, callerWorkspace string)
 
 	resolved, meta, err := store.ResolveWithCallerWorkspace(part.Ref, callerWorkspace)
 	if err != nil {
+		// FR-028a: distinguish the caller-workspace membership guard's
+		// denial (a security-relevant Spoofing rejection) from a routine
+		// stale/missing ref, so it's greppable/auditable separately instead
+		// of folding into the generic "Failed to upload media" ERROR log
+		// this returns into (SendMedia, via ErrSendFailed).
+		if media.IsCallerWorkspaceDenied(err) {
+			logger.WarnCF("qq", "Media ref denied by caller-workspace guard", map[string]any{
+				"ref":              part.Ref,
+				"caller_workspace": callerWorkspace,
+				"error":            err.Error(),
+			})
+		}
 		return nil, fmt.Errorf("qq resolve media ref %q: %v: %w", part.Ref, err, channels.ErrSendFailed)
 	}
 	if part.Filename == "" {

@@ -138,3 +138,28 @@ func ValidateCallerWorkspace(refWorkspaceID string, opts ResolveOpts) error {
 	}
 	return nil
 }
+
+// IsCallerWorkspaceDenied reports whether err represents the FR-028a
+// caller-workspace membership guard's denial (see ValidateCallerWorkspace)
+// — either a missing caller-workspace context (ErrWorkspaceContextRequired)
+// or an explicit cross-workspace spoofing attempt (ErrCrossWorkspaceRef) —
+// as opposed to a routine stale/missing ref (ErrNotFound) or any other
+// resolution failure.
+//
+// Review FIX 4: FileMediaStore.ResolveWithCallerWorkspace (the entry point
+// every channel's SendMedia implementation calls to resolve an outbound
+// media part) can return either of those two sentinels unwrapped, but
+// nothing previously made that fact easy to act on — a caller wanting to
+// treat a security-relevant Spoofing denial differently from a routine
+// stale/deleted ref had to know about and separately check two different
+// package-level error variables, which is easy to get wrong or skip
+// entirely (and every current channel call site does exactly that: an
+// identical logger.ErrorCF(...); continue folds the denial into the same
+// undifferentiated "N of M media parts failed to send" count as any other
+// resolve failure, losing the security-relevant signal exactly where audit
+// visibility matters). This is the single, hard-to-misuse check callers
+// should use instead: err should be logged/audited as a caller-workspace
+// denial (not a routine delivery failure) whenever this returns true.
+func IsCallerWorkspaceDenied(err error) bool {
+	return errors.Is(err, ErrWorkspaceContextRequired) || errors.Is(err, ErrCrossWorkspaceRef)
+}

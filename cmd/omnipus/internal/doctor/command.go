@@ -500,92 +500,158 @@ func checkBrowserPackageChrome() []warning {
 		}
 	case "darwin":
 		missing, machoErr := missingChromeLibsMachO(chromeBin)
-		if machoErr != nil {
-			// Structural error reading the Mach-O — not the same as a
-			// clean "all libs present" result. Surface a WARN so the
-			// operator knows doctor couldn't run the check rather than
-			// seeing silence.
-			warnings = append(warnings, warning{
-				code: "WARN-BROWSER-005",
-				message: fmt.Sprintf(
-					"could not parse bundled chrome Mach-O: %s — Chrome may not launch. Reinstall the omnipus package to recover the integrity-verified payload.",
-					machoErr,
-				),
-			})
-		} else if len(missing) > 0 {
-			// The synthetic "not-a-macho-binary" entry means the parser
-			// ran but the file isn't a Mach-O (e.g. a shell script the
-			// operator staged for testing, or a corrupt binary). That's a
-			// binary-format error, not a missing-lib error — surfacing it
-			// under WARN-BROWSER-005 ("missing required macOS libraries")
-			// would mislead the operator into installing host libs that
-			// don't exist. Skip the warning for this single-entry case;
-			// the structural-error branch above handles true parse errors.
-			if !(len(missing) == 1 && missing[0] == notAMachOBinary) {
-				warnings = append(warnings, warning{
-					code: "WARN-BROWSER-005",
-					message: fmt.Sprintf(
-						"bundled chrome is missing required macOS libraries: %s. System libraries (/usr/lib, /System/Library) ship with macOS — a missing system dylib indicates macOS needs reinstallation. Bundled frameworks ship in the .app's Frameworks directory — a missing @rpath framework indicates the omnipus package is corrupt; reinstall it to recover the integrity-verified payload. The in-process Mach-O check is the primary defense (ADR-052 SEC-ADR052-008).",
-						strings.Join(missing, ", "),
-					),
-				})
-			}
+		if w := darwinMachOWarning(missing, machoErr); w != nil {
+			warnings = append(warnings, *w)
 		}
 	}
 
-	if mismatch, got, want := readChromeSHA(root, chromeBin); mismatch {
-		warnings = append(warnings, warning{
+	if w := readChromeSHA(root, chromeBin); w != nil {
+		warnings = append(warnings, *w)
+	}
+
+	return warnings
+}
+
+// darwinMachOWarning builds the WARN-BROWSER-005 diagnostic (or nil) for
+// the darwin Mach-O dependency walker's result (missingChromeLibsMachO).
+// Factored out of checkBrowserPackageChrome's switch, taking the parser's
+// OUTPUT directly rather than the chrome binary path, so the FIX-HIGH-002
+// behavior is unit-testable on any host: missingChromeLibsMachO itself is
+// darwin-build-tagged (the real implementation lives in
+// command_libs_darwin.go; command_libs_linux.go's copy is a compile-only
+// no-op stub — see that file's doc comment), so a Linux CI host can never
+// exercise the real parser end-to-end. This function has no such
+// restriction — tests feed it synthetic (missing, machoErr) pairs
+// directly.
+//
+// Three distinct outcomes, each with its own accurate message:
+//
+//   - machoErr != nil: a structural parse error (truncated header, bad
+//     magic bytes below the recognized set, implausible offsets) — the
+//     check could not run at all.
+//   - missing == [notAMachOBinary]: the parser ran cleanly but the file
+//     isn't a valid Mach-O — e.g. zeroed out by a failed/partial
+//     extraction, a shell script staged for testing, or wrong-format
+//     garbage. Before this fix this case was silently skipped (reasoning
+//     the missing-libraries text would mislead), which means a corrupted
+//     chrome binary reported a clean doctor bill of health — the same
+//     "no signal" bug this whole fix closes. It is deliberately NOT
+//     folded into the missing-libraries message below: that message names
+//     real, resolvable dylib dependencies, and reusing it here would send
+//     the operator hunting for libraries that don't exist.
+//   - missing is a real, non-empty dependency list: the standard
+//     "missing required macOS libraries" diagnostic.
+func darwinMachOWarning(missing []string, machoErr error) *warning {
+	if machoErr != nil {
+		return &warning{
+			code: "WARN-BROWSER-005",
+			message: fmt.Sprintf(
+				"could not parse bundled chrome Mach-O: %s — Chrome may not launch. Reinstall the omnipus package to recover the integrity-verified payload.",
+				machoErr,
+			),
+		}
+	}
+	if len(missing) == 1 && missing[0] == notAMachOBinary {
+		return &warning{
+			code:    "WARN-BROWSER-005",
+			message: "bundled chrome binary is not a valid Mach-O executable (corrupt, wrong format, or zeroed out by a failed/partial install) — Chrome will not launch. Reinstall the omnipus package to recover the integrity-verified payload.",
+		}
+	}
+	if len(missing) > 0 {
+		return &warning{
+			code: "WARN-BROWSER-005",
+			message: fmt.Sprintf(
+				"bundled chrome is missing required macOS libraries: %s. System libraries (/usr/lib, /System/Library) ship with macOS — a missing system dylib indicates macOS needs reinstallation. Bundled frameworks ship in the .app's Frameworks directory — a missing @rpath framework indicates the omnipus package is corrupt; reinstall it to recover the integrity-verified payload. The in-process Mach-O check is the primary defense (ADR-052 SEC-ADR052-008).",
+				strings.Join(missing, ", "),
+			),
+		}
+	}
+	return nil
+}
+
+// readChromeSHA delegates the manifest parse + verification to the shared
+// pkg/tools/browser/chromeintegrity helpers so the doctor cannot drift
+// from the runtime's tolerance rules (SEC-ADR052-004 — BOM, CRLF,
+// sha256:/SHA-256: prefixes, comment lines, two-field sha256sum form,
+// uppercase-hex rejection, NUL truncation, 64-char digest length).
+//
+// Returns the WARN-BROWSER-006 diagnostic to surface, or nil when there's
+// nothing to report — verification passed, OR the manifest is missing/
+// unreadable (chromeintegrity.ErrSHA256ManifestMissing — the back-compat
+// bare-binary posture; the runtime falls through to download, so there's
+// nothing to verify against and this stays silent).
+//
+// FIX-HIGH-003: chromeintegrity.VerifyChromeSHA256 can fail for several
+// structurally different reasons beyond a missing manifest — a malformed
+// manifest, a binary Lstat error, a SYMLINKED binary (a real security
+// event per SEC-ADR052-005, not a hash disagreement), a directory where a
+// file is expected, or an I/O failure while hashing — plus the genuine
+// digest-mismatch case. Before this fix every one of those (other than the
+// missing-manifest case) collapsed into the same "bundled chrome hash
+// mismatch — expected=X got=Y" message, with the real error dropped and
+// expected/got sometimes blank. That text actively misleads for a symlink
+// refusal (an operator would look for bit-rot instead of a substituted
+// binary) and gives no actionable detail for a parse or I/O failure.
+// Classify by sentinel error so each cause gets an accurate message.
+//
+// SECURITY (SEC-NEW-003): chromeintegrity.VerifyChromeSHA256 does its own
+// Lstat on both the manifest and the binary, refusing a symlink at the
+// leaf. The caller's Lstat on `root` is the directory-level defense; the
+// verifier adds the per-file defense so a tampered manifest at the leaf
+// cannot pass.
+func readChromeSHA(root, chromeBin string) *warning {
+	shaFile := filepath.Join(root, "chrome.sha256")
+	err := chromeintegrity.VerifyChromeSHA256(chromeBin, shaFile)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing) {
+		// Manifest missing or unreadable — bare-binary fallback posture.
+		return nil
+	}
+
+	switch {
+	case errors.Is(err, chromeintegrity.ErrSHA256BinarySymlink):
+		return &warning{
+			code: "WARN-BROWSER-006",
+			message: fmt.Sprintf(
+				"bundled chrome binary at %s is a symlink — refusing to verify or use it. This is a security-relevant anomaly (a substituted binary), NOT a checksum mismatch. Replace it with the real binary, or reinstall the omnipus package.",
+				chromeBin,
+			),
+		}
+	case errors.Is(err, chromeintegrity.ErrSHA256ManifestMalformed):
+		return &warning{
+			code: "WARN-BROWSER-006",
+			message: fmt.Sprintf(
+				"could not parse the chrome.sha256 integrity manifest at %s: %s. Reinstall the omnipus package to recover a valid manifest.",
+				shaFile,
+				err,
+			),
+		}
+	case errors.Is(err, chromeintegrity.ErrSHA256VerificationFailed):
+		return &warning{
+			code: "WARN-BROWSER-006",
+			message: fmt.Sprintf(
+				"could not verify bundled chrome integrity: %s. Reinstall the omnipus package to recover the integrity-verified payload.",
+				err,
+			),
+		}
+	default:
+		// The genuine digest-disagreement path — chromeintegrity's "sha256
+		// mismatch" error carries no sentinel of its own (it IS the base
+		// case). Surface both digests verbatim so the operator sees
+		// exactly what's on disk vs what's expected.
+		want := parseManifestDigestBestEffort(shaFile)
+		got := hashChromeBinaryBestEffort(chromeBin)
+		return &warning{
 			code: "WARN-BROWSER-006",
 			message: fmt.Sprintf(
 				"bundled chrome hash mismatch — refusing to use the package chrome. expected=%s got=%s. Reinstall the omnipus package to recover the integrity-verified payload.",
 				want,
 				got,
 			),
-		})
+		}
 	}
-
-	return warnings
-}
-
-// readChromeSHA delegates the manifest parse to the shared
-// pkg/tools/browser/chromeintegrity helpers so the doctor cannot drift
-// from the runtime's tolerance rules (SEC-ADR052-004 — BOM, CRLF,
-// sha256:/SHA-256: prefixes, comment lines, two-field sha256sum form,
-// uppercase-hex rejection, NUL truncation, 64-char digest length).
-//
-// Returns (mismatch=true, got, want) when the binary's actual SHA-256
-// differs from the manifest's declared digest. Returns (false, "", "")
-// for any "not checkable" condition — a missing manifest
-// (chromeintegrity.ErrSHA256ManifestMissing), an unparseable manifest,
-// a missing binary. The caller treats these as silent (bare-binary
-// users have no package Chrome to verify; the runtime falls through to
-// download). Real verifier errors (parse failures, hash mismatches) are
-// surfaced as WARN-BROWSER-006 with got/want both populated when
-// possible.
-//
-// SECURITY (SEC-NEW-003): chromeintegrity.VerifyChromeSHA256 does its
-// own Lstat on both the manifest and the binary, refusing a symlink at
-// the leaf. The caller's Lstat on `root` is the directory-level defense;
-// the verifier adds the per-file defense so a tampered manifest at the
-// leaf cannot pass.
-func readChromeSHA(root, chromeBin string) (mismatch bool, got, want string) {
-	shaFile := filepath.Join(root, "chrome.sha256")
-	err := chromeintegrity.VerifyChromeSHA256(chromeBin, shaFile)
-	if err == nil {
-		return false, "", ""
-	}
-	if errors.Is(err, chromeintegrity.ErrSHA256ManifestMissing) {
-		// Manifest missing or unreadable — bare-binary fallback posture.
-		return false, "", ""
-	}
-	// Real mismatch / parse failure. Surface got/want so the operator sees
-	// both digests verbatim. Best-effort: any of these I/O calls failing
-	// leaves the corresponding field blank rather than failing closed.
-	want = parseManifestDigestBestEffort(shaFile)
-	if g := hashChromeBinaryBestEffort(chromeBin); g != "" {
-		got = g
-	}
-	return true, got, want
 }
 
 // parseManifestDigestBestEffort returns the manifest's declared digest

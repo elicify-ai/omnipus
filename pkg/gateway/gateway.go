@@ -826,11 +826,25 @@ func pluralSuffix(n int) string {
 // Nothing in this repo calls slog.SetDefault in production code without
 // this: on the documented backgrounded launch form (`./omnipus gateway
 // --allow-empty &`), stderr is not captured anywhere, so every bare slog
-// call was permanently invisible. RunContextWithOptions calls this
-// immediately after logger.EnableFileLogging succeeds — before any
-// subsequent subsystem boot code has a chance to log — so every downstream
-// slog call for the rest of this process's life lands in
+// call was permanently invisible. bootLoggingAndDataModel calls this
+// immediately after logger.EnableFileLogging succeeds and BEFORE
+// datamodel.Init runs — the earliest subsystem boot code in the process that
+// itself calls bare slog (see datamodel.Init's first-run slog.Info) — so
+// every downstream slog call for the rest of this process's life lands in
 // $OMNIPUS_HOME/logs/gateway.log (or wherever EnableFileLogging pointed).
+//
+// Re-review FIX 1 (two independent reviewers): this used to be called from
+// RunContextWithOptions AFTER datamodel.Init, even though this doc comment
+// already claimed "before any subsequent subsystem boot code has a chance
+// to log." That claim was false by exactly the 19 lines separating the two
+// calls — datamodel.Init's own first-run slog.Info/Debug calls (the single
+// most operator-relevant first-run line: "default config written") fired
+// before the bridge existed AND before logger.InitPanic's stderr redirect,
+// so on a fresh install that line reached neither gateway.log nor
+// gateway_panic.log nor anywhere else durable. Fixed by extracting the
+// ordering-sensitive boot preamble into bootLoggingAndDataModel, which both
+// RunContextWithOptions and the ordering test below call, so the two cannot
+// silently drift apart again the way the inline call sites did.
 //
 // Deliberately not restored via defer on shutdown: the orphan-GC ticker
 // started later in RunContextWithOptions (and any other long-lived
@@ -848,6 +862,58 @@ func installSlogBridge() {
 	slog.SetDefault(slog.New(logger.NewSlogHandler()))
 }
 
+// bootLoggingAndDataModel runs logger.EnableFileLogging, installSlogBridge,
+// and datamodel.Init — in that order — so datamodel.Init's own first-run
+// slog.Info/Debug calls are bridged and file-logged instead of hitting
+// log/slog's zero-value stderr-only default the way they used to.
+//
+// RunContextWithOptions calls this immediately after creating
+// $OMNIPUS_HOME/logs and initializing the panic log (both of which stay
+// inline in RunContextWithOptions — see the comment there for why): this
+// helper is deliberately the minimal slice of the boot preamble that (a) is
+// order-sensitive for the slog-visibility bug and (b) is safe to exercise
+// directly from an in-process test. logger.InitPanic is NOT part of this
+// helper on purpose: it Dup2's the real process stderr fd into the panic
+// log file, a process-wide side effect with no built-in undo — calling it
+// from a test would silently redirect the shared pkg/gateway test binary's
+// stderr for the remainder of that test run. Excluding it costs nothing for
+// THIS bug: InitPanic never touches log/slog, so its position relative to
+// EnableFileLogging/installSlogBridge/datamodel.Init has no bearing on
+// whether datamodel.Init's slog calls reach gateway.log.
+//
+// datamodel.Init has no dependency on anything logger.EnableFileLogging or
+// installSlogBridge set up — it only calls bare slog, and creates its own
+// directories independently of the logging path — so this reorder is safe.
+//
+// Both RunContextWithOptions and
+// TestBootOrder_DataModelInitLogsReachGatewayLog (boot_order_test.go) call
+// this helper so a future refactor of one cannot silently drift the order
+// away from the other, the way the two inline call sites did before this
+// fix (two independent reviewers plus a third verifying pass all flagged
+// the same bug: this function used to be called AFTER datamodel.Init).
+func bootLoggingAndDataModel(homePath string) error {
+	logsDir := filepath.Join(homePath, logPath)
+
+	// Preserves the original inline call site's panic-on-failure behavior
+	// (predates this fix, not itself part of the FIX 1 ordering change) —
+	// EnableFileLogging failing this early means no durable log sink exists
+	// to report the failure into.
+	if err := logger.EnableFileLogging(filepath.Join(logsDir, logFile)); err != nil {
+		panic(fmt.Errorf("error enabling file logging: %w", err))
+	}
+
+	// Bridge log/slog's process-wide default into pkg/logger's zerolog sink
+	// (console + $OMNIPUS_HOME/logs/gateway.log, just enabled above) — see
+	// installSlogBridge's doc comment for why. Installed BEFORE
+	// datamodel.Init so its first-run slog calls are captured too.
+	installSlogBridge()
+
+	if err := datamodel.Init(homePath); err != nil {
+		return fmt.Errorf("directory initialization failed: %w", err)
+	}
+	return nil
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -856,27 +922,41 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	configPath := opts.ConfigPath
 	allowEmptyStartup := opts.AllowEmptyStartup
 	allowGodMode := opts.AllowGodMode
-	// Bootstrap ~/.omnipus/ directory tree on every start (idempotent, US-1).
-	if err := datamodel.Init(homePath); err != nil {
-		return fmt.Errorf("directory initialization failed: %w", err)
+
+	// Create $OMNIPUS_HOME/logs ourselves, at 0700, before anything else
+	// touches it. datamodel.Init (below) also creates this directory as
+	// part of omnipusDirs, at 0700 — but only later in this sequence;
+	// logger.InitPanic and logger.EnableFileLogging each MkdirAll the same
+	// directory too, at 0755. os.MkdirAll is a silent no-op — it does not
+	// chmod — when the directory already exists, so whichever of these
+	// calls creates the directory first permanently wins its permission
+	// bits. Creating it here first, at the stricter 0700, is what stops the
+	// two logger calls' 0755 from leaking through and leaving
+	// $OMNIPUS_HOME/logs group/world-readable for the life of the install.
+	logsDir := filepath.Join(homePath, logPath)
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		return fmt.Errorf("creating log directory: %w", err)
 	}
 
-	panicPath := filepath.Join(homePath, logPath, panicFile)
+	panicPath := filepath.Join(logsDir, panicFile)
 	panicFunc, err := logger.InitPanic(panicPath)
 	if err != nil {
 		return fmt.Errorf("error initializing panic log: %w", err)
 	}
 	defer panicFunc()
 
-	if err = logger.EnableFileLogging(filepath.Join(homePath, logPath, logFile)); err != nil {
-		panic(fmt.Errorf("error enabling file logging: %w", err))
+	// Re-review FIX 1 (two independent reviewers, plus a third verifying
+	// pass): bootLoggingAndDataModel runs logger.EnableFileLogging,
+	// installSlogBridge, and datamodel.Init in the one order that captures
+	// datamodel.Init's own first-run slog calls instead of silently losing
+	// them — this used to call datamodel.Init BEFORE any of this boot
+	// preamble existed. See bootLoggingAndDataModel's doc comment for the
+	// full account and why logger.InitPanic stays inline here rather than
+	// folding into that helper.
+	if err = bootLoggingAndDataModel(homePath); err != nil {
+		return err
 	}
 	defer logger.DisableFileLogging()
-
-	// Bridge log/slog's process-wide default into pkg/logger's zerolog sink
-	// (console + $OMNIPUS_HOME/logs/gateway.log, just enabled above) — see
-	// installSlogBridge's doc comment for why.
-	installSlogBridge()
 
 	// Construct and unlock the credential store BEFORE loading config, per the
 	// documented credential boot contract (ADR-004).
@@ -1886,6 +1966,13 @@ func setupAndStartServices(
 		fmt.Println("✓ Queued-task drain owned by: TaskDrainService (dedicated poll)")
 	} else {
 		fmt.Println("⚠ Queued-task drain disabled: no task executor available")
+		// FIX 2: this warning is genuinely operator-relevant (queued tasks will
+		// never dispatch) and, unlike the interactive-only banners nearby, has
+		// no other durable record — pair it with logger.WarnCF (same pattern as
+		// the "Gateway started without default model" warning above) so it
+		// reaches gateway.log on the documented backgrounded launch, not just
+		// an attached terminal's stdout.
+		logger.WarnCF("gateway", "queued-task drain disabled — no task executor available", nil)
 	}
 
 	// Mailbox drain (M11): unhandled inbound mail → Board tasks. The provider is
@@ -1985,6 +2072,10 @@ func setupAndStartServices(
 		fmt.Printf("✓ Channels enabled: %s\n", enabledChannels)
 	} else {
 		fmt.Println("⚠ Warning: No channels enabled")
+		// FIX 2: genuinely operator-relevant (no channel is reachable at all)
+		// and otherwise invisible on a backgrounded launch — pair with
+		// logger.WarnCF, same reasoning as the queued-task-drain warning above.
+		logger.WarnCF("gateway", "no channels enabled — gateway has no reachable channel", nil)
 	}
 
 	// Apply warmup timeout default (FR-013 / CR-04).
@@ -3006,6 +3097,11 @@ func restartServices(
 		fmt.Printf("  ✓ Channels enabled: %s\n", enabledChannels)
 	} else {
 		fmt.Println("  ⚠ Warning: No channels enabled")
+		// FIX 2: reload-time twin of the same warning in setupAndStartServices —
+		// pair with logger.WarnCF for the same reason (invisible otherwise on a
+		// backgrounded gateway; a reload can be the moment the last channel got
+		// disabled, which is exactly when an operator most needs to notice).
+		logger.WarnCF("gateway", "no channels enabled after reload — gateway has no reachable channel", nil)
 	}
 
 	// Stop the previous DeviceService before replacing it to avoid goroutine

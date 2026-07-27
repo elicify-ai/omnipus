@@ -239,6 +239,34 @@ func TestHandleWorkspaceMediaAttach_Stranded_Returns500(t *testing.T) {
 	assert.Contains(t, msg, "inconsistent state")
 }
 
+// TestHandleWorkspaceMediaList_Stranded_AnnotatesStatusInResponse is the
+// review FIX 2 end-to-end regression test: GET .../media (list) must still
+// include a stranded entry (it genuinely is still in the manifest — dropping
+// it would be its own kind of lie) but annotate it with status="stranded" in
+// the JSON response, rather than presenting it identically to a healthy
+// entry the way it did before this fix (the single-entry Get/Attach/Delete
+// handlers above already refuse a stranded id outright with a 500; List has
+// no single id to refuse, so it must annotate instead).
+func TestHandleWorkspaceMediaList_Stranded_AnnotatesStatusInResponse(t *testing.T) {
+	api, _ := newStrandedTestAPI(t)
+	workspaceID := "ws-media-list-stranded"
+	mediaID := buildStrandedWorkspaceLibrary(t, api.homePath, workspaceID)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+workspaceID+"/media", nil)
+	w := httptest.NewRecorder()
+	api.handleWorkspaceMediaList(w, r, workspaceID)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	require.Len(t, entries, 1, "the stranded entry must still be cataloged in the list")
+
+	assert.Equal(t, mediaID, entries[0]["id"])
+	assert.Equal(t, "stranded", entries[0]["status"],
+		"a stranded entry in the list must be annotated, not presented as a healthy entry")
+}
+
 // ── classifyMediaDeleteOutcome unit coverage for the new outcome ───────────
 
 func TestClassifyMediaDeleteOutcome_Stranded(t *testing.T) {

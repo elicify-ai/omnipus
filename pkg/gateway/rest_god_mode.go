@@ -246,9 +246,15 @@ func (a *restAPI) setGodMode(w http.ResponseWriter, r *http.Request) {
 	// 500 — that would wrongly signal the write failed. A genuine reload error
 	// is logged at Error: running agents may keep the prior override state
 	// until restart, which the operator must see in the logs.
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		// Persisted, but live agents may keep the previous override state.
 		slog.Error("rest: reload after god_mode toggle failed", "error", err)
+	} else if !confirmed {
+		// Highest-blast-radius control in the product (SEC-17) — name it
+		// explicitly rather than folding it into a generic reload warning.
+		slog.Warn("rest: reload after god_mode toggle did not confirm within the poll window; "+
+			"running agents may still be evaluating the previous god-mode state",
+			"enabled", body.Enabled)
 	}
 
 	jsonOK(w, gen.GodModeUpdateResponse{

@@ -2,6 +2,8 @@ package slack
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -89,6 +92,50 @@ func TestSendMedia_PartialFailureReturnsError(t *testing.T) {
 // surfaces as an UploadFileContext error (a genuine send/upload failure),
 // not as a locally-skipped part — which is why this package has no
 // "OpenFailureReturnsError" counterpart to Feishu/Matrix's tests.
+// TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning is the FR-028a
+// review regression test: a media ref denied by the caller-workspace
+// membership guard (media.IsCallerWorkspaceDenied) must get its own
+// distinct WARN log line naming it a workspace-boundary denial, instead of
+// being folded into the generic "Failed to resolve media ref" ERROR log
+// used for a routine stale/missing ref. Delivery semantics (permanent
+// ErrSendFailed, no retry) are unchanged either way.
+func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "slack-media.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	require.NoError(t, logger.EnableFileLogging(logFile))
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	ch := newTestSlackChannel(t)
+	ch.SetMediaStore(media.NewFileMediaStore())
+
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "C123456",
+		// WorkspaceID deliberately empty: a workspace-prefixed ref with no
+		// caller-workspace context trips the FR-028a guard
+		// (ErrWorkspaceContextRequired) before any media store provider is
+		// even consulted.
+		Parts: []bus.MediaPart{{Type: "image", Ref: "media://workspace/other-ws/some-id"}},
+	})
+
+	require.Error(t, err, "SendMedia must still report failure for a denied workspace ref")
+	assert.ErrorIs(t, err, channels.ErrSendFailed,
+		"a caller-workspace denial is permanent, same as any other local resolve failure")
+
+	logged, readErr := os.ReadFile(logFile)
+	require.NoError(t, readErr, "reading captured log file")
+	logStr := string(logged)
+	assert.Contains(t, logStr, "Media ref denied by caller-workspace guard",
+		"the FR-028a denial must get its own distinct WARN log line")
+	assert.NotContains(t, logStr, "Failed to resolve media ref",
+		"the denial must NOT also log the generic message (would defeat distinguishing it)")
+}
+
 func TestSendMedia_NoMediaStoreReturnsError(t *testing.T) {
 	base := channels.NewBaseChannel("slack", nil, nil, nil)
 	base.SetRunning(true)

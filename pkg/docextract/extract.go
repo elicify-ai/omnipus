@@ -689,6 +689,16 @@ func extractOOXML(zr *zip.Reader, ext string) (string, bool, string) {
 
 // extractDocx extracts text from a .docx file by parsing word/document.xml.
 // It concatenates <w:t> runs and inserts a newline between paragraphs (<w:p>).
+//
+// Unlike extractPptx/extractXlsx, a .docx has exactly one text-bearing
+// archive entry (word/document.xml), so the shared archive-decompression
+// budget (25 MiB, zip-bomb defense) cannot be checked per-entry — it is
+// checked once, inside parseDocxXML's own token loop, via budget.exceeded
+// (review FIX 1, mirroring FIX 2's pptx/xlsx treatment): a decode error
+// caused by the budget wall preserves whatever paragraph text was already
+// collected and appends the file's standard "[truncated: ...]" notice,
+// instead of discarding it and reporting a generic decode error as if the
+// document were unparseable garbage.
 func extractDocx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, string) {
 	for _, f := range zr.File {
 		if f.Name != "word/document.xml" {
@@ -699,7 +709,7 @@ func extractDocx(zr *zip.Reader, budget *archiveReadBudget) (string, bool, strin
 			return "", false, fmt.Sprintf("docx: open word/document.xml: %v", err)
 		}
 		defer rc.Close()
-		return parseDocxXML(budget.reader(rc))
+		return parseDocxXML(budget.reader(rc), budget)
 	}
 	return "", false, "docx: word/document.xml not found"
 }
@@ -712,7 +722,18 @@ const (
 )
 
 // parseDocxXML parses word/document.xml and extracts paragraph text.
-func parseDocxXML(r io.Reader) (string, bool, string) {
+//
+// budget is the same archiveReadBudget instance wrapping r (via
+// budget.reader in extractDocx): it is consulted, not the decode error's own
+// shape, to tell "the shared 25 MiB decompression budget was exhausted
+// mid-document" apart from "this document is genuinely malformed XML" — see
+// archiveReadBudget.exceeded's doc for why the flag is the reliable signal
+// (encoding/xml's Decoder may wrap or reinterpret the underlying reader
+// error). Only the budget-exceeded case preserves the partial sb collected
+// so far (review FIX 1); a genuine decode error keeps the original
+// behavior, matching extractPptx/extractXlsx's own per-entry error handling
+// (which likewise only special-cases the budget, not arbitrary corruption).
+func parseDocxXML(r io.Reader, budget *archiveReadBudget) (string, bool, string) {
 	dec := xml.NewDecoder(r)
 	var sb strings.Builder
 	var state docxState
@@ -724,6 +745,15 @@ func parseDocxXML(r io.Reader) (string, bool, string) {
 			break
 		}
 		if err != nil {
+			if budget.exceeded {
+				if sb.Len() == 0 {
+					return "", false,
+						"docx: archive exceeds 25 MiB decompression budget before any text could be read"
+				}
+				result := strings.TrimSpace(sb.String())
+				result += "\n[truncated: archive exceeds 25 MiB decompression budget]"
+				return result, true, ""
+			}
 			return "", false, fmt.Sprintf("docx: xml decode error: %v", err)
 		}
 

@@ -1112,6 +1112,24 @@ func (e MediaLibraryEntrySource) Valid() bool {
 	}
 }
 
+// Defines values for MediaLibraryEntryStatus.
+const (
+	Available MediaLibraryEntryStatus = "available"
+	Stranded  MediaLibraryEntryStatus = "stranded"
+)
+
+// Valid indicates whether the value is a known member of the MediaLibraryEntryStatus enum.
+func (e MediaLibraryEntryStatus) Valid() bool {
+	switch e {
+	case Available:
+		return true
+	case Stranded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageAttachmentsType.
 const (
 	MessageAttachmentsTypeAudio MessageAttachmentsType = "audio"
@@ -5573,6 +5591,9 @@ type MediaLibraryEntry struct {
 	// Source Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
 	Source MediaLibraryEntrySource `json:"source"`
 
+	// Status Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
+	Status *MediaLibraryEntryStatus `json:"status,omitempty"`
+
 	// UploadedAt RFC3339 UTC upload timestamp.
 	UploadedAt *time.Time `json:"uploaded_at,omitempty"`
 
@@ -5582,6 +5603,9 @@ type MediaLibraryEntry struct {
 
 // MediaLibraryEntrySource Origin that added the file to the workspace library. Encodes the ADR-051 Rev 4 two-mechanism split (user uploads = persistent; agent-generated tool output = session-scoped, never migrated into the library). The internal-only test_fixture source used by pkg/media/library test helpers is NOT a production wire value (Wave 1 TD-m1).
 type MediaLibraryEntrySource string
+
+// MediaLibraryEntryStatus Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
+type MediaLibraryEntryStatus string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {

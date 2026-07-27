@@ -170,7 +170,22 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		return nil, fmt.Errorf("unexpected program-header entry size: %d", ePhEntSize)
 	}
 	if ePhNum == 0 {
-		return nil, nil // static binary, nothing to check
+		// FIX-HIGH-002: zero program headers is NOT the same as "a static
+		// binary with nothing to check" for a file this function is only
+		// ever called on (the bundled Chrome-for-Testing binary, which is
+		// always dynamically linked — see this file's header comment).
+		// A real ELF executable always carries at least one PT_LOAD
+		// program header; e_phnum==0 here means the file was truncated,
+		// zeroed, or otherwise corrupted (e.g. by a failed/partial
+		// extraction) in a way that happens to still pass the earlier
+		// magic/class/data checks. Silently returning (nil, nil) here
+		// would report "0 missing libraries" for a binary that cannot run
+		// at all — return an error so the caller surfaces an accurate
+		// "could not determine" warning instead of a false-clean bill of
+		// health.
+		return nil, fmt.Errorf(
+			"ELF has no program headers (e_phnum=0) — cannot verify dependencies; not expected for a Chrome-for-Testing binary and likely indicates a truncated or corrupted file",
+		)
 	}
 	if ePhOff > maxELFOffset || ePhNum*phdrSz > maxELFOffset || ePhOff+ePhNum*phdrSz > maxELFOffset {
 		return nil, fmt.Errorf("program header table out of range (e_phoff=%d e_phnum=%d)", ePhOff, ePhNum)
@@ -195,7 +210,16 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 		break
 	}
 	if dynSize == 0 {
-		return nil, nil // static binary, nothing to check
+		// FIX-HIGH-002: same reasoning as the e_phnum==0 case above — no
+		// PT_DYNAMIC segment found among otherwise-present program
+		// headers is not expected for a Chrome-for-Testing binary (always
+		// dynamically linked), and could mean the program-header table
+		// itself is corrupted rather than the binary genuinely being
+		// static. Return an error rather than silently declaring "nothing
+		// to check".
+		return nil, fmt.Errorf(
+			"ELF has program headers but no PT_DYNAMIC segment — cannot verify dependencies; not expected for a Chrome-for-Testing binary and likely indicates a truncated or corrupted file",
+		)
 	}
 	if dynOff > maxELFOffset || dynSize > maxELFOffset || dynOff+dynSize > maxELFOffset {
 		return nil, fmt.Errorf("PT_DYNAMIC segment out of range (off=%d size=%d)", dynOff, dynSize)
@@ -228,6 +252,25 @@ func missingChromeLibsELF(binPath string) ([]string, error) {
 	if strtabOff == 0 || strtabSize == 0 ||
 		strtabOff > maxELFOffset || strtabSize > maxELFOffset ||
 		strtabOff+strtabSize > maxELFOffset {
+		if len(needed) > 0 {
+			// FIX-HIGH-002: DT_NEEDED entries WERE collected — we know
+			// this binary has real dependencies — but DT_STRTAB/DT_STRSZ
+			// is missing or out of range, so none of those dependencies
+			// can be resolved to a soname. Discarding them and returning
+			// (nil, nil) here is indistinguishable from "no dependencies
+			// at all", which would report a false-clean "0 missing
+			// libraries" for a structurally corrupted binary. Surface an
+			// error instead so the caller emits a "could not determine"
+			// warning rather than a silent pass.
+			return nil, fmt.Errorf(
+				"found %d DT_NEEDED entries but DT_STRTAB/DT_STRSZ is missing or out of range (strtab_off=%d strtab_size=%d) — cannot resolve dependency names",
+				len(needed),
+				strtabOff,
+				strtabSize,
+			)
+		}
+		// No DT_NEEDED entries were collected at all, so a missing/empty
+		// string table is consistent with "genuinely nothing to check".
 		return nil, nil
 	}
 

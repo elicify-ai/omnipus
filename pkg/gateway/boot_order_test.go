@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/datamodel"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // writeCorruptedCredentialsFile writes a credentials.json containing exactly
@@ -316,5 +319,106 @@ func TestGatewayBoot_LockedStoreFailsBeforeConfig(t *testing.T) {
 	errMsg := strings.ToLower(bootErr.Error())
 	if !strings.Contains(errMsg, "master key") && !strings.Contains(errMsg, "omnipus_master_key") {
 		t.Errorf("bootCredentials error must mention master key; got: %q", bootErr.Error())
+	}
+}
+
+// TestBootOrder_DataModelInitLogsReachGatewayLog is the FIX 1 revert-proof:
+// it calls bootLoggingAndDataModel — the exact function RunContextWithOptions
+// calls for the logging-setup/datamodel.Init slice of its boot preamble — and
+// asserts that datamodel.Init's own real first-run slog.Info line ("first-run
+// setup complete — default config written") lands in gateway.log.
+//
+// Unlike slog_bridge_wiring_test.go (which proves the bridge mechanism in
+// isolation with a synthetic slog.Warn stand-in), this test exercises the
+// actual early-boot subsystem call whose lost visibility was the reported
+// bug: two independent reviewers (plus a third verifying pass) found that
+// datamodel.Init used to run BEFORE installSlogBridge/logger.EnableFileLogging
+// existed, so this exact line was permanently lost on every fresh install —
+// invisible in gateway.log, and (since it also preceded logger.InitPanic's
+// stderr redirect) not even captured in gateway_panic.log.
+//
+// Revert-proof: reverting bootLoggingAndDataModel to call datamodel.Init
+// before logger.EnableFileLogging/installSlogBridge (the pre-fix order)
+// makes this test fail — at the time datamodel.Init logs, slog.Default()
+// would still be whatever it was before the bridge install, so the line
+// would never reach the file this test reads back.
+func TestBootOrder_DataModelInitLogsReachGatewayLog(t *testing.T) {
+	homePath := t.TempDir()
+
+	prevDefault := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	prevLevel := logger.GetLevel()
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+	logger.SetLevel(logger.INFO)
+
+	if err := bootLoggingAndDataModel(homePath); err != nil {
+		t.Fatalf("bootLoggingAndDataModel: %v", err)
+	}
+
+	// Second proof within the same test: datamodel.Init's config.json must
+	// actually have been written — proving Init itself really ran (not just
+	// that some unrelated log line happens to match below).
+	if _, statErr := os.Stat(filepath.Join(homePath, "config.json")); statErr != nil {
+		t.Errorf("datamodel.Init must have written config.json: %v", statErr)
+	}
+
+	logFilePath := filepath.Join(homePath, logPath, logFile)
+	data, err := os.ReadFile(logFilePath)
+	if err != nil {
+		t.Fatalf("reading gateway.log: %v", err)
+	}
+	logged := string(data)
+
+	if !strings.Contains(logged, "first-run setup complete") {
+		t.Errorf("datamodel.Init's first-run slog.Info line must reach gateway.log; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "default config written") {
+		t.Errorf("datamodel.Init's first-run slog.Info fields must survive as structured fields; got:\n%s", logged)
+	}
+}
+
+// TestBootOrder_OldOrderWouldLoseDataModelInitLogs is the companion negative
+// proof: it replicates the PRE-FIX inline order (datamodel.Init called
+// before logger.EnableFileLogging/installSlogBridge exist) directly against
+// the real datamodel.Init function, and confirms its first-run log line does
+// NOT reach gateway.log in that order — the exact bug FIX 1 closes. It does
+// not call bootLoggingAndDataModel (which now runs the corrected order); it
+// exists so the "why this order matters" claim in bootLoggingAndDataModel's
+// doc comment is verified directly rather than only asserted in prose.
+func TestBootOrder_OldOrderWouldLoseDataModelInitLogs(t *testing.T) {
+	homePath := t.TempDir()
+
+	prevDefault := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+	// Stand-in for "whatever slog.Default() is before installSlogBridge is
+	// ever called" — same reasoning as slog_bridge_wiring_test.go's own
+	// negative test: a real, un-redirected stdlib default writes to
+	// os.Stderr, which cannot be captured as a file assertion in-process.
+	slog.SetDefault(slog.New(slog.NewTextHandler(discardWriter{}, nil)))
+
+	// Pre-fix order: datamodel.Init runs first, with no logging wired up yet.
+	if err := datamodel.Init(homePath); err != nil {
+		t.Fatalf("datamodel.Init: %v", err)
+	}
+
+	// ...THEN logging gets wired up, exactly like the reverted gateway.go
+	// code did.
+	logFilePath := filepath.Join(homePath, logPath, logFile)
+	if err := logger.EnableFileLogging(logFilePath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	t.Cleanup(logger.DisableFileLogging)
+	installSlogBridge()
+
+	data, err := os.ReadFile(logFilePath)
+	if err != nil {
+		t.Fatalf("reading gateway.log: %v", err)
+	}
+	if strings.Contains(string(data), "first-run setup complete") {
+		t.Error("datamodel.Init's first-run log line must NOT reach gateway.log when " +
+			"Init runs before the bridge is installed — if it does, this negative control is broken")
 	}
 }

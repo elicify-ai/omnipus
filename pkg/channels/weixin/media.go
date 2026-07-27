@@ -715,6 +715,19 @@ func (c *WeixinChannel) resolveOutboundPart(
 		}
 		localPath, meta, err := store.ResolveWithCallerWorkspace(part.Ref, callerWorkspace)
 		if err != nil {
+			// FR-028a: distinguish the caller-workspace membership guard's
+			// denial (a security-relevant Spoofing rejection) from a
+			// routine stale/missing ref, so it's greppable/auditable
+			// separately instead of folding into the generic "Failed to
+			// send outbound media" ERROR log this returns into (SendMedia,
+			// via basechannels.ErrSendFailed).
+			if media.IsCallerWorkspaceDenied(err) {
+				logger.WarnCF("weixin", "Media ref denied by caller-workspace guard", map[string]any{
+					"ref":              part.Ref,
+					"caller_workspace": callerWorkspace,
+					"error":            err.Error(),
+				})
+			}
 			return "", "", "", cleanup, err
 		}
 		if filename == "" {
@@ -1118,6 +1131,7 @@ func (c *WeixinChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 		)
 	}
 
+	sentCount := 0
 	for _, part := range msg.Parts {
 		localPath, filename, contentType, cleanup, err := c.resolveOutboundPart(ctx, part, msg.WorkspaceID)
 		if err != nil {
@@ -1150,9 +1164,30 @@ func (c *WeixinChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			if c.remainingPause() > 0 {
 				return fmt.Errorf("weixin send media: %w", basechannels.ErrSendFailed)
 			}
-			return fmt.Errorf("weixin send media: %w", basechannels.ErrTemporary)
+			// CRITICAL fix (retry-duplication, sendfile-fix review): a
+			// genuine upload/send API failure no longer returns a bare
+			// ErrTemporary. ClassifyMediaSendError checks sentCount — if an
+			// earlier part in this message already uploaded AND sent
+			// (sentCount > 0), retrying the whole message
+			// (sendMediaWithRetry has no per-part resume) would re-upload
+			// and re-send it, duplicating it for the user, so the failure
+			// is classified permanent instead. Only when nothing has been
+			// sent yet (sentCount == 0) does the failure keep its normal
+			// ErrTemporary retry classification. The real API error stays
+			// in the chain either way (was previously flattened away
+			// entirely).
+			return basechannels.ClassifyMediaSendError("weixin", sentCount, err)
 		}
+		sentCount++
 	}
 
+	// Like QQ (and unlike Telegram/Feishu/Matrix/Slack), Weixin never
+	// `continue`s past a per-part failure — a local resolve failure returns
+	// immediately above (already permanent, wrapped in
+	// basechannels.ErrSendFailed), and a genuine upload/send failure
+	// returns immediately above via ClassifyMediaSendError. sentCount ==
+	// len(msg.Parts) is guaranteed whenever this point is reached, so no
+	// post-loop shortfall guard (as Telegram/Feishu/Matrix/Slack need for
+	// their `continue`-based local-failure handling) applies here.
 	return nil
 }

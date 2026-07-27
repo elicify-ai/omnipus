@@ -186,10 +186,23 @@ func (c *DiscordChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMes
 	for _, part := range msg.Parts {
 		localPath, _, err := store.ResolveWithCallerWorkspace(part.Ref, msg.WorkspaceID)
 		if err != nil {
-			logger.ErrorCF("discord", "Failed to resolve media ref", map[string]any{
-				"ref":   part.Ref,
-				"error": err.Error(),
-			})
+			// FR-028a: distinguish the caller-workspace membership guard's
+			// denial (a security-relevant Spoofing rejection) from a
+			// routine stale/missing ref, so it's greppable/auditable
+			// separately instead of folding into the same undifferentiated
+			// "part skipped" handling as any other resolve failure.
+			if media.IsCallerWorkspaceDenied(err) {
+				logger.WarnCF("discord", "Media ref denied by caller-workspace guard", map[string]any{
+					"ref":              part.Ref,
+					"caller_workspace": msg.WorkspaceID,
+					"error":            err.Error(),
+				})
+			} else {
+				logger.ErrorCF("discord", "Failed to resolve media ref", map[string]any{
+					"ref":   part.Ref,
+					"error": err.Error(),
+				})
+			}
 			continue
 		}
 

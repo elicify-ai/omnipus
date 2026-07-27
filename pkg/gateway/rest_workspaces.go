@@ -1317,7 +1317,19 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// media.cascade_delete event (DecisionError on failure) regardless of
 	// how many entries were actually removed.
 	wsDir := workspace.WorkspaceDir(a.homePath, id)
+	// FIX 3: RemoveAll's own failure (e.g. EBUSY/permission on
+	// workspaces/<id>/work/, which a live agent turn may still be writing
+	// to) used to only reach a slog.Warn — the response gate below checked
+	// solely mediaCascadeFailed, so a real leftover-directory failure was
+	// still reported to the caller as a 204 "fully deleted" while wsDir was
+	// still (partially) on disk. dirRemoveFailed threads that outcome into
+	// the same gate, alongside — not merged into — mediaCascadeFailed, so
+	// the existing straggler-vs-hard-cascade-failure distinction above is
+	// unaffected: this only tracks whether the directory wipe itself, run
+	// unconditionally regardless of that distinction, actually succeeded.
+	dirRemoveFailed := false
 	if err := os.RemoveAll(wsDir); err != nil {
+		dirRemoveFailed = true
 		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
 	}
 
@@ -1330,6 +1342,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 					"id":                   id,
 					"actor":                actor,
 					"media_cascade_failed": mediaCascadeFailed,
+					"dir_remove_failed":    dirRemoveFailed,
 				},
 			},
 		); err != nil {
@@ -1339,21 +1352,26 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 
 	// The workspace record itself IS gone at this point (the authoritative
 	// delete happened earlier, under the lock, and already released it) —
-	// a 404/409 here would misrepresent that. But a failed media cascade is
-	// a genuine partial failure the caller must be able to see, not a blank
-	// 204 implying total success (FIX-4: a silent 204 here is exactly what
-	// let every media-cascade failure go unnoticed). 500 is consistent with
-	// the two HARD cascade steps earlier in this same handler (task scan,
-	// channel unbind), which already return this status for cascade
-	// failures on this endpoint. The caller can confirm the workspace
-	// itself is gone via a follow-up GET (404) and inspect whatever
-	// survives in the media library via GET /workspaces/{id}/media.
-	if mediaCascadeFailed {
-		jsonErr(
-			w,
-			http.StatusInternalServerError,
-			"workspace deleted, but media library cleanup failed; see server logs",
-		)
+	// a 404/409 here would misrepresent that. But a failed media cascade OR
+	// a failed directory wipe is a genuine partial failure the caller must
+	// be able to see, not a blank 204 implying total success (FIX-4: a
+	// silent 204 here is exactly what let every media-cascade failure go
+	// unnoticed; FIX 3 closes the same gap for a RemoveAll failure, which
+	// used to bypass this gate entirely). 500 is consistent with the two
+	// HARD cascade steps earlier in this same handler (task scan, channel
+	// unbind), which already return this status for cascade failures on
+	// this endpoint. The caller can confirm the workspace itself is gone
+	// via a follow-up GET (404) and inspect whatever survives on disk /
+	// in the media library via GET /workspaces/{id}/media.
+	if mediaCascadeFailed || dirRemoveFailed {
+		msg := "workspace deleted, but media library cleanup failed; see server logs"
+		switch {
+		case mediaCascadeFailed && dirRemoveFailed:
+			msg = "workspace deleted, but media library cleanup and on-disk directory removal both failed; see server logs"
+		case dirRemoveFailed:
+			msg = "workspace record deleted, but the on-disk workspace directory could not be fully removed; see server logs"
+		}
+		jsonErr(w, http.StatusInternalServerError, msg)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

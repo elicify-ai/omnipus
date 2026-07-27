@@ -201,11 +201,17 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	// failed). A genuine reload error is logged at Error — it means running
 	// agents may keep the previous global policy until the next restart, which
 	// an operator must see in the logs.
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error(
 			"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
 			"error",
 			err,
+		)
+	} else if !confirmed {
+		slog.Warn(
+			"rest: reload after tool policies update did not confirm within the poll window; "+
+				"running agents may still be evaluating the previous global policy",
+			"policy_count", len(body.Policies),
 		)
 	}
 

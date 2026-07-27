@@ -21,6 +21,7 @@ import (
 	"github.com/h2non/filetype"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -497,6 +498,19 @@ func (c *WeComChannel) resolveOutboundPart(
 
 		localPath, meta, err := store.ResolveWithCallerWorkspace(ref, callerWorkspace)
 		if err != nil {
+			// FR-028a: distinguish the caller-workspace membership guard's
+			// denial (a security-relevant Spoofing rejection) from a
+			// routine stale/missing ref, so it's greppable/auditable
+			// separately instead of folding into the generic
+			// "wecom resolve media ...: send failed" error this returns
+			// into (SendMedia, via channels.ErrSendFailed).
+			if media.IsCallerWorkspaceDenied(err) {
+				logger.WarnCF("wecom", "Media ref denied by caller-workspace guard", map[string]any{
+					"ref":              ref,
+					"caller_workspace": callerWorkspace,
+					"error":            err.Error(),
+				})
+			}
 			return "", "", "", cleanup, err
 		}
 		if filename == "" {

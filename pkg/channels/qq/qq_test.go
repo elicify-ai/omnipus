@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -593,6 +595,224 @@ func TestSendMedia_ReturnsSendFailedWhenLocalFileExceedsBase64MiBLimit(t *testin
 	}
 }
 
+// buildTwoPartMediaMessage stores two distinct local files and returns an
+// OutboundMediaMessage referencing both, for the sentCount>0 partial-success
+// regression tests below.
+func buildTwoPartMediaMessage(t *testing.T, store *media.FileMediaStore, chatID string) bus.OutboundMediaMessage {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	parts := make([]bus.MediaPart, 0, 2)
+	for _, name := range []string{"a.png", "b.png"} {
+		localPath := writeTempFile(t, tmpDir, name, []byte("fake-image-data-"+name))
+		ref, err := store.Store(localPath, media.MediaMeta{
+			Filename:    name,
+			ContentType: "image/png",
+		}, "qq:test")
+		if err != nil {
+			t.Fatalf("Store() error = %v", err)
+		}
+		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
+	}
+
+	return bus.OutboundMediaMessage{ChatID: chatID, Parts: parts}
+}
+
+// TestSendMedia_MidLoopUploadFailureAfterPartialSuccessIsPermanent is the
+// CRITICAL sendfile-fix review regression test: part 1 fully uploads AND
+// posts successfully, then part 2's upload (Transport) call fails with a
+// genuine API error. Before the fix this returned a bare channels.ErrTemporary
+// unconditionally, so Manager.sendMediaWithRetry would retry the whole
+// message — re-uploading and re-posting part 1, duplicating it for the user.
+// The fix must classify this permanent (channels.ErrSendFailed) instead.
+func TestSendMedia_MidLoopUploadFailureAfterPartialSuccessIsPermanent(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	store := media.NewFileMediaStore()
+
+	api := &fakeQQAPI{
+		transportResp: mustJSON(t, dto.Message{FileInfo: []byte("uploaded-file-info")}),
+		transportErrs: []error{nil, errors.New("network exploded")},
+	}
+	ch := &QQChannel{
+		BaseChannel: channels.NewBaseChannel("qq", nil, messageBus, nil),
+		api:         api,
+		dedup:       make(map[string]time.Time),
+		done:        make(chan struct{}),
+		ctx:         context.Background(),
+	}
+	ch.SetRunning(true)
+	ch.SetMediaStore(store)
+	ch.chatType.Store("group-1", "group")
+
+	err := ch.SendMedia(context.Background(), buildTwoPartMediaMessage(t, store, "group-1"))
+
+	if err == nil {
+		t.Fatal("SendMedia() error = nil, want error from part 2's upload failure")
+	}
+	if !errors.Is(err, channels.ErrSendFailed) {
+		t.Fatalf("SendMedia() error = %v, want ErrSendFailed (permanent, part 1 already delivered)", err)
+	}
+	if errors.Is(err, channels.ErrTemporary) {
+		t.Fatalf("SendMedia() error = %v must not ALSO match ErrTemporary "+
+			"(ambiguous retry classification)", err)
+	}
+	if len(api.transportCalls) != 2 {
+		t.Fatalf("transportCalls = %d, want 2 (part 1 upload, part 2 upload attempt)", len(api.transportCalls))
+	}
+	if len(api.groupMessages) != 1 {
+		t.Fatalf("groupMessages = %d, want 1 (only part 1 reached the post step)", len(api.groupMessages))
+	}
+}
+
+// TestSendMedia_MidLoopPostFailureAfterPartialSuccessIsPermanent is the same
+// CRITICAL regression as above, but the failure happens one step later: part
+// 2's file has already been uploaded to QQ's CDN (Transport succeeds) and
+// only the follow-up PostGroupMessage/PostC2CMessage call fails. Before the
+// fix this also returned a bare channels.ErrTemporary unconditionally.
+func TestSendMedia_MidLoopPostFailureAfterPartialSuccessIsPermanent(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	store := media.NewFileMediaStore()
+
+	api := &fakeQQAPI{
+		transportResp: mustJSON(t, dto.Message{FileInfo: []byte("uploaded-file-info")}),
+		groupErrs:     []error{nil, errors.New("post rejected")},
+	}
+	ch := &QQChannel{
+		BaseChannel: channels.NewBaseChannel("qq", nil, messageBus, nil),
+		api:         api,
+		dedup:       make(map[string]time.Time),
+		done:        make(chan struct{}),
+		ctx:         context.Background(),
+	}
+	ch.SetRunning(true)
+	ch.SetMediaStore(store)
+	ch.chatType.Store("group-1", "group")
+
+	err := ch.SendMedia(context.Background(), buildTwoPartMediaMessage(t, store, "group-1"))
+
+	if err == nil {
+		t.Fatal("SendMedia() error = nil, want error from part 2's post failure")
+	}
+	if !errors.Is(err, channels.ErrSendFailed) {
+		t.Fatalf("SendMedia() error = %v, want ErrSendFailed (permanent, part 1 already delivered)", err)
+	}
+	if errors.Is(err, channels.ErrTemporary) {
+		t.Fatalf("SendMedia() error = %v must not ALSO match ErrTemporary "+
+			"(ambiguous retry classification)", err)
+	}
+	if len(api.transportCalls) != 2 {
+		t.Fatalf("transportCalls = %d, want 2 (both parts fully uploaded)", len(api.transportCalls))
+	}
+	if len(api.groupMessages) != 2 {
+		t.Fatalf("groupMessages = %d, want 2 (part 1 succeeded, part 2 attempted then failed)",
+			len(api.groupMessages))
+	}
+}
+
+// TestSendMedia_UploadFailureWithNothingSentIsTemporary is the control case:
+// when the very first part's upload fails (sentCount == 0, nothing has
+// reached QQ yet), the failure must keep its ErrTemporary classification so
+// sendMediaWithRetry still retries — a bare retry here cannot duplicate
+// anything.
+func TestSendMedia_UploadFailureWithNothingSentIsTemporary(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	store := media.NewFileMediaStore()
+
+	localPath := writeTempFile(t, t.TempDir(), "a.png", []byte("fake-image-data"))
+	ref, err := store.Store(localPath, media.MediaMeta{
+		Filename:    "a.png",
+		ContentType: "image/png",
+	}, "qq:test")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	api := &fakeQQAPI{transportErr: errors.New("network exploded")}
+	ch := &QQChannel{
+		BaseChannel: channels.NewBaseChannel("qq", nil, messageBus, nil),
+		api:         api,
+		dedup:       make(map[string]time.Time),
+		done:        make(chan struct{}),
+		ctx:         context.Background(),
+	}
+	ch.SetRunning(true)
+	ch.SetMediaStore(store)
+	ch.chatType.Store("group-1", "group")
+
+	err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "group-1",
+		Parts:  []bus.MediaPart{{Type: "image", Ref: ref}},
+	})
+
+	if !errors.Is(err, channels.ErrTemporary) {
+		t.Fatalf("SendMedia() error = %v, want ErrTemporary (nothing delivered yet, retry is safe)", err)
+	}
+	if errors.Is(err, channels.ErrSendFailed) {
+		t.Fatalf("SendMedia() error = %v must not ALSO match ErrSendFailed "+
+			"(ambiguous retry classification)", err)
+	}
+}
+
+// TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning is the FR-028a
+// review regression test: a media ref denied by the caller-workspace
+// membership guard (media.IsCallerWorkspaceDenied) must get its own
+// distinct WARN log line naming it a workspace-boundary denial. QQ's
+// buildMediaUpload hard-returns the raw error (wrapped in
+// channels.ErrSendFailed by uploadMedia's caller) and had no logging at
+// this exact call site before this fix, so this only adds the new WARN
+// line — there is no prior generic message to distinguish it from here.
+func TestSendMedia_CrossWorkspaceRefLogsDistinctDenialWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "qq-media.log")
+	prevLevel := logger.GetLevel()
+	logger.DisableConsole()
+	logger.SetLevel(logger.WARN)
+	if err := logger.EnableFileLogging(logFile); err != nil {
+		t.Fatalf("EnableFileLogging() error = %v", err)
+	}
+	t.Cleanup(func() {
+		logger.DisableFileLogging()
+		logger.SetLevel(prevLevel)
+	})
+
+	messageBus := bus.NewMessageBus()
+	ch := &QQChannel{
+		BaseChannel: channels.NewBaseChannel("qq", nil, messageBus, nil),
+		api:         &fakeQQAPI{},
+		dedup:       make(map[string]time.Time),
+		done:        make(chan struct{}),
+		ctx:         context.Background(),
+	}
+	ch.SetRunning(true)
+	ch.SetMediaStore(media.NewFileMediaStore())
+	ch.chatType.Store("group-1", "group")
+
+	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		ChatID: "group-1",
+		// WorkspaceID deliberately empty: a workspace-prefixed ref with no
+		// caller-workspace context trips the FR-028a guard
+		// (ErrWorkspaceContextRequired) before any media store provider is
+		// even consulted.
+		Parts: []bus.MediaPart{{Type: "image", Ref: "media://workspace/other-ws/some-id"}},
+	})
+	if err == nil {
+		t.Fatal("SendMedia() error = nil, want error for a denied workspace ref")
+	}
+	if !errors.Is(err, channels.ErrSendFailed) {
+		t.Fatalf("SendMedia() error = %v, want ErrSendFailed "+
+			"(a caller-workspace denial is permanent, same as any other local resolve failure)", err)
+	}
+
+	logged, readErr := os.ReadFile(logFile)
+	if readErr != nil {
+		t.Fatalf("reading captured log file: %v", readErr)
+	}
+	logStr := string(logged)
+	if !strings.Contains(logStr, "Media ref denied by caller-workspace guard") {
+		t.Fatalf("log file missing the distinct FR-028a denial WARN line; got:\n%s", logStr)
+	}
+}
+
 type fakeQQAPI struct {
 	transportResp  []byte
 	transportErr   error
@@ -601,6 +821,13 @@ type fakeQQAPI struct {
 	transportCalls []fakeTransportCall
 	groupMessages  []dto.APIMessage
 	c2cMessages    []dto.APIMessage
+
+	// transportErrs and groupErrs allow injecting a failure on a specific
+	// call index (0-based), overriding transportErr/groupErr for that call
+	// only, so tests can simulate "part 1 succeeds, part 2 fails" without
+	// affecting every call uniformly.
+	transportErrs []error
+	groupErrs     []error
 }
 
 type fakeTransportCall struct {
@@ -623,7 +850,11 @@ func (f *fakeQQAPI) PostGroupMessage(
 	msg dto.APIMessage,
 	_ ...options.Option,
 ) (*dto.Message, error) {
+	idx := len(f.groupMessages)
 	f.groupMessages = append(f.groupMessages, msg)
+	if idx < len(f.groupErrs) && f.groupErrs[idx] != nil {
+		return &dto.Message{}, f.groupErrs[idx]
+	}
 	return &dto.Message{}, f.groupErr
 }
 
@@ -642,11 +873,15 @@ func (f *fakeQQAPI) Transport(_ context.Context, method, url string, body any) (
 	if !ok {
 		return nil, errors.New("unexpected transport body type")
 	}
+	idx := len(f.transportCalls)
 	f.transportCalls = append(f.transportCalls, fakeTransportCall{
 		method: method,
 		url:    url,
 		body:   *upload,
 	})
+	if idx < len(f.transportErrs) && f.transportErrs[idx] != nil {
+		return f.transportResp, f.transportErrs[idx]
+	}
 	return f.transportResp, f.transportErr
 }
 

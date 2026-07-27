@@ -108,6 +108,23 @@ require md5sum
 require base64
 require od
 
+# MEDIUM fix (disk-fill family, same root cause as the Go installer's
+# FIX-CRIT-001): the full Chrome-for-Testing zip is ~150-200 MB and
+# extracts to a comparable size on top of that, so a run that starts with
+# well under ~1 GiB free is very likely to hit "disk fills up mid-
+# download-or-extract" — exactly the failure mode that leaves a partial,
+# corrupted dist/chromium/ payload behind. Fail fast with a clear message
+# instead of downloading ~150 MB only to die partway through unzip. Checks
+# the CURRENT directory's filesystem (not dist/, which may not exist yet
+# on a first run — dist/chromium/ is created on the same filesystem as the
+# repo root this script always runs from).
+MIN_FREE_KB=$((1024 * 1024)) # 1 GiB, in 1K blocks
+AVAIL_KB=$(df -Pk . | awk 'NR==2 {print $4}')
+if [ -n "$AVAIL_KB" ] && [ "$AVAIL_KB" -lt "$MIN_FREE_KB" ]; then
+  echo "ADR-052: only ${AVAIL_KB}KB free on this filesystem — need at least ${MIN_FREE_KB}KB (1 GiB) to safely download and extract chrome-for-testing. Free up disk space and retry." >&2
+  exit 1
+fi
+
 # Map CfT platform → on-disk extraction subdir. These match the directory
 # names the CfT zip produces (linux: chrome-linux{64,-arm64}/; darwin:
 # chrome-mac-{arm64,x64}/) and what the runtime's fullChromeBinaryRelPath()
@@ -128,7 +145,32 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+
+# MEDIUM fix: before this, the EXIT trap only ever cleaned up WORK (the
+# mktemp scratch dir) — $STAGE (dist/chromium/, 400+ MB once populated) had
+# no failure trap at all and was only ever cleared by the START of the
+# NEXT run (`rm -rf "$STAGE"` above). A failure anywhere after this point
+# (network flake mid-download, a bad checksum, disk-full mid-extract) left
+# a partial/corrupted chromium/ payload sitting in dist/ until someone
+# noticed or re-ran the bundler — the same disk-fill-accumulation family
+# as the Go installer's FIX-CRIT-001 issue. cleanup() removes WORK
+# unconditionally and additionally removes $STAGE, but ONLY on a non-zero
+# exit (rc -ne 0) — a genuinely successful run (rc=0) leaves $STAGE alone,
+# since that's the goreleaser archive payload this whole script exists to
+# produce. The "no CfT build for this platform" early-exit path below
+# already does its own `rm -rf "$STAGE"; exit 0`, which is rc=0 and so
+# does not re-trigger this cleanup (harmless either way — rm -rf on an
+# already-removed directory is a no-op).
+cleanup() {
+  local rc=$?
+  rm -rf "$WORK"
+  if [ "$rc" -ne 0 ]; then
+    echo "ADR-052: build failed (exit $rc) — removing partial $STAGE payload so it can't be mistaken for a complete bundle" >&2
+    rm -rf "$STAGE"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 
 MANIFEST="$WORK/cft.json"
 echo "ADR-052: fetching CfT manifest from $CFT_MANIFEST_URL" >&2

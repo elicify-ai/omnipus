@@ -377,6 +377,118 @@ func TestSendMedia_DeletesPlaceholderBeforeSending(t *testing.T) {
 	}
 }
 
+// mockSequentialMediaChannel simulates the shape every real MediaSender
+// implementation shares (Telegram/Feishu/Matrix/Slack): SendMedia iterates
+// msg.Parts front-to-back, "delivering" each one in turn, and — on a
+// genuine mid-loop send/upload failure — classifies the error via the same
+// shared ClassifyMediaSendError helper the real channels call, using
+// however many parts THIS invocation has already delivered.
+//
+// This is deliberately generic (not a copy of one specific channel) because
+// it exercises the actual defect mechanism end-to-end through
+// Manager.sendMediaWithRetry: the manager retries the ENTIRE message with
+// the same, unmutated bus.OutboundMediaMessage, so any real channel's
+// per-part loop necessarily starts over from part 0 on every retry.
+type mockSequentialMediaChannel struct {
+	mockChannel
+	mu          sync.Mutex
+	delivered   []string // ref of every part actually "delivered", across ALL SendMedia calls
+	callCount   int
+	failPartRef string // ref that fails, but ONLY on the very first SendMedia call
+}
+
+func (m *mockSequentialMediaChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	m.mu.Lock()
+	m.callCount++
+	call := m.callCount
+	m.mu.Unlock()
+
+	sentCount := 0
+	for _, part := range msg.Parts {
+		if call == 1 && part.Ref == m.failPartRef {
+			// A genuine send/upload failure on this part, after sentCount
+			// earlier parts in THIS call already went out — exactly what
+			// Telegram/Feishu/Matrix/Slack hit when the platform API call
+			// for one part fails partway through a multi-part message.
+			return ClassifyMediaSendError("mock", sentCount, fmt.Errorf("simulated transient send failure"))
+		}
+		m.mu.Lock()
+		m.delivered = append(m.delivered, part.Ref)
+		m.mu.Unlock()
+		sentCount++
+	}
+	return nil
+}
+
+// TestSendMediaWithRetry_PartialFailureDoesNotReDeliverSucceededParts is the
+// CRITICAL regression test for the sendfile-fix review finding: before the
+// fix, sendMediaWithRetry retried the whole SendMedia call on ErrTemporary
+// regardless of partial progress. Here part 1 succeeds, part 2 fails on the
+// first attempt (simulating a transient 5xx/network blip) but WOULD succeed
+// on a retry (call 2 never fails) — the exact trigger from the bug report:
+// "part 1 uploads fine; part 2 hits a transient blip... If a later attempt
+// succeeds, sendMediaWithRetry returns nil... no indication a duplicate
+// went out."
+//
+// Before the fix: attempt 1 delivers part1, fails on part2 with a bare
+// ErrTemporary; the manager backs off and retries with the SAME msg;
+// attempt 2 re-delivers part1 (again!), then part2 and part3 succeed, and
+// sendMediaWithRetry returns nil — clean success, with part1 silently
+// delivered twice.
+//
+// After the fix: the part2 failure is classified permanent (ErrSendFailed)
+// because sentCount(1) > 0, so the manager does not retry at all. Part1 is
+// delivered exactly once, and the caller gets a real error instead of a
+// false "success".
+func TestSendMediaWithRetry_PartialFailureDoesNotReDeliverSucceededParts(t *testing.T) {
+	m := newTestManager()
+	ch := &mockSequentialMediaChannel{failPartRef: "media://part2"}
+	w := &channelWorker{
+		ch:      ch,
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+
+	msg := bus.OutboundMediaMessage{
+		Channel: "test",
+		ChatID:  "chat1",
+		Parts: []bus.MediaPart{
+			{Ref: "media://part1"},
+			{Ref: "media://part2"},
+			{Ref: "media://part3"},
+		},
+	}
+
+	err := m.sendMediaWithRetry(context.Background(), "test", w, msg)
+
+	part1Count := 0
+	for _, ref := range ch.delivered {
+		if ref == "media://part1" {
+			part1Count++
+		}
+	}
+	if part1Count != 1 {
+		t.Fatalf(
+			"CRITICAL: part1 must be delivered exactly once, got %d (delivered=%v, SendMedia calls=%d)",
+			part1Count, ch.delivered, ch.callCount,
+		)
+	}
+
+	// Documented trade-off of the chosen fix: a mid-loop failure after a
+	// partial delivery is now permanent, so the manager must not retry at
+	// all (a genuinely-transient single-part failure that would have
+	// succeeded on retry is no longer retried once ANY part in the message
+	// has already gone out).
+	if ch.callCount != 1 {
+		t.Fatalf("expected exactly 1 SendMedia call (no retry after partial delivery), got %d", ch.callCount)
+	}
+	if err == nil {
+		t.Fatal("expected sendMediaWithRetry to return an error, not silent success, when a part failed")
+	}
+	if !errors.Is(err, ErrSendFailed) {
+		t.Fatalf("expected the mid-loop failure to be classified permanent (ErrSendFailed), got %v", err)
+	}
+}
+
 func TestSendWithRetry_UnknownError(t *testing.T) {
 	m := newTestManager()
 	var callCount int

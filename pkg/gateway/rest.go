@@ -2601,9 +2601,12 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// to run. The "warning" field signals a partial success — frontend must
 	// check this field.
 	var createReloadWarning string
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("config reload after agent create failed", "error", err)
 		createReloadWarning = fmt.Sprintf("config reload failed: %v", err)
+	} else if !confirmed {
+		slog.Warn("rest: reload after agent create did not confirm within the poll window; "+
+			"agent may not yet be resolvable via the runtime registry", "agent_id", ac.ID)
 	}
 	// Build the response from local variables only (do NOT read from live config — race).
 	respModel := defaultModelName
@@ -2710,8 +2713,11 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the 204 response is sent back to the caller (prevents a
 	// race where an immediate GET /sessions/:id still sees agent_removed=false).
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
+	} else if !confirmed {
+		slog.Warn("rest: deleteAgent: reload did not confirm within the poll window; "+
+			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
 	}
 	// Audit the destructive action. Emitted after the write succeeds; a
 	// failed audit write is logged (not silently discarded) so audit-log
@@ -3488,9 +3494,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		// returns before the registry actually swaps, so the response-building
 		// reads of a.agentLoop.GetConfig() a few lines below (and any other
 		// request racing this one) would otherwise observe pre-update state.
-		if err := a.triggerReloadAndWait(); err != nil {
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			slog.Error("config reload after agent update failed", "error", err)
 			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
+		} else if !confirmed {
+			slog.Warn("rest: reload after agent update did not confirm within the poll window; "+
+				"updated agent config may not yet be live", "agent_id", id)
 		}
 	}
 
@@ -5758,7 +5767,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// internally as a no-op, so a non-nil error here is always a genuine
 		// reload failure — preserving the existing 500 semantics below (the
 		// key IS persisted; only the live application failed).
-		if err := a.triggerReloadAndWait(); err != nil {
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			slog.Error("config reload after provider update failed", "error", err)
 			jsonErr(
 				w,
@@ -5766,6 +5775,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("provider updated but config reload failed: %v", err),
 			)
 			return
+		} else if !confirmed {
+			slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
+				"agents may still be served by the stale cached provider client", "provider_id", providerID)
 		}
 		hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
 		respModels := []string{}
@@ -7127,7 +7139,7 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// pointer. triggerReloadAndWait already treats ErrReloadNotConfigured
 	// (unit tests without the full gateway reload pipeline wired) as a
 	// no-op, so a non-nil error here is always a genuine reload failure.
-	if err := a.triggerReloadAndWait(); err != nil {
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("agent tools update: reload failed — in-memory policy not updated",
 			"agent_id", agentID, "error", err)
 		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
@@ -7142,6 +7154,9 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		jsonErr(w, http.StatusServiceUnavailable,
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
+	} else if !confirmed {
+		slog.Warn("rest: agent tools update: reload did not confirm within the poll window; "+
+			"in-memory tool policy may not yet reflect the new config", "agent_id", agentID)
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match
@@ -8085,13 +8100,16 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	// unit-test environment TriggerReload is a no-op (ErrReloadNotConfigured), so
 	// this is safe to call unconditionally.
 	if a.agentLoop != nil {
-		if err := a.triggerReloadAndWait(); err != nil {
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			// A genuine reload failure means the (now config-less) channel may still
 			// be running. Log it but continue the teardown — we must still remove the
 			// credentials/state the operator asked to delete, and the config entry is
 			// already gone so a subsequent reload will converge.
 			slog.Error("rest: delete channel instance: reload after config removal failed",
 				"id", channelID, "error", err)
+		} else if !confirmed {
+			slog.Warn("rest: delete channel instance: reload did not confirm within the poll window; "+
+				"the now config-less channel instance may still be running", "id", channelID)
 		}
 	}
 
@@ -8202,7 +8220,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	// error on a genuine reload failure, which we surface rather than reporting a false
 	// success (the flag persisted but the channel did not start).
 	if a.agentLoop != nil {
-		if err := a.triggerReloadAndWait(); err != nil {
+		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			verb := "start"
 			if !enabled {
 				verb = "stop"
@@ -8212,6 +8230,14 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			jsonErr(w, http.StatusInternalServerError,
 				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
 			return
+		} else if !confirmed {
+			verb := "start"
+			if !enabled {
+				verb = "stop"
+			}
+			slog.Warn("rest: channel reload after enable toggle did not confirm within the poll window; "+
+				"channel may not yet have finished attempting to "+verb,
+				"channel", channelID, "enabled", enabled)
 		}
 	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})

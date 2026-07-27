@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -552,6 +553,38 @@ func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	return c.sendPush(ctx, msg.ChatID, msg.Content, quoteToken)
 }
 
+// classifyLINEMediaFailure reclassifies a mid-loop SendMedia failure through
+// channels.ClassifyMediaSendError, based on how many of THIS message's parts
+// (sentCount) already reached the platform.
+//
+// Unlike qq/weixin (whose low-level send helpers return raw, unclassified
+// errors), LINE's callAPI already wraps every HTTP/network failure via
+// channels.ClassifyNetError/ClassifySendError (ErrTemporary/ErrRateLimit/
+// ErrSendFailed) before SendMedia ever sees it. Feeding that already-wrapped
+// error straight into ClassifyMediaSendError would still be functionally
+// safe — sendMediaWithRetry checks for ErrSendFailed before it ever
+// considers ErrTemporary/ErrRateLimit (manager.go's sendMediaWithRetry), so
+// the added permanent marker always wins — but it would leave the resulting
+// error ambiguously matching multiple sentinels at once, which is needless
+// noise for callers/logging that inspect errors.Is directly. So:
+//   - if err is ALREADY permanent (errors.Is(err, channels.ErrSendFailed) —
+//     e.g. a 4xx non-429 API rejection, or the "no media store available"
+//     guard above), return it as-is: these are unconditionally non-retryable
+//     regardless of sentCount, so no reclassification is needed or wanted.
+//   - otherwise, reclassify by MESSAGE only (errors.New(err.Error()), not
+//     %w) so the old ErrTemporary/ErrRateLimit wrap is not carried into the
+//     new chain — the result then carries exactly one retry-relevant
+//     sentinel, matching the qq/weixin/telegram/slack convention.
+func classifyLINEMediaFailure(sentCount int, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, channels.ErrSendFailed) {
+		return err
+	}
+	return channels.ClassifyMediaSendError("line", sentCount, errors.New(err.Error()))
+}
+
 // SendMedia implements the channels.MediaSender interface.
 // LINE requires media to be accessible via public URL; since we only have local files,
 // we fall back to sending a text message with the filename/caption.
@@ -568,6 +601,7 @@ func (c *LINEChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessag
 
 	// LINE Messaging API requires publicly accessible URLs for media messages.
 	// Since we only have local file paths, send caption text as fallback.
+	sentCount := 0
 	for _, part := range msg.Parts {
 		caption := part.Caption
 		if caption == "" {
@@ -575,8 +609,22 @@ func (c *LINEChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessag
 		}
 
 		if err := c.sendPush(ctx, msg.ChatID, caption, ""); err != nil {
-			return err
+			// CRITICAL fix (retry-duplication, sendfile-fix review): callAPI
+			// already classifies this failure with no awareness of how many
+			// of THIS message's parts already went out. sendMediaWithRetry
+			// has no per-part resume — a retry re-invokes SendMedia with the
+			// same, unmutated part list from the top — so if an earlier
+			// part's caption text already sent (sentCount > 0), a retryable
+			// classification here would cause that earlier part's caption
+			// text to be resent too (duplicate text, same root cause as the
+			// duplicate-file defect in the channels that upload real media).
+			// classifyLINEMediaFailure upgrades the failure to permanent
+			// (ErrSendFailed) once sentCount > 0; when sentCount == 0
+			// (nothing sent yet) it keeps the failure's existing retry
+			// classification.
+			return classifyLINEMediaFailure(sentCount, err)
 		}
+		sentCount++
 	}
 
 	return nil

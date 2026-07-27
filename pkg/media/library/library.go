@@ -275,6 +275,14 @@ func (m manifestEntry) clone() manifestEntry {
 // the underlying values), so callers can mutate it freely without
 // affecting library state. This is the API-edge projection required by
 // the contract (TD-M1).
+//
+// Status always defaults to "available" here: manifestEntry has no notion
+// of the Library-level l.stranded registry (see ErrEntryStranded's doc) —
+// only List() (review FIX 2) knows to override this to "stranded" for an id
+// it finds in that registry. Every other read surface (Get, Read,
+// ResolvePathWithCaller, Refcount, ...) refuses a stranded id outright
+// (returns ErrEntryStranded) rather than returning a projection at all, so
+// this field is never "stranded" coming out of those.
 func (m manifestEntry) projection() gen.MediaLibraryEntry {
 	id := m.id
 	workspaceID := m.workspaceID
@@ -284,6 +292,7 @@ func (m manifestEntry) projection() gen.MediaLibraryEntry {
 	uploadedAt := m.uploadedAt
 	refcount := int(m.refcount)
 	lastSeen := m.lastRefcountSeenAt
+	status := gen.Available
 	return gen.MediaLibraryEntry{
 		Id:                 &id,
 		WorkspaceId:        &workspaceID,
@@ -295,6 +304,7 @@ func (m manifestEntry) projection() gen.MediaLibraryEntry {
 		Source:             m.source,
 		Refcount:           &refcount,
 		LastRefcountSeenAt: &lastSeen,
+		Status:             &status,
 	}
 }
 
@@ -469,6 +479,15 @@ func (l *Library) NormalizeCache() NormalizeCache {
 	return GlobalNormalizeCache()
 }
 
+// List returns every entry currently in the manifest, including a stranded
+// one (see ErrEntryStranded) — omitting it would let a caller believe a
+// still-cataloged entry silently vanished, which is just as misleading as
+// the opposite failure this fix closes. Review FIX 2: a stranded entry's
+// Status is annotated "stranded" here (instead of the projection's default
+// "available") so the caller can tell it apart from a healthy entry without
+// a separate per-id Get() round-trip that would just 500 — List() is the
+// one read surface that reports on an id it cannot vouch for rather than
+// refusing outright, because a bulk listing has no single id to refuse.
 func (l *Library) List() []gen.MediaLibraryEntry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -479,7 +498,12 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 	sort.Strings(ids)
 	entries := make([]gen.MediaLibraryEntry, 0, len(ids))
 	for _, id := range ids {
-		entries = append(entries, l.manifest[id].projection())
+		projection := l.manifest[id].projection()
+		if _, stranded := l.stranded[id]; stranded {
+			status := gen.Stranded
+			projection.Status = &status
+		}
+		entries = append(entries, projection)
 	}
 	return entries
 }
@@ -848,6 +872,23 @@ func (l *Library) IncrementRefcount(id string) (int, error) {
 
 func (l *Library) DecrementRefcount(id string) (int, error) {
 	return l.changeRefcount(id, -1)
+}
+
+// StrandedCount returns the number of entries currently known to be in the
+// ErrEntryStranded state (manifest present, bytes quarantined) for this
+// workspace's library. Review FIX 3: before this accessor existed, the only
+// signals available to an operator were a per-transition WarnCF log line
+// (see markStrandedLocked) and a per-click ErrEntryStranded from a caller
+// that happened to touch the exact affected id — there was no way to ask
+// "how many entries are stranded right now" without grepping logs or
+// hand-scanning manifests for orphaned quarantine dotfiles. This is an O(1)
+// live read of the in-memory registry rebuilt from disk on every Load (see
+// rebuildStrandedLocked), so it reflects reality across process restarts
+// too.
+func (l *Library) StrandedCount() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return len(l.stranded)
 }
 
 func (l *Library) Refcount(id string) (int, error) {
@@ -1539,6 +1580,22 @@ func (l *Library) markStrandedLocked(id, quarantinePath string) {
 		l.stranded = make(map[string]string)
 	}
 	l.stranded[id] = quarantinePath
+	// Review FIX 3: a single canonical, greppable log line for every
+	// transition INTO the stranded state, regardless of which call site
+	// (Delete / CascadeDelete / OrphanGC rollback-of-rollback, or
+	// rebuildStrandedLocked rediscovering one at process restart) triggered
+	// it. Before this, each call site only emitted its own differently
+	// worded WarnCF/ErrorCF right before calling this function (e.g.
+	// "delete rollback rename failed"), with no single consistent event an
+	// operator could grep for across every stranding cause — this
+	// complements the StrandedCount accessor above with a running total at
+	// the moment of each transition.
+	logger.WarnCF("media-library", "media entry stranded (manifest present, bytes quarantined)", map[string]any{
+		"workspace_id":    l.workspaceID,
+		"media_id":        id,
+		"quarantine_path": quarantinePath,
+		"stranded_count":  len(l.stranded),
+	})
 }
 
 // rebuildStrandedLocked scans l.path for quarantine dotfiles left behind
@@ -1706,7 +1763,20 @@ func (l *Library) reconcileStragglersLocked() (
 			// this one's directory listing) — fall through and still clear
 			// the bookkeeping below.
 		}
+		_, wasStranded := l.stranded[id]
 		delete(l.stranded, id)
+		if wasStranded {
+			// Review FIX 3: the counterpart to markStrandedLocked's WARN —
+			// a single canonical, greppable log line for every transition
+			// OUT of the stranded state, so an operator watching logs sees
+			// both the stranding event and its eventual resolution, not
+			// just a WarnCF that appears to hang forever.
+			logger.InfoCF("media-library", "stranded entry reconciled (quarantine file removed)", map[string]any{
+				"workspace_id":   l.workspaceID,
+				"media_id":       id,
+				"stranded_count": len(l.stranded),
+			})
+		}
 		if entry, exists := l.manifest[id]; exists {
 			reclaimed = append(reclaimed, entry.projection())
 			bytesFreed += entry.size

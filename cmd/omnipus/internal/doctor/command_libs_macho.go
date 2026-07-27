@@ -140,7 +140,17 @@ func parseMachODylibs(r io.ReaderAt) ([]string, error) {
 	sizeofcmds := bo.Uint32(hdr[20:24])
 
 	if ncmds == 0 {
-		return nil, nil // no load commands, nothing to check
+		// FIX-HIGH-002: mirrors the ELF parser's e_phnum==0 fix
+		// (command_libs_linux.go) — zero load commands is not expected
+		// for a Chrome-for-Testing Mach-O (always dynamically linked; a
+		// real Mach-O executable always carries at least an LC_SEGMENT_64
+		// for __TEXT). Silently returning (nil, nil) here would report
+		// "0 missing libraries" for a binary that is truncated, zeroed, or
+		// otherwise corrupted. Return an error so the caller surfaces an
+		// accurate "could not determine" warning instead.
+		return nil, fmt.Errorf(
+			"mach-o has no load commands (ncmds=0) — cannot verify dependencies; not expected for a Chrome-for-Testing binary and likely indicates a truncated or corrupted file",
+		)
 	}
 	if uint64(sizeofcmds) > maxMachOOffset || sizeofcmds > maxMachOLoadCmdRegion {
 		return nil, fmt.Errorf("load-command region implausibly large: sizeofcmds=%d", sizeofcmds)
