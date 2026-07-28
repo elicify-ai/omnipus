@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_tasks_plan_gate_test.go — REST-layer coverage for the S1 plan-state
 // gate's REST bypass (bc66345f placed the gate in CheckQueuedTasks only, one
 // level above the ExecuteTask/StartTaskNow primitives every dispatch path

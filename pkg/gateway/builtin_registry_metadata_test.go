@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus — Central Builtin Registry Metadata Tests (Issue #350)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

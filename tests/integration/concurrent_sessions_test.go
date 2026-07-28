@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // concurrent_sessions_test.go — regression tests for Bug-3: Concurrent sessions
 // both respond.
 //

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — Wave 1 tests for API key credential store integration.
 //
 // These tests cover API key credential store — backward compat with plaintext

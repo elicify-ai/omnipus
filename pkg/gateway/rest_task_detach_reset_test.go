@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Sibling of rest_plan_delete_reset_test.go. That file covers laundering via
 // DELETE /plans/{id}; this one covers the SECOND door found in UAT round 2 —
 // PATCH /api/v1/tasks/{id} with {"plan_id": ""}.

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_tasks_start_test.go — tests for the "Run/Start" task delegation fix.
 //
 // When PATCH /api/v1/tasks/{id} transitions status to in_progress AND the task

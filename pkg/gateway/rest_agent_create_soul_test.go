@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for the createAgent soul + worker-must-have-executor fixes.
 //
 // Background:

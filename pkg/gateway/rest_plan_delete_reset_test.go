@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_plan_delete_reset_test.go — S1 release-blocker regression coverage
 // (UAT round 2): DELETE /api/v1/plans/{id} used to clear plan_id on every
 // former member task and change nothing else, so a `next` member came out

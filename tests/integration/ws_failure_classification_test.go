@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // ws_failure_classification_test.go — guards the diagnosis, not the feature.
 //
 // The concurrency tests in this package (concurrent_sessions_test.go,

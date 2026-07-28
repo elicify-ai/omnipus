@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — Spec-1 regression test for issue #358.
 //
 // #358 (FR-111): enabling a channel via PUT /api/v1/channels/{id}/enable must

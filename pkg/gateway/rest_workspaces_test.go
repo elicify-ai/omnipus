@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // BDD: workspace REST API tests.
 // Traces to: FR-001 (workspaces CRUD), FR-007 (cascade delete).
 

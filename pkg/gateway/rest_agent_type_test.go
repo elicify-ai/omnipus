@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // REST create-by-type tests for the discriminated-union AgentCreateRequest
 // (W1: AgentCreateRequestMain / AgentCreateRequestSubagent /
 // AgentCreateRequestSubagent3p). Proves:

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // W2-3: TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools
 //
 // Regression test that pins the production wiring in pkg/agent/subturn.go —

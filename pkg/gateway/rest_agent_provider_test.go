@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // O3 two-field model: the agent {model, provider} pair round-trips through
 // create / get / update. Proves:
 //  1. POST with model+provider persists both and echoes provider.

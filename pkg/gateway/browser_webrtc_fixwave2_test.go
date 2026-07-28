@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_webrtc_fixwave2_test.go — second fix-wave coverage for
 // pkg/gateway/browser_webrtc.go, converged from the 14-reviewer review of
 // the live-browser WebRTC epic (see the fix list in the fix-wave task

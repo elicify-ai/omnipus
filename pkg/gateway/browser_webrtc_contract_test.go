@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_webrtc_contract_test.go — ADR-047 / wave-plan W2-C: contract
 // round-trip coverage for the 7 new WebRTC signaling frame types (D4/D6).
 //

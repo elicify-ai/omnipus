@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_audit_test.go — T0: Real handleCancel flow asserts that
 // turn_cancel_attempt is written by the actual cancel state machine.
 //

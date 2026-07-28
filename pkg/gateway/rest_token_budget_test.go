@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET/PUT /api/v1/settings/token-budget (ADR-053 D12/R§8.3, FE-6).
 
 package gateway

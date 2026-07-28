@@ -1,7 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-
 package gateway
 
 import (

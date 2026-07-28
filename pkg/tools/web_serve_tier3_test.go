@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // T2.1 + T2.2: Tier 3 command allow-list tests.
 //
 // T2.1 verifies that the baseline allow-list entries are accepted by

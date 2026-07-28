@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // board_task_hardening_test.go — task hardening tests (Sprint 2).
 //
 // Sprint 2 removals (design decisions — not regressions):

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression test for the CRIT-001/FR-B12 bash:deny seed on the REST
 // agent-creation path (POST /api/v1/agents), which is the primary,
 // human-facing way agents are created in production (the SPA's "+ Add

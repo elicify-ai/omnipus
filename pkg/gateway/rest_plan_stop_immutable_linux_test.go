@@ -1,4 +1,4 @@
-//go:build linux && !cgo
+//go:build linux
 
 // rest_plan_stop_immutable_linux_test.go — Linux implementation of
 // blockNewFilesInDir, the shared test helper TestPlanStop_PartialFailureSurfacesAsServerError

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // tool_result_store_concurrency_test.go — T5: Nil-safety and concurrency tests
 // for toolResultStore.
 //

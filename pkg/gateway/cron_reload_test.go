@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for #412 schedule reload fix.
 //
 // BDD scenarios:

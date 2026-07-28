@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // websocket_replay_order_test.go — regression tests for bug-5 replay event ordering.
 //
 // Bug-5: When a client reconnects and sends attach_session while the agent is still

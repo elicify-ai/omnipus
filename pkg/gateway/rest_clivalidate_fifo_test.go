@@ -1,4 +1,4 @@
-//go:build !windows && !cgo
+//go:build !windows
 
 // Unix-only coverage for the MAJ-004 pre-spawn guard: a target that
 // exec.LookPath ACCEPTS (it reports X_OK) but is NOT a regular file — a FIFO

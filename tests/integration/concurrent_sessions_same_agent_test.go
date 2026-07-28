@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // concurrent_sessions_same_agent_test.go — regression test for Bug-3 variant:
 // multiple concurrent sessions on the SAME agent all reply.
 //

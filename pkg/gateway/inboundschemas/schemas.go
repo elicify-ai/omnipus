@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package inboundschemas embeds OpenAPI component schema YAML files for
 // server-side inbound request body validation.
 //

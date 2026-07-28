@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_board_test.go — unified task REST API tests (Sprint 2).
 //
 // Sprint 2 replaced pkg/boardtask (GTD board) and pkg/taskstore (workflow queue)

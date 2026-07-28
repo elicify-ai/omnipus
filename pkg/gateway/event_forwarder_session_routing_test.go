@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression coverage for the reload/replay "never self-updates" bug found
 // by live UAT re-verification (2026-07): after a browser reload, a
 // background delegate's live completion event (or any other live event

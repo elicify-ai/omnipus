@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_executor_smoketest.go — POST /api/v1/agents/executor-smoke-test.
 //
 // Stateless, agent-agnostic: actually RUNS a trivial, real prompt through an

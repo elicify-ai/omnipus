@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // channel_routing_binding_test.go — ADR-029 WS-A gateway handler tests.
 // Covers TDD plan items #13 (rejection set), #14 (valid binding persists),
 // #15 (GET round-trip), #21 (workspace cascade), #23a (partial-cascade abort).

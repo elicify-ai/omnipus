@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_plans_wire_coverage_test.go — the mechanical net over toWirePlan.
 //
 // THE DEFECT THIS EXISTS TO MAKE UNREPEATABLE

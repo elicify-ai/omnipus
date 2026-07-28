@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_tasks_external_cli_assignment_test.go — gateway-level coverage for the
 // "Fix B/C" task-assignment change: validateTaskAgentID (rest_tasks.go) no
 // longer rejects a subagent_3p (external-CLI) worker outright — it is a

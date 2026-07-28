@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // since_cursor_reconnect_test.go — T1: Integration regression test for
 // the since-cursor reconnect feature (Phase 2D, spa-streaming-refactor.md).
 //

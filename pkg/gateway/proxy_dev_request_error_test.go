@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // T2.23: ProxyDevRequest_UpstreamError_GenericBody.
 //
 // Verifies that when the upstream dev server is unreachable, the gateway

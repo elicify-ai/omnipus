@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Scheduled-runner integration tests (#264): owner pinning (no default
 // fallback), deliver=true direct send, per-mode session selection, and the
 // failure → coalesced notification + channel alert path. Deterministic: a fake

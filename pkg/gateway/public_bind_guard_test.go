@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Contract test: Plan 3 §1 acceptance decision — binding to a public IP with no
 // users and no dev_mode_bypass must cause a fatal boot error.
 //

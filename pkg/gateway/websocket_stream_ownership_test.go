@@ -1,8 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// See websocket_test.go for the same rationale.
-
 // Regression coverage for a live-UAT-reported HIGH-severity bug: two
 // concurrent delegate turns streaming to the same webchat chatID had their
 // token deltas interleave into one garbled message — confirmed via

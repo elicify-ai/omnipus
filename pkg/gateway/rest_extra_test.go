@@ -1,8 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// Tests E4, E6, E7, E8, E9, E10, E13 from the Wave E review findings fix plan.
-
 package gateway
 
 import (

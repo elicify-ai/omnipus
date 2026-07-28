@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_task_restart_domain_test.go — ADR-052 Fix-Wave-2 agent G tests
 // (§6.7/§6.8, spec FR-019/FR-025/FR-026). Split into its own file rather
 // than rest_plan_task_restart_test.go (owned by a different fix agent in

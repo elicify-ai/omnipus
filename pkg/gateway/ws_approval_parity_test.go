@@ -1,9 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled
-// (matches ws_approval_test.go — pkg/gateway imports pkg/channels/matrix which
-// requires libolm under CGO).
-
 // Policy-resolver unification parity (#438).
 //
 // Proves the gateway WS approval-hook resolver (resolveApprovalToolPolicy) and

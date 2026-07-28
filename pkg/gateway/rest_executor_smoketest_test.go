@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_executor_smoketest_test.go — coverage for
 // POST /api/v1/agents/executor-smoke-test (rest_executor_smoketest.go).
 //

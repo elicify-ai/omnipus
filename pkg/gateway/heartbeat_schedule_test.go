@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // ADR-027 — workspace-scoped heartbeat reconciler tests. Proves:
 //  1. A (workspace, Main-agent) pair with heartbeat enabled gets a recurring cron job.
 //  2. A worker is never given a heartbeat job (even if the member_configs entry exists).

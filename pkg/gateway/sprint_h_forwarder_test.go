@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Sprint H WebSocket event forwarder tests — FR-H-004, FR-H-005, FR-H-011
 // Traces to: sprint-h-subagent-block-spec.md TDD rows 5, 6, 7.
 

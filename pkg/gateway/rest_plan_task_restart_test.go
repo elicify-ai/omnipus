@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_plan_task_restart_test.go — ADR-052 Wave 2 "rest" agent tests:
 //
 //   - FR-007/A1: PUT /plans/{id} rejects ANY request whose body carries a

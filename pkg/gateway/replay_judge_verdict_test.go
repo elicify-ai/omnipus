@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // replay_judge_verdict_test.go — review r2 RV1: streamReplay must not render
 // a persisted EntryTypeJudgeVerdict transcript entry as a raw-JSON system
 // chat bubble on WS reconnect. It must emit a typed judge_verdict frame

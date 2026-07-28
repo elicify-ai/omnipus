@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET/PUT /api/v1/settings/memory (FR-019 / US-6, ADR-027).
 
 package gateway

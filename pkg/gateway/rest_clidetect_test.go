@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET /api/v1/system/cli-detect and DELETE /api/v1/agents/{id}.
 // Both endpoints are part of the Wave-6 closeout:
 //   - GET /system/cli-detect probes whether the three external-CLI runner

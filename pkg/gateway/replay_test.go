@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // replay_test.go — unit and integration tests for pkg/gateway/replay.go.
 //
 // TDD rows 1-17 from sprint-i-historical-replay-fidelity-spec.md.

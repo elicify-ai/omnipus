@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_settings_test.go — 7-reviewer-gate finding: HandleClearSessions
 // hand-assembled its response as a bare map[string]any instead of the
 // generated gen.ClearAllSessionsResponse contract type, so a future field

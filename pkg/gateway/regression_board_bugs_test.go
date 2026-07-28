@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for board-task / unified-task bugs.
 //
 // Sprint 2 changes:

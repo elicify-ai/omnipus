@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // docker_exec_test.go — regression test for Bug-4: Docker exec works in default
 // config.
 //

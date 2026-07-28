@@ -1,7 +1,5 @@
 // Package perf — shared latency math helpers.
-// No build tag: these pure-math functions compile under both CGO_ENABLED=0 and CGO_ENABLED=1.
-// Files that import pkg/gateway (testmain_test.go, helpers_test.go, and the gateway-dependent
-// benchmark/SLO files) must retain //go:build !cgo because pkg/gateway itself carries that tag.
+// Every file in this package compiles under both CGO_ENABLED=0 and CGO_ENABLED=1.
 
 package perf
 

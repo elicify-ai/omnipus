@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Integration tests for the 7-reviewer fix wave on the workspace-heartbeat-memory
 // feature (ADR-027). Covers T-G1 through T-I2 + T-Finding2.
 //

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // REST shell-policy gate tests for PUT /api/v1/agents/{id}.
 //
 // Verifies:

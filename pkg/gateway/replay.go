@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // NOTE: this tag applies to every file in pkg/gateway — it is a package-wide
 // constraint enforcing CGO_ENABLED=0 for the single-binary open-source build.
 // It is NOT specific to this file; see gateway.go for the package entry point.

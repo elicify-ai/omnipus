@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Plan 3 PR-A — API-level E2E tests using the in-process test gateway harness.
 //
 // These 11 tests cover the full gateway → agent loop → WebSocket → session pipeline.

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — regression coverage for the runTurn defer-ordering bug
 // found via LIVE verification (not by any unit test) during the Wave 3
 // fix-pass re-verification: pkg/agent/loop.go's runTurn deferred

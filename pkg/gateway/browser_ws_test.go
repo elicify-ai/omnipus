@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_ws_test.go — ADR-038 gateway WebSocket handler tests
 // (pkg/gateway/browser_ws.go).
 //

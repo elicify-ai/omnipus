@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package integration contains outcome-level regression tests for bugs surfaced
 // in manual E2E testing. These tests MUST fail before the corresponding fixes
 // land and MUST pass after.

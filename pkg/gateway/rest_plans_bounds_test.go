@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_plans_bounds_test.go — the per-plan PlanBounds wire surface.
 //
 // Two defects are pinned here, both of which lost operator data silently:

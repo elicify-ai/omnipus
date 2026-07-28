@@ -194,11 +194,11 @@ jobs:
     name: Linter
     runs-on: ubuntu-latest
     env:
-      # pkg/gateway/*.go is tagged //go:build !cgo (pure-Go per CLAUDE.md hard
-      # constraint #2). Without CGO_ENABLED=0 the whole gateway package is
-      # excluded from the build and every caller of gateway.Run fails with
-      # "undefined: gateway.Run". CI must run with CGO disabled to match the
-      # release build and the project's pure-Go policy.
+      # Omnipus ships a pure-Go binary (CLAUDE.md hard constraint #2), so tests
+      # run with cgo disabled to match the release build. This is the
+      # enforcement mechanism for that constraint — the packages themselves
+      # carry no !cgo build tags (see the cgo-gate job, which builds the module
+      # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
     steps:
       - name: Checkout
@@ -320,9 +320,24 @@ jobs:
         run: go build -tags goolm,stdjson ./...
 
       - name: CGO_ENABLED=0 vet (smoke)
-        # go vet under CGO=0 catches pure-Go build-constraint regressions on the
-        # gateway files (//go:build !cgo) that a CGO=1 vet would silently skip.
+        # go vet under CGO=0 is the canonical vet for this module: production
+        # and release builds are always CGO_ENABLED=0.
         run: go vet -tags goolm,stdjson ./...
+
+      - name: CGO_ENABLED=1 build (all packages)
+        # The counterpart to the CGO=0 build above, and the gate CLAUDE.md has
+        # always documented but CI never actually ran (every job pinned
+        # CGO_ENABLED=0). It does NOT permit CGo — CGO=0 above still proves the
+        # module is CGo-free. It proves every package still COMPILES when cgo is
+        # enabled, which is what `go test -race` requires (race forces cgo).
+        #
+        # This exists because ~70 production files (all of pkg/gateway, plus
+        # tests/integration|perf|security) once carried //go:build !cgo, so
+        # under CGO_ENABLED=1 those packages compiled to nothing and could never
+        # be race-tested. This step fails loudly if such a tag comes back.
+        env:
+          CGO_ENABLED: "1"
+        run: go build -tags goolm,stdjson ./...
 
 
   test:
@@ -435,10 +450,16 @@ jobs:
         # contract introduced by MutateConfig, WithConfig, SaveConfigLocked,
         # and the single-user bypass, plus ADR-054's pkg/entity (64-shard
         # striped mutex + sidecar flock) and pkg/agentstore.
-        # pkg/gateway is excluded: every gateway file is //go:build !cgo, so
-        # under CGO_ENABLED=1 the package compiles to nothing and the test
-        # invocation fails. Race coverage for the gateway is provided by the
-        # CGO=0 test job above.
+        # pkg/gateway used to be excluded because every gateway file carried
+        # //go:build !cgo, so under CGO_ENABLED=1 the package compiled to
+        # nothing and the test invocation failed. That tag has been removed
+        # (the pure-Go guarantee is enforced by the CGO_ENABLED=0 gate, not by
+        # a build tag), so pkg/gateway is now race-buildable. The old claim
+        # that "race coverage for the gateway is provided by the CGO=0 test job"
+        # was false — -race requires cgo, so a CGO_ENABLED=0 job runs no race
+        # detector at all. pkg/gateway is NOT yet added to the list below only
+        # because its full race run has not been timed on CI hardware; see the
+        # cgo1-gate job, which at minimum keeps the package race-BUILDABLE.
         #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Milestone 2 REST handler tests: PUT /api/v1/sessions/{id} (rename)
 // and DELETE /api/v1/sessions/{id} (delete).
 //

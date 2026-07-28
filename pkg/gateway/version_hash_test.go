@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Contract test: Plan 3 §1 acceptance decision — /api/v1/version endpoint returns
 // a build SHA that clients use to detect SPA version drift.
 //

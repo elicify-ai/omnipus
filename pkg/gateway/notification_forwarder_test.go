@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Notification WS-forwarder tests (#264): EventKindNotification → notification
 // frame, delivered ONLY to the connection whose userID matches the payload
 // Recipient (per-user filtering), with the admin-broadcast sentinel fanning out

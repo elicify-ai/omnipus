@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // REST round-trip tests for the P-F2 fallback_models bug: fallback_models
 // persisted correctly to config.json (the original save-race was fixed) but
 // was never echoed back on ANY response path — GET /agents/{id}, the

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // W1 regression coverage: REST cold-load session reads must withhold
 // delegation-child transcript entries (ParentSpawnCallID != "") exactly like
 // the live-reconnect replay path (pkg/gateway/replay.go) already does.

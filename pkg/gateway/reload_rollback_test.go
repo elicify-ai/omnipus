@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — reload rollback and degraded health tests.
 //
 // These tests verify that executeReload rolls back in-memory state and marks

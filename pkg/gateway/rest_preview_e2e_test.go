@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // T2.3 + T2.4: Preview proxy security and first-serve audit tests.
 //
 // T2.3: When the dev-server registry has an active registration, hitting

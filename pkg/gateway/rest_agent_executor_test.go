@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // REST executor round-trip tests for the sub-agent Executor (kind/cli) field.
 //
 // Regression coverage for the review finding that req.Executor was never mapped to

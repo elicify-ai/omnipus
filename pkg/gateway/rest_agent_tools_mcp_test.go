@@ -3,8 +3,6 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build !cgo
-
 package gateway
 
 import (

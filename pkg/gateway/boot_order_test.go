@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — boot order integration tests.
 //
 // These tests verify the invariant that the gateway boot sequence is:

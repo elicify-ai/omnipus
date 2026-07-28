@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for #406 tenancy fixes — updated for FR-1.9 (owner attribution-only).
 //
 // BDD scenarios:

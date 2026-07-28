@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // UAT-fix regression tests (operator decisions):
 //   - Task 3: workspace/agent create+update reject whitespace-only names (400).
 //   - Task 4: provider model catalog — has_models_endpoint signal, user-supplied

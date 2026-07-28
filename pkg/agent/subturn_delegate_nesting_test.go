@@ -97,11 +97,10 @@ import (
 )
 
 // testEventTimeout and testEventPoll are used for require.Eventually polling.
-// Defined HERE (not in sprint_h_subturn_test.go, which is //go:build !cgo) so
-// they are visible under BOTH build configurations — sprint_h_subturn_test.go
-// is excluded under CGO_ENABLED=1 (i.e. -race), and this file has no build
-// constraint, so without this definition the references below were undefined
-// under -race (pre-existing break unblocking the corr-MAJOR-3 -race gate).
+// Defined HERE rather than in sprint_h_subturn_test.go for historical reasons:
+// that file used to carry //go:build !cgo, so it was excluded under
+// CGO_ENABLED=1 (i.e. -race) and left these references undefined. That tag has
+// since been removed package-wide; the placement is kept to avoid churn.
 const (
 	testEventTimeout = 2 * time.Second
 	testEventPoll    = 10 * time.Millisecond

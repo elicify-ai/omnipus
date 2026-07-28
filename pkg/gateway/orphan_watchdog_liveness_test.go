@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression coverage for a live-UAT-reported bug (re-verification 2026-07):
 // the WS event forwarder's orphan watchdog (pkg/gateway/websocket.go,
 // startOrphanWatchdog) synthesizes subagent_end{status:"interrupted"} for

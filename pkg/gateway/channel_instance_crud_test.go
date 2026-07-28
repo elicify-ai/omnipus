@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // channel_instance_crud_test.go — ADR-029 US-6/US-10/US-11 gateway handler tests.
 // Covers:
 //   - F-6: rejection tests assert nothing persisted (SC-002)

@@ -1,4 +1,4 @@
-//go:build !linux && !cgo
+//go:build !linux
 
 // rest_plan_stop_immutable_other_test.go — non-Linux twin of
 // blockNewFilesInDir (see rest_plan_stop_immutable_linux_test.go's doc

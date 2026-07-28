@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 // Regression tests for the credential-resolution escalation coverage gaps

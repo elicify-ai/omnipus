@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — credential redaction regression tests (A1 + A1-regression fixes).
 //
 // Verifies that SensitiveDataReplacer scrubs resolved credential values even

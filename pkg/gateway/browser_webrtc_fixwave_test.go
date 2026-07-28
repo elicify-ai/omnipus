@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_webrtc_fixwave_test.go — fix-wave BE findings coverage for
 // pkg/gateway/browser_webrtc.go: fix 1 (sticky failed capture Start), fix 3
 // (encoder-liveness watchdog + push-state-on-stop), fix 7 (DC input error

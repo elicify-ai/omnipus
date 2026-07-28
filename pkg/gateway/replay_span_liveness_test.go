@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression coverage for two backend-observable reload/replay bugs found by
 // live UAT re-verification (2026-07):
 //

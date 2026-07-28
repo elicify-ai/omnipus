@@ -1,4 +1,4 @@
-//go:build !cgo && nogodmode
+//go:build nogodmode
 
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT

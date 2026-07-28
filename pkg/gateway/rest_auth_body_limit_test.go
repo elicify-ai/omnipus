@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // B1.1 backend half: regression test for the 1 MiB body cap on
 // withOptionalAuth-wrapped routes. An anonymous client cannot pin the
 // gateway with an unbounded POST body.

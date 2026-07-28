@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — WebSocket session_close and attach_session integration tests.
 //
 // T2: session_close frame → CloseSession idempotency wiring.

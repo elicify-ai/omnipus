@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — credential boot integration tests.
 //
 // These tests verify that the gateway boot path correctly wires

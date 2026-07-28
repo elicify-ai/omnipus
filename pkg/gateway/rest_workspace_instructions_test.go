@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for GET and PUT /api/v1/workspaces/{id}/instructions.
 //
 // Covered cases:

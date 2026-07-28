@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for verifier-session visibility (ADR-052 FR-036, US-13 Acceptance 6,
 // SC-014):
 //   - GET /api/v1/sessions excludes type="verifier" sessions by default.

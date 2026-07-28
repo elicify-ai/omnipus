@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_subagent_cascade_test.go — T20b: Sub-agent cascade test.
 //
 // The sub-agent cascade test requires direct access to turnState (unexported),

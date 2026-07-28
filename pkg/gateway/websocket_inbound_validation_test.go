@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Package gateway — inbound frame validation tests.
 //
 // Covers three behaviors of the discriminated inbound decode:

@@ -1,10 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled.
-// When CGO is enabled, pkg/gateway imports pkg/channels/matrix which requires
-// the libolm system library (olm/olm.h). If that library is installed,
-// remove this build constraint and run tests normally.
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

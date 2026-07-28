@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // browser_webrtc_test.go — ADR-047 / wave-plan W2-A gateway WebRTC signaling
 // tests (pkg/gateway/browser_webrtc.go). Mirrors browser_ws_test.go's
 // convention of calling handler methods directly (white-box, same package)

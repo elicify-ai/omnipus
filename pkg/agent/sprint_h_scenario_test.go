@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // W2-5: Integration test — sub-turn calling forbidden tools returns unknown-tool errors.
 //
 // Scripts a sub-turn where the LLM attempts to call delegate, then hand_off.

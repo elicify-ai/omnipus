@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package perf
 
 // startPerfGateway mirrors testutil.StartTestGateway but accepts testing.TB so
@@ -8,10 +6,6 @@ package perf
 // DevModeBypass=true and a real OpenRouter provider entry. The test_harness
 // override hook was removed 2026-05-10 — perf tests that exercise the LLM hit
 // real OpenRouter (OPENROUTER_API_KEY required in env).
-//
-// This file retains //go:build !cgo because it directly imports pkg/gateway,
-// which itself is tagged //go:build !cgo. The benchmark and SLO test files in
-// this package do NOT have the !cgo tag.
 
 import (
 	"context"

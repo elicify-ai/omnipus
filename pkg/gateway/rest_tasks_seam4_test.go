@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_tasks_seam4_test.go — SEAM 4 reconciliation test (worktree
 // wf/w1-seams): proves POST /api/v1/tasks and PATCH /api/v1/tasks/{id}
 // actually read/write the ADR-053 write_set/stream/is_join plan-member

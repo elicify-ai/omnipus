@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package integration
 
 import (
@@ -267,31 +265,14 @@ func isReadDeadlineExceeded(err error) bool {
 	return false
 }
 
-// waitForFirstToken reads frames from conn until it sees a token/done/content
-// frame (indicating the LLM responded) or the deadline is reached.
-// Returns the first assistant frame type received.
-//
-// MUST be called from the test goroutine only — see the note on sendMessage.
-// From a spawned goroutine, use waitForFirstTokenErr, which classifies the
-// failure instead of killing the goroutine mid-flight. A Fatalf here runs
-// runtime.Goexit on the CALLING goroutine, so a collector goroutine dies
-// before it can deliver its result and the waiting test reports whatever its
-// own timeout branch says — historically, a transport error was announced as
-// same-agent starvation.
-//
-// Traces to: Bug-3 (concurrent sessions).
-func waitForFirstToken(tb testing.TB, conn *websocket.Conn, timeout time.Duration) string {
-	tb.Helper()
-	ft, waitErr := waitForFirstTokenErr(conn, timeout)
-	if waitErr != nil {
-		tb.Fatalf("waitForFirstToken: %v", waitErr)
-	}
-	return ft
-}
-
-// waitForFirstTokenErr is the goroutine-safe form of waitForFirstToken: it
-// returns a classified *wsWaitError instead of calling tb.Fatalf, so it is
-// legal to call from a goroutine other than the test's own.
+// waitForFirstTokenErr reads frames from conn until it sees a token/done/content
+// frame (indicating the LLM responded) or the deadline is reached, returning a
+// classified *wsWaitError rather than calling tb.Fatalf. That makes it legal to
+// call from a goroutine other than the test's own: a Fatalf runs runtime.Goexit
+// on the CALLING goroutine, so a collector goroutine would die before it could
+// deliver its result and the waiting test would report whatever its own timeout
+// branch says — historically, a transport error was announced as same-agent
+// starvation.
 //
 // The concrete *wsWaitError return (rather than error) is deliberate: it keeps
 // callers from tripping the typed-nil interface trap on the success path.

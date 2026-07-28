@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Tests for MCP backend handlers G6–G9.
 //
 //   - G6: listMCPServers reflects live manager status + tool_count + enabled.

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Wire-format conformance tests for the session REST handlers.
 //
 // These tests close the bug class that shipped to the public IP build on

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // BDD: token stats REST API tests.
 // Traces to: FR-013 (token usage stats, period validation, method enforcement).
 

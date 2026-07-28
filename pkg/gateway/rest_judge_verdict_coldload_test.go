@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_judge_verdict_coldload_test.go — review r2 RV2: getSessionMessages
 // (the cold-load path GET /sessions/{id}/messages) must parse a persisted
 // EntryTypeJudgeVerdict entry's raw-JSON Content into the wire

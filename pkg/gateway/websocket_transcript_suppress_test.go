@@ -1,9 +1,3 @@
-//go:build !cgo
-
-// This test file uses //go:build !cgo so it compiles when CGO is disabled,
-// matching websocket_test.go (avoids the libolm dependency pulled in via the
-// matrix channel under CGO).
-
 package gateway
 
 import (

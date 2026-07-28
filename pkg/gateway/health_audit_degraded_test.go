@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // T2.12 + T2.13: Health endpoint audit-degraded field tests.
 //
 // T2.12: When auditLoggerAvailableFn returns false, /health must report

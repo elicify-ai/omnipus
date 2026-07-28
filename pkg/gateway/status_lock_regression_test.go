@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Regression tests for concurrent PATCH + task.update on same task.
 //
 // Sprint 2 changes:

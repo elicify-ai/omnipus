@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // rest_plans_test.go — tests for the Plans REST surface (ADR-049 D1/D4, Wave
 // 2-C1 deferred REST paths): CRUD, approve (400 body shape + tiered/member
 // gates), stop, progress, and the plan_id cross-workspace FK guard on tasks.

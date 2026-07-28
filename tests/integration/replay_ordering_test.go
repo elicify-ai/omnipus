@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // replay_ordering_test.go — regression test for Bug-5: Replay frame ordering
 // preserved when leaving + returning to chat.
 //

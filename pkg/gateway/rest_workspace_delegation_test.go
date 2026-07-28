@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Per-workspace delegation graph tests (M5). Proves:
 //  1. GET on a fresh workspace → 200 with empty edges + computed team.
 //  2. PUT a valid edge set → 200 and GET round-trips it.

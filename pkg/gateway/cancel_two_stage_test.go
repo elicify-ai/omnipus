@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_two_stage_test.go — T6: Two-stage cancel timer (graceful → hard).
 //
 // Theater smell fixed: old test simulated the timer with time.AfterFunc(10ms)

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // cancel_handler_test.go — tests for the approval registry cancel path.
 //
 // Spec refs: FR-12, FR-13a
