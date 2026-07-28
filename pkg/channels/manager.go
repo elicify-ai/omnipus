@@ -156,6 +156,23 @@ func (m *Manager) SetPairingObserver(fn func(channelID string, status PairingSta
 
 type asyncTask struct {
 	cancel context.CancelFunc
+	// wg tracks the dispatcher goroutines bound to this task's context so a
+	// caller can wait for them to actually EXIT, not merely be signalled.
+	//
+	// Cancelling is not enough before closing a worker queue: enqueueOutbound
+	// selects on `w.queue <- msg` and `<-ctx.Done()`, and a select whose send
+	// case is already runnable can take it even though the context is done —
+	// so a cancel-then-close still races, and a send on a closed channel
+	// PANICS. The race detector caught exactly this pair once pkg/gateway
+	// became race-buildable:
+	//
+	//	Write at … runtime.closechan() ← Manager.StopAll        manager.go:986
+	//	Read  at … runtime.chansend()  ← Manager.enqueueOutbound manager.go:1328
+	//
+	// Never Wait() while holding m.mu: dispatchLoop takes m.mu.RLock to
+	// resolve a worker, so a dispatcher mid-loop would deadlock against the
+	// write lock. StopAll drops the lock for the wait deliberately.
+	wg sync.WaitGroup
 }
 
 // ChannelRegistered reports whether a channel with the given name is currently
@@ -842,9 +859,25 @@ func (m *Manager) newDispatchContext(ctx context.Context) (context.Context, cont
 // previously leaked typing/placeholder/stream entries after a reload). Caller
 // must hold m.mu.
 func (m *Manager) startDispatchers(dispatchCtx context.Context) {
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
-	go m.runTTLJanitor(dispatchCtx)
+	// Track the goroutines on the task that owns dispatchCtx so StopAll can
+	// wait for them to exit before closing any worker queue (see asyncTask.wg).
+	// A nil task means no cancellable owner was installed — run untracked
+	// rather than panicking, matching the pre-existing nil-tolerant style.
+	task := m.dispatchTask
+	if task != nil {
+		task.wg.Add(3)
+	}
+	run := func(fn func(context.Context)) {
+		go func() {
+			if task != nil {
+				defer task.wg.Done()
+			}
+			fn(dispatchCtx)
+		}()
+	}
+	run(m.dispatchOutbound)
+	run(m.dispatchOutboundMedia)
+	run(m.runTTLJanitor)
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
@@ -957,6 +990,28 @@ func (m *Manager) StartAll(ctx context.Context) error {
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {
+	// PHASE 1 — quiesce the dispatchers BEFORE anything closes a worker queue,
+	// and do it WITHOUT holding m.mu.
+	//
+	// Cancelling alone is not sufficient: enqueueOutbound selects on
+	// `w.queue <- msg` vs `<-ctx.Done()`, and a select whose send case is
+	// already runnable may take it even after cancellation — so a
+	// cancel-then-close still races, and a send on a closed channel PANICS,
+	// crashing a gateway that was merely shutting down.
+	//
+	// The lock must be released for the wait: dispatchLoop takes m.mu.RLock to
+	// resolve a worker, so waiting under m.mu.Lock would deadlock against a
+	// dispatcher mid-iteration. Taking the lock only to swap the handle out
+	// keeps that window as small as possible.
+	m.mu.Lock()
+	task := m.dispatchTask
+	m.dispatchTask = nil
+	m.mu.Unlock()
+	if task != nil {
+		task.cancel()
+		task.wg.Wait() // dispatchers have EXITED; nothing can send to w.queue now
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -974,11 +1029,8 @@ func (m *Manager) StopAll(ctx context.Context) error {
 		m.httpServer = nil
 	}
 
-	// Cancel dispatcher
-	if m.dispatchTask != nil {
-		m.dispatchTask.cancel()
-		m.dispatchTask = nil
-	}
+	// Dispatchers were cancelled AND waited for in phase 1 above, so the
+	// close below can no longer race a send.
 
 	// Close all worker queues and wait for them to drain
 	for _, w := range m.workers {
