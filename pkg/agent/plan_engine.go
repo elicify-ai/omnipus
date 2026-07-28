@@ -371,6 +371,11 @@ type PlanEngine struct {
 	stopCh    chan struct{}
 	stoppedWG sync.WaitGroup
 	started   bool
+
+	// stopDrainTimeout overrides Stop's bounded-drain budget. Zero (the
+	// production value — NewPlanEngine never sets it) means
+	// planEngineStopDrainTimeout. Read through stopDrainBudget().
+	stopDrainTimeout time.Duration
 }
 
 // NewPlanEngine constructs the production PlanEngine. al must be non-nil in
@@ -715,24 +720,49 @@ func (pe *PlanEngine) Start(ctx context.Context) error {
 
 // Stop signals both background goroutines to exit, unsubscribes from the
 // event bus, waits for them, then bounds its wait on any still-in-flight
-// judge-round goroutine (planEngineStopDrainTimeout) rather than blocking
-// shutdown forever on a stuck judge call.
+// judge-round or plan-wake goroutine (planEngineStopDrainTimeout) rather than
+// blocking shutdown forever on a stuck judge call.
+//
+// ⚠ REGRESSION ANCHOR — the drain is UNCONDITIONAL; only the *teardown of what
+// Start created* is gated on `started`. The two halves are not the same thing
+// and must not be re-merged behind one early return:
+//
+//   - `stopCh`/`subID`/`stoppedWG` are created by Start, so touching them on a
+//     never-started (or already-stopped) engine is a real crash: `pe.stopCh` is
+//     nil until Start runs and `close(nil)` panics, a second Stop would
+//     double-close the same channel, and `subID` is never zeroed on stop so an
+//     unguarded UnsubscribeEvents would fire twice with a stale id. That half
+//     legitimately stays behind the `started` check.
+//   - `judgeWG`/`wakeWG` are NOT Start's. beginPlanJudgeRound and
+//     dispatchPlanTurn are reached from Tick/processPlan/StopPlan/failPlanLocked
+//     — every one of them callable, and called, on an engine nobody ever
+//     started (StopPlan on a never-started engine dispatches a real owner wake
+//     turn through wakeOwner). Returning early there left those goroutines
+//     running past Stop: in tests, a wake turn writing its session/transcript
+//     into an already-removed temp dir; in production, a wake racing gateway
+//     teardown. Draining them costs nothing on an engine that dispatched
+//     nothing (both counters are zero, Wait returns immediately).
 func (pe *PlanEngine) Stop() {
 	pe.mu.Lock()
-	if !pe.started {
-		pe.mu.Unlock()
-		return
+	wasStarted := pe.started
+	if wasStarted {
+		pe.started = false
+		close(pe.stopCh)
 	}
-	pe.started = false
-	close(pe.stopCh)
 	subID := pe.subID
 	pe.mu.Unlock()
 
-	if pe.agentLoop != nil && subID != 0 {
-		pe.agentLoop.UnsubscribeEvents(subID)
+	if wasStarted {
+		if pe.agentLoop != nil && subID != 0 {
+			pe.agentLoop.UnsubscribeEvents(subID)
+		}
+		// stoppedWG counts only runTickLoop/runEventLoop, both Add-ed inside
+		// Start under mu. Waiting on it from the never-started path would be a
+		// zero-counter Wait racing a concurrent Start's Add — the one
+		// WaitGroup misuse the package is documented against — for no benefit,
+		// since there is nothing to wait for.
+		pe.stoppedWG.Wait()
 	}
-
-	pe.stoppedWG.Wait()
 
 	done := make(chan struct{})
 	go func() {
@@ -746,10 +776,22 @@ func (pe *PlanEngine) Stop() {
 	}()
 	select {
 	case <-done:
-	case <-time.After(planEngineStopDrainTimeout):
+	case <-time.After(pe.stopDrainBudget()):
 		logger.WarnCF("plan_engine",
 			"stop: in-flight plan-judge round(s) or plan wake turn(s) still tearing down after drain timeout", nil)
 	}
+}
+
+// stopDrainBudget is Stop's bounded-drain budget: planEngineStopDrainTimeout in
+// production, overridable only by an in-package test that needs to observe the
+// timeout limb without burning 30 s of wall clock. Mirrors the tickInterval /
+// clock / judge test seams already on this struct; nothing outside _test.go
+// sets stopDrainTimeout, so production always reads the constant.
+func (pe *PlanEngine) stopDrainBudget() time.Duration {
+	if pe.stopDrainTimeout > 0 {
+		return pe.stopDrainTimeout
+	}
+	return planEngineStopDrainTimeout
 }
 
 func (pe *PlanEngine) runTickLoop() {
