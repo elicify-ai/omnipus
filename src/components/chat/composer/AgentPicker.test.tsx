@@ -107,6 +107,10 @@ beforeEach(() => {
     useSessionStore.setState({
       activeAgentId: 'mia',
       activeSessionId: 'sess_1',
+      // AGENT PRECEDENCE RULE (src/store/session.ts): a leaked 'user' source
+      // would make the auto-select tests below refuse their agent hint.
+      agentSelectionSource: 'auto',
+      agentSelectionWorkspaceId: null,
     })
     useUiStore.setState({ agentSelectorOpen: false })
     useWorkspacesStore.setState({ activeWorkspaceId: null })

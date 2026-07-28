@@ -41,6 +41,7 @@ import type { ChatMessage } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useChatAgents } from '@/hooks/useChatAgents'
+import { logDiagnostic } from '@/lib/telemetry'
 
 // ── Slash/skill/agent palette item shape ─────────────────────────────────────
 
@@ -165,6 +166,17 @@ export interface UseSlashMenuResult {
    * preventDefault() so the message never reaches the backend. Makes typing
    * "/new"+Enter (or "/clear"+Enter) behave identically to selecting it
    * from the palette.
+   *
+   * ALSO returns true — WITHOUT running anything — for any "/"-prefixed text
+   * submitted while the command list's first fetch is still in flight. The
+   * submit is parked and replayed automatically once the list lands (as the
+   * client command it turns out to be, or as an ordinary message if it
+   * isn't). Callers must therefore keep treating `true` as "I have taken
+   * responsibility for this submit; do not dispatch it" — which is what all
+   * three of them already do — rather than as "a command just ran". Without
+   * this, a command typed a fraction of a second too early resolved against
+   * an empty list and was dispatched to the LLM as chat text; see the
+   * readiness gate's own comment in the implementation.
    */
   interceptClientCommand: () => boolean
 }
@@ -277,7 +289,16 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // integration boundary spec) — `commandsError` lets the caller render a
   // visible "Commands unavailable" row instead of a silent empty gap
   // (LOW S8).
-  const { data: commands = [], isError: commandsError } = useQuery<SlashCommand[]>({
+  // `isLoading` (React Query v5: `isPending && isFetching`) is true ONLY
+  // while the very first fetch of this list is in flight — it is false both
+  // before the query is enabled (`enabled: inputEnabled` ⇒ `fetchStatus:
+  // 'idle'`) and during any later background refetch, where `commands`
+  // already holds a usable list. That is exactly the window in which
+  // `allCommands` is a LIE: it holds only the two synthetic client-only
+  // entries, so every backend-served command (`/new`, `/help`, `/cancel`, …)
+  // looks like "not a command" to the send-path interception below. See
+  // `commandsFirstLoadPending`'s use in `interceptClientCommand`.
+  const { data: commands = [], isError: commandsError, isLoading: commandsFirstLoadPending } = useQuery<SlashCommand[]>({
     queryKey: ['commands', 'web'],
     queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
@@ -741,22 +762,23 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   }
 
   // selectMentionAgent — called when the user selects an agent from the "@"
-  // mention menu (Enter or click). Same `setActiveSession` contract as
-  // AgentPicker's handleAgentSelect (src/components/chat/composer/
-  // AgentPicker.tsx): preserves activeSessionId (passing it through
-  // unchanged) rather than detaching whatever session is currently active.
+  // mention menu (Enter or click). Same contract as AgentPicker's
+  // handleAgentSelect (src/components/chat/composer/AgentPicker.tsx): an
+  // EXPLICIT user choice, recorded via `selectAgent` (precedence rule 2 —
+  // see src/store/session.ts's AGENT PRECEDENCE RULE) so a session attach
+  // landing afterwards cannot silently re-point the composer at the
+  // session's own agent. `selectAgent` leaves activeSessionId untouched by
+  // construction, which is what the old `setActiveSession(activeSessionId,
+  // …)` call was manually reproducing.
   // Unlike completeSkillName, the `@query` text is fully cleared (not left
   // as `@name `) — the mention is a one-shot agent switch, not something the
   // user continues typing after.
   //
-  // Fix 5: reads activeSessionId/setActiveSession fresh via `.getState()`
-  // rather than closing over the render-time values — this is the write
-  // path, so the freshest state wins (matches AgentPicker's own documented
-  // pattern) and there is no stale-closure window on a captured
-  // activeSessionId between render and the user's actual click/Enter.
+  // Fix 5: reads the store fresh via `.getState()` rather than closing over
+  // render-time values — this is the write path, so the freshest state wins
+  // (matches AgentPicker's own documented pattern).
   function selectMentionAgent(agent: Agent) {
-    const { activeSessionId, setActiveSession } = useSessionStore.getState()
-    setActiveSession(activeSessionId, agent.id, agent.type ?? null)
+    useSessionStore.getState().selectAgent(agent.id, agent.type ?? null)
     composerRuntime.setText('')
     setInputValue('')
     closeSlash()
@@ -786,25 +808,103 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // only a staleness risk from an incomplete dependency array. A plain
   // function always closes over the current render's values, matching the
   // original (pre-extraction) composer's own behavior exactly.
+  // Resolves a trimmed, "/"-prefixed composer string to its client-delivery
+  // command definition, or null. Shared by `interceptClientCommand` and the
+  // deferred-flush effect below so both can never disagree about what
+  // counts as a client command.
+  //
+  // LOW S7/C3: lowercase both sides — commands are ASCII, so "/Clear" or
+  // "/NEW" + Enter must resolve identically to the canonical-case form
+  // instead of silently falling through to the LLM as chat text.
+  function resolveClientCommand(trimmed: string): SlashCommand | null {
+    const trimmedLower = trimmed.toLowerCase()
+    const typedNameLower = trimmed.slice(1).toLowerCase()
+    return (
+      allCommands.find(
+        (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
+      ) ?? null
+    )
+  }
+
+  // A slash submit that arrived before the command list had loaded, parked
+  // until it does (see the readiness gate in `interceptClientCommand` and
+  // the flush effect below). A ref, not state: setting it must not trigger a
+  // render, and it has to survive the renders that happen while the query
+  // resolves.
+  const deferredSlashSubmitRef = useRef(false)
+
   function interceptClientCommand(): boolean {
     const currentText = composerRuntime.getState().text ?? inputValue
     const trimmed = currentText.trim()
     if (!trimmed.startsWith('/')) return false
-    const typedName = trimmed.slice(1)
-    // LOW S7/C3: lowercase both sides — commands are ASCII, so "/Clear" or
-    // "/NEW" + Enter must intercept identically to the canonical-case form
-    // instead of silently falling through to the LLM as chat text.
-    const trimmedLower = trimmed.toLowerCase()
-    const typedNameLower = typedName.toLowerCase()
-    const def = allCommands.find(
-      (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
-    )
-    if (!def) return false
+    const def = resolveClientCommand(trimmed)
+    if (!def) {
+      // READINESS GATE. A miss means one of two very different things, and
+      // conflating them is what let a correctly-typed command escape to the
+      // LLM as chat: either this genuinely isn't a command (a skill, or
+      // "/zzz"), or the command list simply hasn't arrived yet. While the
+      // first fetch is in flight the answer is unknowable — `allCommands`
+      // holds only the two synthetic client-only entries — so "not found"
+      // must be read as NOT READY, never as NOT A COMMAND.
+      //
+      // Observed for real (CI trace): `GET /api/v1/commands` issued at
+      // t=3424ms, "/new" submitted at t=3660ms. The lookup missed, this
+      // function returned false, and the raw "/new" was dispatched to the
+      // backend as a user message — which then answered it as a SERVER-side
+      // command ("Chat history cleared!") and persisted "/new" into the
+      // transcript. Typing a command a fraction of a second too early
+      // silently took a different code path than the same keystrokes a
+      // moment later.
+      //
+      // So: hold the submit (return true ⇒ every caller preventDefaults and
+      // nothing is dispatched) and park it. The flush effect below replays
+      // it the instant the list resolves — as the client command it always
+      // was, or, if it turns out not to be one, as the ordinary message it
+      // always was. Nothing is dropped and nothing is guessed at; the user
+      // pays a wait bounded by the fetch that was already in flight.
+      if (commandsFirstLoadPending) {
+        deferredSlashSubmitRef.current = true
+        // Length only — never the text itself (it is user content).
+        logDiagnostic('slashSubmitHeldForCommandList', { textLength: trimmed.length })
+        return true
+      }
+      return false
+    }
     composerRuntime.setText('')
     setInputValue('')
     runClientCommand(def.name)
     return true
   }
+
+  // Flush of the held slash submit above, once the command list has landed.
+  //
+  // Re-reads the composer's CURRENT text rather than replaying whatever was
+  // captured at submit time: the user may have edited or cleared it while
+  // the fetch was in flight, and their latest text is the only thing worth
+  // acting on. Runs only on a `commandsFirstLoadPending` transition, and the
+  // ref is cleared before dispatch so a re-render cannot double-fire it.
+  useEffect(() => {
+    if (commandsFirstLoadPending) return
+    if (!deferredSlashSubmitRef.current) return
+    deferredSlashSubmitRef.current = false
+    const trimmed = (composerRuntime.getState().text ?? '').trim()
+    if (trimmed === '') return
+    const def = trimmed.startsWith('/') ? resolveClientCommand(trimmed) : null
+    if (def) {
+      composerRuntime.setText('')
+      setInputValue('')
+      runClientCommand(def.name)
+      return
+    }
+    // Not a client command after all (a skill, an agent-delivery command, or
+    // plain text that happens to start with "/") — complete the send the
+    // user asked for. `composerRuntime.send()` is the same runtime call
+    // every submit path converges on: ComposerPrimitive.Root's onSubmit and
+    // ComposerPrimitive.Send's onClick both end in `composer.send()`, and
+    // ChatScreen's own mid-stream path calls this method directly.
+    composerRuntime.send()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the readiness transition alone; every other value it reads (composer text, allCommands) must be the freshest at flush time, which is exactly what this render's closure holds.
+  }, [commandsFirstLoadPending])
 
   function onInputChange(val: string) {
     setInputValue(val)

@@ -162,14 +162,23 @@ export function AgentPicker({
   const effectiveAgentId = activeAgentId || chatAgents[0]?.id
   const activeAgent = chatAgents.find((a) => a.id === effectiveAgentId)
 
-  // Fix H: activeSessionId/setActiveSession read fresh via `.getState()` at
-  // click time — this is the write path, so the freshest state wins,
-  // matching useSlashMenu.ts's selectMentionAgent (Fix 5's documented
-  // pattern) now that neither is a captured outer binding any more.
+  // Fix H: the store is read fresh via `.getState()` at click time — this is
+  // the write path, so the freshest state wins, matching useSlashMenu.ts's
+  // selectMentionAgent (Fix 5's documented pattern).
+  //
+  // Goes through `selectAgent`, NOT `setActiveSession`: this is an EXPLICIT
+  // user choice (precedence rule 2 — see src/store/session.ts's AGENT
+  // PRECEDENCE RULE), so it must outrank any session-derived agent that a
+  // later attach/`session_started` ack tries to apply. Routing it through
+  // `setActiveSession` (as it used to) recorded it as just another
+  // last-write-wins hint: a background session attach landing moments later
+  // silently re-pointed the composer at the session's own agent, and the
+  // user's next message went to the wrong agent with no error shown.
+  // `selectAgent` also leaves activeSessionId / the "Task:" banner alone,
+  // which is why no session id is threaded through here any more.
   const handleAgentSelect = (agentId: string) => {
-    const { activeSessionId, setActiveSession } = useSessionStore.getState()
     const selected = agents.find((a) => a.id === agentId)
-    setActiveSession(activeSessionId, agentId, selected?.type ?? null)
+    useSessionStore.getState().selectAgent(agentId, selected?.type ?? null)
   }
 
   return (

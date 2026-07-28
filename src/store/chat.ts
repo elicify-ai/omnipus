@@ -3883,7 +3883,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
             const sessionStore = useSessionStore.getState()
             // Use the frame's session_id if present; fall back to active.
             const switchSid = frameSessionId ?? sessionStore.activeSessionId
-            sessionStore.setActiveSession(switchSid, newAgentId)
+            // Precedence rule 1 (src/store/session.ts's AGENT PRECEDENCE
+            // RULE): this frame reports a handover the BACKEND already
+            // performed, so it outranks an explicit user pick rather than
+            // being filtered out as a session-derived hint — the picker has
+            // to name whoever is actually answering.
+            sessionStore.applyServerAgentSwitch(switchSid, newAgentId)
           }
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
