@@ -79,6 +79,8 @@ import {
   StorageStats as StorageStatsSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
+  // D18 — model-capabilities warn-and-proceed (contract-first #8):
+  ModelCapabilities as ModelCapabilitiesSchema,
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
@@ -288,6 +290,8 @@ import type {
   Agent,
   Provider,
   ProviderUpdateRequest,
+  // D18 — model-capabilities warn-and-proceed (contract-first #8):
+  ModelCapabilities,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -1754,6 +1758,33 @@ export async function updateConfig(data: Partial<Config>): Promise<Config> {
 
 export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
+}
+
+// D18: flat list of {id, modalities} from the backend's in-repo capability
+// catalog (pkg/providers/capabilities) — model vision capability is not
+// knowable client-side at all otherwise. Used to warn (non-blocking) before
+// sending a vision attachment to a model that cannot see images. Empty array
+// when the catalog is unavailable server-side (never an error the caller
+// needs to branch on beyond the normal request() failure path).
+export function fetchModelCapabilities(): Promise<ModelCapabilities[]> {
+  return request<ModelCapabilities[]>(
+    '/providers/model-capabilities',
+    undefined,
+    z.array(ModelCapabilitiesSchema) as ZodType<ModelCapabilities[]>,
+  )
+}
+
+// D18: pure decision helper shared by the two vision-attachment send paths
+// (browserAnnotate.ts's live-browser annotation submit, attachment-adapter.ts's
+// composer image attach) — kept here (not duplicated) so both warn on the
+// identical rule. Unknown/unlisted models return false (optimistic — mirrors
+// the server-side FR-026 default in pkg/providers/capabilities/catalog.go),
+// so a stale or incomplete capabilities fetch never spuriously blocks/warns.
+export function modelLacksImageCapability(modelId: string | undefined, entries: ModelCapabilities[]): boolean {
+  if (!modelId) return false
+  const entry = entries.find((c) => c.id === modelId)
+  if (!entry) return false
+  return !entry.modalities.includes('image')
 }
 
 // configureProvider sets a model/provider's API key, endpoint, and/or model.

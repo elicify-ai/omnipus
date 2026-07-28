@@ -67,3 +67,91 @@ describe('forceLogout', () => {
     expect(useAuthStore.getState().username).toBe('bob')
   })
 })
+
+// ---------------------------------------------------------------------------
+// D2 — logout messaging: forceLogout() stashes a LogoutReason so the login
+// screen can explain WHY an involuntary logout happened. consumeLogoutReason()
+// is the one-shot read+clear the login screen uses.
+// ---------------------------------------------------------------------------
+describe('D2 — LogoutReason stash/consume', () => {
+  it('forceLogout() with no argument stashes the "elsewhere" default (queryClient.ts / ws.ts call it bare)', async () => {
+    const { forceLogout, LOGOUT_REASON_KEY } = await import('./authLogout')
+    act(() => { forceLogout() })
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBe('elsewhere')
+  })
+
+  it('forceLogout("expired") stashes "expired" (the _app.tsx beforeLoad call site)', async () => {
+    const { forceLogout, LOGOUT_REASON_KEY } = await import('./authLogout')
+    act(() => { forceLogout('expired') })
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBe('expired')
+  })
+
+  it('consumeLogoutReason() reads the stashed reason and clears it (one-shot)', async () => {
+    const { forceLogout, consumeLogoutReason, LOGOUT_REASON_KEY } = await import('./authLogout')
+    act(() => { forceLogout('expired') })
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBe('expired')
+
+    expect(consumeLogoutReason()).toBe('expired')
+    // Cleared — a second read (e.g. React StrictMode's double-invoked effect)
+    // must not see it again.
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBeNull()
+    expect(consumeLogoutReason()).toBeNull()
+  })
+
+  it('consumeLogoutReason() returns null on a normal page load — no forced logout happened', async () => {
+    const { consumeLogoutReason } = await import('./authLogout')
+    expect(consumeLogoutReason()).toBeNull()
+  })
+
+  it('consumeLogoutReason() returns null and clears an unrecognized stored value (defensive decode)', async () => {
+    const { consumeLogoutReason, LOGOUT_REASON_KEY } = await import('./authLogout')
+    sessionStorage.setItem(LOGOUT_REASON_KEY, 'garbage-value')
+    expect(consumeLogoutReason()).toBeNull()
+    expect(sessionStorage.getItem(LOGOUT_REASON_KEY)).toBeNull()
+  })
+
+  it('a manual sign-out (clearAuth() called directly, mirroring Sidebar.tsx) never stashes a reason', async () => {
+    // Sidebar.tsx's handleLogout calls useAuthStore.getState().clearAuth() and
+    // navigate() directly — it NEVER calls forceLogout(). Simulate that here:
+    // no LogoutReason should appear, so the login screen shows no "scary"
+    // involuntary-logout banner for a deliberate sign-out (D2 fix #3).
+    const { useAuthStore } = await import('@/store/auth')
+    const { consumeLogoutReason } = await import('./authLogout')
+    act(() => { useAuthStore.getState().setUsername('alice') })
+    act(() => { useAuthStore.getState().clearAuth() })
+    expect(consumeLogoutReason()).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// D9 — deterministic race flag: isForceLoggingOut() lets a component suppress
+// its own error paint for the beat before the redirect actually swaps routes.
+// ---------------------------------------------------------------------------
+describe('D9 — isForceLoggingOut() race flag', () => {
+  it('is false before any forced logout', async () => {
+    const { isForceLoggingOut } = await import('./authLogout')
+    expect(isForceLoggingOut()).toBe(false)
+  })
+
+  it('flips true synchronously the instant forceLogout() is called', async () => {
+    const { forceLogout, isForceLoggingOut } = await import('./authLogout')
+    expect(isForceLoggingOut()).toBe(false)
+    act(() => { forceLogout() })
+    // No await — must be true on the SAME tick forceLogout() returns, since
+    // a racing component's synchronous render pass needs to observe it.
+    expect(isForceLoggingOut()).toBe(true)
+  })
+
+  it('resets to false after the 2s debounce window closes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { forceLogout, isForceLoggingOut } = await import('./authLogout')
+      act(() => { forceLogout() })
+      expect(isForceLoggingOut()).toBe(true)
+      act(() => { vi.advanceTimersByTime(2_000) })
+      expect(isForceLoggingOut()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

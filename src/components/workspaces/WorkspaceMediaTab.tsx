@@ -17,7 +17,6 @@ import {
   FolderOpen,
   Trash,
   SpinnerGap,
-  WarningCircle,
   Image as ImageIcon,
 } from '@phosphor-icons/react'
 import {
@@ -40,6 +39,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { cn } from '@/lib/utils'
 
 /** Format a byte count as a compact human-readable size. */
@@ -66,7 +66,7 @@ export function WorkspaceMediaTab({ workspaceId }: WorkspaceMediaTabProps) {
   const [pendingDelete, setPendingDelete] = useState<MediaLibraryEntry | null>(null)
 
   const queryKey = workspacesQueryKeys.media(workspaceId)
-  const { data: entries = [], isLoading, isError } = useQuery({
+  const { data: entries = [], isLoading, isError, refetch } = useQuery({
     queryKey,
     queryFn: () => fetchWorkspaceMedia(workspaceId),
     staleTime: 15_000,
@@ -100,15 +100,17 @@ export function WorkspaceMediaTab({ workspaceId }: WorkspaceMediaTabProps) {
   }
 
   if (isError) {
+    // D9: was a dead-end message with no retry (the user's only recourse was
+    // "reopen the tab"). QueryErrorState also suppresses the paint entirely
+    // while a forced logout is in flight, so a 401 no longer flashes a stale
+    // actionable error for the beat before the redirect.
     return (
-      <div
-        className="flex flex-col items-center justify-center h-full gap-2 p-8 text-center text-[var(--color-muted)] text-sm"
-        data-testid="workspace-media-error"
-      >
-        <WarningCircle size={24} className="text-[var(--color-error)]" />
-        <p>Couldn’t load the media library.</p>
-        <p className="text-xs">Check your connection and reopen the tab.</p>
-      </div>
+      <QueryErrorState
+        layout="fill"
+        message="Couldn’t load the media library. Check your connection and try again."
+        onRetry={() => void refetch()}
+        testId="workspace-media-error"
+      />
     )
   }
 
@@ -121,7 +123,9 @@ export function WorkspaceMediaTab({ workspaceId }: WorkspaceMediaTabProps) {
         <FolderOpen size={32} className="text-[var(--color-muted)]" />
         <p className="text-sm text-[var(--color-secondary)]">No files in this workspace yet.</p>
         <p className="text-xs text-[var(--color-muted)] max-w-sm">
-          Files you upload in chat are stored here and can be reused in later conversations without re-uploading.
+          Files you upload in chat are stored here and can be reused in later conversations without
+          re-uploading. Files an agent writes directly (via its write_file tool) live in the
+          workspace's own files instead, not here.
         </p>
       </div>
     )

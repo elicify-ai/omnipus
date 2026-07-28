@@ -687,19 +687,19 @@ export function Sidebar() {
               </span>
             )}
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild onSelect={() => { if (!effectivelyPinned) close() }}>
             <Link to="/usage" className="flex items-center gap-2 cursor-pointer">
               <ChartBar size={14} />
               Usage
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild onSelect={() => { if (!effectivelyPinned) close() }}>
             <Link to="/profile" className="flex items-center gap-2 cursor-pointer">
               <UserCircle size={14} />
               Profile
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
+          <DropdownMenuItem asChild onSelect={() => { if (!effectivelyPinned) close() }}>
             <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
               <Gear size={14} />
               Settings

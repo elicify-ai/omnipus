@@ -21,6 +21,26 @@ export function ExecAllowlistSection(): React.ReactElement {
   const [newPattern, setNewPattern] = useState('')
   const [addError, setAddError] = useState('')
   const [restartRequired, setRestartRequired] = useState(false)
+  // Mirror-image D3 defect fix: `disabled: !isDirty` used to overload the
+  // dirty flag as the useAutoSave readiness signal. Per useAutoSave.ts's
+  // "skip first render" logic, whichever commit is the FIRST one where
+  // `disabled` is false gets captured as the baseline ("already saved"),
+  // not persisted. `handleAdd`/`handleRemove` set `patterns` AND
+  // `isDirty(true)` in the SAME synchronous update, so the user's very
+  // FIRST add/remove was itself the commit that flipped `disabled` false —
+  // useAutoSave adopted that already-containing-the-edit state as its
+  // baseline instead of saving it. `hasPendingChanges()` then read false,
+  // so not even the unmount flush caught it: the first edit of a session
+  // was silently never sent to the server.
+  //
+  // Fix: a DEDICATED readiness flag, decoupled from `isDirty`. It flips
+  // true exactly once, the moment the server's `data` has been loaded into
+  // `patterns` (regardless of whether the user has edited anything yet) —
+  // the same "hydration readiness, not dirtiness" pattern used everywhere
+  // else in this fix. `isDirty` keeps its original, separate job below
+  // (blocking a background refetch from clobbering an in-progress local
+  // edit) — it is no longer read by useAutoSave's `disabled` at all.
+  const [patternsHydrated, setPatternsHydrated] = useState(false)
 
   useEffect(() => {
     if (!data || isDirty) return
@@ -30,6 +50,7 @@ export function ExecAllowlistSection(): React.ReactElement {
     // component doesn't carry stale add-errors across refetches.
     setNewPattern('')
     setAddError('')
+    setPatternsHydrated(true)
   }, [data, isDirty])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
@@ -43,7 +64,7 @@ export function ExecAllowlistSection(): React.ReactElement {
       }
       queryClient.setQueryData(['exec-allowlist'], serverResp)
     },
-    { disabled: !isDirty },
+    { disabled: !patternsHydrated },
   )
 
   function handleAdd() {

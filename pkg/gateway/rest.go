@@ -55,6 +55,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -4728,6 +4729,29 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 		})
 	}
 
+	// D6: God mode armed. Triggered on the raw persisted intent
+	// (cfg.Sandbox.GodMode), NOT on cfg.Sandbox.GodModeAllowed alone —
+	// GodModeAllowed being true (S3: authorized in the past, currently
+	// disabled) is a genuinely inert state and must not false-positive here.
+	// cfg.Sandbox.GodMode true covers both S1 (armed via the UI, pending
+	// restart — the config write already happened even though this boot
+	// hasn't activated it) and S2 (live-active): either way an operator has
+	// committed to disabling the kernel sandbox, egress restrictions, and
+	// the shell guard, which is strictly worse than the sandbox-disabled
+	// check above (that one only concerns the sandbox; god mode disables
+	// three controls simultaneously), hence "high" not "medium".
+	if cfg.Sandbox.GodMode {
+		issues = append(issues, map[string]any{
+			"id":             "god-mode-armed",
+			"severity":       "high",
+			"title":          "God-mode is armed",
+			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.",
+			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
+			"action_link":    "/settings?tab=security",
+			"action_label":   "Open security settings",
+		})
+	}
+
 	return issues
 }
 
@@ -5529,6 +5553,37 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		jsonOK(w, providers)
+
+	case r.Method == http.MethodGet && sub == "model-capabilities":
+		// GET /api/v1/providers/model-capabilities (D18) — flat list of
+		// {id, modalities} from the in-repo capability catalog
+		// (pkg/providers/capabilities), so the SPA can warn — client-side,
+		// non-blocking — before sending a vision attachment to a model that
+		// cannot see images. Model vision capability is not knowable
+		// client-side at all otherwise. The catalog is optional: a nil
+		// catalog (not yet constructed, e.g. degraded boot) returns an
+		// empty list, never a 500 — the reactive server-side capability
+		// gate (pkg/agent/media_present.go) remains the authoritative
+		// backstop regardless of what this endpoint returns.
+		var catalog *capabilities.Catalog
+		if a.agentLoop != nil {
+			catalog = a.agentLoop.GetCapabilityCatalog()
+		}
+		capsOut := make([]gen.ModelCapabilities, 0)
+		if catalog != nil {
+			for _, snap := range catalog.Models() {
+				modalities := snap.Handle.InputModalities()
+				wireModalities := make([]gen.ModelCapabilitiesModalities, 0, len(modalities))
+				for _, m := range modalities {
+					wireModalities = append(wireModalities, gen.ModelCapabilitiesModalities(m))
+				}
+				capsOut = append(capsOut, gen.ModelCapabilities{
+					Id:         snap.ID,
+					Modalities: wireModalities,
+				})
+			}
+		}
+		jsonOK(w, capsOut)
 
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.

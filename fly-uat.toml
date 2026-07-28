@@ -1,0 +1,47 @@
+app = "uat-omnipus"
+primary_region = "fra"
+
+[build]
+  # Path is relative to THIS config file, which must therefore live in the repo.
+  dockerfile = "docker/Dockerfile.heavy"
+
+[env]
+  # Bind all interfaces so Fly's proxy (which reaches the private address)
+  # can route to us — a loopback bind returns 502.
+  OMNIPUS_GATEWAY_HOST = "0.0.0.0"
+  OMNIPUS_GATEWAY_PORT = "5000"
+  # The default container seccomp profile blocks syscalls the hardened-exec
+  # path needs; enforce would break `bash` with "permission denied".
+  OMNIPUS_SANDBOX_MODE = "permissive"
+  # SEC-ADR052-002 defaults TrustPathChrome=false, which makes the gateway
+  # REFUSE the distro Chromium that Dockerfile.heavy installs on purpose
+  # (WARN-BROWSER-007 → "shared Chrome unavailable"). In this image the only
+  # Chrome on $PATH is the apk-packaged one we control, so trusting it is the
+  # correct posture — without this the built-in browser cannot run at all.
+  OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME = "true"
+  # Reverse-proxy origin: drives CanonicalGatewayOrigin, which CSP/CORS and
+  # the WS CheckOrigin all validate against. Without it the SPA's WebSocket
+  # is rejected at the origin check.
+  OMNIPUS_GATEWAY_PUBLIC_URL = "https://uat-omnipus.fly.dev"
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 200
+    soft_limit = 100
+
+# Persist ~/.omnipus (config, credentials, sessions, workspaces) across
+# restarts so a UAT persona's setup survives a machine bounce.
+[[mounts]]
+  source = "uat_omnipus_data"
+  destination = "/home/omnipus/.omnipus"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048mb"

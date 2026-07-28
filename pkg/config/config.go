@@ -124,7 +124,7 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int                              `json:"version"             yaml:"-"` // Config schema version for migration
+	Version   int                              `json:"version"             yaml:"-"` // schema version for migration
 	Agents    AgentsConfig                     `json:"agents"              yaml:"-"`
 	Bindings  []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
 	Session   SessionConfig                    `json:"session,omitempty"   yaml:"-"`
@@ -1190,7 +1190,7 @@ type AgentDefaults struct {
 	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing                   *RoutingConfig     `json:"routing,omitempty"`
 	SteeringMode              string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn                   SubTurnConfig      `json:"subturn"                                                                                    envPrefix:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_"`
+	SubTurn                   SubTurnConfig      `json:"subturn"`
 	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker             bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds            int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
@@ -2807,13 +2807,13 @@ type WebToolsConfig struct {
 	// the client-side web_search tool is hidden to avoid duplicate search surfaces,
 	// and the provider's built-in search is used instead. Falls back to client-side
 	// search when the provider does not support native search.
-	PreferNative bool `json:"prefer_native" yaml:"-" env:"OMNIPUS_TOOLS_WEB_PREFER_NATIVE"`
+	PreferNative bool `yaml:"-" json:"prefer_native" env:"OMNIPUS_TOOLS_WEB_PREFER_NATIVE"`
 	// Proxy is an optional proxy URL for web tools (http/https/socks5/socks5h).
 	// For authenticated proxies, prefer HTTP_PROXY/HTTPS_PROXY env vars instead of embedding credentials in config.
-	Proxy                string              `json:"proxy,omitempty"                  yaml:"-" env:"OMNIPUS_TOOLS_WEB_PROXY"`
-	FetchLimitBytes      int64               `json:"fetch_limit_bytes,omitempty"      yaml:"-" env:"OMNIPUS_TOOLS_WEB_FETCH_LIMIT_BYTES"`
-	Format               string              `json:"format,omitempty"                 yaml:"-" env:"OMNIPUS_TOOLS_WEB_FORMAT"`
-	PrivateHostWhitelist FlexibleStringSlice `json:"private_host_whitelist,omitempty" yaml:"-" env:"OMNIPUS_TOOLS_WEB_PRIVATE_HOST_WHITELIST"`
+	Proxy                string              `yaml:"-" json:"proxy,omitempty"                  env:"OMNIPUS_TOOLS_WEB_PROXY"`
+	FetchLimitBytes      int64               `yaml:"-" json:"fetch_limit_bytes,omitempty"      env:"OMNIPUS_TOOLS_WEB_FETCH_LIMIT_BYTES"`
+	Format               string              `yaml:"-" json:"format,omitempty"                 env:"OMNIPUS_TOOLS_WEB_FORMAT"`
+	PrivateHostWhitelist FlexibleStringSlice `yaml:"-" json:"private_host_whitelist,omitempty" env:"OMNIPUS_TOOLS_WEB_PRIVATE_HOST_WHITELIST"`
 }
 
 type CronToolsConfig struct {
@@ -2889,9 +2889,15 @@ type MediaCleanupConfig struct {
 	Interval   int `                                   json:"interval_minutes" env:"OMNIPUS_MEDIA_CLEANUP_INTERVAL"`
 }
 
+// ReadFileToolConfig fields use relative env tags (like ToolConfig.Enabled)
+// because the outer ToolsConfig.ReadFile field supplies the
+// "OMNIPUS_TOOLS_READ_FILE_" envPrefix. Previously these fields had no env
+// tag at all, so the override was never wired despite the envPrefix being
+// present on the outer field — no documented env var existed for either
+// field until now.
 type ReadFileToolConfig struct {
-	Enabled         bool `json:"enabled"`
-	MaxReadFileSize int  `json:"max_read_file_size"`
+	Enabled         bool `json:"enabled"            env:"ENABLED"`
+	MaxReadFileSize int  `json:"max_read_file_size" env:"MAX_READ_FILE_SIZE"`
 }
 
 type ToolsConfig struct {
@@ -2924,7 +2930,14 @@ type ToolsConfig struct {
 	SendFile        ToolConfig         `json:"send_file"         yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SEND_FILE_"`
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_WRITE_FILE_"`
-	Browser         BrowserToolConfig  `json:"browser"           yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_BROWSER_"`
+	// Browser deliberately has NO envPrefix tag (unlike its ToolConfig-typed
+	// siblings above): every BrowserToolConfig field already carries a
+	// fully-qualified env:"OMNIPUS_TOOLS_BROWSER_..." tag, so adding a prefix
+	// here would double it (caarlos0/env accumulates opts.Prefix across
+	// nesting levels). This was a real bug — see BrowserToolConfig's doc
+	// comment for the full mechanism and why the embedded ToolConfig still
+	// needs its own envPrefix.
+	Browser BrowserToolConfig `json:"browser" yaml:"-"`
 	// RunInWorkspace holds dev-mode configuration for the web_serve tool.
 	// The on-disk key ("run_in_workspace") is preserved for back-compat with
 	// operator config.json files written before the web_serve unification — do
@@ -3002,6 +3015,22 @@ type ServeWorkspaceConfig struct {
 
 // BrowserToolConfig holds browser automation settings (Wave 4, US-4/US-6/US-7).
 // Maps to config.json: tools.browser.*
+//
+// IMPORTANT (double-prefix bug, fixed): the sibling field ToolsConfig.Browser
+// (above) intentionally carries NO `envPrefix` tag — every field below already
+// has a fully-qualified `env:"OMNIPUS_TOOLS_BROWSER_..."` tag, so an envPrefix
+// on the outer field would double it (caarlos0/env's Key = accumulated
+// opts.Prefix + field's own env tag). The embedded ToolConfig.Enabled field
+// below is the ONE exception: ToolConfig.Enabled's own tag is the relative
+// `env:"ENABLED"` (shared by every other ToolConfig embedder, e.g. AppendFile,
+// EditFile — each supplies its own envPrefix on ITS outer field instead). That
+// means the envPrefix on the embedded ToolConfig line below is NOT redundant —
+// it is the only remaining source of the "OMNIPUS_TOOLS_BROWSER_" prefix for
+// Enabled and MUST stay, or OMNIPUS_TOOLS_BROWSER_ENABLED silently stops
+// working. Verified empirically via env.GetFieldParams — see
+// TestBrowserToolConfig_EnvKeys_NoDoublePrefix and
+// TestBrowserToolConfig_EmbeddedToolConfig_RequiresEnvPrefix in
+// env_prefix_guard_test.go.
 type BrowserToolConfig struct {
 	ToolConfig     `       envPrefix:"OMNIPUS_TOOLS_BROWSER_"`
 	Headless       bool   `                                   json:"headless"        env:"OMNIPUS_TOOLS_BROWSER_HEADLESS"`

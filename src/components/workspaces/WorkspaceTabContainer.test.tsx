@@ -46,6 +46,10 @@ vi.mock('framer-motion', () => ({
 // TanStack Query — workspace queries return a resolved workspace
 let mockWorkspaceId = 'ws-1'
 let mockWorkspaceName = 'My Workspace'
+// D9: flip to true to exercise the QueryErrorState blocking-error path for
+// the active (non-archived) workspaces list.
+let mockWorkspacesError = false
+const mockRefetchWorkspaces = vi.fn()
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
@@ -56,10 +60,14 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (key.includes('archived')) {
         return { data: [], isLoading: false, isError: false }
       }
+      if (mockWorkspacesError) {
+        return { data: [], isLoading: false, isError: true, refetch: mockRefetchWorkspaces }
+      }
       return {
         data: [{ id: mockWorkspaceId, name: mockWorkspaceName, is_default: true, core_team: [] }],
         isLoading: false,
         isError: false,
+        refetch: mockRefetchWorkspaces,
       }
     }),
   }
@@ -315,5 +323,49 @@ describe('WorkspaceTabContainer — useWorkspaceSetupKickoff wiring', () => {
     expect(useWorkspaceSetupKickoff).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: 'ws-2', name: 'Second Workspace' }),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// D9 — the workspaces-list query error path used to be a dead-end div with no
+// retry action. It now renders the shared QueryErrorState with a working
+// Retry button wired to the query's own refetch().
+// ---------------------------------------------------------------------------
+describe('WorkspaceTabContainer — query error state (D9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPathname = '/workspaces/ws-1/chat'
+    mockWorkspaceId = 'ws-1'
+    mockWorkspaceName = 'My Workspace'
+    mockWorkspacesError = false
+  })
+
+  it('renders the shared QueryErrorState (not the old plain dead-end div) when the workspaces query errors', async () => {
+    mockWorkspacesError = true
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    expect(screen.getByTestId('workspace-container-error')).toBeTruthy()
+    expect(screen.getByText(/failed to load workspace/i)).toBeTruthy()
+  })
+
+  it('clicking Retry calls the workspaces query refetch()', async () => {
+    mockWorkspacesError = true
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(mockRefetchWorkspaces).toHaveBeenCalledOnce()
+  })
+
+  it('does NOT render the error state when the workspaces query succeeds', async () => {
+    mockWorkspacesError = false
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    expect(screen.queryByTestId('workspace-container-error')).toBeNull()
   })
 })

@@ -55,7 +55,7 @@ import { cn, initialOf } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { BrowserLiveWsConnection } from '@/lib/browserLiveWs'
+import { BrowserLiveWsConnection, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
 import { BrowserWebRTCSession } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
@@ -186,46 +186,19 @@ function computeDriveMode(state: {
 // connection lifecycle, not anything the backend ever sends as a status.
 type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 
-// UAT finding FE-7: the backend surfaces raw Go error strings verbatim on a
-// terminal browser_status{state:'error'} frame — e.g.
-// `browser input failed: browser live: navigate blocked: ... SSRF: blocked
-// cloud metadata endpoint 169.254.169.254` or Go's url.Parse format
-// `parse "...": invalid character " " in host name`. Map the two known,
-// user-triggerable cases to plain language; anything unrecognized passes
-// through unchanged rather than risk hiding real diagnostic information the
-// existing doc comment above (already-controlled, take-control-disabled,
-// no-manager-for-agent, live-view-disabled, malformed control) already
-// treats as reasonably readable.
-function friendlyBrowserStatusMessage(raw: string): string {
-  // Order matters: the backend wraps EVERY navigate failure — a Go url.Parse
-  // error, an ordinary DNS/network failure, AND an actual SSRF policy block
-  // — identically as "... navigate blocked: ...", so classification must run
-  // from MOST specific to LEAST specific. Reviewer finding F2: the old
-  // `navigate blocked|SSRF` catch-all also matched the ordinary "domain
-  // doesn't resolve / typo / site down" path — pkg/security/ssrf.go's
-  // resolver returns e.g. "SSRF: DNS resolution failed for <host>" or
-  // "SSRF: no addresses found for <host>" for that path (string-prefixed
-  // "SSRF:" because the resolver lives in the SSRF-guarded dial path, not
-  // because the address was actually policy-blocked) — so a mistyped or
-  // unreachable URL was wrongly told it was "blocked for security reasons".
-  // The invalid-URL and unreachable branches below are checked BEFORE the
-  // real-block branch, and the real-block branch is narrowed to the actual
-  // policy-deny messages (cloud metadata / private IP range / explicit
-  // "SSRF: blocked ...") rather than any string merely containing "SSRF".
-  if (/invalid character .* in host name|parse "[^"]*":/i.test(raw)) {
-    console.debug('[browser] invalid URL:', raw)
-    return "That doesn't look like a valid web address."
-  }
-  if (/DNS resolution failed|no addresses found|too many redirects|cannot extract host|could not resolve/i.test(raw)) {
-    console.debug('[browser] address unreachable:', raw)
-    return "That address couldn't be reached — check the URL and try again."
-  }
-  if (/blocked cloud metadata|blocked private IP|blocked .* range|SSRF: blocked/i.test(raw)) {
-    console.debug('[browser] navigation blocked:', raw)
-    return 'That address is blocked for security reasons.'
-  }
-  return raw
-}
+// UAT finding FE-7 / D5: the backend surfaces raw Go error strings verbatim
+// on a terminal browser_status{state:'error'} frame — e.g. `browser input
+// failed: browser live: navigate blocked: ... SSRF: blocked cloud metadata
+// endpoint 169.254.169.254` or Go's url.Parse format `parse "...": invalid
+// character " " in host name` — as well as on this connection's own `error`
+// ErrorFrames (D5 Site 2, handled in browserLiveWs.ts's onmessage). The
+// translation now lives in browserLiveWs.ts as `translateBrowserErrorMessage`
+// (moved from here) so BOTH leak sites share one function and can never
+// drift into different copy for the identical underlying string; see its
+// doc comment for the full pattern list and the deliberately-excluded
+// already-readable sessionErrorStatus() messages (already-controlled,
+// take-control-disabled, no-manager-for-agent, live-view-disabled, malformed
+// control).
 
 // fix-wave B (HIGH) — the `BrowserWebRTCSession.onFallback` reason strings
 // that mean "WebRTC was never available here at all" (arrive via
@@ -928,7 +901,7 @@ export function BrowserLiveView({
         }
         // FE-7: only error-state messages get the raw-Go-string treatment —
         // other states' messages (if ever present) are left alone.
-        setStatusMessage(f.state === 'error' && f.message ? friendlyBrowserStatusMessage(f.message) : f.message ?? null)
+        setStatusMessage(f.state === 'error' && f.message ? translateBrowserErrorMessage(f.message) : f.message ?? null)
         setStatusIsError(f.state === 'error')
         setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
         // FE-6: only overwrite `controlledByOther` when the server actually

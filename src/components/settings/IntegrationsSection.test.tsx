@@ -78,6 +78,50 @@ describe('IntegrationsSection', () => {
     })
   })
 
+  it('D14: renders a "Needs configuration" badge for a keyless, not-yet-configured provider (SearXNG / audio-model)', async () => {
+    // D14 regression. Root cause: the badge ternary branched only on
+    // `configured` / `requires_key`, with no else-case for
+    // `!configured && !requires_key`. SearXNG (requiresKey:false;
+    // `configured` derives from `BaseURL != ""`, empty by default) and
+    // audio-model (requiresKey:false; `configured` derives from
+    // `voice.model_name`, empty by default) both fall through BOTH branches
+    // on a fresh install and render no badge at all — inert-looking rows
+    // next to every other provider.
+    vi.mocked(api.fetchIntegrationProviders).mockResolvedValueOnce({
+      search: [
+        {
+          id: 'searxng',
+          kind: 'search',
+          display_name: 'SearXNG',
+          configured: false,
+          requires_key: false,
+          active: false,
+        },
+      ],
+      voice: [
+        {
+          id: 'audio-model',
+          kind: 'voice',
+          display_name: 'Audio Model (provider)',
+          configured: false,
+          requires_key: false,
+          active: false,
+        },
+      ],
+      active_search: 'duckduckgo',
+    } as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByText('SearXNG')).toBeInTheDocument()
+      expect(screen.getByText('Audio Model (provider)')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('needs-config-searxng')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-config-searxng')).toHaveTextContent(/needs configuration/i)
+    expect(screen.getByTestId('needs-config-audio-model')).toBeInTheDocument()
+    // Neither row should ALSO show the "Configured"/"Needs API key" badges.
+    expect(screen.queryByTestId('active-searxng')).not.toBeInTheDocument()
+  })
+
   it('opens the re-auth dialog before configuring (does NOT call PUT directly)', async () => {
     renderSection()
     await waitFor(() => screen.getByText('Brave Search'))

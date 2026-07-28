@@ -43,6 +43,7 @@ import type {
 } from '@/components/calendar/types'
 import { CalendarEventSlideOver } from '@/components/calendar/CalendarEventSlideOver'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
+import { QueryErrorState } from '@/components/shared/QueryErrorState'
 
 interface CalendarScreenProps {
   workspaceId: string
@@ -74,6 +75,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     data: tasks = [],
     isLoading: tasksLoading,
     isError: tasksError,
+    refetch: refetchTasks,
   } = useQuery({
     queryKey: tasksQueryKeys.list({ workspace_id: workspaceId }),
     queryFn: () => fetchTasks({ workspace_id: workspaceId }),
@@ -85,6 +87,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     data: milestones = [],
     isLoading: milestonesLoading,
     isError: milestonesError,
+    refetch: refetchMilestones,
   } = useQuery({
     queryKey: milestonesQueryKeys.list(workspaceId),
     queryFn: () => fetchMilestones(workspaceId),
@@ -156,9 +159,22 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   )
 
   const isLoading = tasksLoading || milestonesLoading
-  const isEmpty = !isLoading && filteredEvents.length === 0
+  // D9 fix: FR-016/I-2's "degrade gracefully" contract is still honored for a
+  // PARTIAL failure (e.g. milestones failed but tasks loaded — there is real
+  // data worth showing, so the grid renders it and a toast is enough). What
+  // it never intended is a TOTAL failure silently reading as "no scheduled
+  // items" — the UAT-reported bug. `isBlockingError` is true only when there
+  // is genuinely nothing to render AND at least one query is the reason why
+  // (as opposed to a genuinely empty, healthy workspace) — that is exactly
+  // the case the Graph/Team/Board tabs already treat as a hard error state.
+  const hasQueryError = tasksError || milestonesError
+  const isTrulyEmpty = !isLoading && filteredEvents.length === 0
+  const isEmpty = isTrulyEmpty && !hasQueryError
+  const isBlockingError = isTrulyEmpty && hasQueryError
 
-  // Degrade on query failure (FR-016, I-2) — non-blocking toast, grid still renders.
+  // Degrade on query failure (FR-016, I-2) — non-blocking toast in the
+  // PARTIAL case; see isBlockingError above for the total-failure case, which
+  // additionally gets a real blocking state in place of the grid below.
   useEffect(() => {
     if (tasksError) addToast({ message: "Couldn't load tasks", variant: 'error' })
   }, [tasksError, addToast])
@@ -607,17 +623,29 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
       </div>
 
       <div className="flex-1 min-h-0 min-w-0 p-3" data-testid="calendar-grid">
-        <FullCalendarView
-          events={calendarEvents}
-          calendarRef={calendarRef}
-          isLoading={isLoading}
-          isEmpty={isEmpty}
-          onEventDrop={handleEventDrop}
-          onEventClick={handleEventClick}
-          onDateClick={handleDateClick}
-          onDateSelect={handleDateSelect}
-          onDatesSet={handleDatesSet}
-        />
+        {isBlockingError ? (
+          <QueryErrorState
+            layout="fill"
+            message="Couldn't load your calendar. Check your connection and try again."
+            onRetry={() => {
+              void refetchTasks()
+              void refetchMilestones()
+            }}
+            testId="calendar-error"
+          />
+        ) : (
+          <FullCalendarView
+            events={calendarEvents}
+            calendarRef={calendarRef}
+            isLoading={isLoading}
+            isEmpty={isEmpty}
+            onEventDrop={handleEventDrop}
+            onEventClick={handleEventClick}
+            onDateClick={handleDateClick}
+            onDateSelect={handleDateSelect}
+            onDatesSet={handleDatesSet}
+          />
+        )}
       </div>
 
       <CalendarEventSlideOver

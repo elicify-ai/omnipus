@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/api', () => ({
-  uploadFiles: vi.fn(),
-  createSession: vi.fn(),
-}))
+// D18: mock only the network calls (uploadFiles, createSession,
+// fetchModelCapabilities); keep the real modelLacksImageCapability (pure
+// decision helper) via importActual so the D18 tests below exercise the
+// actual integration, not a re-implemented mock of the decision logic.
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return {
+    ...actual,
+    uploadFiles: vi.fn(),
+    createSession: vi.fn(),
+    fetchModelCapabilities: vi.fn(),
+  }
+})
 
 vi.mock('@/store/ui', () => ({
   useUiStore: {
@@ -18,8 +27,11 @@ vi.mock('@/components/chat/AttachmentCard', () => ({
 }))
 
 import * as api from '@/lib/api'
+import type { Agent } from '@/lib/api'
+import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { omnipusAttachmentAdapter, takeResolvedUpload, isAcceptedFile } from './attachment-adapter'
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -38,6 +50,14 @@ beforeEach(() => {
   const addToast = vi.fn()
   vi.mocked(useUiStore.getState).mockReturnValue({ addToast } as never)
   useSessionStore.setState({ activeSessionId: 'sess_existing', activeAgentId: 'jim', activeAgentType: null })
+  useWorkspacesStore.setState({ activeWorkspaceId: null })
+  // D18: no agents cached by default — the capability-check block reads
+  // `agentModel` from the ['agents'] query cache and no-ops (skips
+  // fetchModelCapabilities entirely) when it's empty/unset, so every
+  // pre-existing test above is unaffected unless it explicitly seeds the
+  // cache (see the "D18" describe block below).
+  queryClient.setQueryData(['agents'], undefined)
+  vi.mocked(api.fetchModelCapabilities).mockResolvedValue([])
 })
 
 describe('omnipusAttachmentAdapter', () => {
@@ -70,10 +90,33 @@ describe('omnipusAttachmentAdapter', () => {
 
     const resolved = takeResolvedUpload(pending.id)
     expect(resolved?.ref).toBe('media://abc')
-    expect(resolved?.url).toBe('/api/v1/uploads/sess_existing/report.docx')
+    expect(resolved?.url).toBe('/api/v1/media/abc')
     expect(resolved?.contentType).toBe(DOCX)
     // Drained — a second take returns nothing (no stale refs leak into later turns).
     expect(takeResolvedUpload(pending.id)).toBeUndefined()
+  })
+
+  // D16 regression (RCA-verified): the composer's normal drag/drop/paste
+  // attach path shares the exact same hardcoded-URL bug as
+  // browserAnnotate.ts. When a file is attached in a workspace-scoped chat,
+  // uploadFiles() routes it into the workspace media library and returns a
+  // `media://workspace/<ws>/<id>` ref — the stashed preview `url` must be
+  // built from that ref (mediaRefURL), not from
+  // `/api/v1/uploads/${sessionId}/${name}` (which 404s — the workspace path
+  // never writes to the legacy uploads/ dir).
+  it('D16: send() builds the workspace-scoped preview URL from the ref when a workspace is active', async () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    vi.mocked(api.uploadFiles).mockResolvedValue({
+      files: [{ name: 'diagram.png', path: 'workspaces/ws-1/media/med-1', size: 10, content_type: 'image/png', ref: 'media://workspace/ws-1/med-1' }],
+    } as never)
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('diagram.png', 'image/png') })
+    await omnipusAttachmentAdapter.send(pending)
+
+    expect(api.uploadFiles).toHaveBeenCalledWith('sess_existing', [pending.file], 'ws-1')
+    const resolved = takeResolvedUpload(pending.id)
+    expect(resolved?.ref).toBe('media://workspace/ws-1/med-1')
+    expect(resolved?.url).toBe('/api/v1/media/workspace/ws-1/med-1')
   })
 
   it('send() toasts (not throws) when registration yields no media ref', async () => {
@@ -316,5 +359,109 @@ describe('G16 — upload failure toast', () => {
         message: expect.stringMatching(/Upload failed for/),
       })
     )
+  })
+})
+
+// ── D18 — vision-capability warn-and-proceed ────────────────────────────────
+//
+// REVERT-PROOF: no pre-send capability check existed before D18 — these
+// tests fail on unfixed code (no warning toast, fetchModelCapabilities never
+// called) and pass after. Mocks the capabilities endpoint marking
+// z-ai/glm-5.2 as text-only and asserts the warning fires BEFORE
+// uploadFiles is invoked, mirroring the identical check in
+// browserAnnotate.ts (both share the api.ts decision helper).
+function makeAgent(overrides: Partial<Agent>): Agent {
+  return {
+    id: 'jim',
+    name: 'Jim',
+    type: 'core',
+    locked: true,
+    status: 'active',
+    soul: '',
+    timeout_seconds: 120,
+    max_tool_iterations: 10,
+    ...overrides,
+  } as Agent
+}
+
+describe('omnipusAttachmentAdapter — D18 vision-capability warn-and-proceed', () => {
+  const callOrder: string[] = []
+
+  beforeEach(() => {
+    callOrder.length = 0
+    vi.mocked(api.uploadFiles).mockImplementation(async () => {
+      callOrder.push('upload')
+      return {
+        files: [{ name: 'photo.png', path: 'uploads/sess_existing/photo.png', size: 3, content_type: 'image/png', ref: 'media://ref-1' }],
+      } as never
+    })
+    vi.mocked(api.fetchModelCapabilities).mockImplementation(async () => {
+      callOrder.push('capabilities-fetch')
+      return [{ id: 'glm-5.2', modalities: ['text'] }]
+    })
+    queryClient.setQueryData(['agents'], [makeAgent({ id: 'jim', model: 'glm-5.2' })])
+  })
+
+  it('warns BEFORE uploadFiles for an image attachment when the resolved model (z-ai/glm-5.2) lacks the image modality, then still sends', async () => {
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    const complete = await omnipusAttachmentAdapter.send(pending)
+
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'warning', message: expect.stringMatching(/glm-5\.2/) }),
+    )
+    // The warning must fire BEFORE the upload — otherwise the user has
+    // already lost the round-trip the warning exists to prevent.
+    expect(callOrder).toEqual(['capabilities-fetch', 'upload'])
+    // Warn-and-proceed, NOT a blocking confirm — the send still completes.
+    expect(complete.status).toEqual({ type: 'complete' })
+    expect(takeResolvedUpload(pending.id)?.ref).toBe('media://ref-1')
+  })
+
+  it('does not warn (and does not fetch capabilities) for a non-image attachment', async () => {
+    vi.mocked(api.uploadFiles).mockImplementation(async () => {
+      callOrder.push('upload')
+      return {
+        files: [{ name: 'doc.docx', path: 'uploads/sess_existing/doc.docx', size: 3, content_type: DOCX, ref: 'media://ref-2' }],
+      } as never
+    })
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('doc.docx', DOCX) })
+    await omnipusAttachmentAdapter.send(pending)
+
+    expect(api.fetchModelCapabilities).not.toHaveBeenCalled()
+    expect(getAddToast()).not.toHaveBeenCalled()
+  })
+
+  it('does not warn when the resolved model supports images', async () => {
+    vi.mocked(api.fetchModelCapabilities).mockImplementation(async () => {
+      callOrder.push('capabilities-fetch')
+      return [{ id: 'glm-5.2', modalities: ['text', 'image'] }]
+    })
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    await omnipusAttachmentAdapter.send(pending)
+
+    expect(getAddToast()).not.toHaveBeenCalled()
+    expect(callOrder).toEqual(['capabilities-fetch', 'upload'])
+  })
+
+  it('never blocks the send when the capabilities fetch itself fails (best-effort)', async () => {
+    vi.mocked(api.fetchModelCapabilities).mockRejectedValue(new Error('network down'))
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    const complete = await omnipusAttachmentAdapter.send(pending)
+
+    expect(getAddToast()).not.toHaveBeenCalled()
+    expect(complete.status).toEqual({ type: 'complete' })
+  })
+
+  it('skips the capability check entirely (no fetch) when the agent is not in the cached ["agents"] list', async () => {
+    queryClient.setQueryData(['agents'], [])
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    await omnipusAttachmentAdapter.send(pending)
+
+    expect(api.fetchModelCapabilities).not.toHaveBeenCalled()
+    expect(getAddToast()).not.toHaveBeenCalled()
   })
 })

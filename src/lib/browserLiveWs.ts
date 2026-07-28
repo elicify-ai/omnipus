@@ -132,6 +132,103 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
   return null
 }
 
+// D5 fix (UAT): the backend surfaces raw Go error/protocol strings verbatim
+// on TWO distinct wire paths over this connection — a terminal
+// `browser_status{state:'error'}` frame's `message` (handled by
+// BrowserLiveView's onStatus callback) AND this connection's own `error`-type
+// ErrorFrame (handled by `onmessage` below, D5 "Site 2") — e.g. `browser
+// input failed: browser live: navigate blocked: ... SSRF: blocked cloud
+// metadata endpoint 169.254.169.254`, Go's url.Parse format `parse "...":
+// invalid character " " in host name`, or protocol-internal strings such as
+// `browser_attach: agent_id and session_id are required` / `frame schema
+// validation failed (...): ...` / `unknown frame type "..."`.
+// translateBrowserErrorMessage maps every known, user-triggerable case to
+// plain language; anything unrecognized passes through unchanged rather than
+// risk hiding real diagnostic information.
+//
+// Deliberately excluded from the patterns below (left to pass through
+// as-is): the `sessionErrorStatus(...)` messages in pkg/gateway/browser_ws.go
+// (e.g. "another viewer already controls this browser", "take-control is
+// disabled by the operator", "no browser manager for agent ...") — those are
+// already hand-written, human-readable copy, not Go-internal jargon, and the
+// auth-handshake ErrorFrame messages (pkg/gateway/websocket.go /
+// browser_ws.go's `wsAuthErr*` constants), which were fixed at the SOURCE to
+// already be human-readable rather than translated client-side.
+//
+// Exported (moved here from BrowserLiveView.tsx, which was the sole D5
+// "Site 1" caller) so BOTH leak sites share one function — they can never
+// drift into two different translations of the identical underlying string.
+export function translateBrowserErrorMessage(raw: string): string {
+  // Order matters: the backend wraps EVERY navigate failure — a Go url.Parse
+  // error, an ordinary DNS/network failure, AND an actual SSRF policy block
+  // — identically as "... navigate blocked: ...", so classification must run
+  // from MOST specific to LEAST specific. Reviewer finding F2: the old
+  // `navigate blocked|SSRF` catch-all also matched the ordinary "domain
+  // doesn't resolve / typo / site down" path — pkg/security/ssrf.go's
+  // resolver returns e.g. "SSRF: DNS resolution failed for <host>" or
+  // "SSRF: no addresses found for <host>" for that path (string-prefixed
+  // "SSRF:" because the resolver lives in the SSRF-guarded dial path, not
+  // because the address was actually policy-blocked) — so a mistyped or
+  // unreachable URL was wrongly told it was "blocked for security reasons".
+  // The invalid-URL and unreachable branches below are checked BEFORE the
+  // real-block branch, and the real-block branch is narrowed to the actual
+  // policy-deny messages (cloud metadata / private IP range / explicit
+  // "SSRF: blocked ...") rather than any string merely containing "SSRF".
+  if (/invalid character .* in host name|parse "[^"]*":/i.test(raw)) {
+    console.debug('[browser] invalid URL:', raw)
+    return "That doesn't look like a valid web address."
+  }
+  if (/DNS resolution failed|no addresses found|too many redirects|cannot extract host|could not resolve/i.test(raw)) {
+    console.debug('[browser] address unreachable:', raw)
+    return "That address couldn't be reached — check the URL and try again."
+  }
+  if (/blocked cloud metadata|blocked private IP|blocked .* range|SSRF: blocked/i.test(raw)) {
+    console.debug('[browser] navigation blocked:', raw)
+    return 'That address is blocked for security reasons.'
+  }
+  // D5 (BrowserLiveView.tsx D5 write-up) — the 9-message closed set of
+  // protocol-internal `errorStatus(...)`/ErrorFrame strings from
+  // pkg/gateway/browser_ws.go's readLoop/handleAttach/handleControl/
+  // handleTabAction: `frame schema validation failed (%s): %s` (readLoop
+  // inbound-schema gate), `browser_attach: invalid frame` /
+  // `browser_attach: agent_id and session_id are required` (handleAttach),
+  // `browser_control: attach before requesting control` /
+  // `browser_control: invalid frame` / `browser_control: unknown action %q`
+  // (handleControl), `browser_tab_action: attach before managing tabs` /
+  // `browser_tab_action: invalid frame` / `browser_tab_action: unknown
+  // action %q` (handleTabAction), plus the readLoop `unknown frame type
+  // %q` / `invalid frame: not JSON` ErrorFrame-only cases (D5 Site 2). Every
+  // one of these means "the client and server got out of sync" — reconnect
+  // (reopen the panel) is the correct recovery for all of them, so they
+  // collapse to a small number of distinct user-facing messages rather than
+  // needing an exact 1:1 copy per string.
+  if (/^frame schema validation failed/i.test(raw) || /^invalid frame: not JSON/i.test(raw) || /^unknown frame type /i.test(raw)) {
+    console.debug('[browser] protocol frame rejected:', raw)
+    return "That action couldn't be sent — try again."
+  }
+  if (/^browser_attach:/i.test(raw)) {
+    console.debug('[browser] attach failed:', raw)
+    return "Couldn't connect to the live browser — try reopening the panel."
+  }
+  if (/^browser_control: attach before requesting control/i.test(raw)) {
+    console.debug('[browser] control before attach:', raw)
+    return 'Reconnect to the live browser before taking control.'
+  }
+  if (/^browser_control:/i.test(raw)) {
+    console.debug('[browser] control failed:', raw)
+    return "That action couldn't be sent — try again."
+  }
+  if (/^browser_tab_action: attach before managing tabs/i.test(raw)) {
+    console.debug('[browser] tab action before attach:', raw)
+    return 'Reconnect to the live browser before managing tabs.'
+  }
+  if (/^browser_tab_action:/i.test(raw)) {
+    console.debug('[browser] tab action failed:', raw)
+    return "That action couldn't be sent — try again."
+  }
+  return raw
+}
+
 export class BrowserLiveWsConnection {
   private ws: WebSocket | null = null
   private readonly sessionId: string
@@ -195,7 +292,13 @@ export class BrowserLiveWsConnection {
       } else if (frame.type === 'browser_webrtc_state') {
         this.callbacks.onWebRTCState(frame)
       } else {
-        this.callbacks.onError(frame.message)
+        // D5 fix (Site 2) — this was an unconditional raw pass-through of
+        // the server's ErrorFrame.message (protocol-internal Go strings like
+        // `first message must be {"type":"auth",...}` or `browser_control:
+        // attach before requesting control`); route it through the same
+        // translation BrowserLiveView uses for browser_status error frames
+        // so both leak sites produce identical, human-readable copy.
+        this.callbacks.onError(translateBrowserErrorMessage(frame.message))
       }
     }
 

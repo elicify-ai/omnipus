@@ -67,6 +67,49 @@ test('(a) every nav item routes correctly', async ({ page }) => {
   await expectA11yClean(page);
 });
 
+test('(c) D8: Settings navigated to via the profile menu is clickable on the FIRST click', async ({ page }) => {
+  // D8 regression. Root cause: the profile dropdown's Usage/Profile/Settings
+  // items never called the sidebar store's close() — unlike every other nav
+  // link (Library items, workspace rows, the dropdown's own Notifications
+  // item). The dropdown menu itself always closes on select (Radix), but the
+  // Sidebar's OWN `isOpen` state stayed true, so the full-viewport
+  // `aria-hidden` backdrop (Sidebar.tsx, z-30, absolute inset-0, no
+  // background dimming — so it's invisible) kept rendering over the newly
+  // navigated Settings page. The backdrop's onClick is `close()`, so the
+  // FIRST click anywhere on the new page — including directly on a settings
+  // tab trigger — hit the backdrop instead of the tab, silently closing the
+  // (already-hidden) backdrop and doing nothing else. Only the SECOND click
+  // actually reached the tab.
+  const hamburger = page.locator('#sidebar-hamburger');
+  await expect(hamburger).toBeVisible({ timeout: 10_000 });
+  await hamburger.click();
+
+  const nav = page.locator('nav[aria-label="Main navigation"]');
+  await expect(nav).toBeVisible({ timeout: 5_000 });
+
+  const profileTrigger = page.locator('[data-testid="sidebar-profile-trigger"]');
+  await expect(profileTrigger).toBeVisible({ timeout: 5_000 });
+  await profileTrigger.click();
+
+  const settingsItem = page.getByRole('menuitem', { name: 'Settings' });
+  await expect(settingsItem).toBeVisible({ timeout: 5_000 });
+  await settingsItem.click();
+  await expect(page).toHaveURL(/settings/, { timeout: 10_000 });
+
+  // Settings defaults to the "Providers" tab. Click "Integrations" exactly
+  // ONCE and assert it activates immediately — on the unfixed code this first
+  // click is swallowed by the stale backdrop and the tab stays on Providers.
+  const integrationsTab = page.getByTestId('settings-tab-integrations');
+  await expect(integrationsTab).toBeVisible({ timeout: 10_000 });
+  await integrationsTab.click();
+  await expect(integrationsTab).toHaveAttribute('aria-selected', 'true', { timeout: 2_000 });
+
+  const providersTab = page.getByTestId('settings-tab-providers');
+  await expect(providersTab).toHaveAttribute('aria-selected', 'false');
+
+  await expectA11yClean(page);
+});
+
 test('(b) pinning sidebar persists across reload', async ({ page }) => {
   // Open the sidebar first
   const hamburger = page.locator('#sidebar-hamburger');

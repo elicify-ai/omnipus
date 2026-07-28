@@ -15,9 +15,13 @@
 // exactly like the composer's own AttachmentAdapter does internally
 // (src/lib/attachment-adapter.ts), just without needing the runtime.
 
-import { uploadFiles, inspectBrowserElement } from '@/lib/api'
+import { uploadFiles, inspectBrowserElement, fetchModelCapabilities, modelLacksImageCapability } from '@/lib/api'
+import type { Agent } from '@/lib/api'
+import { mediaRefURL } from '@/lib/library-attachment'
+import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export interface SubmitAnnotationParams { // not-wire-format: local params for the annotate-submit orchestration, never serialized across the gateway/SPA boundary
@@ -71,6 +75,31 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
   }
   if (useChatStore.getState().isStreaming) {
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
+  }
+
+  // D18: model vision capability is not knowable client-side at all — warn
+  // (non-blocking) BEFORE uploading when the target agent's resolved model
+  // is known to lack the "image" modality, so the user isn't surprised only
+  // AFTER losing a turn to the model's own rejection. `agents` is read from
+  // the existing `['agents']` react-query cache (shared with useChatAgents)
+  // rather than fetched again here. Best-effort: any failure resolving the
+  // agent's model or fetching the capability catalog must never block the
+  // send — the reactive server-side explanation (loop_media.go) remains the
+  // backstop either way.
+  try {
+    const agents = queryClient.getQueryData<Agent[]>(['agents'])
+    const agentModel = agents?.find((a) => a.id === agentId)?.model
+    if (agentModel) {
+      const caps = await fetchModelCapabilities()
+      if (modelLacksImageCapability(agentModel, caps)) {
+        useUiStore.getState().addToast({
+          message: `${agentModel} may not support image input — it might not be able to see this annotation.`,
+          variant: 'warning',
+        })
+      }
+    }
+  } catch (err) {
+    console.debug('[browser] model-capability check failed:', err)
   }
 
   const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)
@@ -135,12 +164,22 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     throw new Error("The active chat has changed — switch back to this browser's chat to send the annotation.")
   }
 
+  // D16 fix: build the preview URL from the returned media ref (mediaRefURL),
+  // not a hardcoded `/api/v1/uploads/${sessionId}/${uploaded.name}` string.
+  // When this panel is opened from a workspace-scoped chat, uploadFiles()
+  // above routes the file into the workspace media library (HandleUpload,
+  // pkg/gateway/rest.go) and returns a `media://workspace/<ws>/<id>` ref —
+  // the legacy uploads/{session}/{filename} path is never written for that
+  // case, so the hardcoded URL 404s (HandleServeUpload only resolves
+  // uploads/<session>/<file>). mediaRefURL derives the correct route
+  // (/api/v1/media/workspace/<ws>/<id> or /api/v1/media/<id>) from the ref
+  // itself, mirroring the Go-side mediaRefURL in webchat_channel.go.
   useChatStore.getState().sendMessage(finalComment, {
     mediaRefs: [uploaded.ref],
     attachments: [
       {
         type: 'image',
-        url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
+        url: mediaRefURL(uploaded.ref),
         filename: file.name,
         contentType: uploaded.content_type,
       },

@@ -14,12 +14,17 @@
  * the write (with the minted consent token) once the password is confirmed.
  *
  * Live state is read from GET /api/v1/gateway/god-mode (GodModeStatus:
- * { enabled, available, supported }). `supported` is build support (false only
- * on a nogodmode build) — the toggle is clickable whenever `supported` is true,
- * even if `available` is currently false. `available` means this BOOT was
- * already authorized (via --allow-god-mode or a prior UI enable + restart); it
- * gates whether the override is live right now, not whether the switch can be
- * flipped.
+ * { enabled, available, supported, persisted }). `supported` is build support
+ * (false only on a nogodmode build) — the toggle is clickable whenever
+ * `supported` is true, even if `available` is currently false. `available`
+ * means this BOOT was already authorized (via --allow-god-mode or a prior UI
+ * enable + restart); it gates whether the override is live right now, not
+ * whether the switch can be flipped. `persisted` is the raw config intent
+ * (sandbox.god_mode), read directly and NOT gated by `available` — it is what
+ * this component's switch and toggle logic bind to (D1/D19), because
+ * `enabled` (== available && persisted) collapses "never armed" and "armed
+ * via the UI, pending restart" to the same false value, which made an armed-
+ * pending switch render as OFF with no way to disarm it.
  *
  * The write goes through setGodMode() in api.ts (POST /api/v1/gateway/god-mode),
  * which returns { enabled, restart_required }. When enabling from a boot that
@@ -58,6 +63,14 @@ export function GodModeControl() {
 
   const enabled = godMode?.enabled === true
   const available = godMode?.available === true
+  // persisted = the raw config intent (sandbox.god_mode), read directly and
+  // NOT gated by availability (D1/D19). This is the field the switch's
+  // visual state and the toggle logic must bind to — `enabled` collapses
+  // both "never armed" (S0) and "armed via the UI, pending restart" (S1) to
+  // false, which is exactly what made the switch look OFF while armed and
+  // made requestToggle() compute `!enabled` = true forever (no way to
+  // disarm from the UI).
+  const persisted = godMode?.persisted === true
   // supported = build support (false only on a nogodmode build). Distinct
   // from `available` (this boot was already authorized) — the toggle is
   // clickable whenever the build supports god mode at all, since enabling is
@@ -110,9 +123,25 @@ export function GodModeControl() {
   // NOT block the toggle, since those are "unknown" states, not a confirmed
   // "unsupported" one. NOT gated on `available` — enabling from an
   // unauthorized boot is exactly the UI-driven enablement flow.
+  //
+  // D1: negates `persisted`, not `enabled`. `enabled` is always false while
+  // `available` is false (S0 and S1 both), so negating it would compute
+  // `true` forever once armed — an operator could arm god-mode but could
+  // never reach the toggle-driven disarm path from the UI. `persisted`
+  // reflects the actual config intent the switch controls.
   function requestToggle() {
     if (knownUnsupported || isSaving) return
-    setPendingNext(!enabled)
+    setPendingNext(!persisted)
+    setReauthOpen(true)
+  }
+
+  // requestDisarm always stages `false`, regardless of the current state —
+  // it is the explicit "Cancel authorization" affordance shown in the S1
+  // (armed, pending restart) banner. Disabling is unconditionally permitted
+  // by the backend (fail-safe), so this never needs to check availability.
+  function requestDisarm() {
+    if (isSaving) return
+    setPendingNext(false)
     setReauthOpen(true)
   }
 
@@ -181,22 +210,48 @@ export function GodModeControl() {
                   Not available in this build — god-mode support is compiled out.
                 </p>
               )}
-              {supported && !available && !isLoading && (
-                <p
-                  data-testid="god-mode-restart-note"
-                  className="text-[11px] text-[var(--color-muted)] italic"
-                >
-                  Authorized but not yet active — restart the gateway to activate god-mode.
-                </p>
+              {/* D19: gated strictly on persisted && !available — true only
+                  in real S1 (armed via the UI, pending restart), never in S0
+                  (never armed: persisted=false). Previously gated on
+                  `supported && !available`, which is also true for a
+                  never-touched fresh install and falsely claimed it was
+                  "authorized but not yet active". */}
+              {persisted && !available && !isLoading && (
+                <div className="space-y-1">
+                  <p
+                    data-testid="god-mode-restart-note"
+                    className="text-[11px] text-[var(--color-muted)] italic"
+                  >
+                    Authorized but not yet active — restart the gateway to activate god-mode.
+                  </p>
+                  {/* D1/D19: explicit disarm affordance — an operator must be
+                      able to cancel a pending authorization without waiting
+                      for (or triggering) a restart. Replays the existing
+                      setGodMode(false, token) re-auth flow; no new endpoint. */}
+                  <button tabIndex={0}
+                    type="button"
+                    data-testid="god-mode-cancel-authorization"
+                    disabled={busy || isLoading}
+                    onClick={requestDisarm}
+                    className="text-[11px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Cancel authorization
+                  </button>
+                </div>
               )}
             </div>
           </div>
 
-          {/* Switch — accessible role=switch, danger styling when ON. */}
+          {/* Switch — accessible role=switch, danger styling when ON.
+              D1: bound to `persisted` (the config intent this control
+              actually governs), not `enabled` (whether it's live in THIS
+              process). Binding to `enabled` made an armed-but-pending-
+              restart switch render as OFF, and made requestToggle()'s
+              `!enabled` negation re-arm instead of disarm on every click. */}
           <button tabIndex={0}
             type="button"
             role="switch"
-            aria-checked={enabled}
+            aria-checked={persisted}
             aria-label="God-mode"
             aria-describedby="god-mode-consequence-copy god-mode-status-note"
             data-testid="god-mode-toggle"
@@ -205,13 +260,13 @@ export function GodModeControl() {
             className={[
               'relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors',
               'disabled:opacity-40 disabled:cursor-not-allowed',
-              enabled ? 'bg-[var(--color-error)]' : 'bg-[var(--color-surface-3)]',
+              persisted ? 'bg-[var(--color-error)]' : 'bg-[var(--color-surface-3)]',
             ].join(' ')}
           >
             <span
               className={[
                 'inline-flex items-center justify-center h-5 w-5 rounded-full bg-white shadow transition-transform',
-                enabled ? 'translate-x-[22px]' : 'translate-x-0.5',
+                persisted ? 'translate-x-[22px]' : 'translate-x-0.5',
               ].join(' ')}
             >
               {busy && <SpinnerGap size={11} className="animate-spin text-[var(--color-error)]" />}

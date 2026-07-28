@@ -239,7 +239,7 @@ describe('useOmnipusRuntime — native attachment flow', () => {
       const [, opts] = sendSpy.mock.calls[0]
       expect(opts?.mediaRefs).toEqual(['media://abc', 'media://workspace/ws-1/m-2'])
       expect(opts?.attachments).toEqual([
-        expect.objectContaining({ filename: 'report.docx', url: '/api/v1/uploads/sess1/report.docx' }),
+        expect.objectContaining({ filename: 'report.docx', url: '/api/v1/media/abc' }),
         expect.objectContaining({ filename: 'diagram.png', url: '/api/v1/media/workspace/ws-1/m-2' }),
       ])
     })

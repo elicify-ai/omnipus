@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { fetchSessions } from '@/lib/api'
 import type { AgentKind, Session } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -82,7 +83,26 @@ interface SessionStore {
    * logic lives in one place regardless of which UI triggers the delete.
    */
   pruneSessionDescriptor: (sessionId: string) => void
-  enterWorkspaceChat: (workspaceId: string) => void
+  /**
+   * D4 fix: `sessionByWorkspace` is an in-memory-only pointer — a reload wipes
+   * it to `{}` even though the server's sessions are still fully intact. When
+   * called with a workspace that has no LOCAL descriptor (`undefined`), this
+   * no longer assumes "genuine first visit" and defaults to blank — it
+   * resolves the workspace's most-recently-updated session from the server
+   * (`resolveWorkspaceSessionFromServer`) and attaches to it before falling
+   * back to a fresh composer. Returns a Promise so callers/tests can await
+   * the server round-trip in that branch; every other (already-synchronous)
+   * branch resolves immediately.
+   */
+  enterWorkspaceChat: (workspaceId: string) => Promise<void>
+  /**
+   * Workspaces currently mid-flight resolving their most-recent session from
+   * the server (see `enterWorkspaceChat` / `resolveWorkspaceSessionFromServer`
+   * below). Read by `WorkspaceChatTab` to show a loading state instead of a
+   * premature "select an agent" Welcome screen while the restore is in
+   * flight.
+   */
+  resolvingSessionForWorkspace: Record<string, boolean>
 }
 
 // Breaks the chat.ts ↔ session.ts circular import: chat.ts imports this module,
@@ -305,17 +325,33 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   sessionByWorkspace: {},
+  resolvingSessionForWorkspace: {},
 
-  enterWorkspaceChat: (workspaceId: string) => {
+  enterWorkspaceChat: async (workspaceId: string) => {
     const state = get()
     const descriptor = state.sessionByWorkspace[workspaceId]
 
     if (descriptor === undefined) {
-      // First visit: no stored session for this workspace.
-      // Only reset if something is active (avoid redundant startNewSession when already null).
+      // D4 fix: no LOCAL descriptor for this workspace — this is ambiguous
+      // between "genuine first-ever visit" and "a reload just wiped the
+      // in-memory pointer while the server still has real sessions". Ask the
+      // server before defaulting to blank. See resolveWorkspaceSessionFromServer.
+      //
+      // Clear a stale pointer from a DIFFERENT workspace/session context
+      // immediately (mirrors the pre-fix synchronous startNewSession() call)
+      // — WorkspaceChatTab's resolvingSessionForWorkspace gate hides
+      // ChatScreen itself while this is in flight, but activeSessionId /
+      // activeAgentId also drive header/composer chrome outside that gate,
+      // and must not keep pointing at the PREVIOUS workspace's conversation.
+      // Deliberately does NOT call startNewSession() — that would ALSO write
+      // sessionByWorkspace[workspaceId] = null, which would make
+      // resolveWorkspaceSessionFromServer's "someone already claimed this"
+      // guard see its own write and abort before ever querying the server.
       if (state.activeSessionId !== null) {
-        state.startNewSession()
+        set({ activeSessionId: null, attachedSessionType: null, attachedTaskTitle: null })
+        syncForeground()
       }
+      await resolveWorkspaceSessionFromServer(workspaceId)
       return
     }
 
@@ -360,3 +396,108 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     )
   },
 }))
+
+// ── D4 fix: server-derived workspace session restore ────────────────────────
+//
+// sessionByWorkspace is a plain in-memory Zustand slice with no persistence
+// (src/store/session.ts pre-fix). A reload wipes it to `{}` even though the
+// server's day-partitioned JSONL sessions are still fully intact — so
+// enterWorkspaceChat's `descriptor === undefined` branch used to treat every
+// cold reload identically to a genuine first-ever visit and silently landed
+// on a blank Welcome screen (RCA: 3 UAT testers, D4).
+//
+// This resolves the ambiguity by asking the server which session this
+// workspace was most recently showing, reusing the exact data path the
+// Sidebar's workspace accordion and SearchModal already use for the session
+// list (fetchSessions() with no filter, client-side filter by
+// `workspace_id`, sort by `updated_at` — both fields are already on the wire
+// Session contract, so no contract change was needed for this fix).
+
+// Module-level de-dupe: guards against concurrent duplicate server
+// round-trips when enterWorkspaceChat fires more than once for the same
+// workspace before the first resolution lands (e.g. a fast back-and-forth
+// workspace switch, or an effect re-run before the fetch settles).
+const inFlightWorkspaceResolutions = new Set<string>()
+
+async function resolveWorkspaceSessionFromServer(workspaceId: string): Promise<void> {
+  if (inFlightWorkspaceResolutions.has(workspaceId)) return
+  inFlightWorkspaceResolutions.add(workspaceId)
+  useSessionStore.setState((state) => ({
+    resolvingSessionForWorkspace: { ...state.resolvingSessionForWorkspace, [workspaceId]: true },
+  }))
+
+  try {
+    const sessions = await fetchSessions()
+
+    // The workspace may have already been claimed by another code path while
+    // this request was in flight — a deep-link redirect
+    // (setWorkspaceSessionDescriptor in sessions.$sessionId.tsx), a manual
+    // session pick (useSelectSession / attachToSession), or the user
+    // starting a fresh conversation (startNewSession, which writes `null`).
+    // Whichever got there first wins; this resolution must not clobber it.
+    if (useSessionStore.getState().sessionByWorkspace[workspaceId] !== undefined) {
+      return
+    }
+
+    const mostRecent = sessions
+      .filter((s) => s.workspace_id === workspaceId)
+      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0]
+
+    if (!mostRecent) {
+      // Genuinely empty workspace (no sessions ever, or all were deleted) —
+      // Welcome IS the correct state here. Record it explicitly (not left
+      // `undefined`) so a same-tab re-entry doesn't re-fetch every time.
+      useSessionStore.getState().setWorkspaceSessionDescriptor(workspaceId, null)
+      return
+    }
+
+    const agentId = mostRecent.active_agent_id ?? mostRecent.agent_id
+
+    // Write the descriptor by explicit key first (mirrors the deep-link
+    // route's race-free handoff in sessions.$sessionId.tsx) so it's recorded
+    // even if the user has since navigated away from this workspace — see
+    // the activeWorkspaceId check below.
+    useSessionStore.getState().setWorkspaceSessionDescriptor(workspaceId, {
+      id: mostRecent.id,
+      type: mostRecent.type,
+      title: mostRecent.title,
+      agentId,
+    })
+
+    // Only actually attach (send attach_session, reset the chat bucket, flip
+    // isReplaying) if this workspace is STILL the one being viewed —
+    // attachToSession records under whatever workspace is CURRENTLY active
+    // (useWorkspacesStore.getState().activeWorkspaceId), so attaching after
+    // the user has moved on would corrupt a DIFFERENT workspace's pointer.
+    // If they've moved on, the descriptor written above is enough — the next
+    // enterWorkspaceChat for this workspace (returning to it) will find it
+    // and attach then.
+    if (useWorkspacesStore.getState().activeWorkspaceId !== workspaceId) {
+      return
+    }
+    if (useSessionStore.getState().activeSessionId === mostRecent.id) {
+      return
+    }
+    useSessionStore.getState().attachToSession(mostRecent.id, mostRecent.type, mostRecent.title, agentId)
+  } catch (err) {
+    // Fetch failed (network/5xx) — deliberately leave
+    // sessionByWorkspace[workspaceId] unset (still `undefined`, NOT `null`)
+    // so the NEXT enterWorkspaceChat for this workspace (re-entering it, or
+    // a manual reload) retries rather than permanently mislabeling a real
+    // session as "explicitly fresh". Welcome renders in the meantime — a
+    // retryable gap, not a silent dead end.
+    console.warn('[session] resolveWorkspaceSessionFromServer failed', err)
+    logDiagnostic('sessionResolveWorkspaceSessionFailed', { workspaceId, error: String(err) })
+    useUiStore.getState().addToast({
+      message: 'Could not restore your last conversation — starting a new one.',
+      variant: 'warning',
+    })
+  } finally {
+    inFlightWorkspaceResolutions.delete(workspaceId)
+    useSessionStore.setState((state) => {
+      const next = { ...state.resolvingSessionForWorkspace }
+      delete next[workspaceId]
+      return { resolvingSessionForWorkspace: next }
+    })
+  }
+}

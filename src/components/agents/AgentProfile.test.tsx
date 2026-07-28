@@ -310,6 +310,150 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
   })
 })
 
+// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
+//
+// Root cause: AgentProfile's form fields start at hardcoded useState
+// defaults (name='', model='', ...). Before this fix, useAutoSave's
+// `disabled` option was never set for this call, so it defaulted to
+// `false` for the ENTIRE life of the component — useAutoSave's own "skip
+// first render" baseline-capture logic ran on the very first commit
+// (mount, before the agent query had resolved), seeding its baseline from
+// the all-defaults state. The LATER commit where the real agent data
+// hydrates into those fields then looked like a genuine user edit, arming
+// the 1500ms debounce and firing `updateAgent` — a PUT that just echoes
+// the server's own data back, bumping `updated_at` and showing "✓ Saved
+// just now" to a user who never touched the form.
+//
+// Field evidence: opening the read-only core agent Mia fired
+// `GET /api/v1/agents/mia` followed by an unsolicited `PUT` ~1.5s later.
+// Reproduced by 2 UAT testers with network capture.
+describe('AgentProfile — D3: hydration must not trigger a spurious PUT', () => {
+  it('opening a read-only core agent and touching nothing never calls updateAgent, even after the debounce window elapses (REVERT-PROOF: fails without the formHydrated gate)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 1500ms debounce so a spurious hydration-triggered save gets every
+    // chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('the same passive-open holds for an editable (non-locked) agent too — the bug is not locked-agent-specific', async () => {
+    // Explicitly guards against reintroducing an `agent.locked` guard as
+    // the "fix" — the RCA confirmed that's the wrong mechanism, since the
+    // spurious PUT fires for every agent, locked or not.
+    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  // Root cause was inside useAutoSave.ts itself: `initializedRef` seeded its
+  // "skip first render" baseline exactly once per hook instance and never
+  // re-armed on a LATER `disabled: true→false` transition, so only the
+  // FIRST entity a long-lived hook instance ever hydrated got a safe
+  // baseline — every subsequent entity's hydration still looked like a
+  // genuine edit relative to the previous entity's stale baseline. Fixed by
+  // making useAutoSave itself re-arm `previousJsonRef`/`lastSavedJsonRef`
+  // from the CURRENT `data` on every `disabled` true→false transition (see
+  // `wasDisabledRef` in useAutoSave.ts), not just the hook's very first
+  // commit — so `formHydrated`'s existing false→true→false→true cycle
+  // across agent switches (AgentProfile.tsx:284/884) now gets a fresh
+  // baseline every time, not just the first.
+  it('REVERT-PROOF: switching to a SECOND agent within the same mounted AgentProfile instance (it does not unmount on agent switch) does not fire a spurious PUT for that second agent', async () => {
+    vi.mocked(fetchAgent).mockImplementation((id: string) =>
+      Promise.resolve(id === 'mia' ? mockLockedCoreAgent : mockCoreAgent),
+    )
+    const client = makeClient()
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="general-assistant" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('General Assistant')
+    // Let the first agent's hydration settle well past the debounce window
+    // before switching — the passive-open tests above already cover the
+    // first-agent case; this just establishes a clean starting point.
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+
+    // Switch to a SECOND agent WITHOUT unmounting — same QueryClientProvider,
+    // same <AgentProfile> element position, only the `agentId` prop changes.
+    // This mirrors the real app: AgentProfile is mounted at the route/layout
+    // level and does not unmount when the operator opens a different agent
+    // (see the `formHydrated` doc comment in AgentProfile.tsx).
+    rerender(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="mia" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Mia')
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 1500ms debounce so a spurious hydration-triggered save of the SECOND
+    // agent gets every chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 2200))
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+})
+
+// Guard-noise fix (AgentProfile.tsx:405-450): the `updated_at` monotonic
+// hydration guard used to conflate "genuinely stale" (`<`) with "identical,
+// nothing to apply" (`===`) under one `<=` branch, console.warn-ing (+
+// logDiagnostic) on BOTH. Only the `<` case is load-bearing noise; `===` is
+// a normal no-op (e.g. a same-content invalidateQueries echo) and must stay
+// silent.
+describe('AgentProfile — guard-noise fix: stale vs identical updated_at', () => {
+  it('warns via console.warn for a genuinely OLDER incoming snapshot (still load-bearing)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = '2026-01-01T00:00:10.000Z'
+    const t1 = '2026-01-01T00:00:05.000Z' // older than t0
+    const first: Agent = { ...mockCoreAgent, updated_at: t0 }
+    vi.mocked(fetchAgent).mockResolvedValue(first)
+    const client = makeClient()
+    renderProfile('general-assistant', client)
+    await screen.findByText('General Assistant')
+    warnSpy.mockClear()
+
+    // Simulate a stale refetch landing with an OLDER updated_at than what
+    // was already incorporated — queryClient.setQueryData mimics a raw
+    // cache write the way a race-y refetch would.
+    client.setQueryData(['agent', 'general-assistant'], { ...first, updated_at: t1 })
+
+    await waitFor(() => {
+      expect(warnSpy).toHaveBeenCalledWith(
+        'agentProfile.updatedAtGuardRejectedHydration',
+        expect.anything(),
+      )
+    })
+    warnSpy.mockRestore()
+  })
+
+  it('does NOT call console.warn for an IDENTICAL incoming snapshot (silent no-op)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t0 = '2026-01-01T00:00:10.000Z'
+    const first: Agent = { ...mockCoreAgent, updated_at: t0 }
+    vi.mocked(fetchAgent).mockResolvedValue(first)
+    const client = makeClient()
+    renderProfile('general-assistant', client)
+    await screen.findByText('General Assistant')
+    warnSpy.mockClear()
+
+    // Same-content echo: identical updated_at, identical everything else —
+    // e.g. a same-content invalidateQueries refetch.
+    client.setQueryData(['agent', 'general-assistant'], { ...first })
+
+    // Give the effect a chance to run; then assert no warning was ever logged.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      'agentProfile.updatedAtGuardRejectedHydration',
+      expect.anything(),
+    )
+    warnSpy.mockRestore()
+  })
+})
+
 // US-E6: per-agent skill assignment tests
 // Traces to: nontech-ux-hardening-spec.md §6.5, F-06
 describe('AgentProfile — Skills picker (US-E6)', () => {
@@ -1593,7 +1737,15 @@ describe('AgentProfile — updated_at staleness guard', () => {
     vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   })
 
-  it('warns via console.warn + logDiagnostic when it rejects a background refetch snapshot that is not strictly newer', async () => {
+  it('silently no-ops (NO console.warn) when it rejects a background refetch snapshot that is IDENTICAL (same updated_at) to what is already incorporated', async () => {
+    // Guard-noise fix (D3 / UAT v0.1.1 defects): this used to assert a
+    // console.warn fired for this exact scenario, because the guard's old
+    // `incomingTime <= incorporatedTime` conflated "genuinely stale" (`<`)
+    // with "identical, nothing to apply" (`===`) under one branch. An
+    // IDENTICAL snapshot is a normal no-op (e.g. this same-content
+    // invalidateQueries refetch echo) — not a staleness rejection — so it
+    // must NOT warn. Only a genuinely OLDER (`<`) snapshot is still
+    // load-bearing noise; see the sibling test below for that case.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t0 = '2026-02-01T00:00:00.000Z'
 
@@ -1614,17 +1766,25 @@ describe('AgentProfile — updated_at staleness guard', () => {
       expect(vi.mocked(updateAgent)).toHaveBeenCalled()
     }, { timeout: 5000 })
 
-    // The save's own success handler seeds the cache with a same-`updated_at`
-    // response, and `invalidateQueries` fires a background refetch that
-    // resolves with the same static (not-newer) snapshot — both are
-    // rejected by the guard. Wait for at least one rejection warning.
-    await waitFor(() => {
-      expect(warnSpy).toHaveBeenCalledWith(
-        'agentProfile.updatedAtGuardRejectedHydration',
-        expect.objectContaining({ agentId: 'general-assistant' }),
-      )
-    }, { timeout: 6000 })
+    // Let the invalidateQueries background refetch (same static t0
+    // snapshot) settle. Give it a real window past the save.
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    // The identical-snapshot echo must NOT warn — it's a silent no-op now.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      'agentProfile.updatedAtGuardRejectedHydration',
+      expect.anything(),
+    )
+    // The edit itself still visibly succeeded — the guard's silence does
+    // not mean the save failed or the field reverted.
+    expect(screen.getAllByTestId('agent-name-input')[0]).toHaveValue('Edited Name')
   })
+
+  // The `<` (genuinely stale) case remains load-bearing and must stay
+  // noisy — covered by "AgentProfile — guard-noise fix: stale vs identical
+  // updated_at" below (the sibling describe block introduced alongside
+  // this fix), which drives it directly via a synthetic stale
+  // `setQueryData` poke rather than a real save + refetch race.
 
   it('fails CLOSED (rejects the hydration, does not silently adopt it) and warns when updated_at cannot be parsed', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})

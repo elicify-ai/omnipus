@@ -41,6 +41,13 @@ vi.mock('@/store/ui', () => ({
   }),
 }))
 
+// D9: forceLogout is mocked so a 401 in these tests doesn't exercise the real
+// sessionStorage/hash-redirect side effects — just asserts the call happened.
+const mockForceLogout = vi.fn()
+vi.mock('@/lib/authLogout', () => ({
+  forceLogout: (...args: unknown[]) => mockForceLogout(...args),
+}))
+
 import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { ToolApprovalModal } from './ToolApprovalModal'
@@ -365,6 +372,41 @@ describe('ToolApprovalModal — error handling', () => {
         })
       )
     })
+  })
+
+  // D9 — this call bypasses React Query (raw await submitToolApproval), so
+  // queryClient.ts's global 401 subscriber never sees it. Before this fix, a
+  // 401 here left the rest of the app (Sidebar, every other open screen)
+  // looking still logged-in. Assert the shared forced-logout path now fires.
+  it('D9: routes a 401 through the shared forceLogout() teardown', async () => {
+    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(401, 'Unauthorized'))
+
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
+
+    await waitFor(() => {
+      expect(mockForceLogout).toHaveBeenCalledOnce()
+    })
+  })
+
+  it('D9: does NOT call forceLogout() on 403 (forbidden, not unauthenticated)', async () => {
+    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(403, 'Forbidden'))
+
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalled()
+    })
+    expect(mockForceLogout).not.toHaveBeenCalled()
   })
 })
 

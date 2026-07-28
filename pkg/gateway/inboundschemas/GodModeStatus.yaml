@@ -12,6 +12,7 @@ required:
   - enabled
   - available
   - supported
+  - persisted
 additionalProperties: false
 properties:
   enabled:
@@ -24,6 +25,21 @@ properties:
       restart_required=true in GodModeUpdateResponse: the config write
       succeeded, but availability is boot-frozen, so the override does not
       become active until the gateway restarts.
+    example: false
+  persisted:
+    type: boolean
+    description: >
+      The raw persisted config intent — sandbox.god_mode as currently held in
+      config, read directly and NOT gated by `available`. This is what lets a
+      client distinguish "never armed" (persisted=false, available=false) from
+      "armed via the UI, pending restart" (persisted=true, available=false):
+      `enabled` collapses both of those to false, so it alone cannot tell them
+      apart. Once `available` is also true, `persisted` and `enabled` agree
+      (the override is both authorized-intended and live). A UI control that
+      lets the operator arm/disarm god mode should bind its visual on/off
+      state to `persisted`, not `enabled` — otherwise a pending-restart arm
+      renders as if the switch were off, and clicking it again re-arms
+      instead of disarming.
     example: false
   available:
     type: boolean

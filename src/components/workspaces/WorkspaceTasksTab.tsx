@@ -7,6 +7,7 @@ import { ListView } from './ListView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
 import { CreateTaskSlideOver } from './CreateTaskSlideOver'
 import { CreateMilestoneSlideOver } from './CreateMilestoneSlideOver'
+import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import {
   fetchTasks,
   fetchMilestones,
@@ -67,6 +68,7 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
     data: tasks = [],
     isLoading: tasksLoading,
     isError: tasksError,
+    refetch: refetchTasks,
   } = useQuery({
     queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
     queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
@@ -129,9 +131,12 @@ export function WorkspaceTasksTab({ workspaceId, mode }: WorkspaceTasksTabProps)
       {tasksLoading ? (
         <BoardSkeleton />
       ) : tasksError && tasks.length === 0 ? (
-        <div className="flex items-center justify-center flex-1 p-8 text-[var(--color-muted)] text-sm">
-          Failed to load tasks. Check your connection and try again.
-        </div>
+        <QueryErrorState
+          layout="fill"
+          message="Failed to load tasks. Check your connection and try again."
+          onRetry={() => void refetchTasks()}
+          testId="workspace-tasks-error"
+        />
       ) : mode === 'board' ? (
         <BoardView
           tasks={tasks}

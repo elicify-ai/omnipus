@@ -2083,6 +2083,34 @@ func (m *BrowserManager) Preprovision(ctx context.Context) (string, error) {
 	return m.resolveExecPath(ctx)
 }
 
+// InvalidateExecPathCache clears this manager's exec-path resolution caches
+// (success + negative), the per-agent counterpart to
+// BrowserCoordinator.ApplyRuntimeConfig's c.execPath.invalidate() call
+// (coordinator.go). Preprovision (called once, at gateway boot) is the only
+// writer of this cache in the common ADR-043 shared-Chrome (coordinator)
+// path — ensureStarted's own managed-mode branch, which would otherwise
+// re-resolve, is bypassed entirely whenever a coordinator is attached (it
+// asks the coordinator to launch instead, consulting the COORDINATOR's own,
+// already-invalidated cache). So without this method, a policy change
+// (trust_path_chrome / prefer_packaged / exec_path) that landed after boot
+// could leave THIS field holding a resolution computed under the OLD
+// policy — read back by VideoCapability() (this file), which is a real,
+// gateway-request-path WebRTC capability classification, independent of
+// coordinator mode.
+//
+// pkg/agent/loop.go's registerSharedTools currently retires and replaces
+// the whole *BrowserManager on every hot reload (a fresh instance means a
+// fresh, empty execPath cache — see that function's doc comments), so in
+// today's wiring this call is a belt-and-braces no-op for the manager being
+// torn down: call it anyway, at the same reload trigger the coordinator's
+// ApplyRuntimeConfig responds to (right where the retired manager's
+// Shutdown() is invoked), so a future refactor that mutates an existing
+// manager's config in place — instead of always replacing the object —
+// does not silently reintroduce the staleness this closes.
+func (m *BrowserManager) InvalidateExecPathCache() {
+	m.execPath.invalidate()
+}
+
 // Shutdown drops this manager's connection + all its sessions. In ADR-043
 // shared-Chrome mode (coordinator wired), CRIT-001's pipe rework means there
 // is no manager-local connection anymore (chromedp CHILD contexts of the

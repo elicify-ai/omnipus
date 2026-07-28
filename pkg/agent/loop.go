@@ -2015,6 +2015,17 @@ func registerSharedTools(
 						// and kills the manager's own Chrome in the
 						// no-coordinator legacy path.
 						prior.Shutdown()
+						// B2c(i): invalidate the retired manager's own
+						// exec-path cache at the same reload trigger the
+						// coordinator's ApplyRuntimeConfig (above,
+						// al.browserCoordinator.ApplyRuntimeConfig) responds
+						// to — see BrowserManager.InvalidateExecPathCache's
+						// doc comment for why this is currently a no-op
+						// against the freshly-replaced `mgr` (a new instance
+						// already starts with an empty cache) but closes the
+						// gap against `prior` and any future refactor that
+						// stops replacing the whole manager on reload.
+						prior.InvalidateExecPathCache()
 					}
 				}
 			}

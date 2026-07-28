@@ -9,7 +9,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { BrowserLiveWsConnection, parseBrowserFrame, getBrowserFrameDropCount } from './browserLiveWs'
+import {
+  BrowserLiveWsConnection,
+  parseBrowserFrame,
+  getBrowserFrameDropCount,
+  translateBrowserErrorMessage,
+} from './browserLiveWs'
 
 // ── Mock WebSocket ─────────────────────────────────────────────────────────────
 
@@ -159,6 +164,28 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
     lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'error', message: 'session not found' }) })
 
     expect(callbacks.onError).toHaveBeenCalledWith('session not found')
+  })
+
+  // D5 fix ("Site 2"): this was an UNCONDITIONAL raw pass-through of the
+  // server ErrorFrame.message (protocol-internal Go strings), unlike Site 1
+  // (BrowserLiveView's onStatus), which already translated known cases.
+  // Dispatching a synthetic error frame here must now route through the
+  // same translation as browser_status error frames.
+  it('D5: translates a protocol-internal ErrorFrame message before calling onError, instead of passing it through raw', () => {
+    const callbacks = makeCallbacks()
+    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', callbacks)
+    conn.connect()
+    openSocket()
+    callbacks.onError.mockClear()
+
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({ type: 'error', message: 'browser_control: attach before requesting control' }),
+    })
+
+    expect(callbacks.onError).toHaveBeenCalledWith('Reconnect to the live browser before taking control.')
+    expect(callbacks.onError).not.toHaveBeenCalledWith(
+      expect.stringContaining('browser_control:'),
+    )
   })
 
   it('drops a malformed frame silently (no callback fires)', () => {
@@ -567,5 +594,71 @@ describe('parseBrowserFrame — drop counter (LOW, fix-wave B, Constraint #8)', 
     parseBrowserFrame(JSON.stringify({ type: 'done', session_id: 'sess-1' }))
 
     expect(getBrowserFrameDropCount()).toBe(before)
+  })
+})
+
+// D5 fix — the 9-message closed set of protocol-internal errorStatus(...)/
+// ErrorFrame strings from pkg/gateway/browser_ws.go's readLoop/handleAttach/
+// handleControl/handleTabAction (RCA line refs: :526, :586, :590, :861,
+// :867, :907, :940, :946, :991), shared by BOTH D5 leak sites (BrowserLiveView's
+// onStatus AND this module's onmessage). Exercises translateBrowserErrorMessage
+// directly — the exhaustive per-message coverage the component-level tests
+// (BrowserLiveView.annotateAndBar.test.tsx) don't attempt.
+describe('translateBrowserErrorMessage — D5 protocol-internal closed set', () => {
+  it.each([
+    // readLoop inbound-schema gate (:526) — dynamic (%s, %s).
+    ['frame schema validation failed (BrowserControlFrame): modifiers must be 0-15'],
+    // readLoop unknown-type / non-JSON ErrorFrame-only cases (D5 Site 2).
+    ['invalid frame: not JSON'],
+    ['unknown frame type "bogus_frame"'],
+    // handleAttach (:586, :590).
+    ['browser_attach: invalid frame'],
+    ['browser_attach: agent_id and session_id are required'],
+    // handleControl (:867, :907) — :861 covered by its own dedicated test below.
+    ['browser_control: invalid frame'],
+    ['browser_control: unknown action "bogus"'],
+    // handleTabAction (:946, :991) — :940 covered by its own dedicated test below.
+    ['browser_tab_action: invalid frame'],
+    ['browser_tab_action: unknown action "bogus"'],
+  ])('maps %s to a human, non-jargon message', (raw) => {
+    const translated = translateBrowserErrorMessage(raw)
+    expect(translated).not.toBe(raw)
+    expect(translated).not.toMatch(/^(frame schema validation failed|invalid frame|unknown frame type|browser_attach:|browser_control:|browser_tab_action:)/)
+  })
+
+  it('maps browser_control: attach before requesting control (:861) to its own tailored copy', () => {
+    expect(translateBrowserErrorMessage('browser_control: attach before requesting control')).toBe(
+      'Reconnect to the live browser before taking control.',
+    )
+  })
+
+  it('maps browser_tab_action: attach before managing tabs (:940) to its own tailored copy', () => {
+    expect(translateBrowserErrorMessage('browser_tab_action: attach before managing tabs')).toBe(
+      'Reconnect to the live browser before managing tabs.',
+    )
+  })
+
+  it('leaves already-readable sessionErrorStatus() copy unchanged (not in the jargon set)', () => {
+    // These are hand-written, human-readable strings from browser_ws.go's
+    // sessionErrorStatus() calls — deliberately NOT translated (see the
+    // function's doc comment).
+    expect(translateBrowserErrorMessage('another viewer already controls this browser')).toBe(
+      'another viewer already controls this browser',
+    )
+    expect(translateBrowserErrorMessage('take-control is disabled by the operator')).toBe(
+      'take-control is disabled by the operator',
+    )
+    expect(translateBrowserErrorMessage('no browser manager for agent "a1" (browser tools may not be registered for this agent)')).toBe(
+      'no browser manager for agent "a1" (browser tools may not be registered for this agent)',
+    )
+  })
+
+  it('leaves the SOURCE-fixed auth-handshake copy unchanged (already human-readable, not Go jargon)', () => {
+    const authMsg = 'Your session expired — reload the page to reconnect.'
+    expect(translateBrowserErrorMessage(authMsg)).toBe(authMsg)
+  })
+
+  it('passes an unrecognized raw string through unchanged', () => {
+    expect(translateBrowserErrorMessage('completely unrelated message')).toBe('completely unrelated message')
   })
 })

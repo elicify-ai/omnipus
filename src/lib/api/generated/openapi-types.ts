@@ -1546,6 +1546,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/model-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List declared input-modality capabilities per model
+         * @description Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent's model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
+         */
+        get: operations["listModelCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/commands": {
         parameters: {
             query?: never;
@@ -4515,6 +4535,24 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             };
+            /**
+             * @description Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
+             * @example admin
+             */
+            actor?: string;
+            /**
+             * @description Dotted identifier of the config key that was mutated. Present on security_setting_change records, e.g. "gateway.god_mode". May be absent for other event types.
+             * @example gateway.god_mode
+             */
+            resource?: string;
+            /** @description The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. */
+            old_value?: {
+                [key: string]: unknown;
+            };
+            /** @description The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types. */
+            new_value?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * AuditLogResponse
@@ -4720,6 +4758,11 @@ export interface components {
              * @example false
              */
             enabled: boolean;
+            /**
+             * @description The raw persisted config intent — sandbox.god_mode as currently held in config, read directly and NOT gated by `available`. This is what lets a client distinguish "never armed" (persisted=false, available=false) from "armed via the UI, pending restart" (persisted=true, available=false): `enabled` collapses both of those to false, so it alone cannot tell them apart. Once `available` is also true, `persisted` and `enabled` agree (the override is both authorized-intended and live). A UI control that lets the operator arm/disarm god mode should bind its visual on/off state to `persisted`, not `enabled` — otherwise a pending-restart arm renders as if the switch were off, and clicking it again re-arms instead of disarming.
+             * @example false
+             */
+            persisted: boolean;
             /**
              * @description Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it (`supported` is true) AND authorization was granted before this process started, either via the legacy --allow-god-mode boot flag or via sandbox.god_mode_allowed persisted config (set by a prior UI enable + restart). Authorization is evaluated once at boot, so granting it via the UI (POST enabled=true while available=false) does not flip this to true until the gateway restarts — see GodModeUpdateResponse.restart_required.
              * @example false
@@ -4949,6 +4992,26 @@ export interface components {
              */
             error?: string;
             validation?: components["schemas"]["ProviderValidation"];
+        };
+        /**
+         * ModelCapabilities
+         * @description A single model's declared input-modality capabilities, as returned by GET /providers/model-capabilities (D18). Model vision capability is not knowable client-side at all otherwise — the SPA uses this to show a non-blocking warning toast before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to an agent whose resolved model cannot accept images. This is advisory only: the reactive, server-side capability gate (pkg/agent/media_present.go) remains the authoritative backstop regardless of what the client shows.
+         */
+        ModelCapabilities: {
+            /**
+             * @description Canonical model identifier as used in the capability catalog — the bare model slug (no provider prefix), matching Agent.model, e.g. "gemini-2.5-flash" or "glm-5.2".
+             * @example gemini-2.5-flash
+             */
+            id: string;
+            /**
+             * @description Input modalities this model accepts. A model with no "image" entry cannot process image attachments.
+             * @example [
+             *       "text",
+             *       "image",
+             *       "pdf"
+             *     ]
+             */
+            modalities: ("text" | "image" | "pdf" | "audio" | "video")[];
         };
         /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */
         ReAuthRequest: {
@@ -11509,6 +11572,27 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    listModelCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of per-model capability entries. Empty when the catalog is unavailable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilities"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
     listCommands: {
         parameters: {
             query?: {
@@ -13566,6 +13650,7 @@ export type GatewayStatus = components["schemas"]["GatewayStatus"];
 export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
 export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
 export type Provider = components["schemas"]["Provider"];
+export type ModelCapabilities = components["schemas"]["ModelCapabilities"];
 export type ReAuthRequest = components["schemas"]["ReAuthRequest"];
 export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
 export type IntegrationProvider = components["schemas"]["IntegrationProvider"];

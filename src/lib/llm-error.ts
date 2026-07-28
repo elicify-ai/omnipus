@@ -192,3 +192,41 @@ export function readEntryIdFromFrame(frame: unknown): string | undefined {
   const f = frame as { entry_id?: unknown }
   return typeof f.entry_id === 'string' ? f.entry_id : undefined
 }
+
+/**
+ * D5 fix (UAT "Site 3") — a legacy/synthesized `ErrorFrame` (no typed
+ * `llm_error` payload — an auth-handshake rejection, a workspace-setup
+ * kickoff reject, a gateway-synthesized cancel-ack, etc.) falls back to the
+ * raw wire `message` for display in `store/chat.ts`'s `case 'error'`. Most
+ * of those ARE deliberately-authored, human-readable strings (see the
+ * `Message:` literals in pkg/gateway/websocket.go) — but a raw Go-internal/
+ * protocol string can still reach this fallback: an unwrapped backend error,
+ * or any future ErrorFrame the backend hasn't wrapped in the typed payload
+ * yet. This is the safety net for that path — it collapses anything that
+ * LOOKS like internal protocol/Go-error shape into a generic, human message
+ * instead of showing it verbatim:
+ *   - a `{"type":"..."}` JSON-ish wire frame accidentally strung into the
+ *     message field instead of being parsed, or
+ *   - the Go `<component>: <verb...>` error-wrapping convention (a single
+ *     lowercase/snake_case/dotted identifier immediately followed by
+ *     `": "`, e.g. "browser_control: attach before requesting control",
+ *     "browser_attach: agent_id and session_id are required") — a
+ *     deliberately-authored user-facing sentence never starts this way (see
+ *     the `Message:` literals above — "cancel failed: ...", "workspace
+ *     setup has already run", etc. all have a SPACE, not a bare identifier,
+ *     before their first colon or none at all), so this is a conservative,
+ *     low-false-positive signal.
+ *
+ * The concrete leaking strings this UAT finding traced (the WS auth-
+ * handshake rejection messages) were fixed at their SOURCE — see
+ * `wsAuthErrBadFirstFrame`/`wsAuthErrInvalidToken`/`wsAuthErrNoUsers` in
+ * pkg/gateway/websocket.go — this function is defense-in-depth for anything
+ * else that reaches the same raw-fallback path.
+ */
+export function sanitizeLegacyErrorMessage(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed === '') return raw
+  if (/^\{"type"\s*:/.test(trimmed)) return 'Something went wrong — please try again.'
+  if (/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*:\s/.test(trimmed)) return 'Something went wrong — please try again.'
+  return raw
+}

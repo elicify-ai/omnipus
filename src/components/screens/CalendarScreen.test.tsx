@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { EventDropArg, EventClickArg, DateSelectArg } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
@@ -919,6 +919,78 @@ describe('CalendarScreen — milestones query failure (spec §9 #21)', () => {
 
     // The calendar grid stub must still render (degradation — not a full failure screen)
     expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+  })
+})
+
+// ── D9: total query failure → real blocking error state, not a silent "empty" grid ──
+//
+// UAT defect D9: when BOTH queries fail (or the one query with any data
+// fails), the old code only fired a toast — filteredEvents stayed [], so
+// isEmpty=true was passed to FullCalendarView, which rendered its normal "No
+// scheduled items" empty hint. A user who saw that had no way to tell "you
+// have nothing scheduled" apart from "we couldn't load your schedule". This
+// suite proves the calendar now renders the shared QueryErrorState instead
+// of the deceptive empty grid whenever a failure is the reason there's
+// nothing to show — while the two tests above (partial failure, real data
+// still available) continue to degrade gracefully per FR-016/I-2.
+describe('CalendarScreen — total query failure renders a real blocking error state (D9)', () => {
+  it('renders QueryErrorState (not the FullCalendarView "empty" grid) when BOTH tasks and milestones fail', async () => {
+    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
+    vi.mocked(fetchMilestones).mockRejectedValueOnce(new Error('500 Server Error'))
+
+    renderCalendarScreen()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-error')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/couldn.t load your calendar/i)).toBeInTheDocument()
+    // The deceptive "renders as if empty" grid must NOT be what's on screen.
+    expect(screen.queryByTestId('fullcalendar-stub')).not.toBeInTheDocument()
+  })
+
+  it('clicking Retry re-invokes both fetchTasks and fetchMilestones', async () => {
+    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
+    vi.mocked(fetchMilestones).mockRejectedValueOnce(new Error('500 Server Error'))
+
+    renderCalendarScreen()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-error')).toBeInTheDocument()
+    })
+
+    const callsBeforeTasks = vi.mocked(fetchTasks).mock.calls.length
+    const callsBeforeMilestones = vi.mocked(fetchMilestones).mock.calls.length
+
+    // Queue up successful responses for the retry.
+    vi.mocked(fetchTasks).mockResolvedValueOnce([makeTask()])
+    vi.mocked(fetchMilestones).mockResolvedValueOnce([makeMilestone()])
+
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchTasks).mock.calls.length).toBeGreaterThan(callsBeforeTasks)
+      expect(vi.mocked(fetchMilestones).mock.calls.length).toBeGreaterThan(callsBeforeMilestones)
+    })
+
+    // A successful retry replaces the error state with the grid again.
+    await waitFor(() => {
+      expect(screen.queryByTestId('calendar-error')).not.toBeInTheDocument()
+      expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT render the blocking error state when only ONE query fails and the other has data (FR-016/I-2 partial-degrade still holds)', async () => {
+    // Same setup as the pre-existing "tasks query failure" test above — this
+    // asserts the D9 fix did not regress the intentional partial-degrade path.
+    vi.mocked(fetchTasks).mockRejectedValueOnce(new Error('500 Server Error'))
+    vi.mocked(fetchMilestones).mockResolvedValue([makeMilestone()] as never)
+
+    renderCalendarScreen()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('fullcalendar-stub')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('calendar-error')).not.toBeInTheDocument()
   })
 })
 

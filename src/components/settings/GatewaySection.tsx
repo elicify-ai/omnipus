@@ -162,6 +162,16 @@ export function GatewaySection() {
   const [bindAddress, setBindAddress] = useState('127.0.0.1')
   const [port, setPort] = useState('8080')
   const [logLevel, setLogLevel] = useState('info')
+  // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
+  // `!config` check useAutoSave's `disabled` option used to key off of.
+  // `config` turns truthy in the SAME commit the hydration effect below is
+  // SCHEDULED, but the effect's own setState calls don't land until the
+  // NEXT commit — so `disabled: !config` flipped false one render too
+  // early, letting useAutoSave capture the hardcoded useState defaults
+  // ('127.0.0.1' / '8080' / 'info') as its baseline instead of the real
+  // persisted values. `gatewayHydrated` is set at the END of the hydration
+  // effect, so it flips true in the same commit the real values land.
+  const [gatewayHydrated, setGatewayHydrated] = useState(false)
 
   useEffect(() => {
     if (!config) return
@@ -177,6 +187,7 @@ export function GatewaySection() {
     // is pending (the initial useEffect would otherwise look like a port change).
     if (prevPortRef.current === null) prevPortRef.current = newPort
     if (prevBindRef.current === null) prevBindRef.current = newBind
+    setGatewayHydrated(true)
   }, [config])
 
   const gatewayFormData = useMemo(() => ({
@@ -227,7 +238,7 @@ export function GatewaySection() {
         setRestartModalOpen(true)
       }
     },
-    { disabled: !config },
+    { disabled: !gatewayHydrated },
   )
 
   // O4: always-available "Restart gateway" handler.

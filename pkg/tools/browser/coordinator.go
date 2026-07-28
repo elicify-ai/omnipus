@@ -246,6 +246,14 @@ const defaultTotalTabs = 30
 // CDP handshake for seconds). Concurrent Register callers serialize on the
 // single-flight launch (c.launching / c.launchDone); the winner launches, the
 // losers wait and then observe c.launched.
+//
+// createTargetParamsForTest, when non-nil, is invoked with the fully-built
+// target.CreateTargetParams for the per-agent window right before it is
+// sent over CDP (D17 test seam — see the call site inside Register). Nil
+// in production; tests restore it via t.Cleanup, matching this package's
+// other for-test seams (e.g. package_chrome.go's packageChromeRootForTest).
+var createTargetParamsForTest func(*target.CreateTargetParams)
+
 func (c *BrowserCoordinator) Register(
 	ctx context.Context,
 	agentID string,
@@ -358,10 +366,38 @@ func (c *BrowserCoordinator) Register(
 			bcErr,
 		)
 	}
-	tid, ctErr := target.CreateTarget("about:blank").
+	// D17: pin the new window's size to the screencast cap (live.go) instead
+	// of leaving it at Chrome's version/platform-dependent new-window
+	// default. Without this, --window-size=1280,720
+	// (chromeHardeningBaseFlags, exec_resolver.go) only ever sizes the
+	// FIRST window Chrome opens at process start; every subsequent
+	// per-agent window created here (one per Register call) got whatever
+	// size Chrome picked on its own, then that size was cached for the
+	// agent's whole lifetime (c.contexts, below) — reproduced in the field
+	// as a live-browser panel that sometimes filled the panel and sometimes
+	// shrank to a ~320x155 letterboxed rectangle, with no visible trigger
+	// (just "which agent/session got created first"). WithWidth/WithHeight
+	// requires newWindow:true (CreateTargetParams doc comment), already
+	// satisfied by WithNewWindow(true) below — purely additive, keeps
+	// window size and the screencast's own cap in lockstep so there is no
+	// separate magic-number size to drift out of sync.
+	ctParams := target.CreateTarget("about:blank").
 		WithBrowserContextID(bid).
 		WithNewWindow(true).
-		Do(cdp.WithExecutor(rootCtx, rc.Browser))
+		WithWidth(screencastMaxWidth).
+		WithHeight(screencastMaxHeight)
+	// createTargetParamsForTest (D17 test seam, nil in production) lets
+	// tests assert the Width/Height pinning directly on the outgoing CDP
+	// params, without depending on any particular Chrome build/platform's
+	// new-window default actually differing when the fields are absent —
+	// on the Chrome build this fix shipped from, headless new-window sizing
+	// already happened to default to 1280x720, so a live-Chrome
+	// window-bounds assertion alone could not distinguish fixed from
+	// unfixed code. See TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap.
+	if createTargetParamsForTest != nil {
+		createTargetParamsForTest(ctParams)
+	}
+	tid, ctErr := ctParams.Do(cdp.WithExecutor(rootCtx, rc.Browser))
 	if ctErr != nil {
 		_ = target.DisposeBrowserContext(bid).Do(cdp.WithExecutor(rootCtx, rc.Browser))
 		return nil, "", fmt.Errorf("browser: coordinator: failed to open first tab for agent %q: %w", agentID, ctErr)

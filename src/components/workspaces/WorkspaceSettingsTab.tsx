@@ -78,16 +78,107 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   const instructionsDirtyRef = useRef(false)
   const markInstructionsDirty = () => { instructionsDirtyRef.current = true }
 
+  // D3 residual (2nd site) fix: reactive readiness flag for the identity
+  // group's useAutoSave, mirroring `instructionsHydrated` below. The
+  // previous RCA on this group called it "safe by construction" because it
+  // is prop-seeded (`useState(workspace.name)`) rather than query-fetched —
+  // true for the very FIRST mount (no async gap: `workspace` is already
+  // fully resolved by the time this component renders), which is why this
+  // starts `true`, unlike `instructionsHydrated` (which starts `false`
+  // because its data source, `fetchWorkspaceInstructions`, always has a
+  // real network gap even on first mount).
+  //
+  // That "safe by construction" analysis does NOT hold across a WORKSPACE
+  // SWITCH, though — this component persists across switches (no `key` prop
+  // at the route), and `name`/`description`/`repository` are re-synced by
+  // the `useEffect` below, which only runs AFTER the commit where
+  // `workspace.id` (and thus `formData.workspaceId`) already changed. That
+  // produces one real committed render with the NEW workspace's id paired
+  // with the OLD workspace's still-stale name/description/repository state
+  // — a self-inconsistent snapshot useAutoSave's change-detection reads as
+  // "different from the last thing I saw" relative to the fully-settled OLD
+  // snapshot. The FOLLOWING render (once the effect re-syncs the fields to
+  // the new workspace) is ALSO read as "different" relative to that
+  // mismatched intermediate snapshot — two back-to-back "changes" with no
+  // real user edit in either, which arms the debounce and fires a spurious
+  // `updateWorkspace` PUT echoing the new workspace's own (already correct)
+  // identity fields back to itself. Confirmed by tracing the effect/commit
+  // order, not assumed — see the REVERT-PROOF test for this group.
+  //
+  // Reset via the SAME mid-render "adjusting state during render" pattern
+  // used for `instructionsHydrated` below (see `prevWorkspaceIdForReset`) —
+  // not a separate `useEffect` — so the very FIRST committed render after a
+  // workspace switch already carries `identityHydrated = false`, and
+  // useAutoSave's `wasDisabledRef` re-arm logic captures the freshly-synced
+  // fields as its new baseline instead of treating them as an edit.
+  //
+  // UX decision (deliberately NOT mirroring `disabled={!instructionsHydrated}`
+  // on the Instructions `<Textarea>` below): the Name/Description/Repository
+  // inputs are NOT disabled while `identityHydrated` is false. Unlike
+  // Instructions, there is no real network-loading window here worth
+  // surfacing to the user — `workspace` is already fully loaded data by the
+  // time this tab renders, and the "unhydrated" window this flag closes is
+  // a same-tick React commit/effect ordering artifact (resolves within a
+  // frame, no visible delay). Disabling the fields for that frame on EVERY
+  // workspace switch would be a visible, user-perceptible flicker/lock on
+  // ordinary navigation — worse UX than the invisible extra background PUT
+  // it would prevent. This flag exists purely to gate useAutoSave's internal
+  // bookkeeping, not to gate the UI.
+  const [identityHydrated, setIdentityHydrated] = useState(true)
+
+  // D3 / UAT spurious-PUT fix: reactive readiness flag for the instructions
+  // group's useAutoSave. Unlike `identity` (prop-seeded — `workspace.name`
+  // etc. are already loaded by the time this component renders, no async
+  // gap), `instructions` has its OWN dedicated GET
+  // (`fetchWorkspaceInstructions`) that resolves strictly after mount, so
+  // the textarea starts at the hardcoded `''` default and hydrates later —
+  // the exact shape of the D3 bug. `instructionsHydrated` is set at the END
+  // of the instructions hydration effect below, so useAutoSave's baseline
+  // is captured from the hydrated content, not the default. Reset on
+  // workspace switch (this component persists across workspace navigation
+  // — see the dirty-flag reset effect immediately below) so the NEXT
+  // workspace doesn't inherit "ready" from the previous one.
+  const [instructionsHydrated, setInstructionsHydrated] = useState(false)
+
   // Switching to a different workspace (identity change) always resets both
   // dirty flags — this is a different record, not a refresh of the same one,
   // so any "unsaved" local edits belonged to the PREVIOUS workspace and must
-  // not block re-hydration for the new one. Declared before the hydration
-  // effects below so it runs first within the same commit when workspace.id
-  // changes (React runs effects in declaration order).
-  useEffect(() => {
+  // not block re-hydration for the new one.
+  //
+  // D3 residual-race fix (found empirically while verifying the useAutoSave
+  // re-arm fix against repeated workspace switches — see useAutoSave.ts's
+  // `wasDisabledRef`): this reset USED to live in a `useEffect(..., [workspace.id])`,
+  // which only runs one render AFTER the `workspace.id` prop actually
+  // changes. `instructionsFormData` below embeds `workspaceId: workspace.id`
+  // directly (Item 10's cross-workspace-timer tag) — so the FIRST render
+  // after a workspace switch already carries the NEW id inside useAutoSave's
+  // tracked `data`, while `disabled` (driven by `instructionsHydrated`,
+  // still not yet reset by the effect) was STILL false for that one render.
+  // useAutoSave saw "data changed" (the id differs) while still enabled and
+  // fired a save carrying the NEW workspace's id with the OLD (stale,
+  // pre-switch) `instructionsContent` — silently overwriting the new
+  // workspace's instructions with the previous workspace's stale draft. That
+  // is strictly worse than the ordinary D3 echo (it's not even an echo of
+  // the new workspace's own data — it PUTs someone else's stale content).
+  //
+  // Fixed with React's documented "adjusting state when a prop changes"
+  // pattern (calling the setter conditionally DURING render, not inside an
+  // effect: https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  // React treats a state update issued mid-render as "discard this render,
+  // re-render immediately with the new state" — so the reset lands in the
+  // SAME commit `workspace.id` is first observed, and there is no
+  // intermediate commit where the id has changed but `disabled` has not.
+  const [prevWorkspaceIdForReset, setPrevWorkspaceIdForReset] = useState(workspace.id)
+  if (workspace.id !== prevWorkspaceIdForReset) {
+    setPrevWorkspaceIdForReset(workspace.id)
     identityDirtyRef.current = false
     instructionsDirtyRef.current = false
-  }, [workspace.id])
+    setInstructionsHydrated(false)
+    // D3 residual (2nd site) fix: re-arm the identity group's readiness gate
+    // in the SAME mid-render reset — see `identityHydrated`'s doc comment
+    // above for why this must happen here rather than in a separate effect.
+    setIdentityHydrated(false)
+  }
 
   // Re-hydrate local form state when the workspace identity changes (navigating
   // between workspaces while the Settings tab stays mounted) or when the record
@@ -98,6 +189,12 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     setName(workspace.name)
     setDescription(workspace.description ?? '')
     setRepository(workspace.repository ?? '')
+    // D3 residual (2nd site) fix: flip the reactive readiness flag in the
+    // SAME commit the re-synced fields land (see `identityHydrated`'s doc
+    // comment above) — batched with the three setters above into one
+    // render, so useAutoSave never observes a commit where `disabled` is
+    // already false but the data is still the stale pre-switch snapshot.
+    setIdentityHydrated(true)
   }, [workspace.id, workspace.name, workspace.description, workspace.repository])
 
   // Fetch and track workspace instructions (AGENT.md content).
@@ -111,10 +208,21 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   })
 
   useEffect(() => {
-    if (instructionsDirtyRef.current) return
-    if (instructionsData !== undefined) {
+    if (instructionsData === undefined) return
+    // Draft-ownership rule: never overwrite an in-progress local edit with
+    // server data. Note this check is intentionally NOT what gates
+    // `instructionsHydrated` below — the readiness flag must flip true the
+    // moment the GET resolves regardless of dirtiness, or a user who starts
+    // typing before the GET lands would leave useAutoSave disabled forever
+    // (its own baseline-capture logic never gets a chance to run, so
+    // `hasPendingChanges()` would never see anything pending either — a
+    // silent-data-loss regression the disabled `<Textarea>` below actually
+    // prevents by making that race impossible: the field is inert until
+    // `instructionsHydrated` is true).
+    if (!instructionsDirtyRef.current) {
       setInstructionsContent(instructionsData.content)
     }
+    setInstructionsHydrated(true)
   }, [instructionsData])
 
   // Item 10 (cross-workspace timer, cheap variant): tag the autosave data
@@ -165,7 +273,16 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
       await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.instructions(workspace.id) })
     },
     {
-      disabled: instructionsError,
+      // D3 / UAT spurious-PUT fix: `instructionsError` alone left the
+      // group enabled for the ENTIRE duration of the initial GET (no
+      // readiness gate at all) — useAutoSave captured the hardcoded ''
+      // default as its baseline on mount, so the later hydration commit
+      // looked like a genuine edit and fired a spurious PUT echoing the
+      // fetched content straight back. `!instructionsHydrated` closes that
+      // window; the `<Textarea>` below is also disabled until hydrated so
+      // there is no way for a user edit to race the GET and get silently
+      // treated as "already saved" instead.
+      disabled: instructionsError || !instructionsHydrated,
       // Long-form surface — raised from the 500ms default so a normal
       // typing cadence in a multi-paragraph instructions doc doesn't fire a
       // save (and its own invalidate/refetch echo) on nearly every pause.
@@ -239,6 +356,11 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     },
     {
       debounceMs: 600,
+      // D3 residual (2nd site) fix: see `identityHydrated`'s doc comment
+      // above for why this group — despite being prop-seeded, not
+      // query-fetched — still needs a readiness gate to survive a
+      // workspace switch without firing a spurious echo PUT.
+      disabled: !identityHydrated,
       onSaved: (_saved, isCurrent) => {
         // See instructions' onSaved above — same draft-ownership rule,
         // scoped to this field group's own dirty flag.
@@ -386,6 +508,12 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               placeholder={"# Project Instructions\n\nDescribe conventions, tech stack, coding standards, and team preferences that every agent should follow in this workspace."}
               rows={10}
               className="bg-[var(--color-surface-2)] text-xs font-mono resize-none"
+              // D3 fix: inert until hydrated — closes the race where a very
+              // fast edit lands before `fetchWorkspaceInstructions` resolves
+              // and gets silently adopted as useAutoSave's "already saved"
+              // baseline instead of actually being persisted (see
+              // `instructionsHydrated`'s doc comment above).
+              disabled={!instructionsHydrated}
             />
           )}
         </div>

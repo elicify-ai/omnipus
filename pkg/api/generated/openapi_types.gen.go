@@ -1274,6 +1274,33 @@ func (e MessageType) Valid() bool {
 	}
 }
 
+// Defines values for ModelCapabilitiesModalities.
+const (
+	ModelCapabilitiesModalitiesAudio ModelCapabilitiesModalities = "audio"
+	ModelCapabilitiesModalitiesImage ModelCapabilitiesModalities = "image"
+	ModelCapabilitiesModalitiesPdf   ModelCapabilitiesModalities = "pdf"
+	ModelCapabilitiesModalitiesText  ModelCapabilitiesModalities = "text"
+	ModelCapabilitiesModalitiesVideo ModelCapabilitiesModalities = "video"
+)
+
+// Valid indicates whether the value is a known member of the ModelCapabilitiesModalities enum.
+func (e ModelCapabilitiesModalities) Valid() bool {
+	switch e {
+	case ModelCapabilitiesModalitiesAudio:
+		return true
+	case ModelCapabilitiesModalitiesImage:
+		return true
+	case ModelCapabilitiesModalitiesPdf:
+		return true
+	case ModelCapabilitiesModalitiesText:
+		return true
+	case ModelCapabilitiesModalitiesVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NotificationSeverity.
 const (
 	NotificationSeverityError   NotificationSeverity = "error"
@@ -2161,22 +2188,22 @@ func (e SessionCreateRequestType) Valid() bool {
 
 // Defines values for SessionDetailMessagesAttachmentsType.
 const (
-	Audio SessionDetailMessagesAttachmentsType = "audio"
-	File  SessionDetailMessagesAttachmentsType = "file"
-	Image SessionDetailMessagesAttachmentsType = "image"
-	Video SessionDetailMessagesAttachmentsType = "video"
+	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
+	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
+	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
+	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
 func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	switch e {
-	case Audio:
+	case SessionDetailMessagesAttachmentsTypeAudio:
 		return true
-	case File:
+	case SessionDetailMessagesAttachmentsTypeFile:
 		return true
-	case Image:
+	case SessionDetailMessagesAttachmentsTypeImage:
 		return true
-	case Video:
+	case SessionDetailMessagesAttachmentsTypeVideo:
 		return true
 	default:
 		return false
@@ -4328,6 +4355,9 @@ type AttachmentType string
 
 // AuditEntry A single audit log record from the JSONL audit log file (~/.omnipus/system/audit.jsonl). Matches the Go pkg/audit.Entry struct.
 type AuditEntry struct {
+	// Actor Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
+	Actor *string `json:"actor,omitempty"`
+
 	// AgentId ID of the agent that triggered the event. May be absent.
 	AgentId *string `json:"agent_id,omitempty"`
 
@@ -4343,11 +4373,20 @@ type AuditEntry struct {
 	// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
 	Event string `json:"event"`
 
+	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+	NewValue *map[string]interface{} `json:"new_value,omitempty"`
+
+	// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+	OldValue *map[string]interface{} `json:"old_value,omitempty"`
+
 	// Parameters Tool call parameters or other event-specific key-value pairs.
 	Parameters *map[string]interface{} `json:"parameters,omitempty"`
 
 	// PolicyRule Policy rule that produced this decision. May be absent.
 	PolicyRule *string `json:"policy_rule,omitempty"`
+
+	// Resource Dotted identifier of the config key that was mutated. Present on security_setting_change records, e.g. "gateway.god_mode". May be absent for other event types.
+	Resource *string `json:"resource,omitempty"`
 
 	// SessionId Session ID associated with the event. May be absent.
 	SessionId *string `json:"session_id,omitempty"`
@@ -4375,6 +4414,9 @@ type AuditLogResponse struct {
 
 	// Entries Recent audit entries, reverse-chronological, max 100.
 	Entries []struct {
+		// Actor Authenticated username that performed the change. Present on security_setting_change records (see pkg/audit.SecurityChangeRecord); may be absent for other event types.
+		Actor *string `json:"actor,omitempty"`
+
 		// AgentId ID of the agent that triggered the event. May be absent.
 		AgentId *string `json:"agent_id,omitempty"`
 
@@ -4390,11 +4432,20 @@ type AuditLogResponse struct {
 		// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
 		Event string `json:"event"`
 
+		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+		NewValue *map[string]interface{} `json:"new_value,omitempty"`
+
+		// OldValue The config value before the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
+		OldValue *map[string]interface{} `json:"old_value,omitempty"`
+
 		// Parameters Tool call parameters or other event-specific key-value pairs.
 		Parameters *map[string]interface{} `json:"parameters,omitempty"`
 
 		// PolicyRule Policy rule that produced this decision. May be absent.
 		PolicyRule *string `json:"policy_rule,omitempty"`
+
+		// Resource Dotted identifier of the config key that was mutated. Present on security_setting_change records, e.g. "gateway.god_mode". May be absent for other event types.
+		Resource *string `json:"resource,omitempty"`
 
 		// SessionId Session ID associated with the event. May be absent.
 		SessionId *string `json:"session_id,omitempty"`
@@ -5203,6 +5254,9 @@ type GodModeStatus struct {
 	// Enabled Current runtime god-mode state — whether the override is ACTIVE in this process right now. Always false when `available` is false (the switch is a no-op without availability). Can differ from the last value POSTed to this endpoint immediately after an enable that returned restart_required=true in GodModeUpdateResponse: the config write succeeded, but availability is boot-frozen, so the override does not become active until the gateway restarts.
 	Enabled bool `json:"enabled"`
 
+	// Persisted The raw persisted config intent — sandbox.god_mode as currently held in config, read directly and NOT gated by `available`. This is what lets a client distinguish "never armed" (persisted=false, available=false) from "armed via the UI, pending restart" (persisted=true, available=false): `enabled` collapses both of those to false, so it alone cannot tell them apart. Once `available` is also true, `persisted` and `enabled` agree (the override is both authorized-intended and live). A UI control that lets the operator arm/disarm god mode should bind its visual on/off state to `persisted`, not `enabled` — otherwise a pending-restart arm renders as if the switch were off, and clicking it again re-arms instead of disarming.
+	Persisted bool `json:"persisted"`
+
 	// Supported Whether this build supports god mode AT ALL — false only when compiled with the nogodmode build tag. Independent of runtime authorization: POST .../god-mode with enabled=true is permitted whenever `supported` is true, even if `available` is currently false (enabling then persists authorization to config and requires a gateway restart to actually take effect). When `supported` is false, enabling always returns 403 regardless of any authorization source.
 	Supported bool `json:"supported"`
 }
@@ -5809,6 +5863,18 @@ type MilestoneUpdateRequest struct {
 	// Name Milestone name.
 	Name *string `json:"name,omitempty"`
 }
+
+// ModelCapabilities A single model's declared input-modality capabilities, as returned by GET /providers/model-capabilities (D18). Model vision capability is not knowable client-side at all otherwise — the SPA uses this to show a non-blocking warning toast before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to an agent whose resolved model cannot accept images. This is advisory only: the reactive, server-side capability gate (pkg/agent/media_present.go) remains the authoritative backstop regardless of what the client shows.
+type ModelCapabilities struct {
+	// Id Canonical model identifier as used in the capability catalog — the bare model slug (no provider prefix), matching Agent.model, e.g. "gemini-2.5-flash" or "glm-5.2".
+	Id string `json:"id"`
+
+	// Modalities Input modalities this model accepts. A model with no "image" entry cannot process image attachments.
+	Modalities []ModelCapabilitiesModalities `json:"modalities"`
+}
+
+// ModelCapabilitiesModalities defines model for ModelCapabilities.Modalities.
+type ModelCapabilitiesModalities string
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {

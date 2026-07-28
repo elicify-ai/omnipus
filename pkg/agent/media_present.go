@@ -142,6 +142,19 @@ func (al *AgentLoop) getCapabilityCatalog() *capabilities.Catalog {
 	return al.capabilityCatalog
 }
 
+// GetCapabilityCatalog is the exported gateway-facing accessor for the
+// AgentLoop's capability catalog (D18: model-capabilities REST endpoint,
+// so the SPA can warn — client-side, non-blocking — before sending a
+// vision attachment to a model that cannot see images; model vision
+// capability is otherwise unknowable client-side). Delegates to
+// getCapabilityCatalog so the RLock-guarded read has exactly one
+// implementation. Returns nil if the catalog was never constructed —
+// callers (e.g. the REST handler) must treat nil as "no capability data
+// available" and degrade gracefully (empty list), never a 500.
+func (al *AgentLoop) GetCapabilityCatalog() *capabilities.Catalog {
+	return al.getCapabilityCatalog()
+}
+
 // SetCapabilityCatalog injects a capability catalog (typically one with a
 // puller + store wired by the gateway boot for FR-025 repo-pull). It
 // replaces any catalog constructed from the embedded seed at NewAgentLoop

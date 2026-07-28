@@ -15,6 +15,7 @@ import {
   readEntryIdFromFrame,
   readLLMErrorFromFrame,
   readLLMErrorFromReplayFrame,
+  sanitizeLegacyErrorMessage,
   type LLMErrorCode,
 } from './llm-error'
 
@@ -205,5 +206,47 @@ describe('llm-error — readEntryIdFromFrame', () => {
     expect(readEntryIdFromFrame({ entry_id: null })).toBeUndefined()
     expect(readEntryIdFromFrame(null)).toBeUndefined()
     expect(readEntryIdFromFrame(undefined)).toBeUndefined()
+  })
+})
+
+// D5 (UAT Site 3) — chat.ts's case 'error' legacy fallback must not surface
+// raw Go-internal/protocol strings verbatim.
+describe('llm-error — sanitizeLegacyErrorMessage (D5)', () => {
+  it('collapses a Go `<component>: <verb>` style protocol string to a generic message', () => {
+    expect(sanitizeLegacyErrorMessage('browser_control: attach before requesting control')).toBe(
+      'Something went wrong — please try again.',
+    )
+    expect(sanitizeLegacyErrorMessage('browser_attach: agent_id and session_id are required')).toBe(
+      'Something went wrong — please try again.',
+    )
+    expect(sanitizeLegacyErrorMessage('workspace_setup: kickoff failed')).toBe(
+      'Something went wrong — please try again.',
+    )
+  })
+
+  it('collapses a raw {"type":...} JSON-ish wire frame string', () => {
+    expect(sanitizeLegacyErrorMessage('{"type":"error","message":"boom"}')).toBe(
+      'Something went wrong — please try again.',
+    )
+  })
+
+  it('passes deliberately-authored, human-readable backend strings through unchanged', () => {
+    // Real Message: literals from pkg/gateway/websocket.go — none have a
+    // bare identifier immediately followed by a colon.
+    expect(sanitizeLegacyErrorMessage('workspace setup has already run')).toBe('workspace setup has already run')
+    expect(sanitizeLegacyErrorMessage('session not found')).toBe('session not found')
+    expect(sanitizeLegacyErrorMessage('cancel failed: session already closed')).toBe(
+      'cancel failed: session already closed',
+    )
+    expect(sanitizeLegacyErrorMessage('malformed workspace_setup_kickoff metadata')).toBe(
+      'malformed workspace_setup_kickoff metadata',
+    )
+    expect(sanitizeLegacyErrorMessage('this agent is a worker and cannot be a chat target — workers are invoked via delegation')).toBe(
+      'this agent is a worker and cannot be a chat target — workers are invoked via delegation',
+    )
+  })
+
+  it('passes an empty string through unchanged (never crashes on empty input)', () => {
+    expect(sanitizeLegacyErrorMessage('')).toBe('')
   })
 })

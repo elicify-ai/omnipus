@@ -47,6 +47,7 @@ import { useUiStore } from '@/store/ui'
 import { SkillBrowser } from '@/components/skills/SkillBrowser'
 import { McpServerModal } from '@/components/skills/McpServerModal'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
+import { CATEGORY_LABELS } from '@/lib/toolCategories'
 
 export function SkillsScreen() {
   const { addToast } = useUiStore()
@@ -569,8 +570,8 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                   data-testid={`tool-category-toggle-${cat}`}
                 >
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-[var(--color-secondary)] capitalize">
-                      {cat}
+                    <span className="text-sm font-medium text-[var(--color-secondary)]">
+                      {CATEGORY_LABELS[cat] ?? cat}
                     </span>
                     <p className="text-xs text-[var(--color-muted)] mt-0.5">
                       {description}

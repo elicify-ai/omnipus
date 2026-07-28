@@ -71,14 +71,21 @@ func (a *restAPI) getGodMode(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	available := a.godModeAvailable()
+	// persisted is the raw config intent — sandbox.god_mode as currently held,
+	// read directly and NOT gated by availability. D19: this is what lets the
+	// UI tell "never armed" (S0: persisted=false, available=false) apart from
+	// "armed via the UI, pending restart" (S1: persisted=true, available=
+	// false) — enabled alone collapses both of those to false.
+	persisted := a.agentLoop.GetConfig().Sandbox.GodMode
 	// enabled is the persisted runtime switch, but it is only meaningful (and
 	// only has any effect) when god mode is available. Report false when
 	// unavailable so the UI never shows "on" for an inert switch.
-	enabled := available && a.agentLoop.GetConfig().Sandbox.GodMode
+	enabled := available && persisted
 	jsonOK(w, gen.GodModeStatus{
 		Enabled:   enabled,
 		Available: available,
 		Supported: a.godModeSupported(),
+		Persisted: persisted,
 	})
 }
 

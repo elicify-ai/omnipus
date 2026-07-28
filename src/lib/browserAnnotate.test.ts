@@ -9,16 +9,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { submitAnnotation, AnnotationBusyError } from './browserAnnotate'
 import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
+import { queryClient } from '@/lib/queryClient'
+import type { Agent } from '@/lib/api'
 
-vi.mock('@/lib/api', () => ({
-  uploadFiles: vi.fn(),
-  inspectBrowserElement: vi.fn(),
-}))
+// D18: mock only the network calls (uploadFiles, inspectBrowserElement,
+// fetchModelCapabilities); keep the real modelLacksImageCapability (pure
+// decision helper) via importActual so the D18 tests below exercise the
+// actual integration, not a re-implemented mock of the decision logic.
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return {
+    ...actual,
+    uploadFiles: vi.fn(),
+    inspectBrowserElement: vi.fn(),
+    fetchModelCapabilities: vi.fn(),
+  }
+})
 
-import { uploadFiles, inspectBrowserElement } from '@/lib/api'
+import { uploadFiles, inspectBrowserElement, fetchModelCapabilities } from '@/lib/api'
 
 const mockUploadFiles = vi.mocked(uploadFiles)
 const mockInspectBrowserElement = vi.mocked(inspectBrowserElement)
+const mockFetchModelCapabilities = vi.mocked(fetchModelCapabilities)
 
 function makeFile(): File {
   return new File([new Uint8Array([1, 2, 3])], 'annotation.png', { type: 'image/png' })
@@ -36,12 +50,20 @@ describe('submitAnnotation', () => {
     vi.clearAllMocks()
     useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-1' })
     useChatStore.setState({ sendMessage: sendMessageSpy, isStreaming: false })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
     mockUploadFiles.mockResolvedValue({
       files: [
         { name: 'annotation_abc.png', path: 'uploads/sess-1/annotation_abc.png', size: 3, content_type: 'image/png', ref: 'media://ref-1' },
       ],
     })
     mockInspectBrowserElement.mockResolvedValue({ ok: false })
+    // D18: no agents cached by default — the capability-check block reads
+    // `agentModel` from the ['agents'] query cache and no-ops (skips
+    // fetchModelCapabilities entirely) when it's empty/unset, so every
+    // pre-existing test above is unaffected unless it explicitly seeds the
+    // cache (see the "D18" describe block below).
+    queryClient.setQueryData(['agents'], undefined)
+    mockFetchModelCapabilities.mockResolvedValue([])
   })
 
   it('throws when sessionId is empty', async () => {
@@ -76,8 +98,34 @@ describe('submitAnnotation', () => {
     )
     expect(opts.mediaRefs).toEqual(['media://ref-1'])
     expect(opts.attachments).toEqual([
-      { type: 'image', url: '/api/v1/uploads/sess-1/annotation_abc.png', filename: 'annotation.png', contentType: 'image/png' },
+      { type: 'image', url: '/api/v1/media/ref-1', filename: 'annotation.png', contentType: 'image/png' },
     ])
+  })
+
+  // D16 regression (RCA-verified): when the panel is opened from a
+  // workspace-scoped chat, uploadFiles() routes the file into the workspace
+  // media library and returns a `media://workspace/<ws>/<id>` ref — NOT a
+  // legacy session-scoped file. The attachment `url` must be built from that
+  // ref (mediaRefURL) so it resolves via GET /api/v1/media/workspace/<ws>/<id>
+  // (HandleMediaByRef). The old hardcoded
+  // `/api/v1/uploads/${sessionId}/${uploaded.name}` 404s in this case —
+  // HandleServeUpload only ever looks in uploads/<session>/<file>, which was
+  // never written for a workspace-routed upload — producing the reported
+  // "Image unavailable" card.
+  it('D16: builds the workspace-scoped preview URL from the ref when the panel is opened from a workspace chat', async () => {
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
+    mockUploadFiles.mockResolvedValue({
+      files: [
+        { name: 'annotation_abc.png', path: 'workspaces/ws-1/media/med-1', size: 3, content_type: 'image/png', ref: 'media://workspace/ws-1/med-1' },
+      ],
+    })
+
+    await submitAnnotation({ comment: 'What is this?', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(mockUploadFiles).toHaveBeenCalledWith('sess-1', [expect.any(File)], 'ws-1')
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    const [, opts] = sendMessageSpy.mock.calls[0]
+    expect(opts.attachments[0].url).toBe('/api/v1/media/workspace/ws-1/med-1')
   })
 
   // UAT finding (Tester 2, blank-region false negative): every send now
@@ -205,5 +253,99 @@ describe('submitAnnotation', () => {
     const [comment] = sendMessageSpy.mock.calls[0]
     expect(comment).toContain(`"${exactText}"`)
     expect(comment).not.toContain('…')
+  })
+})
+
+// ── D18 — vision-capability warn-and-proceed ────────────────────────────────
+//
+// REVERT-PROOF: no pre-send capability check existed before D18 — these
+// tests fail on unfixed code (no warning toast, fetchModelCapabilities never
+// called) and pass after. Mocks the capabilities endpoint marking
+// z-ai/glm-5.2 as text-only and asserts the warning fires BEFORE uploadFiles
+// is invoked — the whole point of D18 is to warn before the user loses a
+// turn to the model's own after-the-fact rejection, not after — while still
+// proceeding with the send (warn-and-proceed, not a blocking confirm).
+function makeAgent(overrides: Partial<Agent>): Agent {
+  return {
+    id: 'agent-1',
+    name: 'Agent',
+    type: 'Main',
+    locked: false,
+    status: 'active',
+    soul: '',
+    timeout_seconds: 120,
+    max_tool_iterations: 10,
+    ...overrides,
+  } as Agent
+}
+
+describe('submitAnnotation — D18 vision-capability warn-and-proceed', () => {
+  const sendMessageSpy = vi.fn()
+  const callOrder: string[] = []
+  const addToastSpy = vi.fn()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    callOrder.length = 0
+    useSessionStore.setState({ activeSessionId: 'sess-1', activeAgentId: 'agent-1' })
+    useChatStore.setState({ sendMessage: sendMessageSpy, isStreaming: false })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
+    useUiStore.setState({ addToast: addToastSpy })
+    mockUploadFiles.mockImplementation(async () => {
+      callOrder.push('upload')
+      return {
+        files: [
+          { name: 'annotation_abc.png', path: 'uploads/sess-1/annotation_abc.png', size: 3, content_type: 'image/png', ref: 'media://ref-1' },
+        ],
+      }
+    })
+    mockInspectBrowserElement.mockResolvedValue({ ok: false })
+    mockFetchModelCapabilities.mockImplementation(async () => {
+      callOrder.push('capabilities-fetch')
+      return [{ id: 'glm-5.2', modalities: ['text'] }]
+    })
+    queryClient.setQueryData(['agents'], [makeAgent({ id: 'agent-1', model: 'glm-5.2' })])
+  })
+
+  it('warns BEFORE uploadFiles when the resolved model (z-ai/glm-5.2) lacks the image modality, then still sends', async () => {
+    await submitAnnotation({ comment: 'What is this?', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(addToastSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'warning', message: expect.stringMatching(/glm-5\.2/) }),
+    )
+    // The warning must fire BEFORE the upload — otherwise the user has
+    // already lost the round-trip the warning exists to prevent.
+    expect(callOrder).toEqual(['capabilities-fetch', 'upload'])
+    // Warn-and-proceed, NOT a blocking confirm — the send still happens.
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1)
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not warn when the resolved model supports images', async () => {
+    mockFetchModelCapabilities.mockResolvedValue([{ id: 'glm-5.2', modalities: ['text', 'image'] }])
+
+    await submitAnnotation({ comment: 'What is this?', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(addToastSpy).not.toHaveBeenCalled()
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it('never blocks the send when the capabilities fetch itself fails (best-effort)', async () => {
+    mockFetchModelCapabilities.mockRejectedValue(new Error('network down'))
+
+    await submitAnnotation({ comment: 'What is this?', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(addToastSpy).not.toHaveBeenCalled()
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1)
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips the capability check entirely (no fetch) when the agent is not in the cached ["agents"] list', async () => {
+    queryClient.setQueryData(['agents'], [])
+
+    await submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: 'sess-1', agentId: 'agent-1' })
+
+    expect(mockFetchModelCapabilities).not.toHaveBeenCalled()
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1)
   })
 })

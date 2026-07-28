@@ -21,6 +21,7 @@ import {
   readEntryIdFromFrame,
   readLLMErrorFromFrame,
   readLLMErrorFromReplayFrame,
+  sanitizeLegacyErrorMessage,
   type LLMErrorCode,
 } from '@/lib/llm-error'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -3174,15 +3175,28 @@ export const useChatStore = create<ChatStore>((set, get) => {
             const llmError = readLLMErrorFromFrame(frame)
             const errorEntryId = readEntryIdFromFrame(frame)
             const verboseChatEnabled = useChatPreferencesStore.getState().verboseChatEnabled
+            // D5 fix (UAT Site 3): a legacy/synthesized ErrorFrame (no typed
+            // llm_error payload) falls back to the raw wire `message` for
+            // display in several branches below (translatedMessage here, the
+            // kickoff-reject toast, setConnectionError x2, and the
+            // coalesced/fresh bubble content). Sanitize ONCE up front so
+            // every one of those reads the same safe value — see
+            // sanitizeLegacyErrorMessage's doc comment (lib/llm-error.ts) for
+            // what it catches. Pattern-matching checks below (isCancelAck,
+            // isDuplicate, console.warn/logDiagnostic) intentionally keep
+            // reading `frame.message` directly — the original wire string,
+            // not the sanitized display copy — since those are content
+            // classifiers/logs, not user-facing text.
+            const safeMessage = sanitizeLegacyErrorMessage(frame.message ?? '')
             // Resolve the visible message: translated code→display copy when
-            // the typed payload is present, else the raw `frame.message`
+            // the typed payload is present, else the sanitized `frame.message`
             // (legacy). `errorDetail` is non-undefined only when verbose is on
             // AND detail was actually carried — the renderers key off its
             // presence to decide whether to mount the "Technical details"
             // disclosure.
             const { message: translatedMessage, detail: errorDetail } = llmError
               ? getLLMErrorDisplay(llmError, verboseChatEnabled)
-              : { message: frame.message ?? '', detail: undefined }
+              : { message: safeMessage, detail: undefined }
             // ADR-051 — live→replay dedup. If an error bubble carrying the
             // same `errorEntryId` is already in the foreground bucket (or any
             // bucket routed below), do not push a second one. Pre-checks the
@@ -3238,8 +3252,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                         variant: 'default',
                       }
                     : {
+                        // D5 fix (Site 3): safeMessage (computed once at the
+                        // top of this case block) instead of the raw
+                        // frame.message.
                         message: frame.message
-                          ? `Could not start the workspace setup interview: ${frame.message}`
+                          ? `Could not start the workspace setup interview: ${safeMessage}`
                           : 'Could not start the workspace setup interview — reopen the workspace to retry.',
                         variant: 'warning',
                       },
@@ -3277,7 +3294,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
             if (!targetSid) {
               const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
               if (!isCancelAck) {
-                useConnectionStore.getState().setConnectionError(frame.message)
+                // D5 fix (Site 3): safeMessage, not the raw frame.message —
+                // this is the global connection-error banner (AppShell),
+                // visible on every screen.
+                useConnectionStore.getState().setConnectionError(safeMessage)
               }
               get().clearStreamingState()
               break
@@ -3387,10 +3407,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     // narration text keeps that text as its content and just
                     // gets the typed error fields stamped on for the
                     // "Technical details" disclosure. Pre-ADR-051 fallback
-                    // (`frame.message`) is preserved when no typed payload.
+                    // (`frame.message`, sanitized — D5 fix Site 3) is
+                    // preserved when no typed payload.
                     const fallbackContent = llmError
                       ? translatedMessage
-                      : frame.message
+                      : safeMessage
                     msg.content = (resolvedStatus === 'interrupted')
                       ? msg.content
                       : (msg.content || (fallbackContent ?? ''))
@@ -3431,16 +3452,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // it non-empty) — push one below so the error isn't silently
               // dropped. Only show an error toast for non-cancel errors.
               if (!isCancelAck) {
-                useConnectionStore.getState().setConnectionError(frame.message)
+                // D5 fix (Site 3): safeMessage, not the raw frame.message.
+                useConnectionStore.getState().setConnectionError(safeMessage)
               }
               // ADR-051 — fresh error bubble: use the translated copy when
               // the typed payload is present (matches the streaming-coalesce
-              // branch above), else the legacy `frame.message`. Stamp the
-              // typed fields so the "Technical details" disclosure can render.
+              // branch above), else the sanitized legacy `frame.message`
+              // (D5 fix Site 3). Stamp the typed fields so the "Technical
+              // details" disclosure can render.
               const errMsg: ChatMessage = {
                 id: generateId(),
                 role: 'assistant',
-                content: isCancelAck ? '' : (llmError ? translatedMessage : frame.message),
+                content: isCancelAck ? '' : (llmError ? translatedMessage : safeMessage),
                 timestamp: new Date().toISOString(),
                 status: isCancelAck ? 'interrupted' : 'error',
                 isStreaming: false,

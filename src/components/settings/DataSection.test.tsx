@@ -178,3 +178,33 @@ describe('DataSection — rejected mutations render getErrorMessage() text', () 
     })
   })
 })
+
+// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
+//
+// Root cause: `retentionDays` starts at the hardcoded useState default
+// '90'. Before this fix, useAutoSave's `disabled` option here was
+// `!config` — but `config` turns truthy in the SAME commit the hydration
+// effect is SCHEDULED, one render before the effect's own `setState` call
+// actually lands. So `disabled` flipped false one render too early,
+// useAutoSave captured the hardcoded '90' default as its baseline, and the
+// LATER commit where the real persisted value hydrates looked like a
+// genuine edit — firing a spurious `updateConfig` that echoes the fetched
+// value straight back.
+describe('DataSection — D3: hydration must not trigger a spurious PUT', () => {
+  it('loading a retention value that differs from the hardcoded "90" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the retentionHydrated gate)', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({
+      ...baseConfig,
+      data: { session_retention_days: 45 },
+    })
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('45')).toBeInTheDocument()
+    })
+
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 500ms default debounce.
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    expect(updateConfig).not.toHaveBeenCalled()
+  })
+})

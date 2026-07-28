@@ -696,6 +696,35 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.readLoop(r.Context(), conn, wc, chatID)
 }
 
+// D5 fix (UAT): the three ErrorFrame messages a rejected WS handshake can
+// send were raw Go-internal/protocol strings ("first message must be
+// {\"type\":\"auth\",\"token\":\"...\"}", "unauthorized: invalid token", "no
+// users configured, complete onboarding first") surfaced verbatim to the end
+// user via BrowserLiveView's/chat's error banners — see
+// friendlyBrowserStatusMessage's/onError's doc comments on the SPA side.
+// authenticateWS (this file, the chat WS) and BrowserWSHandler.authenticate
+// (browser_ws.go) are deliberately near-identical mirrored implementations
+// (browser_ws.go's own doc comment: "mirroring WSHandler.authenticateWS
+// exactly") that hit these exact three conditions independently — sharing
+// these constants means the two can never drift into two different
+// user-facing strings for the identical condition, and fixing the copy here
+// fixes both call sites at once.
+const (
+	// wsAuthErrBadFirstFrame — the client's first WS frame (on the no-cookie
+	// fallback path) wasn't a well-formed {"type":"auth","token":"..."}
+	// frame. Only reachable by a non-cookie client (the SPA always attaches
+	// the same-origin session cookie) — a stale client build or a dropped/
+	// malformed handshake is the realistic trigger, so "reload" is the
+	// correct recovery action either way.
+	wsAuthErrBadFirstFrame = "Your session expired — reload the page to reconnect."
+	// wsAuthErrInvalidToken — the presented cookie/bearer token didn't match
+	// any configured identity (expired session, revoked token, stale cookie).
+	wsAuthErrInvalidToken = "Your session expired — reload the page to reconnect."
+	// wsAuthErrNoUsers — no account or token is configured at all yet (fresh
+	// install, onboarding not completed).
+	wsAuthErrNoUsers = "Setup isn't complete yet — finish onboarding, then reload the page."
+)
+
 // authenticateWS authenticates the WS handshake via EITHER the omnipus-session
 // cookie (checked first, synchronously, against the upgrade request r) OR the
 // legacy first-message {"type":"auth","token":...} frame (FR-009). The SPA no
@@ -743,7 +772,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			conn,
 			generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
-				Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}",
+				Message: wsAuthErrBadFirstFrame,
 			},
 		)
 		return false
@@ -772,7 +801,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if bearerAccountsConfigured(cfg) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
@@ -792,7 +821,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 		// No auth configured — deny by default (fail closed), matching HTTP auth path.
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "no users configured, complete onboarding first",
+			Message: wsAuthErrNoUsers,
 		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
@@ -803,7 +832,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		conn.WriteMessage(
 			websocket.CloseMessage,

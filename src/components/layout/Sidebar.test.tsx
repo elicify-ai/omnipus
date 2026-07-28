@@ -652,6 +652,55 @@ describe('Sidebar — username popup: User + Sign out', () => {
   })
 })
 
+// ── D8: stale sidebar backdrop swallows the first click ─────────────────────
+// Traces to: UAT v0.1.1 D7 findings — the Usage/Profile/Settings items in the
+// profile popup never called the sidebar store's close(), unlike every other
+// nav link (Library items :626-628, workspace rows :596-600/:466-467, and the
+// dropdown's own Notifications item :679). Radix always closes the DROPDOWN
+// itself on select, but the SIDEBAR's own `isOpen` stayed true, so the
+// full-viewport `aria-hidden` backdrop (Sidebar.tsx, z-30, invisible — "no
+// background dimming") kept rendering over the page the user just navigated
+// to, and its onClick=close() silently swallowed the very next click
+// anywhere on that page (including on a target control), before finally
+// closing the (already-hidden) backdrop.
+describe('Sidebar — D8: profile-menu Usage/Profile/Settings close the (unpinned) sidebar on select', () => {
+  it.each(['Usage', 'Profile', 'Settings'])(
+    'clicking "%s" in the profile menu closes the overlay sidebar (isOpen -> false) when unpinned',
+    async (label) => {
+      act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+      render(<Sidebar />, { wrapper: makeWrapper() })
+      await openUserMenu()
+
+      const item = screen.getByRole('button', { name: label })
+      expect(useSidebarStore.getState().isOpen).toBe(true)
+      act(() => { fireEvent.click(item) })
+
+      // D8 fix: close() must fire — on the unfixed code isOpen stays true,
+      // which is exactly what leaves the invisible backdrop covering the
+      // newly-navigated-to page and swallowing the next click.
+      expect(useSidebarStore.getState().isOpen).toBe(false)
+    },
+  )
+
+  it.each(['Usage', 'Profile', 'Settings'])(
+    'clicking "%s" in the profile menu does NOT force-close a PINNED sidebar',
+    async (label) => {
+      // canPin is true in this test file's matchMedia stub, so isPinned:true
+      // means effectivelyPinned:true — the `if (!effectivelyPinned) close()`
+      // guard must skip close() here (mirrors the existing Notifications /
+      // Library-link / workspace-row convention for pinned mode).
+      act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+      render(<Sidebar />, { wrapper: makeWrapper() })
+      await openUserMenu()
+
+      const item = screen.getByRole('button', { name: label })
+      act(() => { fireEvent.click(item) })
+
+      expect(useSidebarStore.getState().isOpen).toBe(true)
+    },
+  )
+})
+
 // ── FR-020 (grafted from hotfix/v0.1.1): sign-out revokes the server session
 // before clearing local state ──────────────────────────────────────────────
 describe('Sidebar — FR-020 sign-out calls server logout before local teardown', () => {

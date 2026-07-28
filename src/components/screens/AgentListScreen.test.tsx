@@ -172,6 +172,54 @@ describe('AgentListScreen — base/worker partition', () => {
   })
 })
 
+// Agents-screen IA fix: two independent UAT testers stopped at the (empty)
+// Main agents / Sub-agent workers cards — 100% of what a fresh install shows
+// there — and concluded there was no built-in roster, because it previously
+// rendered LAST, below both empty sections. Fix: Built-in roster now renders
+// FIRST.
+describe('AgentListScreen — Agents-screen IA: Built-in roster renders first', () => {
+  it('renders the Built-in roster section BEFORE Main agents and Sub-agent workers, in DOM order', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core', locked: true }),
+      makeAgent({ id: 'custom-1', name: 'Custom Main', type: 'Main' }),
+      makeAgent({ id: 'worker-1', name: 'Worker One', type: 'Subagent', executor: { kind: 'native' } }),
+    ])
+    renderScreen()
+
+    const builtInSection = await screen.findByTestId('built-in-agents-section')
+    const baseSection = await screen.findByTestId('base-agents-section')
+    const workerSection = await screen.findByTestId('worker-agents-section')
+
+    // DOCUMENT_POSITION_FOLLOWING (4) on the result means the argument node
+    // comes AFTER the node compareDocumentPosition was called on.
+    expect(
+      builtInSection.compareDocumentPosition(baseSection) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      builtInSection.compareDocumentPosition(workerSection) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    // Main agents still precedes Sub-agent workers — only the built-in
+    // roster's position moved.
+    expect(
+      baseSection.compareDocumentPosition(workerSection) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('updates the Main-agents empty-state copy to point "above" (not "below") now that Built-in roster renders first', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core', locked: true }),
+    ])
+    renderScreen()
+    const baseSection = await screen.findByTestId('base-agents-section')
+    expect(within(baseSection).getByTestId('base-agents-empty')).toHaveTextContent(
+      /use a built-in above/i,
+    )
+    expect(within(baseSection).getByTestId('base-agents-empty')).not.toHaveTextContent(
+      /use a built-in below/i,
+    )
+  })
+})
+
 // Per-section "New…" buttons (v0.3 worker roster split). Each section
 // header carries its own affordance, and each opens the modal pre-set to
 // the matching tier (createAgentModalType='custom' | 'worker') so the

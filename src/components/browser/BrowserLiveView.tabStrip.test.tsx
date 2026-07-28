@@ -21,22 +21,29 @@ const { mockSendTabAction, mockSendControl, mockSendInput, mockConnect, mockDeta
     callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
   }))
 
-vi.mock('@/lib/browserLiveWs', () => ({
-  BrowserLiveWsConnection: vi.fn().mockImplementation(
-    function (_sessionId: string, _agentId: string, callbacks: BrowserLiveWsCallbacks) {
-      callbacksRef.current = callbacks
-      return {
-        connect: mockConnect,
-        detach: mockDetach,
-        close: mockClose,
-        sendInput: mockSendInput,
-        sendControl: mockSendControl,
-        sendTabAction: mockSendTabAction,
-        isConnected: true,
-      }
-    },
-  ),
-}))
+// D5: importOriginal so the real translateBrowserErrorMessage (now imported
+// by BrowserLiveView for the D5 fix) stays live under this mock — only
+// BrowserLiveWsConnection itself is replaced.
+vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
+  return {
+    ...actual,
+    BrowserLiveWsConnection: vi.fn().mockImplementation(
+      function (_sessionId: string, _agentId: string, callbacks: BrowserLiveWsCallbacks) {
+        callbacksRef.current = callbacks
+        return {
+          connect: mockConnect,
+          detach: mockDetach,
+          close: mockClose,
+          sendInput: mockSendInput,
+          sendControl: mockSendControl,
+          sendTabAction: mockSendTabAction,
+          isConnected: true,
+        }
+      },
+    ),
+  }
+})
 
 import { BrowserLiveView } from './BrowserLiveView'
 

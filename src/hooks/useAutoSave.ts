@@ -122,6 +122,22 @@ export function useAutoSave<T>(
 
   // Track whether initial hydration has happened.
   const initializedRef = useRef(false)
+  // D3 (2nd-entity spurious-PUT) fix: tracks whether `disabled` was true the
+  // last time the change-detection effect below actually ran. `initializedRef`
+  // alone only guards the VERY FIRST commit a hook instance ever sees — it is
+  // set true permanently and never reset, so a long-lived hook instance that
+  // gets disabled, re-hydrated with a DIFFERENT entity's data, then
+  // re-enabled (e.g. AgentProfile switching from agent A to agent B without
+  // unmounting) skips the seed branch on the second hydration and instead
+  // diffs B's freshly-hydrated data against A's stale previousJsonRef/
+  // lastSavedJsonRef baseline — indistinguishable from a genuine user edit,
+  // arming the debounce and firing a spurious PUT that just echoes B's own
+  // data back. Seeded from the CURRENT `disabled` value (not a hardcoded
+  // `false`) so a hook instance that starts out disabled (the common
+  // `disabled: !hydrated` pattern) correctly treats its first enable as a
+  // re-arm event too, not just a plain "first ever" seed — both are the same
+  // case below (`!initializedRef.current || wasDisabledRef.current`).
+  const wasDisabledRef = useRef(disabled)
   // The JSON last SEEN by the change effect — used only to debounce-dedupe
   // (don't re-fire a save for identical data). Advanced eagerly when data
   // changes; NOT a record of what's been persisted.
@@ -274,14 +290,29 @@ export function useAutoSave<T>(
   }, [disabled])
 
   useEffect(() => {
-    if (disabled) return
+    if (disabled) {
+      // Remember that we were disabled so the NEXT commit where `disabled`
+      // is false — whenever that happens — knows a re-arm is owed, however
+      // many renders (or however much `data` drifted underneath) happened
+      // while disabled. See `wasDisabledRef`'s own doc comment above.
+      wasDisabledRef.current = true
+      return
+    }
 
     const json = JSON.stringify(data)
 
-    // Skip first render (initial load) — the loaded data is the persisted
-    // baseline, so it is both "last seen" and "last saved".
-    if (!initializedRef.current) {
+    // Re-arm the baseline on: (a) the very first commit this hook instance
+    // ever sees (`initializedRef` still false — the original "skip first
+    // render" case), or (b) any LATER commit where `disabled` just
+    // transitioned true→false (`wasDisabledRef` still true from the branch
+    // above). Both mean the same thing: `data` right now is a freshly
+    // hydrated, authoritative snapshot — not a user edit relative to
+    // whatever baseline an EARLIER (possibly different) entity left behind —
+    // so it becomes the new "last seen" / "last saved" baseline rather than
+    // being diffed against a stale one.
+    if (!initializedRef.current || wasDisabledRef.current) {
       initializedRef.current = true
+      wasDisabledRef.current = false
       previousJsonRef.current = json
       lastSavedJsonRef.current = json
       return
@@ -417,6 +448,38 @@ export function useAutoSave<T>(
     }
   }, [flushUrl, disabled, flushBeacon, beaconFlush])
 
+  // D3 residual defect (found while verifying the `wasDisabledRef` re-arm
+  // fix against a REAL 2nd-entity consumer, WorkspaceSettingsTab): this
+  // effect's cleanup is the unmount-flush logic below. Before this fix, the
+  // effect depended on `[hasPendingChanges, doSave]` directly — `doSave` is
+  // a `useCallback` keyed on `[disabled]`, so its identity changes every
+  // time `disabled` toggles. React runs an effect's CLEANUP whenever ANY dep
+  // changes, not only on a genuine unmount (a changed dep means "tear down
+  // the old effect instance, set up a new one" — cleanup-then-effect, even
+  // though nothing is actually unmounting). So the unmount-flush cleanup
+  // below fired on EVERY `disabled` toggle — including the exact moment a
+  // consumer's readiness flag flips true→false→true across a 2nd entity —
+  // and it fired the STALE (pre-toggle) `doSave` closure, which itself
+  // checks a closed-over `disabled` from BEFORE the toggle, so it didn't
+  // even bail on its own `if (disabled) return` guard. For a consumer whose
+  // tracked `data` embeds an identity field that updates synchronously with
+  // props (e.g. WorkspaceSettingsTab's `instructionsFormData.workspaceId`)
+  // while the REST of `data` (e.g. `content`) still lags behind an async
+  // re-hydration, `hasPendingChanges()` reads as true for that mismatched,
+  // transitional snapshot — so this stale flush fired a real PUT carrying
+  // the NEW entity's id with the OLD entity's stale content: not just an
+  // echo, an actual cross-entity data clobber.
+  //
+  // Fixed the same way `saveFnRef`/`onSavedRef` already solve this
+  // elsewhere in this hook: read the LATEST `doSave` through a ref updated
+  // every render, and drop `doSave` from the dependency array so this
+  // effect mounts once and its cleanup runs ONLY on a genuine unmount. By
+  // the time a genuine unmount happens, `doSaveRef.current` is whatever the
+  // most recent render's `doSave` was — correctly reflecting the CURRENT
+  // `disabled` value, not a stale one from an earlier toggle.
+  const doSaveRef = useRef(doSave)
+  doSaveRef.current = doSave
+
   // Cleanup on unmount: cancel timers and flush any pending save so changes
   // made just before navigation/unmount are not silently dropped.
   useEffect(() => {
@@ -462,11 +525,17 @@ export function useAutoSave<T>(
         if (isSavingRef.current) {
           rerunPendingRef.current = true
         } else if (hasPendingChanges()) {
-          void doSave()
+          void doSaveRef.current()
         }
       }
     }
-  }, [hasPendingChanges, doSave])
+    // Mount-once (see `doSaveRef`'s doc comment above) — `hasPendingChanges`
+    // is already a stable, `[]`-deps `useCallback` so listing it costs
+    // nothing; `doSave` is deliberately NOT listed here — it's read fresh
+    // via `doSaveRef` specifically so this effect's cleanup does not re-fire
+    // on every `disabled` toggle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasPendingChanges])
 
   return { status, error, lastSavedAt, saveNow: doSave, hasPendingChanges }
 }

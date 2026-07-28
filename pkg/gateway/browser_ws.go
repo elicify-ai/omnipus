@@ -359,7 +359,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 		authFrame.Type != string(generated.WsFrameTypeAuth) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}",
+			Message: wsAuthErrBadFirstFrame,
 		})
 		return "", false
 	}
@@ -374,7 +374,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 	if bearerAccountsConfigured(cfg) {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		writeCloseAuthFailed(conn)
 		return "", false
@@ -388,7 +388,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 		}
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "no users configured, complete onboarding first",
+			Message: wsAuthErrNoUsers,
 		})
 		writeCloseAuthFailed(conn)
 		return "", false
@@ -396,7 +396,7 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
 		sendGenWSFrame(conn, generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "unauthorized: invalid token",
+			Message: wsAuthErrInvalidToken,
 		})
 		writeCloseAuthFailed(conn)
 		return "", false

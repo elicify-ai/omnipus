@@ -262,11 +262,28 @@ func launchManagedPipe(ctx context.Context, execPath string, cfg pipeLaunchConfi
 //     resolve returns the SAME error — on a dead host a full resolution
 //     otherwise re-probes all 4 PATH candidates (~20s) and re-hits the CfT
 //     manifest (~30s) on every browser_* call, forever.
+//
+// B2c(ii) fix: failPath additionally records the SINGLE on-disk binary path
+// the cached failure is about, when the failure has one (the managed-download
+// probeChromiumBinary failure at the bottom of resolve() — a mid-download or
+// corrupt-extraction probe failure whose error text is a raw, present-tense
+// os/exec error like "no such file or directory"). Before replaying failErr
+// verbatim, resolve() cheaply re-os.Stat's failPath: if the binary now
+// exists, the cached failure is stale (the install finished, or was fixed,
+// since the error was cached) and is evicted instead of being replayed as
+// still-true. Without this, an agent could tell a user a binary "does not
+// exist" while it demonstrably does (the field-observed symptom this fixes).
+// Other failure modes (network/manifest errors from EnsureChromium itself)
+// have no single associated path — failPath is "" for those and the
+// existing TTL-bounded replay is unchanged, except the replayed message is
+// now annotated with its cache age (see resolve()'s negative-cache branch)
+// so it is never presented as a fresh, present-tense fact.
 type execPathCaches struct {
 	mu        sync.Mutex
 	success   string
 	failErr   error
 	failUntil time.Time
+	failPath  string
 }
 
 // resolve returns the path to the Chromium binary chromedp should launch.
@@ -326,6 +343,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	cached := e.success
 	failErr := e.failErr
 	failUntil := e.failUntil
+	failPath := e.failPath
 	e.mu.Unlock()
 
 	// Success cache hit — validate the binary is still on disk (L2). A cached
@@ -344,11 +362,45 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// re-probing. On a dead host a full resolution re-probes all 4 PATH
 	// candidates + re-hits fetchCFTManifest on every browser_* call.
 	if failErr != nil && time.Now().Before(failUntil) {
-		logger.DebugCF("browser", "chromium resolution still negative-cached — short-circuiting",
-			map[string]any{
-				"ttl_remaining_seconds": int64(time.Until(failUntil).Seconds()),
-			})
-		return "", failErr
+		// B2c(ii): before replaying failErr verbatim, cheaply re-verify —
+		// os.Stat is orders of magnitude cheaper than the full PATH probe /
+		// CfT manifest fetch this branch exists to avoid. If the specific
+		// binary the cached failure was about now exists (a download that
+		// was mid-flight when the failure was cached has since completed;
+		// an operator removed and replaced a corrupt install), the cached
+		// failure is stale — evict it and fall through to a full
+		// re-resolution instead of repeating a claim that is no longer
+		// true.
+		if failPath != "" {
+			if info, statErr := os.Stat(failPath); statErr == nil && !info.IsDir() {
+				logger.InfoCF("browser",
+					"cached chromium resolution failure is stale — binary now exists, evicting and re-resolving",
+					map[string]any{"path": failPath})
+				e.mu.Lock()
+				// Only clear if nothing else already superseded this entry
+				// (e.g. a concurrent resolve() already succeeded/failed
+				// again) — compare-and-clear on failUntil avoids clobbering
+				// a newer cache entry with a stale eviction.
+				if e.failUntil.Equal(failUntil) {
+					e.failErr = nil
+					e.failUntil = time.Time{}
+					e.failPath = ""
+				}
+				e.mu.Unlock()
+				// Fall through to a full re-resolution below rather than
+				// returning here — the freshly-discovered binary still
+				// needs the same --version probe every other candidate
+				// gets before being trusted (FIX-CRIT-001 discipline).
+			} else {
+				return "", cacheAgeAnnotate(failErr, failUntil)
+			}
+		} else {
+			logger.DebugCF("browser", "chromium resolution still negative-cached — short-circuiting",
+				map[string]any{
+					"ttl_remaining_seconds": int64(time.Until(failUntil).Seconds()),
+				})
+			return "", cacheAgeAnnotate(failErr, failUntil)
+		}
 	}
 
 	// Operators can force the managed install path (skipping the $PATH lookup)
@@ -463,7 +515,11 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	managedPath, err := EnsureChromium(ctx, installRoot)
 	if err != nil {
 		err = augmentWithRejectedPathChrome(err, rejectedPathChrome)
-		e.cacheFailure(err)
+		// No single on-disk binary path to re-verify later (this is an
+		// install/network-level failure, not a probe of a specific file) —
+		// cacheFailure's "" path means the replay path skips the B2c(ii)
+		// re-stat and relies solely on the cache-age annotation.
+		e.cacheFailure(err, "")
 		return "", err
 	}
 	// FIX-CRIT-001: mirror step 2's $PATH probe. EnsureChromium resolving a
@@ -485,7 +541,11 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 			installRoot,
 		)
 		probeErr = augmentWithRejectedPathChrome(probeErr, rejectedPathChrome)
-		e.cacheFailure(probeErr)
+		// B2c(ii): record managedPath as the specific binary this failure is
+		// about, so the negative-cache replay branch above can cheaply
+		// re-os.Stat it and evict a now-stale "does not exist"/"corrupt"
+		// verdict instead of replaying it as still true.
+		e.cacheFailure(probeErr, managedPath)
 		return "", probeErr
 	}
 	e.cacheSuccess(managedPath)
@@ -518,16 +578,26 @@ func (e *execPathCaches) cacheSuccess(path string) {
 	e.success = path
 	e.failErr = nil
 	e.failUntil = time.Time{}
+	e.failPath = ""
 	e.mu.Unlock()
 }
 
 // cacheFailure stores err as the last resolution failure, arms the negative-
 // cache deadline (execPathNegativeCacheTTL from now), clears any prior success
 // cache entry, and logs the WARN exactly once per fresh failure. Guarded by mu.
-func (e *execPathCaches) cacheFailure(err error) {
+//
+// failPath (B2c(ii)) is the single on-disk binary path this failure is
+// ABOUT, when there is one — the managed-download probe failure passes
+// managedPath so a later replay of this cached error can cheaply re-verify
+// (os.Stat) whether the binary now exists before repeating a stale verdict.
+// Pass "" for failures with no single associated path (e.g. EnsureChromium's
+// own install/network errors) — the replay path then relies solely on the
+// cache-age annotation (cacheAgeAnnotate) rather than a re-stat.
+func (e *execPathCaches) cacheFailure(err error, failPath string) {
 	e.mu.Lock()
 	e.failErr = err
 	e.failUntil = time.Now().Add(execPathNegativeCacheTTL)
+	e.failPath = failPath
 	e.success = ""
 	e.mu.Unlock()
 	logger.WarnCF("browser",
@@ -545,7 +615,28 @@ func (e *execPathCaches) invalidate() {
 	e.success = ""
 	e.failErr = nil
 	e.failUntil = time.Time{}
+	e.failPath = ""
 	e.mu.Unlock()
+}
+
+// cacheAgeAnnotate (B2c(ii)) wraps a replayed negative-cache error with its
+// age, so a caller that surfaces it verbatim (an agent narrating a tool
+// result to a user, a log line, an API error field) can never present a
+// TTL-bounded, potentially-stale cached verdict as a fresh, present-tense
+// fact — e.g. "does not exist" — without qualification. Applied to every
+// negative-cache replay, including the failPath=="" case (no re-stat
+// possible) and the case where a re-stat confirmed the binary genuinely
+// still does not exist.
+func cacheAgeAnnotate(err error, failUntil time.Time) error {
+	age := time.Since(failUntil.Add(-execPathNegativeCacheTTL)).Round(time.Second)
+	if age < 0 {
+		age = 0
+	}
+	return fmt.Errorf(
+		"%w (cached result from %s ago; re-checked automatically after the negative-cache TTL expires)",
+		err,
+		age,
+	)
 }
 
 // cachedPath returns the last successfully-resolved Chromium binary path, or

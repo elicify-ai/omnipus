@@ -211,6 +211,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Guards auto-save from firing with default (empty) state before the first fetch resolves.
   const hasHydrated = useRef(false)
 
+  // D3 / UAT spurious-PUT fix: reactive counterpart to `hasHydrated` above.
+  // A `useRef` read at render time is NOT reactive — useAutoSave's own
+  // "skip first render" baseline-capture logic runs off its `disabled`
+  // option, gated purely by React's commit/effect cycle, so the flag it
+  // reads has to be component STATE, flipped at the END of the hydration
+  // effect below, so the exact commit where the hydrated field values land
+  // is also the commit where `disabled` flips false. That's the only way
+  // useAutoSave captures the HYDRATED data as its baseline instead of the
+  // hardcoded useState defaults every field below starts at (name='',
+  // description='', model='', ...) before the agent's real data has
+  // loaded — the root cause of the spurious-PUT bug (mount → hydrate →
+  // unsolicited PUT echoing the server's own data back). Reset to false in
+  // the `[agentId]` effect below — required because this component
+  // persists across agent switches (it does NOT unmount on sheet close —
+  // see `handleCloseAgentSheet`'s comment), so without the reset the NEXT
+  // agent inherits "ready" a render too early and reproduces the same bug
+  // on every subsequent agent open.
+  const [formHydrated, setFormHydrated] = useState(false)
+
   // I12: cache the executor kind+cli+cli_path we've already passed the
   // runner-test for, so the auto-save debounce (500 ms) doesn't re-fire the
   // test on every unrelated keystroke while the user has external-cli
@@ -260,6 +279,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     conflictRef.current = false
     hbDirtyRef.current = false
     lastIncorporatedUpdatedAtRef.current = undefined
+    // D3 fix: re-arm the hydration-readiness gate for the new agent — see
+    // `formHydrated`'s own doc comment above for why this reset is required.
+    setFormHydrated(false)
   }, [agentId])
 
   // Hydrate heartbeat state from workspace member_configs when the workspace
@@ -427,7 +449,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         })
         return
       }
-      if (incomingTime <= incorporatedTime) {
+      if (incomingTime === incorporatedTime) {
+        // Guard-noise fix: an IDENTICAL snapshot (e.g. a same-content
+        // `invalidateQueries` refetch echo landing right after our own
+        // save already incorporated that exact `updated_at`) is not a
+        // staleness rejection — there is nothing newer to apply, but
+        // nothing wrong happened either. Return silently: no warn, no
+        // `logDiagnostic` breadcrumb. Only a genuinely OLDER snapshot
+        // (below) is the load-bearing case this guard exists to catch.
+        return
+      }
+      if (incomingTime < incorporatedTime) {
         // 7-reviewer-gate fix: this guard used to be a bare early-`return`
         // with no signal when it actually rejected a hydration. If this
         // guard ever incorrectly rejects a legitimate hydration (e.g. clock
@@ -498,6 +530,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
     hasHydrated.current = true
+    // D3 fix: flip the reactive readiness flag as the LAST line of this
+    // effect, after every setState call above — React batches all of these
+    // into a single commit, so `formHydrated` becomes true in the exact
+    // same commit the hydrated field values land. See `formHydrated`'s own
+    // doc comment (near `hasHydrated`'s declaration) for the full rationale.
+    setFormHydrated(true)
   }, [agentId, agent])
 
   // US-1/US-5 AC-1: OFFER the detected absolute path when cli_path is EMPTY —
@@ -820,8 +858,30 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
       queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
-    // Locked agents can still save model and tool changes — do not disable auto-save
+    // Locked agents can still save model and tool changes — locked status
+    // itself must NEVER disable auto-save (an `agent.locked` guard is a
+    // confirmed-wrong fix for the D3 spurious-PUT bug below — it fires for
+    // every agent, locked or not). The `disabled` key in the options object
+    // is unrelated to locked status: it gates on hydration readiness only.
     {
+      // D3 / UAT spurious-PUT fix: block useAutoSave's own change-detection
+      // entirely until `formHydrated` flips true at the end of the
+      // hydration effect above. Without this, useAutoSave's "skip first
+      // render" baseline-capture logic seeds itself from the hardcoded
+      // useState defaults every field above starts at (name='',
+      // description='', model='', ...) — captured on the FIRST commit
+      // where `disabled` is false, which used to be the very first render,
+      // before the agent's real data had loaded. The LATER hydration
+      // commit then looks like a genuine user edit relative to that
+      // all-defaults baseline, arming the debounce and firing a `PUT` that
+      // just echoes the server's own data back (bumps `updated_at`, shows
+      // "✓ Saved just now" to a user who touched nothing — reproduced by 2
+      // UAT testers opening the read-only core agent Mia). `formHydrated`
+      // is real component state, not a ref read at render time, so it
+      // flips false→true in the SAME commit the hydrated field values
+      // land — useAutoSave's baseline is captured from the HYDRATED data
+      // instead.
+      disabled: !formHydrated,
       // Long-form surface (SOUL and other multi-line fields live on this
       // form) — raised from the 500ms default so a normal typing cadence
       // doesn't fire a save (and its own invalidateQueries echo) on nearly

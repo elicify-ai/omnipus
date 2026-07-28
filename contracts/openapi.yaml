@@ -243,6 +243,8 @@ components:
       $ref: ./components/schemas/PerformanceSettingsUpdate.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
+    ModelCapabilities:
+      $ref: ./components/schemas/ModelCapabilities.yaml
     ReAuthRequest:
       $ref: ./components/schemas/ReAuthRequest.yaml
     ReAuthResponse:
@@ -3802,6 +3804,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /providers/model-capabilities:
+    get:
+      operationId: listModelCapabilities
+      summary: List declared input-modality capabilities per model
+      description: >
+        Returns the in-repo capability catalog (pkg/providers/capabilities) as
+        a flat list of {id, modalities} pairs (D18). Model vision capability
+        is not knowable client-side at all otherwise — the SPA resolves the
+        target agent's model against this list to show a non-blocking warning
+        before sending a vision attachment (e.g. a live-browser annotation, or
+        an image attached via the composer) to a model that cannot accept
+        images. Returns an empty array when the catalog is not constructed
+        (never a 500) — the catalog is optional and the server-side capability
+        gate remains the authoritative backstop regardless.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of per-model capability entries. Empty when the catalog is unavailable.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelCapabilities'
         '401':
           $ref: '#/components/responses/401Unauthorized'
   /commands:

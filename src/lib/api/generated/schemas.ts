@@ -363,6 +363,10 @@ type AuditEntry = {
   parameters?: {} | undefined;
   policy_rule?: string | undefined;
   details?: {} | undefined;
+  actor?: string | undefined;
+  resource?: string | undefined;
+  old_value?: {} | undefined;
+  new_value?: {} | undefined;
 };
 type Provider = {
   id: string;
@@ -1678,6 +1682,10 @@ export const AuditEntry: z.ZodType<AuditEntry> = z
     parameters: z.object({}).partial().passthrough().optional(),
     policy_rule: z.string().optional(),
     details: z.object({}).partial().passthrough().optional(),
+    actor: z.string().optional(),
+    resource: z.string().optional(),
+    old_value: z.object({}).partial().passthrough().optional(),
+    new_value: z.object({}).partial().passthrough().optional(),
   })
   .passthrough();
 export const AuditLogResponse: z.ZodType<AuditLogResponse> = z.object({
@@ -1826,6 +1834,7 @@ export const GatewayRestartResponse = z
   .passthrough();
 export const GodModeStatus = z.object({
   enabled: z.boolean(),
+  persisted: z.boolean(),
   available: z.boolean(),
   supported: z.boolean(),
 });
@@ -1889,6 +1898,10 @@ export const ProviderUpdateRequest = z
     models: z.array(z.string().min(1).max(256)).max(500),
   })
   .partial();
+export const ModelCapabilities = z.object({
+  id: z.string(),
+  modalities: z.array(z.enum(["text", "image", "pdf", "audio", "video"])),
+});
 export const SlashCommand = z.object({
   name: z.string(),
   label: z.string(),
@@ -4691,6 +4704,22 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       },
     ],
     response: OperationResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/providers/model-capabilities",
+    alias: "listModelCapabilities",
+    description: `Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent&#x27;s model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
+`,
+    requestFormat: "json",
+    response: z.array(ModelCapabilities),
     errors: [
       {
         status: 401,

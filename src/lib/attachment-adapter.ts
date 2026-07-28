@@ -22,7 +22,10 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { createSession, uploadFiles } from "@/lib/api";
+import { createSession, uploadFiles, fetchModelCapabilities, modelLacksImageCapability } from "@/lib/api";
+import type { Agent } from "@/lib/api";
+import { mediaRefURL } from "@/lib/library-attachment";
+import { queryClient } from "@/lib/queryClient";
 import { useSessionStore } from "@/store/session";
 import { useUiStore } from "@/store/ui";
 import { useWorkspacesStore } from "@/store/workspacesStore";
@@ -195,6 +198,34 @@ export const omnipusAttachmentAdapter = {
       return failedComplete;
     }
 
+    // D18: model vision capability is not knowable client-side at all — warn
+    // (non-blocking) BEFORE uploading when this is an image attachment and
+    // the active agent's resolved model is known to lack the "image"
+    // modality, mirroring the identical check in browserAnnotate.ts (the
+    // live-browser annotation send path — the two share the decision helper
+    // in api.ts). Best-effort: any failure resolving the agent's model or
+    // fetching the capability catalog must never block the send — the
+    // reactive server-side explanation (loop_media.go) remains the backstop
+    // either way.
+    if (attachment.type === "image") {
+      try {
+        const agentId = useSessionStore.getState().activeAgentId;
+        const agents = agentId ? queryClient.getQueryData<Agent[]>(["agents"]) : undefined;
+        const agentModel = agents?.find((a) => a.id === agentId)?.model;
+        if (agentModel) {
+          const caps = await fetchModelCapabilities();
+          if (modelLacksImageCapability(agentModel, caps)) {
+            useUiStore.getState().addToast({
+              message: `${agentModel} may not support image input — it might not be able to see "${attachment.name}".`,
+              variant: "warning",
+            });
+          }
+        }
+      } catch (err) {
+        console.debug("[attachment] model-capability check failed:", err);
+      }
+    }
+
     let uploadResult: Awaited<ReturnType<typeof uploadFiles>>;
     try {
       const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? undefined;
@@ -226,10 +257,16 @@ export const omnipusAttachmentAdapter = {
 
     stashResolvedUpload(attachment.id, {
       ref,
-      // URL uses the server-sanitized name, but display uses the ORIGINAL
-      // filename (the server appends a uniqueness suffix, e.g.
-      // report_1780….docx, which is ugly in the chat).
-      url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
+      // D16 fix: build the preview URL from the returned media ref
+      // (mediaRefURL), not a hardcoded `/api/v1/uploads/${sessionId}/${name}`
+      // string. A workspace-scoped upload (uploadFiles called with
+      // workspaceId below) is routed into the workspace media library and
+      // returns a `media://workspace/<ws>/<id>` ref — the legacy
+      // uploads/{session}/{filename} path is never written for that case, so
+      // the hardcoded URL 404s. mediaRefURL derives the correct route from
+      // the ref itself, mirroring the Go-side mediaRefURL in
+      // webchat_channel.go.
+      url: mediaRefURL(ref),
       filename: attachment.name,
       contentType: uploaded.content_type,
     });

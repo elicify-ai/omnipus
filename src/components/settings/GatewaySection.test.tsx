@@ -93,7 +93,15 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(useUiStore).mockReturnValue({ addToast: mockAddToast } as never)
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
-  vi.mocked(fetchGodMode).mockResolvedValue({ enabled: false, available: true, supported: true })
+  // `persisted` is required on GodModeStatus as of the D1/D19 fix: it carries the
+  // raw sandbox.god_mode intent, independent of `available` (which is frozen at
+  // boot). This fixture is state S0 — never armed — so it is false.
+  vi.mocked(fetchGodMode).mockResolvedValue({
+    enabled: false,
+    available: true,
+    supported: true,
+    persisted: false,
+  })
 })
 
 // ── FR-107: no auth_mode:none option ─────────────────────────────────────────
@@ -354,5 +362,32 @@ describe('GatewaySection — bind_address risky control (US-B2)', () => {
     await waitFor(() => {
       expect(screen.getByText(/keep localhost only/i)).toBeInTheDocument()
     })
+  })
+})
+
+// D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.
+//
+// Root cause: `port` starts at the hardcoded useState default '8080'.
+// Before this fix, useAutoSave's `disabled` option here was `!config` —
+// but `config` turns truthy in the SAME commit the hydration effect is
+// SCHEDULED, one render before the effect's own setState calls actually
+// land. So `disabled` flipped false one render too early, useAutoSave
+// captured the hardcoded '8080' default as its baseline, and the LATER
+// commit where the real persisted port hydrates (5000, per `makeConfig`)
+// looked like a genuine edit — firing a spurious `updateConfig` that
+// echoes the fetched value straight back.
+describe('GatewaySection — D3: hydration must not trigger a spurious PUT', () => {
+  it('loading a port that differs from the hardcoded "8080" default never calls updateConfig, even after the debounce window elapses (REVERT-PROOF: fails without the gatewayHydrated gate)', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({}) as never) // port: 5000
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('5000')).toBeInTheDocument()
+    })
+
+    // PASSIVE idle wait — no interaction at all — comfortably past the
+    // 500ms default debounce.
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    expect(updateConfig).not.toHaveBeenCalled()
   })
 })

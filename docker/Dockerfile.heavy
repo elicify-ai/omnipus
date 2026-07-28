@@ -13,7 +13,7 @@ RUN npm run build
 # ============================================================
 # Stage 2: Build the Go binary with the SPA embedded
 # ============================================================
-FROM golang:1.26.3-alpine AS go-builder
+FROM golang:1.26.5-alpine AS go-builder
 
 RUN apk add --no-cache git make
 
@@ -46,11 +46,50 @@ RUN apk add --no-cache \
   chromium \
   jq
 
-# Make the apk-installed Chromium discoverable by browser/manager.go's
-# PATH lookup (it tries `google-chrome`, `chromium`, `chromium-browser` in
-# order). Alpine's `chromium` package installs the binary as
-# /usr/bin/chromium-browser → /usr/lib/chromium/chrome, so the PATH lookup
-# already resolves; no symlink needed.
+# B2a: give the apk-installed Chromium a verified chrome.sha256 manifest
+# in the on-disk layout pkg/tools/browser's resolver treats as the trusted
+# "package Chrome" floor (ADR-052 D2 step 3 — findPackageChrome in
+# package_chrome.go probes <dir(omnipus binary)>/../chromium/chrome +
+# a companion chrome.sha256).
+#
+# DO NOT flip tools.browser.trust_path_chrome to make the resolver accept
+# a bare $PATH Chrome instead — pkg/config/defaults.go seeds it false by
+# design (SEC-ADR052-002) and ADR-052
+# (docs/internal/architecture/ADR-052-phase1-security-review.md:26-32,146,185,198)
+# is explicit that trusting ANY $PATH match for the container's whole life
+# is a Blocker (planted-binary risk on shared/CI hosts); a $PATH Chrome is
+# still recorded (WARN-BROWSER-007) but refused, exactly as it is on a
+# native install.
+#
+# Chose apk chromium + a generated manifest over bundling real
+# Chrome-for-Testing (scripts/cft-bundle.sh, the release-binary precedent)
+# for THIS base image specifically: node:24-alpine3.23 is musl libc, and
+# CfT's Linux build is glibc-linked. Alpine's glibc-compat shim (gcompat)
+# is a documented, per-binary-fragile workaround — flagged unreliable
+# specifically for headless/automation use, which is exactly this
+# use case — and this dev pod has no Docker daemon to verify it
+# empirically before shipping. Alpine's own chromium package is
+# musl-native and already the binary this image ran before this fix, so
+# generating chrome.sha256 for it satisfies the verified step-3 path with
+# zero new binary-compatibility risk. Nothing apk-managed is removed —
+# this only ADDS the verified layout alongside the existing
+# /usr/lib/chromium install and its /usr/bin/chromium* symlinks.
+#
+# MUST be verified via a Fly remote build (no Docker daemon on this pod):
+# after building, `docker run --rm <image> omnipus doctor` checks exactly
+# this ("Package-bundled Chrome (ADR-052): missing required host shared
+# libraries... and a SHA-256 mismatch" per its own --help) and should
+# report the package Chrome clean, with no missing-shared-library or
+# SHA-256-mismatch warning; a live browser_navigate tool call should show
+# no WARN-BROWSER-007 and no managed chrome-for-testing download attempt.
+RUN set -eux; \
+    mkdir -p /usr/local/chromium; \
+    cp -rL /usr/lib/chromium/. /usr/local/chromium/; \
+    test -f /usr/local/chromium/chrome; \
+    test ! -L /usr/local/chromium/chrome; \
+    sha256sum /usr/local/chromium/chrome | awk '{printf "%s  %s\n", $1, $2}' > /usr/local/chromium/chrome.sha256; \
+    chmod -R go-w /usr/local/chromium; \
+    chmod 0755 /usr/local/chromium
 
 # Install uv (used by Python MCP servers)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \

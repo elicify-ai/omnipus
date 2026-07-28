@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
-import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key } from '@phosphor-icons/react'
+import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key, Info } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { login, fetchAppState, isApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
+import { consumeLogoutReason, LOGOUT_REASON_MESSAGE } from '@/lib/authLogout'
 import { resetTokenValidationCache } from './authValidation'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 
@@ -18,6 +19,21 @@ function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false)
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [error, setError] = useState('')
+
+  // D2 fix: explain an INVOLUNTARY logout (forced by a 401/1008, stashed by
+  // forceLogout() — see authLogout.ts). A manual Sidebar "Sign out" never
+  // stashes a reason, so this stays null and no banner renders for that
+  // path (per the D2 spec's "must not show a scary conflict message" rule).
+  // Read via useEffect (not a useState lazy initializer) so React 19
+  // StrictMode's double-invoked effects can't clobber the message: the
+  // second invocation always finds the key already cleared and no-ops
+  // (see consumeLogoutReason's own idempotency doc comment) rather than
+  // overwriting the already-set banner with null.
+  const [logoutNotice, setLogoutNotice] = useState<string | null>(null)
+  useEffect(() => {
+    const reason = consumeLogoutReason()
+    if (reason) setLogoutNotice(LOGOUT_REASON_MESSAGE[reason])
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -113,6 +129,23 @@ function LoginScreen() {
         <p className="text-sm text-center mb-8" style={{ color: 'var(--color-muted)' }}>
           Enter your username and password
         </p>
+
+        {logoutNotice && (
+          <div
+            data-testid="logout-notice"
+            role="status"
+            aria-live="polite"
+            className="mb-6 flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs"
+            style={{
+              backgroundColor: 'rgba(212,175,55,0.08)',
+              border: '1px solid rgba(212,175,55,0.25)',
+              color: 'var(--color-secondary)',
+            }}
+          >
+            <Info size={14} weight="bold" className="mt-0.5 shrink-0" style={{ color: 'var(--color-accent)' }} />
+            <span>{logoutNotice}</span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
