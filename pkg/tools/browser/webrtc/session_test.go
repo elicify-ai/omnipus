@@ -1252,6 +1252,28 @@ func TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsA
 		receivedMu.Unlock()
 	}
 
+	// Baseline the two per-viewer goroutines BEFORE this test creates any of
+	// its own, and assert at the end that we return TO that baseline rather
+	// than to zero.
+	//
+	// Why this matters: the check at the end of this test uses
+	// runtime.Stack(buf, true) — a PROCESS-WIDE dump. Asserting those
+	// functions appear NOWHERE makes this test fail whenever ANY other test
+	// in the package still has a viewer goroutine winding down, including
+	// ones that already finished — Pion's Close() is documented (in this
+	// test's own comments below) not to tear down every internal goroutine
+	// synchronously. That is a package-global assertion masquerading as a
+	// per-test one.
+	//
+	// It is also precisely why this test PASSED when run alone with
+	// -run '^TestSessionViewerICEDisconnect...$' and FAILED on CI, where the
+	// whole package runs: identical code, different neighbours. Blaming this
+	// test for another test's residue sends the next person hunting a leak
+	// that isn't where the failure points. Baseline-relative preserves the
+	// real regression this guards — THIS viewer's goroutines must exit —
+	// while staying immune to unrelated residue.
+	baselineViewerGoroutines := countViewerGoroutines()
+
 	sess := relay.NewSession(relay.Config{}, sink, safeLogf(t))
 	t.Cleanup(func() { _ = sess.Close() })
 
@@ -1351,10 +1373,35 @@ func TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsA
 		disconnectDetectWait,
 		"drainViewerRTCP/runInputQueue goroutines to actually exit (not just the registry entry to vanish)",
 		func() bool {
-			buf := make([]byte, 1<<20)
-			n := runtime.Stack(buf, true)
-			dump := string(buf[:n])
-			return !strings.Contains(dump, ".drainViewerRTCP(") && !strings.Contains(dump, ".runInputQueue(")
+			return countViewerGoroutines() <= baselineViewerGoroutines
 		},
 	)
+}
+
+// countViewerGoroutines counts live goroutines currently inside
+// drainViewerRTCP or runInputQueue — the two per-viewer goroutines a viewer
+// eviction must reap.
+//
+// The dump is process-wide (runtime.Stack's all=true), so the ABSOLUTE count
+// includes every other test's viewers too; callers must therefore compare it
+// against a baseline they captured themselves rather than against zero. See
+// the caller's own comment for why that distinction is what makes this
+// assertion meaningful instead of merely noisy.
+//
+// The buffer grows until the dump fits: a truncated dump would UNDERCOUNT,
+// silently turning a real leak into a pass — the one failure mode this helper
+// must not have. Starting at 1MB covers the common case in a single call.
+func countViewerGoroutines() int {
+	size := 1 << 20
+	var dump string
+	for {
+		buf := make([]byte, size)
+		n := runtime.Stack(buf, true)
+		if n < size {
+			dump = string(buf[:n])
+			break
+		}
+		size *= 2
+	}
+	return strings.Count(dump, ".drainViewerRTCP(") + strings.Count(dump, ".runInputQueue(")
 }
