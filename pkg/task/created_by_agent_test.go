@@ -194,21 +194,21 @@ func TestCreatedByAgentID_PersistedJSONKey(t *testing.T) {
 	if err := s.CreateByAgent(agentTask, "mia"); err != nil {
 		t.Fatalf("agent create: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(s.Dir(), agentTask.ID+".json"))
-	if err != nil {
-		t.Fatalf("read task file: %v", err)
+	raw, readErr := os.ReadFile(filepath.Join(s.Dir(), agentTask.ID+".json"))
+	if readErr != nil {
+		t.Fatalf("read task file: %v", readErr)
 	}
 	var onDisk map[string]any
-	if err := json.Unmarshal(raw, &onDisk); err != nil {
-		t.Fatalf("parse task file: %v", err)
+	if parseErr := json.Unmarshal(raw, &onDisk); parseErr != nil {
+		t.Fatalf("parse task file: %v", parseErr)
 	}
 	if got := onDisk["created_by_agent_id"]; got != "mia" {
 		t.Errorf("on-disk created_by_agent_id = %v, want %q", got, "mia")
 	}
 
 	human := restCreatedTask("human work", "ws-1", "mia")
-	if err := s.Create(human); err != nil {
-		t.Fatalf("REST-shaped create: %v", err)
+	if createErr := s.Create(human); createErr != nil {
+		t.Fatalf("REST-shaped create: %v", createErr)
 	}
 	rawHuman, err := os.ReadFile(filepath.Join(s.Dir(), human.ID+".json"))
 	if err != nil {
