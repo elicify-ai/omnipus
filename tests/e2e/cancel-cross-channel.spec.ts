@@ -476,12 +476,23 @@ async function assertCancelCascadesToSubagent(
   // through `executeSlashCommand`, which can only be reached once the command
   // actually exists in the palette — so the client-side path is guaranteed,
   // not merely likely. This is also the real user path.
-  await input.fill('/new')
-  const slashMenu = page.locator('[data-testid="slash-menu"]')
+  //
+  // MUST be real keystrokes, not `fill()`. The palette opens from
+  // `onInputChange` (useSlashMenu.ts: `if (val.startsWith('/')) setSlashOpen(true)`),
+  // which is driven by the composer's own change handler. `fill()` sets the
+  // value in one shot without driving that handler, so the menu never opens —
+  // verified on ci-omnipus-2 at a1d77d58, where a `fill()` version of this
+  // block timed out waiting for the row (31.8s ≈ the 30s gate). T22 above is
+  // the in-repo precedent for the working form: `click()` then type.
+  await input.click()
+  await input.pressSequentially('/new')
+
   // Palette rows are role="option" buttons whose accessible name starts with
   // the command label (ChatScreen.tsx renders `item.label` then
   // `item.description`). Anchored so it can never match a future "/newfoo".
-  const newSessionCommand = slashMenu.getByRole('option', { name: /^\/new\b/ })
+  // Scoped to the page rather than to [data-testid="slash-menu"], matching
+  // T22's `page.getByRole('option', …)` convention.
+  const newSessionCommand = page.getByRole('option', { name: /^\/new\b/ }).first()
   await expect(newSessionCommand).toBeVisible({ timeout: 30_000 })
   await newSessionCommand.click()
 
