@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -497,14 +499,38 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
 
+	// FAIL CLOSED on an unresolvable caller, and do it BEFORE the store read so
+	// an unprincipled call cannot even probe which task ids exist.
+	//
+	// This is not defence in depth, it is the gate itself. `caller` is the sole
+	// input to the ownership condition below, and BOTH of that condition's
+	// owner comparisons are satisfiable by an empty value on both sides: an
+	// unattributed task (Task.CreatedByAgent documents "" as the normal state
+	// for every REST/human-created task) plus an empty caller made the final
+	// clause `"" != ""` false, which made the whole condition false, which
+	// meant delegationDenied — the ONLY authorization on this path — was never
+	// called at all.
+	//
+	// Production always injects a principal (pkg/agent/loop.go seeds every turn
+	// ctx via tools.WithAgentID), so an empty one here is a wiring fault rather
+	// than a legitimate human-driven call. The create path's deliberate
+	// no-principal allowance (see TaskCreateTool.Execute) is NOT precedent for
+	// relaxing this: recording "nobody in the agent namespace authored this new
+	// task" is an honest attribution of a task that did not exist before;
+	// mutating an EXISTING task that may belong to someone else is an
+	// authorization decision, and there is no principal to authorize.
+	caller := strings.TrimSpace(tools.ToolAgentID(ctx))
+	if caller == "" {
+		return tools.ErrorResult(errorJSON("PRINCIPAL_REQUIRED",
+			"cannot resolve the calling agent; refusing to update a task", ""))
+	}
+
 	store := taskStoreFor(t.deps.Home)
 	existing, err := store.Get(id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use list_tasks_in_workspace to see available tasks"))
 	}
-
-	caller := tools.ToolAgentID(ctx)
 
 	// Ownership gate (parity with the plain update_task tool's "you can only
 	// update tasks assigned to you"). The privileged cross-workspace path is
@@ -513,7 +539,17 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// could rewrite work it has no authority over. Tasks the caller owns
 	// (assignee or creator) are always mutable by the caller. Unassigned tasks
 	// (no AgentID) carry no ownership constraint.
-	if existing.AgentID != "" && existing.AgentID != caller && existing.CreatedBy != caller {
+	//
+	// CreatedByAgent, never CreatedBy. Task.CreatedBy is MIXED-NAMESPACE and its
+	// own doc comment states the rule this predicate used to break: "both are
+	// MIXED-NAMESPACE and MUST NEVER be used as an ownership or authorization
+	// predicate". On THIS tool the mismatch is not even theoretical — the create
+	// path above writes `tk.CreatedBy = sessionOwner`, a human USERNAME, while
+	// `caller` is an agent id, so a human who registers the username `jim` hands
+	// agent `jim` a pass on every task they create, skipping the delegation
+	// check entirely. CreatedByAgent reads the agent-id-namespaced field and
+	// fails closed on BOTH sides by construction, so "" is never a wildcard.
+	if existing.AgentID != "" && existing.AgentID != caller && !existing.CreatedByAgent(caller) {
 		if denied := t.deps.delegationDenied(ctx, caller, existing.AgentID); denied != nil {
 			return tools.DelegationDeniedResult(t.Name(), denied)
 		}
@@ -707,6 +743,18 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to delete a task", ""))
 	}
+	// FAIL CLOSED on an unresolvable caller, before the store read — same
+	// reasoning as update_task_in_workspace above, which documents in full why
+	// an empty principal previously slipped past this gate entirely (empty
+	// caller + unattributed task made every clause of the condition false, so
+	// delegationDenied was never reached) and why the create path's deliberate
+	// no-principal allowance is not precedent for a destructive operation.
+	caller := strings.TrimSpace(tools.ToolAgentID(ctx))
+	if caller == "" {
+		return tools.ErrorResult(errorJSON("PRINCIPAL_REQUIRED",
+			"cannot resolve the calling agent; refusing to delete a task", ""))
+	}
+
 	store := taskStoreFor(t.deps.Home)
 	existing, err := store.Get(id)
 	if err != nil {
@@ -719,8 +767,12 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 	// path may delete ANOTHER agent's task ONLY when delegation policy permits the
 	// caller to delegate to that task's assignee. Tasks the caller owns (assignee
 	// or creator) are always deletable; unassigned tasks carry no ownership gate.
-	caller := tools.ToolAgentID(ctx)
-	if existing.AgentID != "" && existing.AgentID != caller && existing.CreatedBy != caller {
+	//
+	// CreatedByAgent, never CreatedBy — see update_task_in_workspace's gate for
+	// the full namespace rationale (Task.CreatedBy holds a human username on
+	// this surface, so comparing it against an agent id is a namespace
+	// collision, not an ownership test).
+	if existing.AgentID != "" && existing.AgentID != caller && !existing.CreatedByAgent(caller) {
 		if denied := t.deps.delegationDenied(ctx, caller, existing.AgentID); denied != nil {
 			return tools.DelegationDeniedResult(t.Name(), denied)
 		}
@@ -748,39 +800,276 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 
 // ---- list_tasks_in_workspace ----
 
-type TaskListTool struct{ deps *Deps }
+// maxWorkspaceTaskRows bounds one list_tasks_in_workspace response.
+//
+// The task store grows monotonically and nothing sweeps it, so a long-lived
+// install exceeding this bound is the steady state rather than the exception —
+// which is why crossing it is REPORTED (truncated + matched) rather than
+// silently absorbed. A short list that looks complete is the worst possible
+// output for a tool whose entire job is "find the id of the task I need to act
+// on". Sized to match list_jobs' own effective row ceiling (95).
+const maxWorkspaceTaskRows = 100
+
+// workspaceTaskRow is the ALLOWLIST projection list_tasks_in_workspace returns
+// in place of the on-disk task.Task struct.
+//
+// Allowlist, never denylist, and task.Task is never marshalled whole. That is
+// the load-bearing property. task.Task carries fields whose own doc comments
+// declare them DISK-ONLY and forbid them from crossing any boundary —
+// CreatedByAgentID ("the REST mapper does NOT copy it to the wire type, and it
+// MUST NOT be added to any schema in contracts/"), Scratchpad (every agent's
+// private todo card), PendingJudgeClaim, DelegationDepth — and a whole-struct
+// marshal shipped every one of them, plus Prompt and Result, straight into an
+// LLM's context. With an allowlist a field added to task.Task tomorrow is NOT
+// disclosed by default; with a denylist the next field to land would re-open
+// exactly this hole.
+type workspaceTaskRow struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+	// Relation says WHY this row is the caller's, mirroring list_jobs:
+	// "runs" = assigned to the caller, "dispatched" = created by the caller.
+	Relation    string   `json:"relation"`
+	WorkspaceID string   `json:"workspace_id,omitempty"`
+	AgentID     string   `json:"agent_id,omitempty"`
+	PlanID      string   `json:"plan_id,omitempty"`
+	Due         string   `json:"due,omitempty"`
+	BlockedBy   []string `json:"blocked_by,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
+}
+
+// workspaceTaskListResponse is the list_tasks_in_workspace envelope. `matched`
+// and `truncated` exist so a bounded list is never mistaken for a complete one.
+type workspaceTaskListResponse struct {
+	Tasks     []workspaceTaskRow `json:"tasks"`
+	Matched   int                `json:"matched"`
+	Returned  int                `json:"returned"`
+	Truncated bool               `json:"truncated,omitempty"`
+	Note      string             `json:"note,omitempty"`
+}
+
+type TaskListTool struct {
+	deps *Deps
+	// auditLogger records one entry per call. Propagated by the tool registry
+	// via the auditLoggerAware contract (pkg/tools/registry.go); nil is a
+	// best-effort no-op, never an error.
+	auditLogger *audit.Logger
+}
 
 func NewTaskListTool(d *Deps) *TaskListTool    { return &TaskListTool{deps: d} }
 func (t *TaskListTool) Name() string           { return "list_tasks_in_workspace" }
 func (t *TaskListTool) Scope() tools.ToolScope { return tools.ScopeCore }
+
+// SetAuditLogger satisfies the auditLoggerAware contract so the registry
+// propagates the audit logger after construction.
+func (t *TaskListTool) SetAuditLogger(logger *audit.Logger) { t.auditLogger = logger }
+
 func (t *TaskListTool) Description() string {
-	return "List tasks with optional filters.\nParameters: workspace_id, agent_id, status (all optional)."
+	return "List YOUR OWN tasks across workspaces: tasks assigned to you, plus tasks you created " +
+		"for other agents. It never returns another agent's or a human's tasks, so an empty result " +
+		"means you have no matching work — not that the workspace is empty. Bounded to the 100 " +
+		"most recently updated matches; `truncated` and `matched` say when there were more.\n" +
+		"Parameters: workspace_id, agent_id, status (all optional, all narrow the result further)."
 }
 
 func (t *TaskListTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"workspace_id": map[string]any{"type": "string"},
-			"agent_id":     map[string]any{"type": "string"},
-			"status":       map[string]any{"type": "string"},
+			"workspace_id": map[string]any{
+				"type":        "string",
+				"description": "Narrow to one workspace (from list_workspaces). Optional.",
+			},
+			"agent_id": map[string]any{
+				"type": "string",
+				"description": "Narrow to tasks assigned to this agent. Only ever narrows within " +
+					"your own tasks — naming another agent shows the work you dispatched to them, " +
+					"never their own.",
+			},
+			"status": map[string]any{
+				"type":        "string",
+				"description": "Narrow to one status: inbox, next, in_progress, blocked, done, failed.",
+			},
 		},
 	}
 }
 
-func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	workspaceFilter, _ := args["workspace_id"].(string)
-	agentFilter, _ := args["agent_id"].(string)
-	statusFilter, _ := args["status"].(string)
+func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	// FAIL CLOSED on an unresolvable caller, exactly as the plain list_tasks
+	// and list_jobs do.
+	//
+	// Every argument this tool accepts is optional, and task.Filter treats each
+	// empty field as "filter OFF" (Filter.matches, pkg/task/store.go). So
+	// without this guard — and without the caller scope applied below —
+	// `list_tasks_in_workspace {}` asked the store for EVERY task file in
+	// $OMNIPUS_HOME/tasks: every workspace, every agent, every human. This tool
+	// resolves `allow` from the global seed (pkg/config/defaults.go), so that
+	// was reachable from any agent's turn, not just the Orchestrator's.
+	//
+	// Never relax this into "return an empty list": a silent empty success is
+	// indistinguishable from genuinely having no tasks and hides the
+	// misconfiguration that produced it.
+	caller := strings.TrimSpace(tools.ToolAgentID(ctx))
+	if caller == "" {
+		t.writeAudit(ctx, audit.DecisionError, "", nil, 0, 0, false)
+		return tools.ErrorResult(errorJSON("PRINCIPAL_REQUIRED",
+			"cannot resolve the calling agent; refusing to list tasks", ""))
+	}
+
+	workspaceFilter := strings.TrimSpace(argString(args, "workspace_id"))
+	agentFilter := strings.TrimSpace(argString(args, "agent_id"))
+	statusFilter := strings.TrimSpace(argString(args, "status"))
+	if statusFilter != "" && !isValidTaskStatus(statusFilter) {
+		// Rejected rather than passed through: an unknown status matches
+		// nothing, and returning an empty list for a typo would teach the
+		// caller its work had vanished.
+		t.writeAudit(ctx, audit.DecisionError, caller, map[string]any{
+			"workspace_id": workspaceFilter, "agent_id": agentFilter, "status": statusFilter,
+		}, 0, 0, false)
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			fmt.Sprintf("unknown status %q: expected one of inbox, next, in_progress, blocked, done, failed",
+				statusFilter), "status"))
+	}
+
+	auditDetails := map[string]any{
+		"workspace_id": workspaceFilter, "agent_id": agentFilter, "status": statusFilter,
+	}
 
 	store := taskStoreFor(t.deps.Home)
-	filtered, err := store.List(task.Filter{
+	// The caller's own arguments only ever NARROW. The authorization scope is
+	// applied below, over the returned records, and cannot be widened by any
+	// argument.
+	records, err := store.List(task.Filter{
 		WorkspaceID: workspaceFilter,
 		AgentID:     agentFilter,
 		Status:      task.Status(statusFilter),
 	})
 	if err != nil {
+		t.writeAudit(ctx, audit.DecisionError, caller, auditDetails, 0, 0, false)
 		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
-	return tools.NewToolResult(successJSON(map[string]any{"tasks": filtered}))
+
+	// Caller scope: the UNION of the two agent-id-namespaced readings of
+	// ownership, identical to list_jobs' task collector.
+	//
+	//	AgentID == caller      -> "runs"       (work assigned to me)
+	//	CreatedByAgent(caller) -> "dispatched" (work I created)
+	//
+	// Never Task.CreatedBy or Task.Owner: both are mixed-namespace (this file's
+	// own create path writes a human username into CreatedBy) and using either
+	// would disclose a human's task titles to a same-named agent — the exact
+	// collision Task.CreatedBy's doc comment forbids.
+	//
+	// Cross-WORKSPACE reach is preserved deliberately: that is this tool's
+	// entire reason to exist, and it is what the Orchestrator uses it for. What
+	// is removed is cross-PRINCIPAL reach, which was never stated as intended
+	// anywhere in this file — the "privileged" framing in the comments above
+	// attaches only to the mutation gates, each of which still consults
+	// delegation policy.
+	scoped := make([]*task.Task, 0, len(records))
+	for i := range records {
+		tk := &records[i]
+		assigned := tk.AgentID != "" && tk.AgentID == caller
+		if !assigned && !tk.CreatedByAgent(caller) {
+			continue
+		}
+		scoped = append(scoped, tk)
+	}
+
+	// Deterministic order BEFORE the bound, so which rows survive truncation is
+	// a stated rule (most recently updated first) rather than directory order.
+	sort.SliceStable(scoped, func(i, j int) bool {
+		if scoped[i].UpdatedAt != scoped[j].UpdatedAt {
+			return scoped[i].UpdatedAt > scoped[j].UpdatedAt
+		}
+		return scoped[i].ID > scoped[j].ID
+	})
+
+	matched := len(scoped)
+	truncated := matched > maxWorkspaceTaskRows
+	if truncated {
+		scoped = scoped[:maxWorkspaceTaskRows]
+	}
+
+	rows := make([]workspaceTaskRow, 0, len(scoped))
+	for _, tk := range scoped {
+		relation := "dispatched"
+		if tk.AgentID != "" && tk.AgentID == caller {
+			relation = "runs"
+		}
+		rows = append(rows, workspaceTaskRow{
+			ID:          tk.ID,
+			Title:       tk.Title,
+			Status:      string(tk.Status),
+			Relation:    relation,
+			WorkspaceID: tk.WorkspaceID,
+			AgentID:     tk.AgentID,
+			PlanID:      tk.PlanID,
+			Due:         tk.Due,
+			BlockedBy:   tk.BlockedBy,
+			CreatedAt:   tk.CreatedAt,
+			UpdatedAt:   tk.UpdatedAt,
+		})
+	}
+
+	resp := workspaceTaskListResponse{
+		Tasks:    rows,
+		Matched:  matched,
+		Returned: len(rows),
+	}
+	if truncated {
+		resp.Truncated = true
+		resp.Note = fmt.Sprintf(
+			"showing the %d most recently updated of %d matching tasks — narrow with workspace_id, agent_id or status",
+			len(rows), matched)
+	}
+	t.writeAudit(ctx, audit.DecisionAllow, caller, auditDetails, matched, len(rows), truncated)
+	return tools.NewToolResult(successJSON(resp))
+}
+
+// writeAudit records exactly one entry per call, including a rejected one.
+//
+// This is a security control, not a debugging aid: the tool enumerates task
+// handles and would enumerate another principal's if the scope above were ever
+// wrong, so a scoping regression must leave a forensic trail. Task TITLES are
+// deliberately never recorded — they are precisely what the scope protects.
+// A nil logger is a no-op; an audit write failure never fails the call.
+func (t *TaskListTool) writeAudit(
+	ctx context.Context,
+	decision, caller string,
+	filters map[string]any,
+	matched, returned int,
+	truncated bool,
+) {
+	if t.auditLogger == nil {
+		return
+	}
+	details := map[string]any{
+		"matched":   matched,
+		"returned":  returned,
+		"truncated": truncated,
+	}
+	for k, v := range filters {
+		details["filter_"+k] = v
+	}
+	entry := &audit.Entry{
+		Timestamp: time.Now().UTC(),
+		Event:     audit.EventToolCall,
+		Decision:  decision,
+		AgentID:   caller,
+		SessionID: tools.ToolTranscriptSessionID(ctx),
+		Tool:      "list_tasks_in_workspace",
+		Details:   details,
+	}
+	if err := t.auditLogger.Log(entry); err != nil {
+		slog.Warn("list_tasks_in_workspace: audit log failed", "agent_id", caller, "error", err)
+	}
+}
+
+// argString reads a string tool argument, tolerating an absent or non-string
+// value as "unset" — the same lenient decode the rest of this file uses.
+func argString(args map[string]any, name string) string {
+	s, _ := args[name].(string)
+	return s
 }

@@ -94,8 +94,19 @@ func TestTaskDelete_OwnerAllowed(t *testing.T) {
 	}
 }
 
-// TestTaskDelete_CreatorAllowed proves CreatedBy can also delete.
-func TestTaskDelete_CreatorAllowed(t *testing.T) {
+// TestTaskDelete_MixedNamespaceCreatorRejected proves the creator clause reads
+// the AGENT-namespaced attribution and nothing else.
+//
+// This test previously asserted the opposite ("CreatedBy can also delete") and
+// passed, because seedTask writes its createdBy straight into the
+// mixed-namespace Task.CreatedBy — the field whose own doc comment says it
+// "MUST NEVER be used as an ownership or authorization predicate", because the
+// REST path writes a human USERNAME into it. A task carrying only that (no
+// CreatedByAgentID) is either a human's or a pre-attribution record, and is
+// nobody's to delete via an agent tool. The legitimate creator case — an agent
+// deleting what it created through Store.CreateByAgent — is covered by
+// TestTaskDelete_AgentCreatorAllowed in task_scope_test.go.
+func TestTaskDelete_MixedNamespaceCreatorRejected(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tk := seedTask(t, store, "agent-owner", "creator-a", "ws-1")
@@ -103,8 +114,11 @@ func TestTaskDelete_CreatorAllowed(t *testing.T) {
 	tool := NewTaskDeleteTool(store)
 	ctx := WithAgentID(context.Background(), "creator-a")
 	result := tool.Execute(ctx, map[string]any{"task_id": tk.ID})
-	if result.IsError {
-		t.Fatalf("creator delete failed: %s", result.ForLLM)
+	if !result.IsError {
+		t.Fatal("a caller matching only the mixed-namespace created_by must not be able to delete")
+	}
+	if _, err := store.Get(tk.ID); err != nil {
+		t.Errorf("task must survive a denied delete, got: %v", err)
 	}
 }
 

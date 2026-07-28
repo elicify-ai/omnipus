@@ -223,12 +223,16 @@ func TestListTasks_ScopedToCallingAgent(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("role=%s: %s", role, res.ForLLM)
 		}
-		var rows []task.Task
-		if err := json.Unmarshal([]byte(res.ForLLM), &rows); err != nil {
+		var resp struct {
+			Tasks []struct {
+				Title string `json:"title"`
+			} `json:"tasks"`
+		}
+		if err := json.Unmarshal([]byte(res.ForLLM), &resp); err != nil {
 			t.Fatalf("role=%s: unmarshal %q: %v", role, res.ForLLM, err)
 		}
-		out := make([]string, 0, len(rows))
-		for _, r := range rows {
+		out := make([]string, 0, len(resp.Tasks))
+		for _, r := range resp.Tasks {
 			out = append(out, r.Title)
 		}
 		return out

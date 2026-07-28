@@ -16,7 +16,6 @@ package systools_test
 // adjudicate.
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -83,7 +82,7 @@ func TestSysagentTaskUpdate_DoneOnCriteriaTask_OutOfBand_Rejected(t *testing.T) 
 	seedCriteriaTaskWS(t, home, taskID, "OutOfBandDoneClaim", task.StatusInProgress)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "done",
 		"result": "I claim this is done",
@@ -108,7 +107,7 @@ func TestSysagentTaskUpdate_DoneOnCriteriaTask_WrongRunningTask_Rejected(t *test
 	seedCriteriaTaskWS(t, home, taskID, "WrongRunningTask", task.StatusInProgress)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	ctx := tools.WithRunningTaskID(context.Background(), "some-other-task-id")
+	ctx := tools.WithRunningTaskID(callerCtx("caller-agent"), "some-other-task-id")
 	result := tool.Execute(ctx, map[string]any{
 		"id":     taskID,
 		"status": "done",
@@ -134,7 +133,7 @@ func TestSysagentTaskUpdate_DoneOnCriteriaTask_InRun_StagesClaim(t *testing.T) {
 	seedCriteriaTaskWS(t, home, taskID, "InRunDoneClaim", task.StatusInProgress)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	ctx := tools.WithRunningTaskID(context.Background(), taskID)
+	ctx := tools.WithRunningTaskID(callerCtx("caller-agent"), taskID)
 	result := tool.Execute(ctx, map[string]any{
 		"id":     taskID,
 		"status": "done",
@@ -161,7 +160,7 @@ func TestSysagentTaskUpdate_DoneOnCriteriaTask_NeverAdvancesDependents(t *testin
 	seedTask(t, home, depID, "Dependent", task.StatusBlocked, []string{blockerID})
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     blockerID,
 		"status": "done",
 		"result": "done",

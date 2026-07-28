@@ -148,7 +148,7 @@
   },
   {
     "name": "list_tasks_in_workspace",
-    "description": "List tasks with optional filters.\nParameters: workspace_id, agent_id, status (all optional).",
+    "description": "List YOUR OWN tasks across workspaces: tasks assigned to you, plus tasks you created for other agents. It never returns another agent's or a human's tasks, so an empty result means you have no matching work — not that the workspace is empty. Bounded to the 100 most recently updated matches; `truncated` and `matched` say when there were more.\nParameters: workspace_id, agent_id, status (all optional, all narrow the result further).",
     "scope": "core",
     "category": "tasks",
     "source": "builtin"

@@ -91,7 +91,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	// Invoke system.task.update with ONLY a name change.
 	// Sprint 2: the tool uses "name" arg key (maps to Title internally).
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":   taskID,
 		"name": "Updated Name",
 	})
@@ -134,7 +134,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 	// Differentiation test: a SECOND update with only "status" change must also
 	// preserve title (= "Updated Name") and all other fields. Two different inputs
 	// must produce two different outputs.
-	result2 := tool.Execute(context.Background(), map[string]any{
+	result2 := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "next",
 	})
@@ -156,7 +156,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 
 	// Guard: agent_id:"" must NOT clear an existing agent_id.
 	// The new tool only applies agent_id when the value is non-empty (v != "").
-	result3 := tool.Execute(context.Background(), map[string]any{
+	result3 := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":       taskID,
 		"agent_id": "",
 	})

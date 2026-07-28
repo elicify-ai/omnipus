@@ -20,7 +20,6 @@ package systools_test
 // Deleted: TestSysagentTaskUpdate_A4_Differentiation — same reason.
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -77,7 +76,7 @@ func TestSysagentTaskUpdate_InvalidStatusIgnored(t *testing.T) {
 	seedTask(t, home, taskID, "WriteTests", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "active",
 	})
@@ -105,7 +104,7 @@ func TestSysagentTaskUpdate_RemovedPlanningStatusIgnored(t *testing.T) {
 	seedTask(t, home, taskID, "WriteTests", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "planning",
 	})
@@ -134,7 +133,7 @@ func TestSysagentTaskUpdate_ValidStatusApplied(t *testing.T) {
 	seedTask(t, home, taskID, "DeployService", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": "next",
 	})
@@ -186,7 +185,7 @@ func TestSysagentTaskUpdate_AllSettableStatusesApplied(t *testing.T) {
 		seedTask(t, home, id, "Task for "+string(st), seedStatus, nil)
 
 		tool := systools.NewTaskUpdateTool(deps)
-		result := tool.Execute(context.Background(), map[string]any{
+		result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 			"id":     id,
 			"status": string(st),
 		})
@@ -220,7 +219,7 @@ func TestSysagentTaskUpdate_BlockedNotSettable(t *testing.T) {
 	seedTask(t, home, taskID, "Task for blocked", task.StatusInbox, nil)
 
 	tool := systools.NewTaskUpdateTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     taskID,
 		"status": string(task.StatusBlocked),
 	})
@@ -245,11 +244,11 @@ func TestSysagentTaskUpdate_Differentiation(t *testing.T) {
 
 	tool := systools.NewTaskUpdateTool(deps)
 
-	resultInbox := tool.Execute(context.Background(), map[string]any{
+	resultInbox := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     inboxTaskID,
 		"status": "inbox",
 	})
-	resultNext := tool.Execute(context.Background(), map[string]any{
+	resultNext := tool.Execute(callerCtx("caller-agent"), map[string]any{
 		"id":     nextTaskID,
 		"status": "next",
 	})
