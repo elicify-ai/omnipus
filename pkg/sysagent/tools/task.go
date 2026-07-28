@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -394,8 +395,34 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 	}
 
-	if err := store.Create(&tk); err != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+	// FR-037 provenance. CreateByAgent stamps Task.CreatedByAgentID (agent-id
+	// namespace) so the created task is findable by its author — list_jobs'
+	// dispatched half and list_tasks role="delegator" both filter on it, and
+	// neither can use tk.CreatedBy above, which holds the SESSION OWNER
+	// (a username) on this tool.
+	//
+	// The fallback to plain Create is deliberate and is NOT the pkg/tools
+	// create_task posture. This tool is also driven with no agent principal at
+	// all — the System Agent surface is reachable from a plain human session
+	// (see pkg/gateway/tenancy_regression_test.go, which drives it with a bare
+	// context carrying only a session owner) — and that is a legitimate,
+	// human-authored task, not a misconfiguration. An unattributed task is
+	// exactly what the store's plain Create path exists to write, and
+	// Task.CreatedByAgent fails closed on an empty stamp, so such a task is
+	// never disclosed to any agent's roster. Fabricating a caller id here, or
+	// refusing the create outright, would both be worse than recording the
+	// truth: nobody-in-the-agent-namespace created this.
+	var createErr error
+	if strings.TrimSpace(caller) != "" {
+		createErr = store.CreateByAgent(&tk, caller)
+	} else {
+		slog.Debug("create_task_in_workspace: no calling agent on context — "+
+			"persisting the task without FR-037 agent provenance",
+			"workspace_id", tk.WorkspaceID, "assignee_agent_id", tk.AgentID)
+		createErr = store.Create(&tk)
+	}
+	if createErr != nil {
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", createErr.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": tk.ID, "name": name, "status": string(tk.Status),

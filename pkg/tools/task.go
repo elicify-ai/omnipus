@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -57,14 +58,37 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("role must be 'assignee' or 'delegator'")
 	}
 	status, _ := args["status"].(string)
-	agentID := ToolAgentID(ctx)
+
+	// FAIL CLOSED on an unresolvable caller, exactly as list_jobs does.
+	// task.Filter treats every empty field as "filter off" (Filter.matches,
+	// pkg/task/store.go), so an empty agent id here does not narrow anything —
+	// it returns EVERY task in the store, across every workspace and every
+	// agent, straight into the model's context. list_tasks is seeded `allow`
+	// globally, so that is a cross-agent/cross-workspace disclosure reachable
+	// from any turn whose agent id failed to resolve.
+	//
+	// Never relax this into "return an empty list": a silent empty success is
+	// indistinguishable from genuinely having no tasks and hides the
+	// misconfiguration that produced it.
+	agentID := strings.TrimSpace(ToolAgentID(ctx))
+	if agentID == "" {
+		return ErrorResult("list_tasks: cannot resolve the calling agent; refusing to list tasks")
+	}
 
 	filter := task.Filter{Status: task.Status(status)}
 	switch role {
 	case "assignee":
 		filter.AgentID = agentID
 	case "delegator":
-		filter.CreatedBy = agentID
+		// CreatedByAgentID, not CreatedBy: CreatedBy is MIXED-NAMESPACE (a
+		// username on the REST path, an agent id on the tool path — see
+		// task.Task.CreatedBy) and must never be used as an ownership
+		// predicate, because a human user whose username happens to equal an
+		// agent id would have their tasks disclosed to that agent. The
+		// CreatedByAgentID filter routes through task.Task.CreatedByAgent,
+		// which fails closed on BOTH sides — an unattributed (REST-created)
+		// task never matches any agent.
+		filter.CreatedByAgentID = agentID
 	}
 
 	tasks, err := t.store.List(filter)
@@ -400,7 +424,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	title, _ := args["title"].(string)
 	prompt, _ := args["prompt"].(string)
 	agentID, _ := args["agent_id"].(string)
-	callerID := ToolAgentID(ctx)
+	callerID := strings.TrimSpace(ToolAgentID(ctx))
 
 	if title == "" {
 		return ErrorResult("title is required")
@@ -410,6 +434,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 	if agentID == "" {
 		return ErrorResult("agent_id is required")
+	}
+	// FAIL CLOSED on an unresolvable caller. create_task is a delegation: it
+	// assigns work to ANOTHER agent, and both halves of that record — the
+	// delegation-policy decision and the FR-037 provenance stamp
+	// (Store.CreateByAgent, which itself rejects an empty agent id) — are
+	// meaningless without a principal. Refusing here keeps the two consistent
+	// rather than letting the policy gate run against an empty caller and then
+	// discovering the missing principal at write time.
+	if callerID == "" {
+		return ErrorResult("create_task: cannot resolve the calling agent; refusing to create a delegated task")
 	}
 
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
@@ -589,7 +623,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		entity.IsJoin = isJoin
 	}
 
-	if err := t.store.Create(entity); err != nil {
+	// CreateByAgent, not Create: this is the AGENT creation path, so the task
+	// carries FR-037 provenance (Task.CreatedByAgentID = the calling agent) in
+	// the agent-id namespace. That stamp is what makes the created task
+	// findable by its author — list_jobs' dispatched half and list_tasks
+	// role="delegator" both filter on it, and neither can use the
+	// mixed-namespace CreatedBy. callerID is guaranteed non-empty by the
+	// fail-closed guard at the top of Execute, so CreateByAgent's own
+	// empty-agent-id rejection is belt-and-suspenders here, not the primary
+	// gate.
+	if err := t.store.CreateByAgent(entity, callerID); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
 		}

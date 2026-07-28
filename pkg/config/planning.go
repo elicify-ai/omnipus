@@ -20,6 +20,17 @@ const (
 	// transcript window fed to a verifier adjudication (ADR-052 FR-032,
 	// operator interview 2026-07-21 confirmed N=20000).
 	DefaultVerifierWindowTokens = 20000
+	// DefaultSupervisionTurnTimeoutSeconds is FR-021's observation deadline:
+	// how long after a supervision wake is armed the PlanSupervisor waits for
+	// that turn to produce a correction before counting the attempt spent.
+	// 600 s mirrors the package constant the plan engine used before this key
+	// existed (pkg/agent/plan_engine.go defaultSupervisionTurnTimeout).
+	DefaultSupervisionTurnTimeoutSeconds = 600
+	// DefaultSupervisionMaxAttempts is FR-022's ceiling: supervision wakes
+	// that produce NO valid correction, after which the plan terminates
+	// failed(supervision_unavailable). Mirrors the plan engine's
+	// defaultSupervisionMaxAttempts.
+	DefaultSupervisionMaxAttempts = 3
 )
 
 // PlanningConfig holds the global bounds for the Planning & Goals epic's
@@ -82,6 +93,19 @@ type PlanningConfig struct {
 	// NFR-1's "no token/money fields" for THIS one overall budget (D12 converts
 	// SEC-26's USD cap → tokens because cost isn't reliably measurable).
 	TokenBudget int64 `json:"token_budget,omitempty"`
+	// SupervisionTurnTimeoutSeconds is FR-021's supervision observation
+	// deadline: how long the PlanSupervisor waits on an armed wake before the
+	// attempt counts as spent. Overridden per-plan by
+	// plan.PlanBounds.SupervisionTurnTimeoutSeconds. Zero inherits
+	// DefaultSupervisionTurnTimeoutSeconds via
+	// EffectiveSupervisionTurnTimeoutSeconds.
+	SupervisionTurnTimeoutSeconds int `json:"supervision_turn_timeout_seconds,omitempty"`
+	// SupervisionMaxAttempts is FR-022's ceiling on supervision turns that
+	// produce no valid correction; exhausting it terminates the plan
+	// failed(supervision_unavailable). Overridden per-plan by
+	// plan.PlanBounds.SupervisionMaxAttempts. Zero inherits
+	// DefaultSupervisionMaxAttempts via EffectiveSupervisionMaxAttempts.
+	SupervisionMaxAttempts int `json:"supervision_max_attempts,omitempty"`
 }
 
 // EffectiveBootSweepBudgetSeconds resolves the boot-sweep budget (FR-118):
@@ -184,6 +208,38 @@ func (c PlanningConfig) EffectiveTokenBudget() int64 {
 		return 0
 	}
 	return c.TokenBudget
+}
+
+// EffectiveSupervisionTurnTimeoutSeconds resolves FR-021's supervision
+// observation deadline (FR-9 resolution order): a non-nil, >=1 per-plan Bounds
+// override wins; otherwise this config's SupervisionTurnTimeoutSeconds;
+// otherwise DefaultSupervisionTurnTimeoutSeconds. Safe to call against a
+// zero-value PlanningConfig.
+//
+// Returns SECONDS, not a time.Duration, so pkg/config stays free of any
+// scheduling semantics — the plan engine converts.
+func (c PlanningConfig) EffectiveSupervisionTurnTimeoutSeconds(override *int) int {
+	if override != nil && *override >= 1 {
+		return *override
+	}
+	if c.SupervisionTurnTimeoutSeconds >= 1 {
+		return c.SupervisionTurnTimeoutSeconds
+	}
+	return DefaultSupervisionTurnTimeoutSeconds
+}
+
+// EffectiveSupervisionMaxAttempts resolves FR-022's no-correction attempt
+// ceiling (FR-9 resolution order): a non-nil, >=1 per-plan Bounds override
+// wins; otherwise this config's SupervisionMaxAttempts; otherwise
+// DefaultSupervisionMaxAttempts.
+func (c PlanningConfig) EffectiveSupervisionMaxAttempts(override *int) int {
+	if override != nil && *override >= 1 {
+		return *override
+	}
+	if c.SupervisionMaxAttempts >= 1 {
+		return c.SupervisionMaxAttempts
+	}
+	return DefaultSupervisionMaxAttempts
 }
 
 // EffectiveVerifierWindowTokens resolves the verifier transcript-window
