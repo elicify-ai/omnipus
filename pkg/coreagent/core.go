@@ -308,13 +308,14 @@ func GetPrompt(id string) string {
 // allStaticToolNames is the complete, hardcoded enumeration of every static
 // builtin tool name known to the platform:
 //
-//   - 33 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
+//   - 34 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
 //     the dynamic MCP-adapter tool names, which are per-server and can't be
 //     statically enumerated — see the Constraint #6 MCP exception). The count
 //     was stated as 31 until plan-supervisor-spec FR-006 surface 1 required
 //     this comment corrected in the same edit: recall_conversation (the 4th
 //     memory tool) and message_parent (ADR-053 §5.1) were both added to the
-//     literal below without the prose being updated.
+//     literal below without the prose being updated. ADR-056's list_jobs then
+//     took it from 33 to 34.
 //   - 11 browser-automation tools (pkg/tools/browser/tools.go +
 //     pkg/tools/browser/tabs.go).
 //   - 35 sysagent management tools (pkg/sysagent/tools/*.go).
@@ -329,6 +330,10 @@ func GetPrompt(id string) string {
 //   - 2 ADR-055 (PlanSupervisor) supervision/containment tools — plan_correct
 //     and stop_plan, registered here for the same reason and under the same
 //     rule as the ADR-052 four.
+//   - ADR-056's list_jobs is counted in the 34 general tools above (it is a
+//     ScopeGeneral tool in pkg/tools, not a separate tier); it is called out
+//     here only because its seeded posture is a rule of its own — see
+//     coreAgentSeed's ROSTER VISIBILITY rule.
 //
 // Do NOT treat the per-category counts above as the authority for the total:
 // they are prose and go stale (they twice did). The mechanical assertion
@@ -356,6 +361,12 @@ var allStaticToolNames = []string{
 	"set_todos",
 	"read_inbox", "search_email", "read_message", "send_email", "reply",
 	"load_tool",
+	// ADR-056 — the unified read-only background-job roster (plans owned,
+	// subagents delegated, standalone tasks assigned to or created by the
+	// caller). Listed in the general block because that is what it is
+	// (ScopeGeneral, pkg/tools/list_jobs.go), not in the ADR-052/055 planning
+	// groups below.
+	"list_jobs",
 
 	// Browser automation tools.
 	"browser_navigate", "browser_click", "browser_type", "browser_screenshot",
@@ -524,6 +535,36 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 // owner-stops-their-own-plan case resolves "allow" rather than depending on a
 // human answering a prompt — see pkg/config/defaults.go's stop_plan entry.
 //
+// # SEED RULE — ROSTER VISIBILITY (ADR-056, list_jobs)
+//
+// "list_jobs" IS SEEDED "allow" FOR THE FOUR BASE AGENTS AND FOR NOBODY ELSE.
+//
+// list_jobs is strictly read-only, but its scope is AGENT IDENTITY, not
+// session: it returns every plan, delegated session and standalone task
+// recorded against the CALLING agent id. For the four base agents
+// (Mia/Jim/Ava/Ray) that is a well-posed question — they are durable,
+// user-addressable identities, and they are the only agents that can be a
+// plan's OwnerAgentID (IsChatTarget, the same predicate FR-006b's parity sweep
+// uses). For them the grant is also the DISCOVERY half of containment:
+// stop_plan takes a plan id, and this is where an agent that did not itself
+// just mint one gets it. Jim in particular resolves stop_plan "allow"
+// specifically so a runaway plan can be contained with no human in the loop —
+// leaving him unable to FIND the plan id hands that dependency straight back.
+//
+// The delegation-only tier (Worker/Planner/Explorer/Researcher) is denied. Each
+// of those ids is occupied by many concurrent, unrelated delegated sessions at
+// once, so for them "your own work" resolves to "every concurrent run of this
+// role in the installation" rather than "this run's work" — a roster that is
+// simultaneously useless and cross-talking. Nothing is lost: a leaf that needs
+// the status of the one child it just minted already has delegate's own status
+// sub-case, scoped to a handle it holds. The Judge and PlanSupervisor are
+// denied for their own stated reasons (verifier-inapplicable; D-04
+// roster-blindness — see systemAgentSeed).
+//
+// As with stop_plan, the Worker's SPARSE map needs an EXPLICIT deny rather than
+// an omission: list_jobs' global ceiling is "allow", so an absent key there
+// would silently GRANT it.
+//
 // The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	allow := config.ToolPolicyAllow
@@ -603,6 +644,14 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// applies, so it is named too rather than left to inference.
 			"stop_plan":    deny,
 			"plan_correct": deny,
+			// --- ADR-056 roster visibility ---
+			// Same "ceiling is allow, so absence GRANTS" trap once more, and
+			// here the grant would not merely be unusable: the Worker id is
+			// occupied by every generic delegated session in the installation
+			// at once, so a Worker roster would enumerate sibling branches of
+			// unrelated parent turns rather than its own work. See
+			// coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": deny,
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -735,6 +784,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
 			// same literal value. See coreAgentSeed's doc comment.
 			"stop_plan": ask,
+			// ADR-056 roster visibility: Ava is a chat target and can therefore
+			// be a plan's owner (after an operator approves her "ask"), so she
+			// must be able to find the plan she owns in order to stop it. See
+			// coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -781,6 +835,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
 			// same literal value. See coreAgentSeed's doc comment.
 			"stop_plan": ask,
+			// ADR-056 roster visibility: "what of mine is still running?" is an
+			// everyday-assistant question, and Mia already owns the task surface
+			// it reports on. She is a chat target, so she can also own a plan
+			// once an operator approves the "ask" above — and would then need
+			// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -842,6 +902,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
 			// same literal value. See coreAgentSeed's doc comment.
 			"stop_plan": ask,
+			// ADR-056 roster visibility: Ray fans out parallel research
+			// subagents (delegate: allow above) and then synthesizes, so the
+			// "which of my delegated children are still running?" roster is
+			// directly on his critical path. See coreAgentSeed's ROSTER
+			// VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -943,6 +1009,13 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// this one actually RESOLVES allow — that is the whole point of
 			// the asymmetric ceiling (see coreAgentSeed's doc comment).
 			"stop_plan": allow,
+			// ADR-056 roster visibility: Jim is the only agent seeded to START
+			// a plan unprompted and the only one whose stop_plan actually
+			// RESOLVES allow, so he is the one agent for whom containment must
+			// work with no human in the loop — which needs a plan id he did not
+			// necessarily mint this turn. He is also the heaviest delegator.
+			// See coreAgentSeed's ROSTER VISIBILITY rule.
+			"list_jobs": allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
@@ -1020,7 +1093,13 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     same answer independently — execute_plan is not named here, so
 		//     stop_plan must not be either.
 		//   - No list_jobs / plan-list / roster tool (D-04): PlanSupervisor is
-		//     roster-blind BY DESIGN. It cannot enumerate the plans it
+		//     roster-blind BY DESIGN. As of ADR-056 list_jobs is a REAL catalog
+		//     name, so this bullet is now load-bearing rather than
+		//     anticipatory — the deny comes from denyAllThenOverride stamping
+		//     every unnamed catalog entry, and TestPlanSupervisorSeed_
+		//     ExactlyPlanCorrect names list_jobs in its withheld call-outs so
+		//     the omission cannot be re-read as an oversight. It cannot
+		//     enumerate the plans it
 		//     supervises; the engine's supervision wake deadline is the only
 		//     liveness control, and it is deliberately the engine's — an
 		//     adjudicator that could see it had three parked plans would have

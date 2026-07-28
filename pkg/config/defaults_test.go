@@ -5,7 +5,10 @@
 
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk verifies that a fresh
 // install's default config seeds sandbox.tool_policies as a FULLY-ENUMERATED
@@ -92,35 +95,60 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		t.Errorf("expected seeded ceiling policy 'allow' for \"stop_plan\", got %q", got)
 	}
 
+	// ADR-056 (list_jobs) — the read-only background-job roster. "allow" for
+	// the same third reason stop_plan's ceiling is: stop_plan takes a plan id,
+	// list_jobs is where an agent gets one, and an "ask" ceiling would drag
+	// every per-agent "allow" (Jim's included) down to "ask" under
+	// strictest-wins — re-introducing exactly the human-in-the-loop dependency
+	// stop_plan's asymmetric ceiling exists to remove. Asserted by name for the
+	// same reason as the pair above: "restoring symmetry" with execute_plan
+	// must require deleting a named assertion that carries the reason.
+	if got := cfg.Sandbox.ToolPolicies["list_jobs"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"list_jobs\", got %q", got)
+	}
+
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6) — 85 static builtin tools (33 general + 11 browser + 35
-	// sysagent + 4 ADR-052 planning/verifier + 2 ADR-055 supervision tools),
-	// matching pkg/coreagent's allStaticToolNames literal-for-literal.
-	// Browser gained browser_list_tabs / browser_switch_tab / browser_close_tab
-	// (ADR-041 multi-tab), taking browser from 7 to 10, then browser_open_tab
-	// (live-UAT finding, Alex — "no agent tool to open a new tab"), taking it to 11.
-	// General gained recall_conversation — the 4th memory tool (remember /
-	// recall_memory / run_retrospective / recall_conversation) that was
-	// registered but omitted from the seed + catalog, so it was denied-by-default
-	// (fail-closed) on every install — taking general from 31 to 32.
-	// ADR-052 added create_plan/execute_plan/run_task/inspect_session, taking
-	// the total from 78 to 82. ADR-053 added message_parent (the child→parent
-	// messaging tool, seeded allow everywhere delegate is), taking it to 83.
-	// ADR-055 added plan_correct + stop_plan, taking it to 85.
+	// constraint 6): it must enumerate EXACTLY the names in pkg/coreagent's
+	// allStaticToolNames, one for one.
 	//
-	// This literal is a BACKSTOP, not the real guard: package config cannot
-	// import pkg/coreagent (that direction is a cycle), so the one-for-one
-	// identity with allStaticToolNames is asserted from the other side, in
-	// pkg/coreagent's TestCatalog_MatchesGlobalCeilingEntryForEntry. Prefer
-	// replacing this number with that mechanical assertion the next time a
-	// tool is added, rather than growing the literal again.
-	const wantToolCount = 85
-	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
-		t.Errorf(
-			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",
-			wantToolCount,
-			got,
-		)
+	// That identity is NOT asserted here, and deliberately no longer has a
+	// hardcoded count standing in for it. Package config cannot import
+	// pkg/coreagent (pkg/coreagent already imports pkg/config — that direction
+	// is a cycle), so the only thing this package could ever express was a
+	// magic number, which is a strictly weaker control: it says "expected 85,
+	// got 86" while the real question is WHICH tool is missing from WHICH
+	// surface, and it has to be hand-grown (with a paragraph of changelog
+	// prose) every time a tool lands.
+	//
+	// The real, mechanical, by-name guard runs from the other side, where the
+	// import direction is legal: pkg/coreagent's
+	// TestCatalog_MatchesGlobalCeilingEntryForEntry checks BOTH directions
+	// (every catalog name has a ceiling entry; every ceiling entry is in the
+	// catalog) plus length equality, and names the offending tool when it
+	// fails. pkg/gateway's TestBuildKnownBuiltinToolNames_MatchesCoreagentStatic
+	// ToolCatalog closes the third side (the live tool registry). Do not
+	// reintroduce a count literal here — add the tool to both surfaces and let
+	// those two tests speak.
+	//
+	// What IS still asserted locally is that the map is non-empty and that
+	// every entry carries a legal, explicit policy value — the sweep below —
+	// so a corrupted or wildcard-bearing ceiling still fails in this package.
+	if len(cfg.Sandbox.ToolPolicies) == 0 {
+		t.Fatal("sandbox.tool_policies must be a fully-enumerated global ceiling, got no entries")
+	}
+	for name, policy := range cfg.Sandbox.ToolPolicies {
+		switch policy {
+		case "allow", "ask", "deny":
+		default:
+			t.Errorf("tool %q has illegal seeded policy %q — must be allow, ask or deny", name, policy)
+		}
+		if strings.ContainsAny(name, "*?") {
+			t.Errorf(
+				"tool %q is a wildcard entry — the static builtin ceiling must be literal and "+
+					"wildcard-free (CLAUDE.md hard constraint 6); wildcards are the MCP exception only",
+				name,
+			)
+		}
 	}
 
 	// Every non-destructive, non-ADR-052-planning-ask entry must be "allow" —

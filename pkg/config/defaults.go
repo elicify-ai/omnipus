@@ -449,6 +449,39 @@ func DefaultConfig() *Config {
 				//    deliberately does not.
 				"plan_correct": "allow",
 				"stop_plan":    "allow",
+
+				// --- ADR-056 (list_jobs) background-job roster ---
+				// "allow", for three reasons, the third of which is the one
+				// that would actually break something:
+				//
+				// 1. It mutates nothing. list_jobs is strictly read-only, is
+				//    fail-closed on an unresolvable caller identity (it refuses
+				//    rather than returning the whole installation's roster),
+				//    scopes every row to the calling principal, and bounds its
+				//    own output. There is no destructive action for an "ask" to
+				//    stand in front of.
+				// 2. An "ask" ceiling would put a human prompt in front of an
+				//    agent reading its OWN work roster, on every call — the
+				//    highest-frequency, lowest-consequence call in the planning
+				//    surface.
+				// 3. Under the strictest-wins global x agent merge
+				//    (pkg/tools/compositor.go:resolveEffectivePolicyWith) an
+				//    "ask" ceiling would drag every per-agent "allow" down to
+				//    "ask" — including Jim's. Jim's stop_plan resolves "allow"
+				//    precisely so a runaway plan can be contained with no human
+				//    in the loop, and stop_plan takes a PLAN ID. Gating the one
+				//    tool that produces that id behind a prompt hands the human
+				//    dependency straight back and makes the asymmetric stop_plan
+				//    ceiling directly above pointless. Same defect shape as
+				//    inspect_session and plan_correct, third time.
+				//
+				// As always, raising the ceiling grants the tool to nobody by
+				// itself: the four base agents carry an explicit per-agent
+				// "allow" and every other seeded agent an explicit "deny"
+				// (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
+				// including the Worker's sparse-map deny — an absent key there
+				// would inherit this "allow").
+				"list_jobs": "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds

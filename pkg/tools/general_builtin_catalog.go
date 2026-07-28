@@ -43,7 +43,7 @@ import (
 // Constructor errors are logged at Warn level and the corresponding tool is
 // skipped. The caller must not treat a shorter-than-expected slice as fatal.
 func GeneralBuiltinMetadata() []Tool {
-	out := make([]Tool, 0, 39)
+	out := make([]Tool, 0, 42)
 
 	// --- bash (CategoryShell, ScopeCore) — ADR-036 merge of
 	// exec/workspace_shell/workspace_shell_bg into one universally-registered
@@ -123,6 +123,38 @@ func GeneralBuiltinMetadata() []Tool {
 	// inspect_session: verifier-role-only (ceiling-deny for every ordinary
 	// agent); listed here purely as a capability-reference entry.
 	out = append(out, NewInspectSessionTool(nil))
+
+	// --- ADR-055 (PlanSupervisor) supervision + containment (CategoryTasks) ---
+	// plan_correct is PlanSupervisor's entire grant; stop_plan is the plan
+	// OWNER's containment control (deliberately inverse authorities — the
+	// adjudicator corrects, the owner contains).
+	//
+	// Listing them here is not cosmetic: pkg/gateway's
+	// buildKnownBuiltinToolNames() derives the Constraint #6 tool-policy
+	// COVERAGE UNIVERSE by walking this catalog, and both names are already in
+	// pkg/coreagent's allStaticToolNames seed literal and in pkg/config's
+	// global ceiling. A name present on those two surfaces but absent from the
+	// live catalog is exactly the drift
+	// TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog exists
+	// to catch — and it leaves the tools invisible to GET /api/v1/tools.
+	//
+	// Nil stores and no engine hook: metadata only. Both tools FAIL CLOSED on
+	// an unwired hook rather than reporting a correction/stop that never
+	// happened, so a stray Execute() in this mode errors instead of lying.
+	out = append(out, NewPlanCorrectTool(nil, nil))
+	out = append(out, NewPlanStopTool(nil))
+
+	// --- ADR-056 list_jobs (read-only background-job roster) ---
+	// The one tool that answers "what background work of mine is outstanding,
+	// and what is its handle?" across plans owned, subagents delegated and
+	// standalone tasks. Strictly read-only and fail-closed on an unresolvable
+	// caller identity, so the metadata instance below (nil plan/task/lifecycle
+	// listers) can neither read nor leak anything.
+	//
+	// It is the DISCOVERY half of containment: stop_plan needs a plan id, and
+	// this is where an agent gets one — which is why its global ceiling is
+	// "allow" (pkg/config/defaults.go) rather than mirroring execute_plan.
+	out = append(out, NewListJobsTool(nil, nil, nil))
 
 	// --- Memory tools (CategoryMemory) ---
 	out = append(out, NewRememberTool(nil, nil))

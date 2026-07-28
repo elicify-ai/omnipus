@@ -29,7 +29,34 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// TestPlanSupervisorAgentID_MatchesToolsConstant pins the two independent
+// declarations of the PlanSupervisor identity to each other.
+//
+// pkg/tools/plan_correct.go gates the entire correction path on the literal
+// tools.PlanSupervisorAgentID — deliberately on the exact id rather than on
+// Type == system, so a future System Agent cannot inherit correction rights by
+// existing. pkg/coreagent independently declares IDPlanSupervisor as the id it
+// SEEDS. If those two strings ever diverge, plan_correct denies the very agent
+// the seed created and the correction loop is dead on every install, with both
+// packages' own tests still green — neither can see the other's constant.
+//
+// The assertion lives HERE and not in pkg/tools because the import direction
+// only works this way: pkg/coreagent may import pkg/tools (it already does, in
+// tool_policy_effective_resolution_test.go), while pkg/tools must NOT import
+// pkg/coreagent — pkg/sysagent/tools already imports pkg/coreagent, so the
+// reverse edge would cycle. pkg/agent/plan_engine.go currently carries a THIRD
+// copy of this literal (an unexported planSupervisorAgentID const, added
+// because coreagent.IDPlanSupervisor did not exist yet); swapping it to this
+// constant is pending and belongs to that file's owner.
+func TestPlanSupervisorAgentID_MatchesToolsConstant(t *testing.T) {
+	assert.Equal(t, tools.PlanSupervisorAgentID, string(coreagent.IDPlanSupervisor),
+		"pkg/tools' correction-authority gate and pkg/coreagent's seeded System Agent id must be the "+
+			"SAME string — plan_correct compares the caller id against tools.PlanSupervisorAgentID "+
+			"exactly, so any divergence denies the seeded agent its only tool")
+}
 
 // --- FR-001: membership in all four places ---------------------------------
 
@@ -272,10 +299,16 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 				"amend this test deliberately (the complement failing IS the guard working)", name)
 	}
 
-	// Named call-outs for the four withheld grants the spec argues about at
-	// length, so a future reader sees the decision rather than inferring it
-	// from the sweep above.
-	for _, withheld := range []string{"bash", "write_file", "read_file", "list_directory", "inspect_session", "stop_plan", "execute_plan"} {
+	// Named call-outs for the withheld grants the spec argues about at length,
+	// so a future reader sees the decision rather than inferring it from the
+	// sweep above. list_jobs is named for D-04 specifically: PlanSupervisor is
+	// roster-blind BY DESIGN — an adjudicator that could see it had three
+	// parked plans would have a reason to act outside the single wake it was
+	// given, which is the opposite of "one correction per wake".
+	for _, withheld := range []string{
+		"bash", "write_file", "read_file", "list_directory",
+		"inspect_session", "stop_plan", "execute_plan", "list_jobs",
+	} {
 		assert.Equalf(t, config.ToolPolicyDeny, pol[withheld],
 			"%q is deliberately withheld from PlanSupervisor", withheld)
 	}
