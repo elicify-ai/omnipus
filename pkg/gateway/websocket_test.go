@@ -70,6 +70,55 @@ func sendWSAuthFrameDevMode(t *testing.T, conn *websocket.Conn) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data), "auth frame write")
 }
 
+// busDeliveryTimeout bounds how long a test waits for the WS handler to publish
+// an inbound message to the bus.
+//
+// This is a FAILSAFE, not a latency assertion. These tests assert that a frame
+// IS delivered to the bus, never that it is delivered quickly. The publish is
+// preceded by session minting, which performs several fsync-backed atomic
+// writes (fileutil.WriteFileAtomic calls tmpFile.Sync()), so the wall-clock
+// cost of the path tracks whatever else is hammering the disk and scheduler at
+// the time — it is not a property of the code under test.
+//
+// The previous 3s budget turned every one of these into a wall-clock timing
+// test. It fired on the CI worker's contended full-suite run (pkg/gateway,
+// 2026-07-28) for TestWSHandlerMessagePublishedToBus and
+// TestWSHandlerMessageMediaThreadedToBus even though the handler had published
+// normally: no "ws: failed to publish message", no "ws: could not create
+// session" and no "ws: auth read failed" appeared anywhere in that run's log,
+// and every early return in handleChatMessage logs before returning.
+const busDeliveryTimeout = 30 * time.Second
+
+// awaitInboundMessage waits for the next message the WS handler publishes to
+// msgBus and returns it, failing the test if none ever arrives. what names the
+// expectation so a genuine non-delivery says which one broke.
+//
+// It reads the bus DIRECTLY rather than through a relay goroutine. The inbound
+// channel is buffered (bus.defaultBusBufferSize == 64) and these tests are its
+// only consumer — the agent loop is constructed but never Start()ed — so a
+// message published before this call is already waiting in the buffer. There is
+// nothing to miss by subscribing "late", which is why no goroutine is needed.
+//
+// The relay-goroutine form this replaces was actively harmful. It armed a
+// SECOND timer that started BEFORE the frame was written, while the caller's
+// timer started after, so the relay always expired first. On a slow box the
+// relay could give up and exit while the message was still in flight; the
+// caller then reported "message was not published to bus" for a message that
+// HAD been published, blaming the production publish path for what was purely
+// a harness artifact. Worse, whenever both of the relay's select cases were
+// ready at once Go chose between them at random, so it could discard a message
+// that had arrived comfortably within budget.
+func awaitInboundMessage(t *testing.T, msgBus *bus.MessageBus, what string) bus.InboundMessage {
+	t.Helper()
+	select {
+	case msg := <-msgBus.InboundChan():
+		return msg
+	case <-time.After(busDeliveryTimeout):
+		t.Fatalf("%s: no message reached the bus within %s", what, busDeliveryTimeout)
+		return bus.InboundMessage{} // unreachable: t.Fatalf ends the goroutine.
+	}
+}
+
 // --- E1: WebSocket handler tests ---
 
 // TestWSHandlerNoAuthRequired verifies that when OMNIPUS_BEARER_TOKEN is unset,
@@ -237,27 +286,13 @@ func TestWSHandlerMessagePublishedToBus(t *testing.T) {
 	// Authenticate first — required by authenticateWS before any other frames.
 	sendWSAuthFrameDevMode(t, conn)
 
-	// Listen on the bus before sending the message.
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "publish-to-bus-test"}
 	msgData, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "webchat", msg.Channel)
-		assert.Equal(t, "publish-to-bus-test", msg.Content)
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds")
-	}
+	msg := awaitInboundMessage(t, msgBus, "message frame must reach the bus")
+	assert.Equal(t, "webchat", msg.Channel)
+	assert.Equal(t, "publish-to-bus-test", msg.Content)
 }
 
 // TestWSHandlerMessageMediaThreadedToBus is the #254 regression test: media://
@@ -274,15 +309,6 @@ func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	msgFrame := wsClientFrameTestHelper{
 		Type:    "message",
 		Content: "look at this image",
@@ -292,15 +318,11 @@ func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
 	msgData, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "look at this image", msg.Content)
-		// #254: the valid ref is threaded; the bogus one is dropped.
-		require.Equal(t, []string{"media://abc123"}, msg.Media,
-			"only well-formed media:// refs must reach the agent loop")
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds")
-	}
+	msg := awaitInboundMessage(t, msgBus, "media-bearing message frame must reach the bus")
+	assert.Equal(t, "look at this image", msg.Content)
+	// #254: the valid ref is threaded; the bogus one is dropped.
+	require.Equal(t, []string{"media://abc123"}, msg.Media,
+		"only well-formed media:// refs must reach the agent loop")
 }
 
 // TestWSHandlerMessageMediaOnly_NotDropped verifies that a message frame with
@@ -322,15 +344,6 @@ func TestWSHandlerMessageMediaOnly_NotDropped(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	msgFrame := wsClientFrameTestHelper{
 		Type:    "message",
 		Content: "",
@@ -339,14 +352,11 @@ func TestWSHandlerMessageMediaOnly_NotDropped(t *testing.T) {
 	msgData, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "", msg.Content)
-		require.Equal(t, []string{"media://abc123"}, msg.Media,
-			"a media-only message (empty content) must still thread its media ref to the bus")
-	case <-time.After(3 * time.Second):
-		t.Fatal("media-only message was silently dropped instead of reaching the bus within 3 seconds")
-	}
+	msg := awaitInboundMessage(t, msgBus,
+		"media-only message must not be silently dropped")
+	assert.Equal(t, "", msg.Content)
+	require.Equal(t, []string{"media://abc123"}, msg.Media,
+		"a media-only message (empty content) must still thread its media ref to the bus")
 }
 
 // TestWSHandlerMessageMediaBogusRef_IncreasesDropCount verifies that a
@@ -364,14 +374,6 @@ func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	// Drain bus concurrently.
-	received := make(chan bus.InboundMessage, 2)
-	go func() {
-		for msg := range msgBus.InboundChan() {
-			received <- msg
-		}
-	}()
-
 	// Send a message with ONLY bogus refs — no valid media:// refs.
 	// Also send "media://" (empty ID) which ParseMediaRef rejects.
 	const bogusCount = 3
@@ -383,16 +385,14 @@ func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 	msgData, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
-	// Wait briefly for the frame to be processed.
-	time.Sleep(150 * time.Millisecond)
-
-	select {
-	case msg := <-received:
-		// The message reached the bus but Media must be empty.
-		assert.Empty(t, msg.Media, "bogus refs must not reach the bus Media field")
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds")
-	}
+	// The message reached the bus but Media must be empty. Waiting for the bus
+	// message is also what makes the inboundDropped assertion below race-free:
+	// handleChatMessage increments that counter for every rejected ref BEFORE
+	// it publishes, so once the message is in hand the counter is already
+	// final. This replaces a bare time.Sleep(150ms), which asserted nothing and
+	// only happened to be long enough.
+	msg := awaitInboundMessage(t, msgBus, "message with only bogus media refs must still reach the bus")
+	assert.Empty(t, msg.Media, "bogus refs must not reach the bus Media field")
 
 	// Assert the per-connection inboundDropped counter.
 	// wsConnChatIDsForTest gives us the chatID of the active connection so we can
@@ -431,26 +431,14 @@ func TestWSHandlerAuthNotRequired_NoFirstFrameNeeded(t *testing.T) {
 	// Authenticate first — required by authenticateWS before any other frames.
 	sendWSAuthFrameDevMode(t, conn)
 
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	// Send message directly (no auth frame first) — must be accepted.
 	frame := wsClientFrameTestHelper{Type: "message", Content: "no-auth-needed"}
 	data, _ := json.Marshal(frame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "no-auth-needed", msg.Content)
-	case <-time.After(3 * time.Second):
-		t.Fatal("message not received on bus — server may have required auth")
-	}
+	msg := awaitInboundMessage(t, msgBus,
+		"message must reach the bus — server may have required auth")
+	assert.Equal(t, "no-auth-needed", msg.Content)
 }
 
 // TestWSHandlerAuthRequired_InvalidTokenRejected verifies that when

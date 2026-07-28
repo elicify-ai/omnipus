@@ -284,26 +284,14 @@ func TestAuthenticateWS_LogsInvalidSessionCookie(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData),
 		"the frame-based fallback must still authenticate after an invalid cookie")
 
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after invalid cookie"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
-	select {
-	case msg := <-received:
-		assert.Equal(t, "ws-frame-user", msg.GatewayUserID,
-			"the connection must still authenticate via the frame fallback")
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3 seconds — frame-fallback auth did not complete")
-	}
+	msg := awaitInboundMessage(t, msgBus, "frame-fallback auth must complete and publish the message")
+	assert.Equal(t, "ws-frame-user", msg.GatewayUserID,
+		"the connection must still authenticate via the frame fallback")
 
 	assert.True(t, recorder.contains("cookie present but invalid"),
 		"authenticateWS must log the SFH-1 signal for a present-but-invalid cookie before falling "+

@@ -19,8 +19,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // readFrameOfType drains incoming frames until it receives one with the
@@ -303,15 +301,6 @@ func TestWS_Message_FindsSession_InPerAgentStore(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	received := make(chan bus.InboundMessage, 1)
-	go func() {
-		select {
-		case msg := <-msgBus.InboundChan():
-			received <- msg
-		case <-time.After(3 * time.Second):
-		}
-	}()
-
 	// Capture any error frames the server emits — drives the assertion that
 	// "session not found" is NOT one of them.
 	type errCapture struct {
@@ -365,12 +354,17 @@ func TestWS_Message_FindsSession_InPerAgentStore(t *testing.T) {
 	}
 
 	// Assertion 2: bus delivery happened with the supplied session_id.
-	select {
-	case msg := <-received:
-		assert.Equal(t, meta.ID, msg.SessionID,
-			"bus message must carry the resolved session_id")
-		assert.Equal(t, "follow-up after task completion", msg.Content)
-	case <-time.After(3 * time.Second):
-		t.Fatal("message was not published to bus within 3s — per-agent session lookup likely still broken")
-	}
+	//
+	// Read the bus only NOW, after Assertion 1 — safe because the inbound
+	// channel is buffered, so a message published while Assertion 1 was still
+	// waiting is sitting in the buffer. The relay goroutine this replaces armed
+	// its 3s timer BEFORE Assertion 1, which could burn 2s of that budget, so a
+	// delivery slower than ~1s was discarded by the relay and reported here as
+	// "per-agent session lookup likely still broken" — a diagnosis with no
+	// connection to the actual cause.
+	msg := awaitInboundMessage(t, msgBus,
+		"per-agent session lookup must resolve and publish the message")
+	assert.Equal(t, meta.ID, msg.SessionID,
+		"bus message must carry the resolved session_id")
+	assert.Equal(t, "follow-up after task completion", msg.Content)
 }
