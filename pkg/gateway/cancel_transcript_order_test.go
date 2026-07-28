@@ -120,8 +120,13 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 		cancelRun()
 		select {
 		case <-runDone:
-		case <-time.After(2 * time.Second):
-			t.Logf("agent loop Run did not exit within 2s of cancel")
+		case <-time.After(cancelTestTurnStartDeadline):
+			// Log-only: never fails the test. Kept on the shared budget so a
+			// slow host cannot surface this line inside an unrelated failure
+			// block and read like the cause — which is exactly what it did in
+			// the ci-omnipus-2 @670a8c0c run, where the real failure was the
+			// "token" read below timing out.
+			t.Logf("agent loop Run did not exit within %v of cancel", cancelTestTurnStartDeadline)
 		}
 	})
 	time.Sleep(20 * time.Millisecond) // let Run start reading from the bus
@@ -141,14 +146,17 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
+	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)
 	sessionID := started.SessionID
 	require.NotEmpty(t, sessionID, "session_started must carry a non-empty session_id")
 
 	// Wait for the token frame confirming streaming has actually begun —
 	// the provider is now blocked on ctx.Done(), simulating an in-flight
 	// generation, exactly the window a real mid-stream cancel targets.
-	tokenFrame := readFrameOfType(t, conn, "token", 5*time.Second)
+	// This read is the one that blew its 5s budget on ci-omnipus-2 @670a8c0c
+	// ("read error: i/o timeout") while the turn was merely starting slowly.
+	// See cancelTestTurnStartDeadline.
+	tokenFrame := readFrameOfType(t, conn, "token", cancelTestTurnStartDeadline)
 	require.NotEmpty(t, tokenFrame.Content, "token frame must carry the streamed chunk")
 
 	// Cancel through the REAL production cancel path — the same
@@ -164,7 +172,7 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 	require.True(t, outcome.Fired, "RequestCancel must fire for the actively-streaming turn")
 
 	// Wait for the turn to fully finish and emit its done frame.
-	doneFrame := readFrameOfType(t, conn, "done", 5*time.Second)
+	doneFrame := readFrameOfType(t, conn, "done", cancelTestTurnStartDeadline)
 	assert.Equal(t, sessionID, doneFrame.SessionID)
 
 	// Brief settle window for the deferred transcript writes (finalizeStreamer

@@ -31,6 +31,30 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
+// cancelTestTurnStartDeadline bounds "the server never got this far" for the
+// WS cancel tests (cancel_audit_test.go, cancel_two_stage_test.go,
+// cancel_transcript_order_test.go). It is a HANG DETECTOR, not a performance
+// assertion — nothing about these tests gets slower by making it large,
+// because every wait it guards is on a latching signal (a closed `ready`
+// channel, or a frame that has already been queued) and so returns the
+// instant the event happens.
+//
+// It is deliberately ~100x the healthy cost. On an idle machine the whole
+// span it covers — WS dial, message publish, route, context assembly
+// (memrooms index rebuild included), and the provider entering Chat —
+// completes inside 0.3s. The previous value was 5s, which sounds generous but
+// is only a ~16x margin, and that was NOT enough: on the shared CI worker
+// this exact span has been measured at >5s while the host was stalled, and
+// all three tests failed together in one run (ci-omnipus-2 @670a8c0c) with
+// "BLOCKED: ... never entered Chat" and readFrameOfType i/o timeouts. Those
+// were false negatives — the turn was starting normally, just slowly.
+//
+// Note the failure mode this trades against is benign: a genuinely wedged
+// server now reports after 30s instead of 5s, still far inside the package's
+// own -timeout. Do NOT "optimise" this back down to shave test time; it costs
+// nothing on a healthy run.
+const cancelTestTurnStartDeadline = 30 * time.Second
+
 // blockingCancelProvider blocks Chat until its context is canceled. Signals
 // via ready when the provider has entered Chat so tests know a turn is in flight.
 type blockingCancelProvider struct {
@@ -109,8 +133,11 @@ func newCancelTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, string, 
 		cancel()
 		select {
 		case <-runDone:
-		case <-time.After(3 * time.Second):
-			t.Logf("agent loop Run did not exit within 3s")
+		case <-time.After(cancelTestTurnStartDeadline):
+			// Log-only: this never fails the test. It is on the same budget as
+			// the assertions above so a slow host cannot make this line appear
+			// inside an unrelated failure block and read like the cause.
+			t.Logf("agent loop Run did not exit within %v", cancelTestTurnStartDeadline)
 		}
 	})
 	time.Sleep(20 * time.Millisecond)
@@ -191,14 +218,17 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	data, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
+	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)
 	sessionID := started.SessionID
 	require.NotEmpty(t, sessionID)
 
 	// Wait until the blocking provider is inside Chat (turn is genuinely in flight).
+	// bp.ready is CLOSED (not sent to) on first Chat entry, so this select can
+	// never miss the signal no matter how late it is armed — the deadline only
+	// bounds a genuine hang. See cancelTestTurnStartDeadline.
 	select {
 	case <-bp.ready:
-	case <-time.After(5 * time.Second):
+	case <-time.After(cancelTestTurnStartDeadline):
 		t.Fatal("BLOCKED: blockingCancelProvider never entered Chat — turn did not start in time")
 	}
 
@@ -208,9 +238,17 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// The cancel_stage frame confirms the graceful phase fired.
-	readFrameOfType(t, conn, "cancel_stage", 3*time.Second)
+	readFrameOfType(t, conn, "cancel_stage", cancelTestTurnStartDeadline)
 
 	// Drain until the turn exits.
+	//
+	// This one deliberately does NOT use cancelTestTurnStartDeadline. Unlike
+	// every other wait in this test, its result is DISCARDED, and no `done`
+	// frame for this session id actually arrives here — so the call always
+	// runs its timeout out in full and returns false unnoticed. It is a settle
+	// window in practice, not a hang detector, which means its duration is
+	// added to this test's wall-clock time verbatim: raising it to the shared
+	// 30s budget took the test from 5.08s to 30.08s. Keep it small.
 	drainUntilSessionDone(t, conn, sessionID, 5*time.Second)
 
 	// ASSERT 1: turn_cancel_attempt must appear in the real audit log.
@@ -222,7 +260,7 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 			}
 		}
 		return false
-	}, 3*time.Second, 30*time.Millisecond,
+	}, cancelTestTurnStartDeadline, 30*time.Millisecond,
 		"turn_cancel_attempt must be written by the real cancel state machine")
 
 	// Count events before second cancel.
@@ -251,7 +289,7 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 			}
 		}
 		return count >= firstCount+1
-	}, 3*time.Second, 30*time.Millisecond,
+	}, cancelTestTurnStartDeadline, 30*time.Millisecond,
 		"second cancel must produce a second turn_cancel_attempt (was_fired=false), total events: %v",
 		readAuditEventNamesFromDir(t, auditDir))
 }

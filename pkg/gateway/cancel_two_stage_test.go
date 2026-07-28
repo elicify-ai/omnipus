@@ -171,8 +171,11 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 		cancel()
 		select {
 		case <-runDone:
-		case <-time.After(5 * time.Second):
-			t.Logf("agent loop Run did not exit within 5s")
+		case <-time.After(cancelTestTurnStartDeadline):
+			// Log-only: never fails the test. Kept on the shared budget so a
+			// slow host cannot surface this line inside an unrelated failure
+			// block and read like the cause.
+			t.Logf("agent loop Run did not exit within %v", cancelTestTurnStartDeadline)
 		}
 	})
 	t.Cleanup(ip.Shutdown)
@@ -193,14 +196,17 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 	data, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
+	started := readFrameOfType(t, conn, "session_started", cancelTestTurnStartDeadline)
 	sessionID := started.SessionID
 	require.NotEmpty(t, sessionID)
 
-	// Wait until the iron provider is inside Chat.
+	// Wait until the iron provider is inside Chat. ip.ready is CLOSED (not
+	// sent to) on first Chat entry, so this select cannot miss the signal
+	// however late it is armed — the deadline only bounds a genuine hang.
+	// See cancelTestTurnStartDeadline.
 	select {
 	case <-ip.ready:
-	case <-time.After(5 * time.Second):
+	case <-time.After(cancelTestTurnStartDeadline):
 		t.Fatal("BLOCKED: ironProvider never entered Chat")
 	}
 

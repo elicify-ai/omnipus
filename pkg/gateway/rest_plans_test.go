@@ -385,19 +385,25 @@ func TestPlanStop_RequiresRunning(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	wsID := createTestWorkspace(t, api, "Stop WS")
 
+	// Every status assertion below carries the response body. This test failed
+	// once on ci-omnipus-2 (@670a8c0c) and was undiagnosable after the fact:
+	// the CI flake filter keeps only the "--- FAIL" header line, and the bare
+	// assertions here named no body, so which of the four calls broke — and
+	// why — could not be recovered from the run log. Keep the bodies.
 	wCreate := postPlan(t, api, wsID,
 		`{"workspace_id":"`+wsID+`","title":"Stoppable","owner_agent_id":"`+testPlansAgentID+`"}`)
-	require.Equal(t, http.StatusCreated, wCreate.Code)
+	require.Equal(t, http.StatusCreated, wCreate.Code, "create body=%s", wCreate.Body.String())
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 
 	// Stop on a draft plan -> 400.
 	wStopDraft := postPlanAction(t, api, p.Id, "stop")
-	assert.Equal(t, http.StatusBadRequest, wStopDraft.Code)
+	assert.Equal(t, http.StatusBadRequest, wStopDraft.Code,
+		"draft stop body=%s", wStopDraft.Body.String())
 
 	// draft -> approved (soft tier, empty DoD, no members).
 	wApprove := postPlanAction(t, api, p.Id, "approve")
-	require.Equal(t, http.StatusOK, wApprove.Code)
+	require.Equal(t, http.StatusOK, wApprove.Code, "approve body=%s", wApprove.Body.String())
 
 	// approved -> running (legal transition; the engine would normally do
 	// this on its next tick, but this test drives the transition directly
