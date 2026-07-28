@@ -9474,6 +9474,81 @@ func (al *AgentLoop) assembleMessages(
 	)
 }
 
+// sentToolSurfaceTokens estimates the tokens the tool surface ACTUALLY costs on
+// the wire for this agent+session — the non-evictable overhead history has to
+// fit around.
+//
+// This is deliberately NOT agent.Tools.ToProviderDefs(): that returns a full
+// JSON schema for EVERY registered tool, but under a compressed manifest only
+// three groups are sent (buildCompressedToolDefs, tool_manifest.go):
+//
+//   - ManifestFull  — full schema, every turn
+//   - ManifestInfra — full schema (load_tool is always callable)
+//   - ManifestLazy  — full schema ONLY while loaded this session; otherwise it
+//     is one line in the compact manifest block, ~25x cheaper
+//
+// Charging every lazy tool a full schema made the budget shrink with the size
+// of the CATALOG rather than the size of the REQUEST. With ~15 MCP servers
+// connected (150-450 lazy tools, none of them sent) the over-count exceeds the
+// whole context window, driving the history budget negative: the trimmer would
+// evict every turn, still not fit, and stop at its FR-003 floor keeping only
+// the last user message — silently, on every turn. TestSwitchTime_EndToEnd
+// caught the small-scale version of this at a 20k window.
+//
+// The manifest block is MEASURED via the same builder the turn uses, not
+// approximated by a per-entry constant, so the two cannot drift.
+//
+// When the compressed manifest is off every tool really is sent, so the whole
+// registry is the correct answer and we fall back to it.
+func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, sessionKey string) int {
+	if agent == nil || agent.Tools == nil {
+		return 0
+	}
+	all := agent.Tools.GetAll()
+
+	cfg := al.GetConfig()
+	if cfg == nil || !cfg.Tools.Manifest.Compressed {
+		// Uncompressed: every tool is sent as a full def.
+		return estimateToolDefsTokens(agent.Tools.ToProviderDefs())
+	}
+
+	loaded := al.sessionLoadedTools(sessionKey)
+
+	sent := make([]tools.Tool, 0, len(all))
+	for _, t := range all {
+		switch tools.ToolManifestTier(t.Name()) {
+		case tools.ManifestFull, tools.ManifestInfra:
+			sent = append(sent, t)
+		case tools.ManifestLazy:
+			if loaded[t.Name()] {
+				sent = append(sent, t)
+			}
+		}
+	}
+
+	total := estimateToolDefsTokens(tools.ToolsToProviderDefs(sent))
+	// The compact block for the lazy tools that are NOT loaded. Measured with
+	// the real builder: same input shape the turn passes, same filtering.
+	if note := tools.BuildCompressedManifest(all, loaded); note != "" {
+		total += estimateMessageTokens(providers.Message{Role: "system", Content: note})
+	}
+
+	// Loud, non-fatal: if the surface alone rivals the window, the trimmer will
+	// bottom out on its floor and the agent will look like it lost its memory
+	// for no visible reason. Name the numbers so that is diagnosable from logs.
+	if window := agent.ContextWindow; window > 0 && total > window/2 {
+		logger.WarnCF("agent", "tool definitions occupy over half the context window; "+
+			"history retention will be severely reduced", map[string]any{
+			"agent_id":          agent.ID,
+			"tool_surface_toks": total,
+			"context_window":    window,
+			"tools_registered":  len(all),
+			"tools_sent":        len(sent),
+		})
+	}
+	return total
+}
+
 // evictionTotal counts successful windowTrim evictions (FR-018,
 // context_eviction_total). Exported for test assertions.
 var evictionTotal atomic.Int64
@@ -9499,6 +9574,9 @@ var skipAdvanceTotal atomic.Int64
 //
 // Returns a compressionResult with DroppedMessages/RemainingMessages for
 // event emission, and ok=true when eviction actually occurred.
+//
+// The tool-surface term is what the turn ACTUALLY SENDS, not the whole
+// registry — see sentToolSurfaceTokens.
 func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
 	window := agent.Sessions.GetHistory(sessionKey)
 	if len(window) <= 1 {
@@ -9506,8 +9584,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		return compressionResult{NothingToTrim: true}, false
 	}
 
-	toolDefs := agent.Tools.ToProviderDefs()
-	toolDefsTokens := estimateToolDefsTokens(toolDefs)
+	toolDefsTokens := al.sentToolSurfaceTokens(agent, sessionKey)
 
 	// Recall span tokens — updated after a potential drop below.
 	recallSpan := al.activeRecallSpan(sessionKey)
