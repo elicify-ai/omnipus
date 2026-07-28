@@ -225,6 +225,22 @@ type turnState struct {
 	transcriptSessionID string
 	transcriptStore     *session.UnifiedStore
 
+	// askPendingToolCalls holds the tool-call IDs for which a "pending"
+	// approval placeholder has been written to the transcript by
+	// recordAskPendingToolCall (approval_transcript.go), and not yet settled.
+	//
+	// Its only job is to let appendToolCallTranscript settle that placeholder
+	// IN PLACE instead of appending a second entry with the same tool-call ID
+	// (which renders as a duplicate card on replay — the defect
+	// external_dispatch.go's S1 note records for its own flow). Membership is
+	// the cheap pre-check that keeps the read-modify-rewrite off the hot path:
+	// a tool call that never went through the ask gate is never in this map, so
+	// it takes the plain append with no extra file I/O.
+	//
+	// sync.Map rather than a plain map under ts.mu: the settle can arrive from
+	// the async tool callback goroutine as well as the synchronous loop.
+	askPendingToolCalls sync.Map // session.ToolCallID -> struct{}
+
 	// activeAgentResolver, when non-nil, returns the runtime-current active
 	// agent for this session's transcript. It is set at turn construction for
 	// webchat turns (where sessionActiveAgent tracks post-handoff overrides).
@@ -979,6 +995,25 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return
 	}
+
+	// Approval-gate settle (approval_transcript.go): when this call previously
+	// wrote a "pending" placeholder because it blocked on human approval,
+	// REPLACE that entry rather than appending a second one with the same ID.
+	// Only ever true for ask-policy calls that actually reached the approver,
+	// so every other tool call skips straight to the append below.
+	//
+	// The placeholder itself arrives here with Status "pending" and must not
+	// try to replace itself, hence the status guard. A failed replacement falls
+	// through to the append — a duplicate entry is a far better outcome than a
+	// lost record of what the tool did.
+	if tc.Status != toolCallStatusPending {
+		if _, hadPending := ts.askPendingToolCalls.LoadAndDelete(tc.ID); hadPending {
+			if replaceToolCallInTranscript(ts, tc.ID, toolCallStatusPending, tc) {
+				return
+			}
+		}
+	}
+
 	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
 		ID:        string(tc.ID),

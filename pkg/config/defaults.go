@@ -367,23 +367,50 @@ func DefaultConfig() *Config {
 				"delete_agent":             "ask", // irreversible delete
 
 				// --- ADR-052 (autonomous agent plan execution) planning/
-				// verifier tools --- Ceiling is explicit "ask" for the three
-				// plan-execution tools per FR-005/FR-027/DS-6 (Test 2) — never
-				// absent, never deny; this is the seeded DATA value, matching
-				// the spec's literal seed matrix. Worker (sparse ceiling-
-				// inheriting map, pkg/coreagent/core.go) resolves "ask" via
-				// this entry. NOTE (flagged for the ADR-052 owner/architect,
-				// not resolved here — outside this file's ownership): the
-				// runtime global×agent merge is strictest-wins, deny > ask >
-				// allow, applied whenever BOTH sides have an entry
-				// (pkg/tools/compositor.go:resolveEffectivePolicyWith) — so a
-				// ceiling "ask" here, combined with Jim's own seeded "allow"
-				// (pkg/coreagent/core.go's IDJim case), merges to "ask" for
-				// Jim too, not "allow". Seeding still matches the spec's
-				// literal data requirement; whether Jim's actual runtime
-				// resolution needs a call-site exemption from the global
-				// ceiling for these three tools is a cross-cutting resolution
-				// question outside pkg/config's ownership.
+				// verifier tools --- Ceiling is "allow" for the three
+				// plan-execution tools — never absent, never deny.
+				//
+				// It was seeded "ask" (the spec's literal FR-005/FR-027/DS-6
+				// Test-2 seed matrix value) until 2026-07-28, when that turned
+				// out to be the THIRD instance of the same landed defect the
+				// inspect_session note below and the ADR-055 note further down
+				// each record: the runtime global x agent merge is
+				// strictest-wins, deny > ask > allow, applied whenever BOTH
+				// sides have an entry
+				// (pkg/tools/compositor.go:resolveEffectivePolicyWith). An
+				// "ask" ceiling here therefore OVERRULED Jim's own seeded
+				// "allow" (pkg/coreagent/core.go's IDJim case) and resolved
+				// "ask" for him too — making FR-005/R2-06's "Jim is the ONLY
+				// seeded agent granted unprompted plan-execution" dead on
+				// every install, in a build where the seed data still read
+				// exactly as the spec required.
+				//
+				// Observed cost before the fix: a 300 s stall per call.
+				// run_task raised an approval nobody was there to answer, the
+				// turn blocked on the default timeout in
+				// pkg/gateway/approvals.go, and the tool never executed at all.
+				//
+				// Raising the ceiling grants these tools to NOBODY by itself —
+				// it only raises the level an agent's own policy may be granted
+				// UP TO. Every seeded agent except Jim carries an explicit
+				// per-agent "ask" for all three (pkg/coreagent/core.go's
+				// coreAgentSeed), the Judge carries an explicit "deny"
+				// (systemAgentSeed, DS-6), and the Worker's sparse
+				// tightenGlobalCeiling map carries its own explicit entries.
+				// All of those still win under strictest-wins, so the only
+				// resolution this change moves is Jim's, from "ask" to the
+				// "allow" he was always seeded. This mirrors exactly what
+				// inspect_session (below) and ADR-055's plan_correct/stop_plan
+				// already do, for the same reason.
+				//
+				// Regression coverage:
+				// pkg/coreagent/tool_policy_effective_resolution_test.go
+				// resolves the seeds end-to-end through the real resolver
+				// (tools.ResolveEffectivePolicy), so a future ceiling
+				// tightening that silently overrules a seeded per-agent
+				// "allow" — for these three tools OR any other, see that
+				// file's bug-class test — fails the build rather than
+				// shipping.
 				// inspect_session is verifier-role-only (fix-wave finding #2,
 				// architect F2 half 1). The runtime global x agent merge is
 				// strictest-wins (deny > ask > allow,
@@ -412,14 +439,13 @@ func DefaultConfig() *Config {
 				// fail-closed verifier-session scope lock
 				// (tools.VerifierSessionScopeAllows): a turn without the
 				// scope is refused every session id regardless of policy.
-				"create_plan":     "ask",
-				"execute_plan":    "ask",
-				"run_task":        "ask",
+				"create_plan":     "allow",
+				"execute_plan":    "allow",
+				"run_task":        "allow",
 				"inspect_session": "allow",
 
 				// --- ADR-055 (PlanSupervisor) supervision/containment ---
-				// Both ceilings are "allow", and NEITHER mirrors
-				// execute_plan's "ask" above. Two independent reasons, both
+				// Both ceilings are "allow". Two independent reasons, both
 				// recorded because either alone breaks the feature:
 				//
 				// 1. plan_correct: an "ask" or "deny" ceiling would OVERRULE
@@ -440,13 +466,15 @@ func DefaultConfig() *Config {
 				// 2. stop_plan: an "ask" ceiling would silently defeat the
 				//    FR-006b seeding rule. pkg/coreagent seeds stop_plan
 				//    alongside execute_plan at the same per-agent value, so
-				//    Jim gets "allow" — but execute_plan's own ceiling is
-				//    "ask", which merges Jim's "allow" back down to "ask".
-				//    Mirroring that ceiling here "for symmetry" would make the
-				//    plan owner stopping their OWN plan resolve "ask", leaving
-				//    containment dependent on a human answering a prompt. The
-				//    per-agent level mirrors execute_plan; the ceiling
-				//    deliberately does not.
+				//    Jim gets "allow" — and an "ask" ceiling here would merge
+				//    that back down to "ask", making the plan owner stopping
+				//    their OWN plan depend on a human answering a prompt.
+				//    (Until 2026-07-28 execute_plan's own ceiling was "ask"
+				//    and this note cited that asymmetry as deliberate; it was
+				//    in fact the same defect, and execute_plan's ceiling has
+				//    since been raised to "allow" too — see the ADR-052 note
+				//    above. The reasoning for stop_plan is unchanged and was
+				//    always correct; only the contrast it drew is gone.)
 				"plan_correct": "allow",
 				"stop_plan":    "allow",
 

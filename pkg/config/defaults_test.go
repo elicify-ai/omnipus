@@ -48,23 +48,38 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 	}
 
-	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — a third
-	// ceiling category alongside "destructive" (ask) and the allow-by-default
-	// rest: the three plan-execution tools are explicit "ask" (never absent,
-	// never deny — only Jim's own seeded policy is "allow").
-	planningAsk := map[string]bool{
+	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — the three
+	// plan-execution tools seed an explicit "allow" CEILING (never absent,
+	// never deny).
+	//
+	// This asserted "ask" until 2026-07-28. That value matched the spec's
+	// literal seed matrix but produced the wrong RESOLVED posture: under the
+	// strictest-wins global x agent merge, an "ask" ceiling overruled Jim's own
+	// seeded "allow" and resolved "ask" for him too, making FR-005/R2-06's
+	// "Jim is the ONLY seeded agent granted unprompted plan-execution" dead on
+	// every install — and costing a 300 s approval-timeout stall per call.
+	//
+	// A ceiling grants nothing by itself; it only bounds what a per-agent
+	// policy may be granted up to. The real resolved posture — Jim allow,
+	// every other seeded agent ask, Judge deny — is asserted from the side
+	// where the import direction is legal and the REAL resolver can be called:
+	// pkg/coreagent's TestEffectiveResolution_PlanExecution_DefaultCeiling_
+	// JimAllowOthersAsk. This assertion only pins the ceiling literal so that
+	// tightening it back to "ask" has to delete a named reason first.
+	planningAllowCeiling := map[string]bool{
 		"create_plan":  true,
 		"execute_plan": true,
 		"run_task":     true,
 	}
-	for name := range planningAsk {
+	for name := range planningAllowCeiling {
 		got, ok := cfg.Sandbox.ToolPolicies[name]
 		if !ok {
 			t.Errorf("expected sandbox.tool_policies to seed an entry for %q, found none", name)
 			continue
 		}
-		if got != "ask" {
-			t.Errorf("expected seeded ceiling policy 'ask' for plan-execution tool %q, got %q", name, got)
+		if got != "allow" {
+			t.Errorf("expected seeded ceiling policy 'allow' for plan-execution tool %q, got %q "+
+				"(an 'ask' ceiling silently overrules Jim's seeded 'allow' under strictest-wins)", name, got)
 		}
 	}
 	// inspect_session (fix-wave finding #2, architect F2 half 1): the ceiling
@@ -79,15 +94,17 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	}
 
 	// ADR-055 (PlanSupervisor) — the supervision/containment pair. BOTH
-	// ceilings are "allow" and neither mirrors execute_plan's "ask": an "ask"
-	// or "deny" ceiling on plan_correct would overrule PlanSupervisor's own
-	// seeded "allow" under strictest-wins (the inspect_session defect,
-	// repeated on the next tool), and an "ask" ceiling on stop_plan would
-	// merge Jim's seeded "allow" down to "ask", making a plan owner stopping
-	// their own plan depend on a human answering a prompt. Asserted
-	// explicitly rather than left to the allow-by-default sweep below, so
-	// someone "restoring symmetry" with execute_plan has to delete a named
-	// assertion carrying the reason.
+	// ceilings are "allow": an "ask" or "deny" ceiling on plan_correct would
+	// overrule PlanSupervisor's own seeded "allow" under strictest-wins (the
+	// inspect_session defect, repeated on the next tool), and an "ask" ceiling
+	// on stop_plan would merge Jim's seeded "allow" down to "ask", making a
+	// plan owner stopping their own plan depend on a human answering a prompt.
+	// Asserted explicitly rather than left to the allow-by-default sweep
+	// below, so someone tightening these has to delete a named assertion
+	// carrying the reason. (Until 2026-07-28 this note contrasted the pair
+	// with execute_plan's "ask" ceiling; that ceiling was the same defect and
+	// is now "allow" too — the reasoning here is unchanged, only the contrast
+	// is gone.)
 	if got := cfg.Sandbox.ToolPolicies["plan_correct"]; got != "allow" {
 		t.Errorf("expected seeded ceiling policy 'allow' for \"plan_correct\", got %q", got)
 	}
@@ -100,9 +117,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// list_jobs is where an agent gets one, and an "ask" ceiling would drag
 	// every per-agent "allow" (Jim's included) down to "ask" under
 	// strictest-wins — re-introducing exactly the human-in-the-loop dependency
-	// stop_plan's asymmetric ceiling exists to remove. Asserted by name for the
-	// same reason as the pair above: "restoring symmetry" with execute_plan
-	// must require deleting a named assertion that carries the reason.
+	// stop_plan's ceiling exists to remove. Asserted by name for the same
+	// reason as the pair above: tightening it must require deleting a named
+	// assertion that carries the reason.
 	if got := cfg.Sandbox.ToolPolicies["list_jobs"]; got != "allow" {
 		t.Errorf("expected seeded ceiling policy 'allow' for \"list_jobs\", got %q", got)
 	}
@@ -151,14 +168,15 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 	}
 
-	// Every non-destructive, non-ADR-052-planning-ask entry must be "allow" —
-	// this is an allow-by-default ceiling, not a narrow ask-list.
-	// disable_channel is explicitly checked as the canonical
-	// "reversible, not destructive" example. inspect_session is no longer
-	// excluded (fix-wave finding #2): it is now seeded "allow" at the
-	// ceiling too, same as any other non-destructive tool.
+	// Every non-destructive entry must be "allow" — this is an allow-by-default
+	// ceiling, not a narrow ask-list. disable_channel is explicitly checked as
+	// the canonical "reversible, not destructive" example. inspect_session is
+	// no longer excluded (fix-wave finding #2), and neither are the three
+	// ADR-052 plan-execution tools (2026-07-28): all four are now seeded
+	// "allow" at the ceiling, same as any other non-destructive tool, with the
+	// real gating done per-agent.
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		if destructive[name] || planningAsk[name] {
+		if destructive[name] {
 			continue
 		}
 		if policy != "allow" {

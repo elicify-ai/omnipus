@@ -29,12 +29,10 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,7 +40,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -632,100 +629,28 @@ func recordExternalToolResult(childTS *turnState, tr *runner.ToolResultEvent) {
 // updates that ToolCall in-place with the final status + result. It returns
 // true when an entry was found and the on-disk rewrite succeeded, false
 // otherwise (caller falls back to appending).
+//
+// The JSONL read-modify-rewrite itself lives in mutateToolCallInTranscript
+// (approval_transcript.go) — shared with the approval gate's pending→denied
+// settle, which needs the identical operation against a different expected
+// status. Only the "which status do I overwrite, and what do I write" policy
+// differs, and that is expressed by the two arguments below.
 func recordExternalToolResultUpdateInPlace(
 	childTS *turnState,
 	callID session.ToolCallID,
 	status string,
 	result map[string]any,
 ) bool {
-	store := childTS.transcriptStore
-	sessionID := childTS.transcriptSessionID
-	transcriptPath := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
-
-	var found bool
-	rewriteErr := fileutil.WithFlock(transcriptPath, func() error {
-		found = false
-		data, err := os.ReadFile(transcriptPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil // no transcript yet — nothing to update
-			}
-			return err
-		}
-
-		// Split into raw lines (preserving malformed lines so the file layout
-		// is unchanged on rewrite).
-		rawLines := bytes.Split(data, []byte{'\n'})
-		targetIdx := -1
-		var updatedEntry session.TranscriptEntry
-		for i, raw := range rawLines {
-			line := bytes.TrimSpace(raw)
-			if len(line) == 0 {
-				continue
-			}
-			var entry session.TranscriptEntry
-			if jErr := json.Unmarshal(line, &entry); jErr != nil {
-				// Skip malformed lines (matches ReadTranscript behavior).
-				continue
-			}
-			if entry.Type != session.EntryTypeToolCall {
-				continue
-			}
-			// Find a ToolCall on this entry with the matching ID whose Status
-			// is still "completed" (the start-of-call entry written by
-			// recordExternalToolCall). Walk the entry's ToolCalls slice.
-			for j := range entry.ToolCalls {
-				if entry.ToolCalls[j].ID != callID {
-					continue
-				}
-				if entry.ToolCalls[j].Status != "completed" {
-					// Already has a final status — leave it (idempotent guard
-					// against double-processing the same result event).
-					continue
-				}
-				targetIdx = i
-				updatedEntry = entry
-				updatedEntry.ToolCalls[j].Status = status
-				updatedEntry.ToolCalls[j].Result = result
-				break
-			}
-			if targetIdx == i {
-				break
-			}
-		}
-		if targetIdx == -1 {
-			return nil // no matching pending entry — signal fallback
-		}
-
-		rewritten, mErr := json.Marshal(updatedEntry)
-		if mErr != nil {
-			return mErr
-		}
-		rawLines[targetIdx] = rewritten
-
-		var buf bytes.Buffer
-		for i, line := range rawLines {
-			// Skip a trailing empty line produced by a final-newline split so
-			// the file does not grow a blank line on each rewrite.
-			if i == len(rawLines)-1 && len(bytes.TrimSpace(line)) == 0 {
-				continue
-			}
-			buf.Write(line)
-			buf.WriteByte('\n')
-		}
-		if wErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); wErr != nil {
-			return wErr
-		}
-		found = true
-		return nil
-	})
-
-	if rewriteErr != nil {
-		slog.Warn("external-cli dispatch: in-place tool-result transcript update failed; falling back to append",
-			"session_id", sessionID, "tool_call_id", string(callID), "err", rewriteErr)
-		return false
-	}
-	return found
+	return mutateToolCallInTranscript(
+		childTS.transcriptStore,
+		childTS.transcriptSessionID,
+		callID,
+		"completed",
+		func(tc *session.ToolCall) {
+			tc.Status = status
+			tc.Result = result
+		},
+	)
 }
 
 // DefaultExternalMaxTurns bounds an external run when the agent declares no

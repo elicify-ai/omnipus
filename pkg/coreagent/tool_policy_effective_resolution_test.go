@@ -77,37 +77,110 @@ func TestEffectiveResolution_InspectSession_JudgeAllow_OthersDeny(t *testing.T) 
 	}
 }
 
-// TestEffectiveResolution_ExecutePlan_DefaultCeiling_EveryoneAsk verifies
-// DS-6's default resolved posture (ADR-052 §6.1): under the DEFAULT ceiling
-// (execute_plan seeded "ask"), strictest-wins means EVERY agent — including
-// Jim, whose own per-agent policy is "allow" — resolves "ask", because ask
-// beats allow. Full autonomy is a deliberate one-seed-edit operator opt-in
-// (the companion test below), not the fresh-install default.
-func TestEffectiveResolution_ExecutePlan_DefaultCeiling_EveryoneAsk(t *testing.T) {
+// TestEffectiveResolution_PlanExecution_DefaultCeiling_JimAllowOthersAsk is
+// the ADR-052 FR-005/R2-06 regression lock, resolved END-TO-END through the
+// real compositor merge.
+//
+// It replaces an earlier test that asserted the OPPOSITE ("every agent
+// including Jim resolves ask under the default ceiling") and, in doing so,
+// locked in the defect it was describing. The seed data always said Jim was
+// "the ONLY seeded agent granted unprompted plan-execution", but the global
+// ceiling was "ask", and strictest-wins (deny > ask > allow) silently
+// overruled his per-agent "allow" to "ask" on every install. The observed
+// symptom was a 300 s stall: run_task raised an approval that, on a headless
+// or unattended turn, nobody answered, and the tool never ran.
+//
+// What makes this a real end-to-end assertion rather than a seed-literal
+// check: it starts from config.DefaultConfig() + the real coreagent.SeedConfig
+// and resolves through tools.ResolveEffectivePolicy — the same function the
+// agent loop's ask-gate and the gateway approval hook both call. A change to
+// EITHER side of the merge (the ceiling in pkg/config/defaults.go or the
+// per-agent seed in pkg/coreagent/core.go) fails this test.
+func TestEffectiveResolution_PlanExecution_DefaultCeiling_JimAllowOthersAsk(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 
-	assert.Equal(t, "ask", resolveFor(t, cfg, string(coreagent.IDJim), "execute_plan", nil),
-		"(Jim, execute_plan) must resolve ask under the default ceiling (ceiling ask beats Jim's own allow)")
-	assert.Equal(t, "ask", resolveFor(t, cfg, string(coreagent.IDRay), "execute_plan", nil),
-		"(Ray, execute_plan) must resolve ask under the default ceiling")
+	for _, tool := range planExecutionTools {
+		assert.Equalf(t, "allow", resolveFor(t, cfg, string(coreagent.IDJim), tool, nil),
+			"(Jim, %s) must RESOLVE allow on a fresh install — he is the only seeded agent "+
+				"granted unprompted plan-execution (ADR-052 FR-005/R2-06). Resolving ask here means "+
+				"the global ceiling in pkg/config/defaults.go has been tightened back to ask and is "+
+				"silently overruling his seeded allow again", tool)
+
+		for _, id := range []coreagent.CoreAgentID{
+			coreagent.IDMia, coreagent.IDRay, coreagent.IDAva, coreagent.IDWorker,
+		} {
+			assert.Equalf(t, "ask", resolveFor(t, cfg, string(id), tool, nil),
+				"(%s, %s) must still resolve ask — raising the ceiling grants the tool to nobody "+
+					"by itself; every seeded agent except Jim carries an explicit per-agent ask "+
+					"that still wins under strictest-wins", id, tool)
+		}
+	}
+
+	// The Judge's explicit per-agent "deny" (systemAgentSeed, DS-6) must also
+	// survive the raised ceiling — deny beats allow in the same merge.
+	for _, tool := range planExecutionTools {
+		assert.Equalf(t, "deny", resolveFor(t, cfg, string(coreagent.IDJudge), tool, nil),
+			"(Judge, %s) must resolve deny — plan-execution is verifier-inapplicable (DS-6)", tool)
+	}
 }
 
-// TestEffectiveResolution_ExecutePlan_CeilingRaised_JimResolvesAllow proves
-// the "one seed-edit away" autonomy claim (ADR-052 §6.1, grill F5): when an
-// operator raises the GLOBAL CEILING entry for execute_plan to "allow", Jim
-// (already seeded "allow" per-agent) resolves "allow" — full autonomy —
-// while every other seeded agent (explicit per-agent "ask") still resolves
-// "ask" and therefore still prompts.
-func TestEffectiveResolution_ExecutePlan_CeilingRaised_JimResolvesAllow(t *testing.T) {
+// TestEffectiveResolution_SeededAgentAllow_IsNeverOverruledByCeiling is the
+// BUG-CLASS lock, not a single-tool lock.
+//
+// The same defect has now landed three times in this codebase — inspect_session
+// (Judge's allow overruled to deny by a "deny" ceiling), ADR-055's plan_correct
+// (caught in review before shipping), and ADR-052's create_plan/execute_plan/
+// run_task (shipped, and cost a 300 s per-call stall). Each was found by hand,
+// on the specific tool someone happened to look at.
+//
+// The invariant: for EVERY seeded agent and EVERY tool in its own policy map,
+// a per-agent "allow" must RESOLVE to "allow". A seed that says allow while the
+// runtime resolves ask (or deny) is a lie in the data — the operator-visible
+// posture disagrees with the seeded intent, and nothing in the type system,
+// the boot-time coverage validation, or the per-tool tests catches it.
+//
+// Note this deliberately does NOT assert the converse. A ceiling legitimately
+// TIGHTENS a per-agent allow down to ask/deny as a design choice in some cases;
+// what it must never do is so SILENTLY. If a future change genuinely needs a
+// ceiling that overrules a seeded allow, this test will fail and the fix is to
+// change the per-agent seed to match reality (so the data is honest), not to
+// weaken this assertion.
+func TestEffectiveResolution_SeededAgentAllow_IsNeverOverruledByCeiling(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 
-	raised := globalPolicyMap(cfg)
-	raised["execute_plan"] = config.ToolPolicyAllow
+	global := globalPolicyMap(cfg)
+	require.NotEmpty(t, global, "default config must seed a global tool-policy ceiling")
 
-	assert.Equal(t, "allow", resolveFor(t, cfg, string(coreagent.IDJim), "execute_plan", raised),
-		"(Jim, execute_plan) must resolve allow once the ceiling is raised to allow")
-	assert.Equal(t, "ask", resolveFor(t, cfg, string(coreagent.IDRay), "execute_plan", raised),
-		"(Ray, execute_plan) must still resolve ask even after the ceiling is raised — Ray's own per-agent entry stays explicit ask")
+	checked := 0
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		if ac.Tools == nil {
+			continue
+		}
+		for tool, perAgent := range ac.Tools.Builtin.Policies {
+			if perAgent != config.ToolPolicyAllow {
+				continue
+			}
+			polCfg := &tools.ToolPolicyCfg{
+				Policies:       ac.Tools.Builtin.Policies,
+				GlobalPolicies: global,
+			}
+			got := tools.ResolveEffectivePolicy(polCfg, tool)
+			checked++
+			assert.Equalf(t, "allow", got,
+				"(%s, %s): seeded per-agent policy is \"allow\" but the REAL resolver returns %q — "+
+					"the global ceiling (%q) is silently overruling the seed under strictest-wins. "+
+					"Either raise the ceiling in pkg/config/defaults.go, or change this agent's own "+
+					"seed in pkg/coreagent/core.go to say what actually happens",
+				ac.ID, tool, got, global[tool])
+		}
+	}
+
+	// Guard against the assertion loop silently covering nothing (an empty
+	// seed, a renamed field) and reporting a vacuous pass.
+	require.Greater(t, checked, 100,
+		"expected the seeded roster to contain many per-agent allow entries; "+
+			"got %d — the seed shape probably changed and this test is no longer covering it", checked)
 }

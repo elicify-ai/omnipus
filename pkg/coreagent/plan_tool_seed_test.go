@@ -15,9 +15,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
-// planExecutionTools are the three new ADR-052 plan-execution tools whose
-// seed matrix DS-6 pins: Jim allow, every other seeded agent + the global
-// ceiling explicit ask (never absent, never deny).
+// planExecutionTools are the three ADR-052 plan-execution tools whose seed
+// matrix DS-6 pins: Jim allow, every other seeded agent explicit ask (never
+// absent, never deny), Judge deny, and — since 2026-07-28 — a global ceiling
+// of "allow" so Jim's grant actually RESOLVES. Shared with
+// tool_policy_effective_resolution_test.go (same test package) so the seed
+// assertions and the end-to-end resolution assertions can never cover
+// different tool sets.
 var planExecutionTools = []string{"create_plan", "execute_plan", "run_task"}
 
 // TestToolPolicy_ExecutePlanSeed verifies DS-6 (Test 2, FR-005/FR-006): a
@@ -58,23 +62,40 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 		}
 	})
 
-	t.Run("Worker deliberately absent from its own map, inherits ceiling ask", func(t *testing.T) {
+	t.Run("Worker carries an explicit ask, never absent", func(t *testing.T) {
 		cfg := &config.Config{}
 		require.True(t, coreagent.SeedConfig(cfg))
 		worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 		require.NotNil(t, worker.Tools)
 		for _, tool := range planExecutionTools {
-			_, ok := worker.Tools.Builtin.Policies[tool]
-			assert.Falsef(t, ok,
-				"Worker's own map must NOT have an explicit entry for %q — it inherits the global ceiling (ask)", tool)
+			p, ok := worker.Tools.Builtin.Policies[tool]
+			// Inverted 2026-07-28. The Worker's map is SPARSE
+			// (tightenGlobalCeiling), so an absent key means "inherit the
+			// ceiling". That was a correct way to get "ask" only while the
+			// ceiling itself was "ask"; once the ceiling was raised to
+			// "allow" (so Jim's seeded allow could resolve at all), absence
+			// here silently GRANTED all three to the Worker. Explicit "ask"
+			// pins the Worker's posture to what it has always been,
+			// independent of where the ceiling moves next.
+			require.Truef(t, ok,
+				"Worker must carry an EXPLICIT entry for %q — its map is sparse, so an absent key "+
+					"inherits the global ceiling, which is now 'allow'", tool)
+			assert.Equalf(t, config.ToolPolicyAsk, p,
+				"Worker must be seeded ask for %q", tool)
 		}
 	})
 
-	t.Run("global ceiling seeds explicit ask for the three tools, explicit allow for inspect_session", func(t *testing.T) {
+	t.Run("global ceiling seeds explicit allow for the three tools and for inspect_session", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		for _, tool := range planExecutionTools {
-			assert.Equalf(t, "ask", cfg.Sandbox.ToolPolicies[tool],
-				"global ceiling must seed 'ask' for %q", tool)
+			// Raised from "ask" on 2026-07-28: an "ask" ceiling overruled
+			// Jim's own seeded "allow" under strictest-wins, making R2-06's
+			// grant dead on every install. The ceiling bounds; the per-agent
+			// entries (asserted above) do the real gating. Resolved posture
+			// is asserted end-to-end in
+			// tool_policy_effective_resolution_test.go.
+			assert.Equalf(t, "allow", cfg.Sandbox.ToolPolicies[tool],
+				"global ceiling must seed 'allow' for %q", tool)
 		}
 		// fix-wave finding #2 (architect F2 half 1): the ceiling seeds
 		// "allow" for inspect_session — under strictest-wins

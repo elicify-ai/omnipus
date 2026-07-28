@@ -453,11 +453,11 @@ func TestPlanContainmentParity_NonOwnersCannotStartAPlan(t *testing.T) {
 }
 
 // TestPlanContainmentParity_OwnerStopsOwnPlan pins the concrete case the
-// asymmetric ceiling exists for (dataset B11): the orchestrator who is the
-// only agent seeded to START a plan unprompted resolves ALLOW for stop_plan —
-// unprompted containment. If stop_plan's ceiling were mirrored from
-// execute_plan's "ask" "for symmetry", this resolves "ask" instead and
-// stopping a runaway plan depends on a human answering a prompt.
+// "allow" stop_plan ceiling exists for (dataset B11): the orchestrator who is
+// the only agent seeded to START a plan unprompted resolves ALLOW for
+// stop_plan — unprompted containment. An "ask" ceiling on stop_plan resolves
+// "ask" instead, and stopping a runaway plan depends on a human answering a
+// prompt.
 func TestPlanContainmentParity_OwnerStopsOwnPlan(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -465,11 +465,16 @@ func TestPlanContainmentParity_OwnerStopsOwnPlan(t *testing.T) {
 	assert.Equal(t, "allow", resolveFor(t, cfg, string(coreagent.IDJim), "stop_plan", nil),
 		"(Jim, stop_plan) must resolve allow on a fresh install — he is the only agent seeded to start "+
 			"a plan unprompted, so he must be able to stop one unprompted too")
-	// The companion half: his execute_plan still resolves "ask" under the
-	// default ceiling. Asserted here so the asymmetry is visible in one place
-	// and cannot be "fixed" by accident.
-	assert.Equal(t, "ask", resolveFor(t, cfg, string(coreagent.IDJim), "execute_plan", nil),
-		"(Jim, execute_plan) still resolves ask under the default ceiling — the two are deliberately asymmetric")
+	// The companion half. This asserted "ask" until 2026-07-28, describing the
+	// two ceilings as "deliberately asymmetric". They were not: execute_plan's
+	// "ask" ceiling was the ADR-052 defect silently overruling Jim's seeded
+	// "allow", and stop_plan only escaped it because its own ceiling had
+	// already been raised for this very test's reason. Both now resolve allow,
+	// which is what FR-006b's parity rule asks for in the first place — an
+	// agent that can start a plan unprompted can stop one unprompted.
+	assert.Equal(t, "allow", resolveFor(t, cfg, string(coreagent.IDJim), "execute_plan", nil),
+		"(Jim, execute_plan) must resolve allow on a fresh install — parity with his stop_plan; "+
+			"an 'ask' here means the global ceiling has been tightened back and is overruling his seed")
 }
 
 // TestPlanContainmentParity_WorkerExplicitDeny covers FR-006b's exception 1.
@@ -492,14 +497,27 @@ func TestPlanContainmentParity_WorkerExplicitDeny(t *testing.T) {
 		assert.Equalf(t, "deny", resolveFor(t, cfg, string(coreagent.IDWorker), name, nil),
 			"(Worker, %s) must RESOLVE deny", name)
 	}
-	// The Worker is the parity rule's sparse-map exception precisely because
-	// it omits execute_plan; confirm that premise still holds, so this test
-	// starts failing (rather than silently passing vacuously) if the Worker
-	// is ever given execute_plan.
-	_, hasExec := worker.Tools.Builtin.Policies["execute_plan"]
-	assert.False(t, hasExec,
-		"the Worker deliberately omits execute_plan (inherits the ceiling's ask) — if that changed, "+
-			"FR-006b's rule now applies to it and its stop_plan entry must follow execute_plan's value")
+	// The Worker holds a non-deny execute_plan alongside a deny stop_plan. That
+	// is FR-006b exception 1, and the premise it rests on is IsChatTarget()
+	// == false (it can never be a Plan.OwnerAgentID, so "starts a plan it
+	// cannot stop" is unreachable) — NOT, as this assertion used to claim, the
+	// fact that its sparse map omitted execute_plan. Omission stopped meaning
+	// "ask" on 2026-07-28 when the ceiling was raised to "allow"; the entry is
+	// now explicit, and its RESOLVED value is unchanged at "ask".
+	//
+	// Assert the resolved value and the real premise, so this test fails if
+	// either the Worker's posture widens or it ever becomes a chat target.
+	execPolicy, hasExec := worker.Tools.Builtin.Policies["execute_plan"]
+	require.True(t, hasExec,
+		"the Worker's sparse map must carry an EXPLICIT execute_plan entry — an absent key inherits "+
+			"the global ceiling, which is now 'allow'")
+	assert.Equal(t, config.ToolPolicyAsk, execPolicy,
+		"the Worker must be seeded ask for execute_plan (unchanged posture, now stated explicitly)")
+	assert.Equal(t, "ask", resolveFor(t, cfg, string(coreagent.IDWorker), "execute_plan", nil),
+		"(Worker, execute_plan) must RESOLVE ask — raising the ceiling must not have widened it to allow")
+	assert.False(t, worker.IsChatTarget(),
+		"the Worker must not be a chat target — that, not the shape of its policy map, is what makes "+
+			"'ask for execute_plan alongside deny for stop_plan' acceptable (FR-006b exception 1)")
 }
 
 // TestPlanContainmentParity_NewCustomAgent covers the FR-006b rule at the

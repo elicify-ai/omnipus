@@ -514,13 +514,21 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 //
 // Two exceptions, each with its own stated reason:
 //
-//  1. A SPARSE map that deliberately omits execute_plan (today exactly one:
-//     the Worker's tightenGlobalCeiling map below) must carry an EXPLICIT
-//     "stop_plan": deny instead. An absent key in a sparse map inherits the
-//     GLOBAL CEILING, and stop_plan's ceiling is "allow" (see
-//     pkg/config/defaults.go) — so absence would silently GRANT it. This is
-//     precisely the trap inspect_session carries an explicit deny for in the
-//     same map.
+//  1. An agent that is NOT a chat target (today exactly one holds a non-deny
+//     execute_plan: the Worker, via the sparse tightenGlobalCeiling map below)
+//     may hold "execute_plan": ask alongside "stop_plan": deny. It is exempt
+//     because it is structurally incapable of being a Plan.OwnerAgentID
+//     (IsChatTarget gates both write paths), so "starts a plan it cannot stop"
+//     is unreachable for it — asserted by
+//     TestPlanContainmentParity_NonOwnersCannotStartAPlan, which is what this
+//     exemption actually rests on. Note this exception used to be phrased as
+//     "a sparse map that deliberately OMITS execute_plan"; the Worker now
+//     carries all three plan-execution tools EXPLICITLY (see the map below —
+//     omission stopped meaning "ask" the moment the ceiling was raised to
+//     "allow"), so the exemption is restated over the property that was always
+//     doing the work rather than over the omission that used to imply it. Its
+//     stop_plan/plan_correct/inspect_session entries stay EXPLICIT deny for the
+//     same ceiling-inheritance reason.
 //  2. PlanSupervisor (systemAgentSeed below) holds NEITHER tool: its override
 //     map names plan_correct and nothing else, so denyAllThenOverride gives it
 //     stop_plan: deny. That is consistent with this rule (it does not seed
@@ -528,12 +536,14 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 //     corrects, the owner contains.
 //
 // Note the requirement is over the seed LITERAL while the property that
-// matters is over the RESOLVED policy, and the two genuinely differ today:
-// execute_plan's global ceiling is "ask", so Jim's own seeded "allow" merges
-// down to "ask" under strictest-wins. stop_plan's ceiling is deliberately
-// "allow" (NOT mirrored from execute_plan "for symmetry") precisely so the
-// owner-stops-their-own-plan case resolves "allow" rather than depending on a
-// human answering a prompt — see pkg/config/defaults.go's stop_plan entry.
+// matters is over the RESOLVED policy. Those two used to differ for Jim:
+// execute_plan's global ceiling was "ask", so his own seeded "allow" merged
+// down to "ask" under strictest-wins while stop_plan's "allow" ceiling let
+// that one resolve "allow". That gap was not a design — it was the ADR-052
+// ceiling defect (see pkg/config/defaults.go), and since 2026-07-28 both
+// ceilings are "allow" and Jim resolves "allow" for both. The parity rule is
+// unchanged and is now satisfied at the resolved level as well as the literal
+// one for every chat target.
 //
 // # SEED RULE — ROSTER VISIBILITY (ADR-056, list_jobs)
 //
@@ -569,6 +579,7 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	allow := config.ToolPolicyAllow
 	deny := config.ToolPolicyDeny
+	ask := config.ToolPolicyAsk
 	if id == IDWorker {
 		// Worker tracks the seeded global tool-policy ceiling
 		// (sandbox.tool_policies, pkg/config/defaults.go) for every tool NOT
@@ -617,10 +628,26 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"list_workspaces":  deny,
 			"get_workspace":    deny,
 			// --- ADR-052 planning/verifier tools ---
-			// create_plan/execute_plan/run_task are deliberately ABSENT
-			// here, same as list_agents/list_tasks above — Worker inherits
-			// them ("ask") from the global ceiling (DS-6), which is
-			// sufficient coverage under the OR-based coverage validator.
+			// create_plan/execute_plan/run_task are EXPLICIT "ask" here.
+			//
+			// They were deliberately ABSENT until 2026-07-28, inheriting
+			// "ask" from the global ceiling (DS-6) — correct only for as
+			// long as that ceiling stayed "ask". When the ceiling was
+			// raised to "allow" (so Jim's own seeded "allow" could finally
+			// resolve at all; see pkg/config/defaults.go's ADR-052 note),
+			// absence here would have silently GRANTED all three to the
+			// Worker: the exact "ceiling is allow, so absence GRANTS" trap
+			// that inspect_session, stop_plan/plan_correct and list_jobs
+			// below each already document, hit a fourth time. Caught by
+			// tool_policy_effective_resolution_test.go — which is why that
+			// test asserts the whole seeded roster, not just Jim.
+			//
+			// "ask", not "deny": this restores exactly the posture the
+			// Worker had before the ceiling moved. Tightening it further
+			// would be an unrelated policy change smuggled in on a bug fix.
+			"create_plan":  ask,
+			"execute_plan": ask,
+			"run_task":     ask,
 			// inspect_session, by contrast, is an EXPLICIT "deny" here
 			// (fix-wave finding #2) — NOT absent: the global ceiling now
 			// seeds inspect_session "allow" (raising the ceiling so the
@@ -996,18 +1023,26 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"remove_mcp_server":        ask,
 			// ADR-052 FR-005/R2-06: Jim is the ONLY seeded agent granted
 			// unprompted plan-execution — consistent with his orchestrator
-			// role. Every other seeded agent + the global ceiling get
-			// explicit "ask" instead (never absent, never deny).
+			// role. Every other seeded agent gets an explicit "ask" instead
+			// (never absent, never deny); the Judge gets "deny"
+			// (systemAgentSeed, DS-6).
+			//
+			// These three RESOLVE to "allow" for Jim only because the global
+			// ceiling for them is also "allow" (pkg/config/defaults.go). It
+			// was "ask" until 2026-07-28, which — under the strictest-wins
+			// global x agent merge — silently overruled all three entries
+			// below and made this whole grant dead on every install. If you
+			// are tightening the ceiling for any of these, you are reverting
+			// that fix: tool_policy_effective_resolution_test.go will fail,
+			// and it is telling you the truth.
 			"create_plan":  allow,
 			"execute_plan": allow,
 			"run_task":     allow,
 			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
 			// same literal value — so the orchestrator who is the only agent
 			// seeded to START a plan unprompted is also the one seeded to STOP
-			// it unprompted. Unlike execute_plan (whose "ask" ceiling merges
-			// Jim's allow down to ask), stop_plan's ceiling is "allow", so
-			// this one actually RESOLVES allow — that is the whole point of
-			// the asymmetric ceiling (see coreAgentSeed's doc comment).
+			// it unprompted. Its ceiling has always been "allow", so it kept
+			// resolving allow even while execute_plan's did not; both now do.
 			"stop_plan": allow,
 			// ADR-056 roster visibility: Jim is the only agent seeded to START
 			// a plan unprompted and the only one whose stop_plan actually

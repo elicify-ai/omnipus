@@ -8367,6 +8367,15 @@ turnLoop:
 					// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
 					// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
 					al.emitScheduledAutoDenyAudit(turnCtx, ts, toolName, tc.ID)
+					// Persist the refusal as a real tool_call entry. This path
+					// never blocks (there is no approver on a headless run), so
+					// there is no pending placeholder to settle — but without
+					// this the scheduled run's transcript showed the tool had
+					// simply never been called, with the reason living only in
+					// the audit log. settleAskToolCallTranscript appends when it
+					// finds no placeholder, which is exactly this case.
+					settleAskToolCallTranscript(
+						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
 					deniedMsg := providers.Message{
 						Role:       "tool",
 						Content:    denyMsg,
@@ -8396,10 +8405,38 @@ turnLoop:
 				// now that the legacy WS-frame gate, wsApprovalHook, has been
 				// retired), then fall through to interactive human approval
 				// (FR-011) only when no grant is on file.
-				approved, denialReason := al.CheckGrantOrRequestApproval(
-					turnCtx, ts.transcriptSessionID, ts.agentID, toolName, tc.ID, ts.turnID, toolArgs,
-				)
+				//
+				// A standing grant resolves without ever contacting a human, so
+				// it must NOT write a pending placeholder — that would render an
+				// "awaiting approval" card for a call nobody was asked about.
+				// Consult the grant store separately here (CheckGrantOrRequestApproval
+				// consults the SAME store first, so a granted call still
+				// short-circuits identically), and write the placeholder only on
+				// the path that genuinely blocks on a human.
+				approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName)
+				denialReason := ""
 				if !approved {
+					// About to block on a human, for up to the approval
+					// registry's timeout (300 s by default — see
+					// pkg/gateway/approvals.go). Record the call as `pending`
+					// FIRST so the thread shows what the turn is waiting on for
+					// the whole wait, and so a reload mid-wait still shows it:
+					// the tool_approval_required WS frame is live-only and does
+					// not survive a refresh. Before this, an unanswered approval
+					// rendered nothing at all and the turn looked hung for no
+					// visible reason.
+					recordAskPendingToolCall(ts, session.ToolCallID(tc.ID), toolName, toolArgs)
+					approved, denialReason = al.CheckGrantOrRequestApproval(
+						turnCtx, ts.transcriptSessionID, ts.agentID, toolName, tc.ID, ts.turnID, toolArgs,
+					)
+				}
+				if !approved {
+					// Settle the placeholder to `denied` with the outcome
+					// reason, so "denied by the user" and "expired after five
+					// minutes with nobody watching" are distinguishable in the
+					// thread and on replay.
+					settleAskToolCallTranscript(
+						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
 					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
 					deniedMsg := providers.Message{
