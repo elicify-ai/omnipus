@@ -1267,7 +1267,7 @@ func TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsA
 	//
 	// It is also precisely why this test PASSED when run alone with
 	// -run '^TestSessionViewerICEDisconnect...$' and FAILED on CI, where the
-	// whole package runs: identical code, different neighbours. Blaming this
+	// whole package runs: identical code, different neighbors. Blaming this
 	// test for another test's residue sends the next person hunting a leak
 	// that isn't where the failure points. Baseline-relative preserves the
 	// real regression this guards — THIS viewer's goroutines must exit —
