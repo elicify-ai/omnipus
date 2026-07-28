@@ -577,9 +577,20 @@ async function assertCancelCascadesToSubagent(
   // parallel-shard CI load (the same class of flake already fixed for
   // TestConcurrentSessions_TwoSessions/FiveSessions in this same wave, whose
   // sibling doc note says "the prior budget flaked under the parallel
-  // matrix"). Widened to 10s for headroom; the sync cancel path itself was
-  // verified to unblock in ~3s via a dedicated Go repro
-  // (TestRepro_SyncDelegateCancel_RequestCancel, pkg/agent).
+  // matrix"). Widened to 10s for headroom.
+  //
+  // CORRECTION (2026-07-28): this comment used to claim the sync cancel path
+  // "was verified to unblock in ~3s via a dedicated Go repro
+  // (TestRepro_SyncDelegateCancel_RequestCancel, pkg/agent)". That citation is
+  // wrong and the margin it implies does not exist. The cited test asserts a
+  // FIFTEEN second bound, not three. The real server-side ladder is 3s
+  // hard-abort + 5s detach = 8s, plus the SPA's own 1s MIN_STOPPING_DISPLAY_MS
+  // before the button may disappear — so ~9s against this 10s budget, i.e.
+  // roughly 1s of margin, not the ~7s the old note implied.
+  //
+  // Left at 10s deliberately: it passes 6/6 including under load, and raising a
+  // green timeout on a hunch is how real regressions get masked. But do NOT
+  // derive a new budget from the old claim — measure the ladder instead.
   await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
   await expect(chatInput(page)).toBeEnabled({ timeout: 10_000 })
   const interruptedLabels = page.locator('text=(interrupted)')

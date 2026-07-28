@@ -89,16 +89,42 @@ export const newChatButton = (page: Page) =>
  * replacement for the removed header "New Chat" button (see `newChatButton`
  * doc comment above for the ground truth citation).
  *
- * Typing "/new" then Enter is intercepted client-side before it ever reaches
- * the backend (src/hooks/useSlashMenu.ts: `interceptClientCommand` /
- * `runClientCommand('new')` both call `startNewSession()`), converging with
- * selecting "/new" from the slash palette. This is the most direct
- * E2E-reachable equivalent of the old header button — no need to navigate
- * the sidebar's per-workspace accordion to reach its own "New chat" row.
+ * Typing "/new" then Enter is intercepted client-side (src/hooks/useSlashMenu.ts:
+ * `interceptClientCommand` / `runClientCommand('new')` both call
+ * `startNewSession()`), converging with selecting "/new" from the slash palette.
+ * This is the most direct E2E-reachable equivalent of the old header button — no
+ * need to navigate the sidebar's per-workspace accordion to reach its own
+ * "New chat" row.
+ *
+ * IMPORTANT — two things here are load-bearing; do not "simplify" them back:
+ *
+ *  1. `pressSequentially`, NOT `fill`. `fill` sets the value without firing the
+ *     input events the composer listens to, so the slash palette never opens and
+ *     the command is never recognised as one. T22 in cancel-cross-channel.spec.ts
+ *     already types rather than fills for this reason.
+ *  2. We wait for the palette entry before submitting. The interception looks the
+ *     command up in the list fetched by GET /api/v1/commands?surface=web; a miss
+ *     while that request is still in flight used to fall through and send "/new"
+ *     to the backend AS A CHAT MESSAGE. Observed in CI: the fetch was issued at
+ *     t=3424ms and Enter pressed at t=3660ms, 236ms later — the backend answered
+ *     it as a server-side command, minting a session bound to the wrong agent and
+ *     failing the test 150s later on an unrelated assertion.
+ *
+ * The SPA now holds an early slash command until the list resolves (5157e378),
+ * so (2) is belt-and-braces — but it keeps this helper honest against the real
+ * user path rather than depending on that guard.
  */
 export const startNewChat = async (page: Page) => {
   const input = chatInput(page);
-  await input.fill('/new');
+  await input.click();
+  await input.pressSequentially('/new');
+  // The palette entry appearing proves the command list has loaded and "/new"
+  // resolved against it, so Enter cannot escape to the backend as chat.
+  await page
+    .getByRole('option', { name: /new/i })
+    .or(page.locator('[data-testid="slash-menu"]').getByText('/new'))
+    .first()
+    .waitFor({ state: 'visible', timeout: 10_000 });
   await input.press('Enter');
 };
 
