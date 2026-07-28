@@ -41,7 +41,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { createPlan, executePlan } from '@/lib/api'
+import { createPlan, executePlan, updatePlan } from '@/lib/api'
 
 const mockAddToast = vi.fn()
 vi.mock('@/store/ui', () => ({
@@ -115,6 +115,7 @@ async function selectOwner(name: RegExp) {
 
 beforeEach(() => {
   vi.mocked(createPlan).mockReset()
+  vi.mocked(updatePlan).mockReset()
   vi.mocked(executePlan).mockReset()
   mockAddToast.mockReset()
 })
@@ -278,5 +279,226 @@ describe('CreatePlanSlideOver — character caps are visible, not silent (S3/S4 
     fireEvent.change(goal, { target: { value: 'y'.repeat(2000) } })
     expect(screen.getByText(/2000\/2000/)).toBeInTheDocument()
     expect(screen.getByText(/max length reached/i)).toBeInTheDocument()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// I8: the edit form must not destroy what it did not load.
+//
+// This form is used for BOTH create and edit, and it renders a strict subset of
+// what a Plan carries — two of the four `bounds` overrides, and nothing else.
+// Every one of the tests below asserts a PROPERTY of the request payload the
+// component actually builds, never that a function was called.
+//
+// The server merges `PlanUpdateRequest.bounds` field-by-field: a field present
+// in the request is written, a field ABSENT keeps its stored value
+// (contracts/components/schemas/PlanUpdateRequest.yaml). `mergeBounds` below
+// mirrors exactly that rule, so these tests can assert the stored outcome an
+// operator would actually observe rather than the shape of the wire body.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The stored bounds of a plan carrying overrides this form does NOT render. */
+const STORED_BOUNDS: Record<string, number> = {
+  plan_judge_max_rounds: 50,
+  idle_expiry_days: 14,
+  supervision_turn_timeout_seconds: 900,
+  supervision_max_attempts: 5,
+}
+
+/** Mirrors the documented server-side field-by-field merge of `bounds`. */
+function mergeBounds(
+  stored: Record<string, number>,
+  requested: Record<string, number> | undefined,
+): Record<string, number> {
+  return { ...stored, ...(requested ?? {}) }
+}
+
+function planWithBounds(overrides: Partial<Plan> = {}): Plan {
+  return makePlan({
+    goal: 'Ship it',
+    bounds: STORED_BOUNDS as NonNullable<Plan['bounds']>,
+    ...overrides,
+  })
+}
+
+/** The body the component handed to `updatePlan`, as a plain record. */
+function lastUpdateBody(): Record<string, unknown> {
+  return vi.mocked(updatePlan).mock.calls[0][1] as unknown as Record<string, unknown>
+}
+
+const PROSE_CRITERION = {
+  kind: 'prose',
+  text: 'CI is green',
+  author: { kind: 'user', id: 'alice' },
+  status: 'pending',
+} as unknown as NonNullable<Plan['dod']>[number]
+
+describe('CreatePlanSlideOver — an edit never destroys bounds the form does not render', () => {
+  it('editing ONLY the title leaves every supervision override at its stored value', async () => {
+    vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver({ plan: planWithBounds() })
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'Launch v2' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
+    const body = lastUpdateBody()
+
+    // The property that matters: after the server applies this request, the
+    // two overrides the form cannot see are still exactly what they were.
+    const after = mergeBounds(STORED_BOUNDS, body.bounds as Record<string, number> | undefined)
+    expect(after.supervision_turn_timeout_seconds).toBe(900)
+    expect(after.supervision_max_attempts).toBe(5)
+    // …and the two it CAN see are untouched too, because they were untouched.
+    expect(after.plan_judge_max_rounds).toBe(50)
+    expect(after.idle_expiry_days).toBe(14)
+
+    expect(body.title).toBe('Launch v2')
+  })
+
+  it('changing one rendered bound writes that bound and nothing else', async () => {
+    vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver({ plan: planWithBounds() })
+
+    fireEvent.change(screen.getByLabelText(/plan judge max rounds/i), { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
+    const after = mergeBounds(
+      STORED_BOUNDS,
+      lastUpdateBody().bounds as Record<string, number> | undefined,
+    )
+    expect(after).toEqual({
+      plan_judge_max_rounds: 30,
+      idle_expiry_days: 14,
+      supervision_turn_timeout_seconds: 900,
+      supervision_max_attempts: 5,
+    })
+  })
+
+  it('a create with no bounds input still produces a valid request', async () => {
+    vi.mocked(createPlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    await selectOwner(/^jim$/i)
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() => expect(createPlan).toHaveBeenCalledOnce())
+    const body = vi.mocked(createPlan).mock.calls[0][0] as unknown as Record<string, unknown>
+
+    // Valid = every `required` field of PlanCreateRequest is present and
+    // non-empty, and `bounds` is absent rather than an empty object.
+    expect(body.workspace_id).toBe('ws-1')
+    expect(body.title).toBe('v1.0 Launch')
+    expect(body.owner_agent_id).toBe('jim')
+    expect(body.bounds).toBeUndefined()
+  })
+})
+
+describe('CreatePlanSlideOver — an edit sends only what actually changed', () => {
+  // handlePlanPut freezes `dod` and `owner_agent_id` once a plan leaves draft,
+  // and the freeze is a PRESENCE check (`req.Dod != nil || req.OwnerAgentId !=
+  // nil`), not a value comparison. The form used to send `owner_agent_id` on
+  // every save, so editing the title of any approved/running/done/failed plan
+  // 409'd unconditionally.
+  it('editing the title of a NON-DRAFT plan omits the frozen fields, so the freeze cannot trip', async () => {
+    vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver({ plan: planWithBounds({ state: 'running', dod: [PROSE_CRITERION] }) })
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'Launch v2' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
+    const body = lastUpdateBody()
+    expect(Object.prototype.hasOwnProperty.call(body, 'owner_agent_id')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(body, 'dod')).toBe(false)
+    expect(body.title).toBe('Launch v2')
+  })
+
+  it('clearing the Goal actually clears it — the request carries an explicit empty string', async () => {
+    vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver({ plan: planWithBounds() })
+
+    fireEvent.change(screen.getByLabelText(/^goal$/i), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
+    // The backend patch is presence-checked (`if patch.Goal != nil`), so an
+    // omitted key is a silent no-op. `''` is what actually clears the goal.
+    expect(lastUpdateBody().goal).toBe('')
+  })
+
+  it('deleting every DoD criterion actually clears it — the request carries an explicit empty array', async () => {
+    vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
+    renderSlideOver({ plan: planWithBounds({ state: 'draft', dod: [PROSE_CRITERION] }) })
+
+    fireEvent.click(screen.getByRole('button', { name: /remove criterion CI is green/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
+    expect(lastUpdateBody().dod).toEqual([])
+  })
+
+  it('Save on an untouched plan fires no request and says so, instead of toasting a change that never happened', async () => {
+    const onOpenChange = vi.fn()
+    renderSlideOver({ plan: planWithBounds(), onOpenChange })
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(mockAddToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'No changes to save' }),
+      ),
+    )
+    expect(updatePlan).not.toHaveBeenCalled()
+    expect(mockAddToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Plan updated' }),
+    )
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+})
+
+describe('CreatePlanSlideOver — bounds inputs fail loudly, never silently', () => {
+  it('blanking an existing override is refused inline rather than silently ignored by the merge', async () => {
+    renderSlideOver({ plan: planWithBounds() })
+
+    fireEvent.change(screen.getByLabelText(/plan judge max rounds/i), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(await screen.findByText(/max rounds can be changed but not cleared here/i)).toBeInTheDocument()
+    // Without this guard the save would succeed, toast "Plan updated", and
+    // leave the 50 the user just deleted in place — the merge keeps an absent
+    // field's stored value.
+    expect(updatePlan).not.toHaveBeenCalled()
+    expect(mockAddToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Plan updated' }),
+    )
+  })
+
+  it('a fractional bounds value is rejected, not silently truncated to an integer', async () => {
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    await selectOwner(/^jim$/i)
+    fireEvent.change(screen.getByLabelText(/idle expiry days/i), { target: { value: '3.5' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    // The previous reader was `parseInt`, which turned "3.5" into 3 and
+    // submitted it as though the operator had typed it.
+    expect(await screen.findByText(/idle-expiry days must be a whole number of 1 or more/i)).toBeInTheDocument()
+    expect(createPlan).not.toHaveBeenCalled()
+  })
+
+  it('a below-minimum bounds value is rejected inline, not sent to be 400d behind the footer', async () => {
+    renderSlideOver()
+
+    fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
+    await selectOwner(/^jim$/i)
+    fireEvent.change(screen.getByLabelText(/plan judge max rounds/i), { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    expect(await screen.findByText(/max rounds must be a whole number of 1 or more/i)).toBeInTheDocument()
+    expect(createPlan).not.toHaveBeenCalled()
   })
 })
