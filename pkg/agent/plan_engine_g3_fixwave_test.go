@@ -120,6 +120,65 @@ func tickPastDeadline(t *testing.T, h *planEngineHarness, planID string) *plan.P
 	return got
 }
 
+// breakPlanStore makes every plan.Store operation on planDir fail, and returns
+// the restore func (also registered as a t.Cleanup, so a t.Fatalf between the
+// break and the restore cannot leave the temp dir wedged). Calling the
+// returned func twice is safe; the second call is a no-op.
+//
+// ⚠ DO NOT "SIMPLIFY" THIS BACK TO os.Chmod(planDir, 0o500). It was written
+// that way and it made this test silently uid-dependent: it passed in a dev
+// shell as an unprivileged user and FAILED on the CI worker, which runs as
+// root. Root holds CAP_DAC_OVERRIDE, which bypasses directory permission bits
+// on Linux, so the 0500 chmod did not make the write fail there at all — the
+// receipt landed, the failure path this test exists to pin never executed, and
+// the precondition assertion below collapsed. Any permission-bit-based
+// injection has that same hole; only a break the kernel enforces structurally
+// is uid-independent.
+//
+// The mechanism: swap the store's DIRECTORY for a regular file. Every
+// open/stat of <planDir>/<anything> then fails with ENOTDIR, which no
+// capability overrides — root and dev get the identical error. It needs no
+// privileges to set up, is deterministic, and does not depend on the
+// filesystem backing TMPDIR (tmpfs, ext4 and overlayfs behave alike).
+//
+// Honest scope note: this is a STRONGER break than the chmod aimed at. The
+// chmod let plan.Store.load succeed and failed only the atomic write;
+// ENOTDIR fails the load too, so Update errors a few lines earlier inside the
+// store. That is deliberate — root's DAC bypass means there is no way to fail
+// only the write without privileged setup (a read-only mount or chattr +i),
+// neither of which is available to an unprivileged test. It does not weaken
+// what is under test: the seam wakeSupervisor branches on is
+// `pe.planStore.Update(...) != nil`, and the assertions below are about what
+// the plan record looks like afterwards, neither of which can tell the two
+// apart.
+func breakPlanStore(t *testing.T, planDir string) (restore func()) {
+	t.Helper()
+	stashed := planDir + ".stashed"
+	if err := os.Rename(planDir, stashed); err != nil {
+		t.Fatalf("stash the plan dir: %v", err)
+	}
+	if err := os.WriteFile(planDir, []byte("not a directory"), 0o600); err != nil {
+		if rerr := os.Rename(stashed, planDir); rerr != nil {
+			t.Errorf("restore the plan dir after a failed break: %v", rerr)
+		}
+		t.Fatalf("plant the blocking file: %v", err)
+	}
+	var once sync.Once
+	restore = func() {
+		once.Do(func() {
+			if err := os.Remove(planDir); err != nil {
+				t.Errorf("remove the blocking file: %v", err)
+				return
+			}
+			if err := os.Rename(stashed, planDir); err != nil {
+				t.Errorf("restore the plan dir: %v", err)
+			}
+		})
+	}
+	t.Cleanup(restore)
+	return restore
+}
+
 // --- Finding 1: Stop must not report success on a cancel it never issued ----
 
 // TestStopPlan_UnissuableSessionCancelIsNotReportedAsSuccess is the outcome
@@ -217,27 +276,25 @@ func TestSupervision_FailedWakeReceiptStillReachesATerminalState(t *testing.T) {
 	h := newTestPlanEngine(t)
 	p := seedParkedPlan(t, h, "p1", &task.Task{Title: "member", Status: task.StatusDone})
 
-	// Break the store for exactly the receipt write, then run the real wake.
+	// Break the store so the receipt write cannot land, then run the real
+	// wake. See breakPlanStore for why this is not a chmod.
 	planDir := h.plans.Dir()
-	if err := os.MkdirAll(planDir, 0o700); err != nil {
-		t.Fatalf("ensure plan dir: %v", err)
+	restore := breakPlanStore(t, planDir)
+
+	// Guard the injection itself: if the store is still writable here, the
+	// rest of this test is theatre. This assertion is what the uid-dependent
+	// chmod version lacked — it would have named the real problem on the CI
+	// worker instead of failing as a confusing "precondition failed".
+	probe := ""
+	if _, err := h.plans.Update("p1", plan.Patch{SupervisionWakeError: &probe}); err == nil {
+		t.Fatal("the plan store is still writable after breakPlanStore — the failure " +
+			"injection is not working, so nothing below tests the failure path")
 	}
-	if err := os.Chmod(planDir, 0o500); err != nil {
-		t.Fatalf("make plan dir read-only: %v", err)
-	}
-	restored := false
-	t.Cleanup(func() {
-		if !restored {
-			_ = os.Chmod(planDir, 0o700)
-		}
-	})
+
 	h.pe.planDecisionMu.Lock()
 	h.pe.wakeSupervisor(p, "adjudicate this", "plan_judge_unmet", true)
 	h.pe.planDecisionMu.Unlock()
-	if err := os.Chmod(planDir, 0o700); err != nil {
-		t.Fatalf("restore plan dir: %v", err)
-	}
-	restored = true
+	restore()
 
 	stuck, err := h.plans.Get("p1")
 	if err != nil {
