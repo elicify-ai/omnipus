@@ -4460,27 +4460,18 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 			return "", false, errors.New(
 				"plan engine is not installed — corrections cannot be applied")
 		}
-		res, err := pe.AppendCorrection(ctx, planID, CorrectionCaller{
-			AgentID:   caller.AgentID,
-			SessionID: caller.SessionID,
-		}, CorrectionRequest{
-			// CorrectionVerb and plan.RevisionVerb are the same underlying
-			// string values (plan_engine.go defines its constants BY
-			// conversion from plan.Revision*), so this conversion is
-			// value-preserving rather than a remap. NOTE: the engine's
-			// validateCorrection has no `abandon` case and rejects it via its
-			// default branch — the tool exposes the verb, the engine does not
-			// implement it yet, and the caller gets an explicit error rather
-			// than a false success. Tracked in the report, not papered over
-			// here (plan_engine.go is out of scope for this wiring).
-			Verb:                CorrectionVerb(req.Verb),
-			FalsifiedAssumption: req.FalsifiedAssumption,
-			Reason:              req.Reason,
-			SupersededMemberID:  req.SupersededMemberID,
-			RetriedMemberID:     req.RetriedMemberID,
-			TailMembers:         req.TailMembers,
-			TailEdges:           req.TailEdges,
-		})
+		// Passed through whole, NOT rebuilt field-by-field. FR-004 moved the
+		// correction types into pkg/plan and left tools.CorrectionCaller /
+		// agent.CorrectionCaller as type ALIASES of plan.CorrectionCaller
+		// (likewise CorrectionRequest), so these are one type, not two that
+		// happen to match — the compiler accepts the value directly and the
+		// old CorrectionVerb() conversion became a no-op the linter flags.
+		//
+		// The rebuild also had to go on its own merits: enumerating the
+		// fields here means the next field added to plan.CorrectionRequest is
+		// silently dropped at this seam, with nothing failing to compile.
+		// This branch has shipped that exact shape more than once.
+		res, err := pe.AppendCorrection(ctx, planID, caller, req)
 		if err != nil {
 			return "", false, err
 		}
