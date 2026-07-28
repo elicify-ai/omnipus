@@ -620,30 +620,9 @@ var ErrReloadNotConfigured = errors.New("reload not configured")
 // — do not read them as describing live gateway behaviour.
 var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 
-// reloadWindowHook, when set, runs inside TriggerReload between marking the
-// reload pending and invoking the reload function. It exists SOLELY to let
-// tests widen that window, which is otherwise a few hundred nanoseconds wide
-// and cannot be hit deterministically.
-//
-// That window is load-bearing: a reload cycle finishing inside it would clear
-// the pending flag this call just set, and the caller's poller would then
-// return against a config snapshot that predates the caller's own write. The
-// gateway closes it by re-marking pending inside services.beginReload, under
-// the same mutex that serialises the clear (see MarkReloadPending). Production
-// leaves this nil, so the cost is one atomic load per reload trigger — a path
-// that runs on config writes, not on any hot path.
-var reloadWindowHook atomic.Pointer[func()]
-
-// SetReloadWindowHookForTest installs (or, with nil, removes) the hook that
-// runs inside TriggerReload between MarkReloadPending and the reload function.
-// TEST-ONLY — never call this from production code.
-func SetReloadWindowHookForTest(fn func()) {
-	if fn == nil {
-		reloadWindowHook.Store(nil)
-		return
-	}
-	reloadWindowHook.Store(&fn)
-}
+// (The TriggerReload window hook that used to live here is gone: the race it
+// let tests reproduce is now structurally impossible, because TriggerReload no
+// longer sets the reload-pending flag at all. See TriggerReload.)
 
 // ErrAgentNotWorkspaceMember is returned by runTurn when the acting agent is
 // not a member of any workspace's CoreTeam (ADR-046 P1, FR-007/008). Execution
@@ -5421,17 +5400,21 @@ func (al *AgentLoop) TriggerReload() error {
 	if al.reloadFunc == nil {
 		return ErrReloadNotConfigured
 	}
-	// Marking pending here — BEFORE reloadFunc — leaves a window in which a
-	// reload cycle finishing concurrently would clear the flag this call just
-	// set, after which the poller below would return against a stale registry.
-	// The gateway's reload function closes that window by re-marking pending
-	// while it holds the mutex that serialises the clear; see MarkReloadPending
-	// and pkg/gateway's services.beginReload. Do not reorder these two lines
-	// without re-reading both.
-	al.MarkReloadPending()
-	if hook := reloadWindowHook.Load(); hook != nil {
-		(*hook)()
-	}
+	// This deliberately does NOT mark the reload pending. Only the reload
+	// function itself can, because only it knows whether a reload was actually
+	// queued — and it sets the flag while holding the same mutex that clears it
+	// (pkg/gateway's services.beginReload / finishReload), which is what makes
+	// "request registered" and "flag set" atomic against a concurrently
+	// finishing reload.
+	//
+	// Setting it here instead was a real defect. TriggerReload cannot register
+	// the request until it calls reloadFunc, so a flag set beforehand sits in a
+	// window where a finishing cycle sees no registered request, clears the
+	// flag, and releases the slot; the caller's poller then returns immediately
+	// against a config snapshot predating its own write. It also made the flag
+	// LIE whenever reloadFunc completed nothing — every test fake that returns
+	// nil without running a reload left the flag stuck on, so callers polling
+	// it blocked for the full deadline against a reload that was never coming.
 	if err := al.reloadFunc(); err != nil {
 		// Only clear the pending flag if this was a genuine failure.
 		// If another reload is already in progress, that reload owns the flag —
@@ -5450,16 +5433,15 @@ func (al *AgentLoop) TriggerReload() error {
 // MarkReloadPending marks a config reload as pending — the flag
 // restAPI.triggerReloadAndWait polls, and the one ClearReloadPending clears.
 //
-// It exists so the gateway can re-assert the flag from INSIDE the critical
-// section that serialises reload bookkeeping. TriggerReload necessarily sets
-// the flag before it can register the request with the gateway (it has to call
-// reloadFunc to do that), so those two steps are not atomic: a reload cycle
-// completing in between sees no registered request, clears the flag, and
-// releases the slot — and the request that arrives a moment later then has a
-// cleared flag and returns immediately against a registry that predates its
-// own write. Calling this from services.beginReload under reloadCoalesceMu
-// makes "the request is registered" and "the flag is set" a single atomic step
-// with respect to the clear, closing the window.
+// This is the ONLY way the flag gets set, and it is called from exactly one
+// place in production: pkg/gateway's services.beginReload, while it holds the
+// mutex that finishReload/abandonReload clear under. That placement is the
+// whole design — it makes "a reload is queued" and "the flag is set" the same
+// atomic fact, so the flag can never be set for a reload that will not run, nor
+// cleared out from under a request that has just been registered.
+//
+// Callers other than the reload bookkeeping should not use it; a flag set
+// without a queued reload blocks every poller until the wait deadline expires.
 //
 // Idempotent, safe to call repeatedly and concurrently.
 func (al *AgentLoop) MarkReloadPending() {

@@ -1,5 +1,3 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -571,98 +569,80 @@ func TestReloadTrigger_MidFlightRequestIsAcceptedNotRejected(t *testing.T) {
 		"the coalesced request must actually run a second reload")
 }
 
-// TestCreateAgent_PendingFlagClobberedMidTrigger_StillTaskAssignable closes the
-// last stale-read window in this path.
+// TestCreateAgent_ReloadSlowerThanWaitDeadline_IsStillTaskAssignable is the
+// regression test for the SECOND half of this release blocker — the half the
+// coalescing fix did not touch, and which kept the llm-conformance e2e shard
+// failing 3/9 with the original signature after coalescing had shipped.
 //
-// AgentLoop.TriggerReload must set the reload-pending flag BEFORE it can
-// register the request with the gateway — registering IS calling reloadFunc. So
-// the two steps are not atomic, and a reload cycle completing between them sees
-// no registered request, clears the flag the caller just set, and releases the
-// slot. The caller then registers against a free slot with a cleared flag, and
-// restAPI.triggerReloadAndWait's poll returns on its very first check — against
-// a registry rebuilt from a config snapshot that predates the caller's write.
-// Same 201-then-"agent not found" outcome as the original blocker, reached
-// through a different door.
+// triggerReloadAndWait polled for a hard-coded 5 SECONDS and then `return nil`
+// — reporting success it had not observed. A reload restarts every channel,
+// cron, the plan engine and the provider before rebuilding the AgentRegistry;
+// idle that is milliseconds, but under the conformance shard's load (live LLM
+// turns + a busy plan engine) it runs to tens of seconds. Every reload that
+// overran 5s therefore produced a 201 with NO warning and a registry that still
+// had no such agent, so the next POST /tasks answered `agent "x" not found` and
+// POST /workspaces answered `core_team member "x" is not a registered agent`.
 //
-// The window is a few hundred nanoseconds wide in production and cannot be hit
-// by looping and hoping, so it is widened DETERMINISTICALLY here via
-// agent.SetReloadWindowHookForTest, which parks TriggerReload between its two
-// steps. The fix is services.beginReload re-marking pending under
-// reloadCoalesceMu — the same mutex finishReload clears under.
-func TestCreateAgent_PendingFlagClobberedMidTrigger_StillTaskAssignable(t *testing.T) {
+// This is why coalescing alone was not enough: it guaranteed the right reload
+// was QUEUED and would run, but the caller stopped waiting for it and lied
+// about the result.
+//
+// The reload here takes 6s — longer than the old deadline, far inside the new
+// one — and the assertion is the same user-visible outcome as every other test
+// in this file.
+func TestCreateAgent_ReloadSlowerThanWaitDeadline_IsStillTaskAssignable(t *testing.T) {
 	h := newReloadHarness(t)
 
-	enteredFirst := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	var enterOnce, releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
-	t.Cleanup(release)
-	h.beforeExec = func(idx int) {
-		if idx == 1 {
-			enterOnce.Do(func() { close(enteredFirst) })
-			<-releaseFirst
-			return
-		}
-		// Every LATER reload takes visible time. Without this the broken build
-		// could race a fast follow-up reload in before the poll's first check
-		// and pass by luck; with it, a poller that returns early is guaranteed
-		// to observe the pre-reload registry.
-		time.Sleep(250 * time.Millisecond)
-	}
+	// Every reload takes longer than the retired 5s deadline. Deliberately a
+	// wall-clock sleep: the property under test IS a wall-clock deadline.
+	const slowReload = 6 * time.Second
+	require.Greater(t, slowReload, 5*time.Second,
+		"the simulated reload must exceed the deadline this test exists to retire")
+	require.Less(t, slowReload, reloadWaitTimeout,
+		"...and must sit inside the current deadline, or this asserts the wrong thing")
+	h.beforeExec = func(int) { time.Sleep(slowReload) }
 
-	// Reload #1 starts and parks. Its config snapshot predates the create below.
-	require.NoError(t, h.svc.reloadTrigger(), "starting the first reload must succeed")
-	select {
-	case <-enteredFirst:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the first reload never started executing")
-	}
-
-	// Park the create's TriggerReload between "flag set" and "request
-	// registered" — the window under test.
-	windowOpen := make(chan struct{})
-	windowClose := make(chan struct{})
-	var windowOnce sync.Once
-	agent.SetReloadWindowHookForTest(func() {
-		windowOnce.Do(func() {
-			close(windowOpen)
-			<-windowClose
-		})
-	})
-	t.Cleanup(func() { agent.SetReloadWindowHookForTest(nil) })
-
-	done := make(chan createAgentResult, 1)
-	go func() { done <- h.postAgent("Clobber Window Target") }()
-
-	select {
-	case <-windowOpen:
-	case <-time.After(10 * time.Second):
-		t.Fatal("createAgent never reached the reload trigger")
-	}
-
-	// The create has persisted its agent and set the pending flag, but has NOT
-	// yet registered its request. Let reload #1 finish now: it sees nothing
-	// recorded, so it clears that flag and frees the slot.
-	release()
-	require.Eventually(t, func() bool { return !h.al.IsReloadPending() }, 10*time.Second, 2*time.Millisecond,
-		"precondition: the finishing reload must actually clobber the pending flag the "+
-			"in-flight create had already set — otherwise this test is not exercising the window")
-
-	// The create now registers its request against a free slot and a cleared
-	// flag. Everything after this is the property under test.
-	close(windowClose)
-
-	var res createAgentResult
-	select {
-	case res = <-done:
-	case <-time.After(20 * time.Second):
-		t.Fatal("createAgent never returned")
-	}
-
+	res := h.postAgent("Slow Reload Target")
 	assertUsable(t, res)
-	assert.GreaterOrEqual(t, res.reloadsAtReturn, 2,
-		"the create must not have been released by reload #1 — a reload triggered by its own "+
-			"request has to complete first; only %d had run", res.reloadsAtReturn)
+}
+
+// TestTriggerReloadAndWait_TimeoutIsReportedNotSwallowed pins the honesty half
+// of the same fix: when the rebuild genuinely does not land inside the
+// deadline, the caller must be TOLD. Returning nil there is what let handlers
+// answer 201/200 for a change that was only on disk — and it is what made the
+// e2e failures surface several steps downstream, as a mystifying
+// "agent not found", instead of at the create that caused them.
+func TestTriggerReloadAndWait_TimeoutIsReportedNotSwallowed(t *testing.T) {
+	h := newReloadHarness(t)
+
+	// A reload function that accepts the request but never completes it, so the
+	// pending flag stays set and the wait must hit its deadline.
+	h.al.SetReloadFunc(func() error { return nil })
+
+	// Model a genuinely outstanding reload: the gateway's own trigger sets this
+	// flag under reloadCoalesceMu when it queues a cycle. TriggerReload does not
+	// set it, precisely so a fake reload function cannot leave it stuck on.
+	h.al.MarkReloadPending()
+
+	// Assert the behaviour at expiry, not the size of the production constant —
+	// waiting the real 60s would add a minute to the suite for no extra signal.
+	restore := reloadWaitTimeout
+	reloadWaitTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { reloadWaitTimeout = restore })
+
+	start := time.Now()
+	err := h.api.triggerReloadAndWait()
+	elapsed := time.Since(start)
+
+	require.Error(t, err,
+		"a reload that does not complete within the deadline must be reported, never "+
+			"swallowed as success — callers turn a nil here into a 201/200 for a change "+
+			"that is not live")
+	assert.Contains(t, err.Error(), "not yet active",
+		"the error must say the change is saved but not active, so the operator can tell "+
+			"it from a failed write")
+	assert.GreaterOrEqual(t, elapsed, reloadWaitTimeout,
+		"the wait must actually honour its full deadline before giving up")
 }
 
 // TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers guards the

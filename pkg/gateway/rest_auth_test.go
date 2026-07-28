@@ -1,5 +1,3 @@
-//go:build !cgo
-
 package gateway
 
 import (
@@ -1995,6 +1993,7 @@ func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
 type agentLoopWrapper struct {
 	al interface {
 		SetReloadFunc(fn func() error)
+		MarkReloadPending()
 		ClearReloadPending()
 	}
 }
@@ -2009,10 +2008,13 @@ type agentLoopWrapper struct {
 func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
 	apiObj, wrap := newTestRestAPIForReload(t)
 
-	// reloadFunc simply returns nil; TriggerReload sets reloadPending=true before
-	// calling it. The goroutine below clears the flag after 50ms so the poll loop
-	// has something real to wait for.
+	// The reloadFunc marks the reload pending, mirroring production: the flag is
+	// set by the gateway's trigger (services.beginReload, under the mutex that
+	// clears it), NOT by TriggerReload. A fake that returned nil without marking
+	// would mean "no reload queued", and the poll loop would correctly return at
+	// once — leaving this test asserting nothing.
 	wrap.al.SetReloadFunc(func() error {
+		wrap.al.MarkReloadPending()
 		return nil
 	})
 
@@ -2026,11 +2028,11 @@ func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "triggerReloadAndWait must return nil when reload completes")
-	// Must have polled for at least 40ms (pending was set), but well under 5s deadline.
+	// Must have polled for at least 40ms (pending was set), but well under the deadline.
 	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(40),
 		"triggerReloadAndWait must poll until the pending flag clears")
-	assert.Less(t, elapsed, 5*time.Second,
-		"triggerReloadAndWait must return well before the 5s deadline")
+	assert.Less(t, elapsed, reloadWaitTimeout,
+		"triggerReloadAndWait must return well before its deadline")
 }
 
 // TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough verifies that when
