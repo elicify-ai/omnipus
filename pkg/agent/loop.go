@@ -1854,6 +1854,12 @@ func registerSharedTools(
 		// writer (7-reviewer gate NIT).
 		al.wirePlanToolsForAgent(agent, al.GetPlanStore())
 
+		// list_jobs (the unified background-job roster). Separate from the
+		// plan surface above because it spans plans, standalone tasks AND
+		// delegated sessions, and because it needs no late re-bind — every
+		// store is read through a live adapter (see wireJobRosterForAgent).
+		al.wireJobRosterForAgent(agent)
+
 		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
 		// is determined by the policy engine. Chromium presence/download is now
@@ -4324,7 +4330,8 @@ func (al *AgentLoop) isRegisteredAgentID(id string) bool {
 }
 
 // wirePlanToolsForAgent constructs and registers the ADR-052 create_plan /
-// execute_plan / run_task / inspect_session tool surface for a single
+// execute_plan / run_task / inspect_session tool surface, plus the ADR-055
+// plan_correct / stop_plan supervision surface, for a single
 // agent instance — the single clear wiring site Wave 1 left unwired for
 // Wave 2 (pkg/tools/plan.go / run_task.go / inspect_session.go's "another
 // wave's job" doc comments name pkg/agent/loop.go explicitly). Called from
@@ -4337,7 +4344,8 @@ func (al *AgentLoop) isRegisteredAgentID(id string) bool {
 // instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
 // store / nil checker / nil dispatcher => explicit error result, never an
 // implicit allow or a silently-dead no-op tool).
-// The four tools below are registered via RegisterReplacing, not Register:
+// The six tools below (the ADR-052 four, plus ADR-055's plan_correct and
+// stop_plan) are registered via RegisterReplacing, not Register:
 // this function is called once per agent at registerSharedTools time AND
 // again for every already-registered agent from SetPlanStore once the real
 // plan.Store is installed (this function's own doc comment) — the second
@@ -4410,6 +4418,82 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	// ReadTranscript, once VerifierSessionScopeAllows has already passed)
 	// is the fail-closed signal, not a nil-store check.
 	agent.Tools.RegisterReplacing(tools.NewInspectSessionTool(agentLoopInspectSessionStore{al: al}))
+
+	// --- ADR-055 plan supervision surface: plan_correct + stop_plan --------
+	//
+	// Both engine hooks are installed as LATE-RESOLVING CLOSURES over
+	// GetPlanEngine(al), never as a value captured here. This is load-bearing,
+	// not a style choice: the gateway installs the plan engine LAST
+	// (gateway.go's SetPlanEngine, after SetPlanStore), and SetPlanEngine only
+	// assigns the field — it does not re-run this function. A hook capturing
+	// al.planEngine at wiring time would therefore be nil on EVERY pass and
+	// both tools would sit permanently in their fail-closed "engine is not
+	// wired" branch, in a build where everything looks correctly registered.
+	//
+	// The closures preserve the fail-closed contract they replace: an absent
+	// engine returns an explicit error, so the tool reports a failure and
+	// never a silent success. Neither tool's authority is wired here — both
+	// gate internally, and deliberately in opposite directions: plan_correct
+	// admits only the PlanSupervisor identity (tools.PlanSupervisorAgentID),
+	// stop_plan admits only the plan's own owner agent. The adjudicator
+	// corrects; the owner contains.
+	planCorrect := tools.NewPlanCorrectTool(planStore, al.taskStore)
+	planCorrect.SetAppendCorrection(func(
+		ctx context.Context, planID string, caller tools.CorrectionCaller, req tools.CorrectionRequest,
+	) (string, bool, error) {
+		pe := GetPlanEngine(al)
+		if pe == nil {
+			return "", false, errors.New(
+				"plan engine is not installed — corrections cannot be applied")
+		}
+		res, err := pe.AppendCorrection(ctx, planID, CorrectionCaller{
+			AgentID:   caller.AgentID,
+			SessionID: caller.SessionID,
+		}, CorrectionRequest{
+			// CorrectionVerb and plan.RevisionVerb are the same underlying
+			// string values (plan_engine.go defines its constants BY
+			// conversion from plan.Revision*), so this conversion is
+			// value-preserving rather than a remap. NOTE: the engine's
+			// validateCorrection has no `abandon` case and rejects it via its
+			// default branch — the tool exposes the verb, the engine does not
+			// implement it yet, and the caller gets an explicit error rather
+			// than a false success. Tracked in the report, not papered over
+			// here (plan_engine.go is out of scope for this wiring).
+			Verb:                CorrectionVerb(req.Verb),
+			FalsifiedAssumption: req.FalsifiedAssumption,
+			Reason:              req.Reason,
+			SupersededMemberID:  req.SupersededMemberID,
+			RetriedMemberID:     req.RetriedMemberID,
+			TailMembers:         req.TailMembers,
+			TailEdges:           req.TailEdges,
+		})
+		if err != nil {
+			return "", false, err
+		}
+		if res == nil {
+			// Defensive: a nil result with a nil error would otherwise be
+			// reported to the adjudicator as a successful correction carrying
+			// an empty revision id.
+			return "", false, errors.New(
+				"plan engine returned no correction result")
+		}
+		return res.RevisionID, res.HonestExit, nil
+	})
+	agent.Tools.RegisterReplacing(planCorrect)
+
+	// stop_plan (FR-042/FR-043, US-8): the containment control. StopPlan's
+	// signature matches StopPlanFunc exactly, so the closure adds only the
+	// late engine resolution described above.
+	planStop := tools.NewPlanStopTool(planStore)
+	planStop.SetStopPlan(func(ctx context.Context, planID, userID, channel string) (*plan.Plan, error) {
+		pe := GetPlanEngine(al)
+		if pe == nil {
+			return nil, errors.New(
+				"plan engine is not installed — the plan cannot be stopped")
+		}
+		return pe.StopPlan(ctx, planID, userID, channel)
+	})
+	agent.Tools.RegisterReplacing(planStop)
 }
 
 // agentLoopInspectSessionStore adapts AgentLoop.ResolveSessionStore to the
@@ -4438,6 +4522,135 @@ func (s agentLoopInspectSessionStore) ReadTranscript(sessionID string) ([]sessio
 		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
 	}
 	return store.ReadTranscript(sessionID)
+}
+
+// --- list_jobs wiring (the unified background-job roster) -----------------
+//
+// Every store below is reached through a LATE-RESOLVING adapter rather than a
+// value captured at wiring time, because the three stores list_jobs reads are
+// installed at three DIFFERENT points in gateway boot, all of which can follow
+// this wiring: the task store exists from NewAgentLoop, the plan store arrives
+// with SetPlanStore, and the lifecycle store arrives later still with
+// SetSessionMessagingStores (which re-wires only the session-messaging tool
+// surface, never this one). A captured lifecycle store would be nil forever
+// and the `subagent` kind would silently report an empty roster on every call.
+//
+// Each adapter returns an explicit ERROR when its store is absent — never an
+// empty slice. list_jobs turns that into a per-kind error entry, which is the
+// whole point: "a short list that looks complete is the worst possible output"
+// (NewListJobsTool's own doc). A nil-return adapter would produce exactly the
+// silent-undercount failure the tool is built to prevent.
+//
+// DELIBERATELY NOT IMPLEMENTED HERE: the optional ListLenient siblings
+// (tools.jobPlanLenientLister and friends). list_jobs picks those up by
+// OPTIONAL type assertion against the value passed to NewListJobsTool — i.e.
+// against these adapters. None of pkg/plan, pkg/task or pkg/session implements
+// ListLenient yet, so defining a forwarding method here would make the
+// assertion succeed while the count it feeds (`unreadable`) is structurally
+// always 0 — an honest-looking zero that means "not measured", not "nothing
+// was corrupt". The seam is left unsatisfied on purpose so it stays visibly
+// unwired. WHEN ListLenient LANDS on the concrete stores, add the matching
+// forwarding method to the adapter below; that is the only change needed.
+type agentLoopJobPlanLister struct{ al *AgentLoop }
+
+func (l agentLoopJobPlanLister) List(filter plan.Filter) ([]plan.Plan, error) {
+	store := l.al.GetPlanStore()
+	if store == nil {
+		return nil, errors.New("plan store is not installed")
+	}
+	return store.List(filter)
+}
+
+type agentLoopJobTaskLister struct{ al *AgentLoop }
+
+func (l agentLoopJobTaskLister) List(filter task.Filter) ([]task.Task, error) {
+	store := GetTaskStore(l.al)
+	if store == nil {
+		return nil, errors.New("task store is not installed")
+	}
+	return store.List(filter)
+}
+
+type agentLoopJobLifecycleLister struct{ al *AgentLoop }
+
+func (l agentLoopJobLifecycleLister) List(
+	filter session.LifecycleFilter,
+) ([]session.LifecycleRecord, error) {
+	store := l.al.GetSessionLifecycleStore()
+	if store == nil {
+		return nil, errors.New("session lifecycle store is not installed")
+	}
+	return store.List(filter)
+}
+
+// agentLoopJobAgentNamer resolves a delegated agent's display name for a
+// subagent row's label. AgentRegistry.GetAgentName already has exactly this
+// contract (name+true when the agent exists, the raw id when its name is
+// empty, ("",false) when it does not), so this forwards rather than
+// re-deriving. A false return is a NORMAL case: durable lifecycle records
+// outlive the agents they name, and the tool falls back to the raw agent id.
+type agentLoopJobAgentNamer struct{ al *AgentLoop }
+
+func (n agentLoopJobAgentNamer) AgentDisplayName(agentID string) (string, bool) {
+	reg := n.al.GetRegistry()
+	if reg == nil {
+		return "", false
+	}
+	return reg.GetAgentName(agentID)
+}
+
+// wireJobRosterForAgent registers `list_jobs` for one agent.
+//
+// Called from registerSharedTools' per-agent loop (so it re-runs on every hot
+// reload, picking up the fresh config). It is deliberately NOT called from
+// SetPlanStore's re-wire loop the way the plan surface is: the adapters above
+// read every store live, so there is nothing for a later pass to re-bind.
+//
+// Three of this tool's seven setters are left UNWIRED because the
+// implementations they need do not exist yet. Each omission degrades honestly
+// and is listed here so the gap is visible at the wiring site rather than
+// inferred from behaviour:
+//
+//   - SetSessionResolver — needs a BATCH tools.JobSessionResolver over the
+//     delegate tool's in-memory session index (DelegateTool has no
+//     ResolvableSessionIDs method). Unwired, no subagent row is reported
+//     actionable, which is what the tool documents as the honest answer.
+//     Resolving per-row against the delegate mutex is explicitly forbidden
+//     (FR-028) — the replacement must be batch.
+//   - SetCapSnapshotSource — needs PlanEngine.CapSnapshot, a LOCK-FREE reader
+//     over values the engine already published from inside its own admission
+//     path. It must never be faked from Admit (which takes the engine mutex
+//     exclusively and re-scans the plan store) nor re-derived independently.
+//     Unwired, the cap fields are omitted as a pair, which is the designed
+//     degradation; a fabricated source reporting 0 would be strictly worse
+//     than absent.
+//   - SetScanCeiling — the config key list_jobs' own doc names
+//     (tools.list_jobs.max_records_scanned_per_kind) does not exist in
+//     pkg/config. Unwired, the package default (5000/kind) applies and a
+//     crossing is still REPORTED via notes.scan_truncated.
+//
+// SetAuditLogger is intentionally not called either, but for the opposite
+// reason: it is already satisfied. ListJobsTool implements the registry's
+// auditLoggerAware contract, and ToolRegistry propagates the logger on
+// registration and on its own SetAuditLogger — wiring it by hand here would
+// duplicate that with a value that goes stale.
+func (al *AgentLoop) wireJobRosterForAgent(agent *AgentInstance) {
+	if agent == nil || agent.Tools == nil {
+		return
+	}
+	listJobs := tools.NewListJobsTool(
+		agentLoopJobPlanLister{al: al},
+		agentLoopJobTaskLister{al: al},
+		agentLoopJobLifecycleLister{al: al},
+	)
+	listJobs.SetConfig(al.GetConfig())
+	listJobs.SetAgentNamer(func() tools.JobAgentNamer {
+		return agentLoopJobAgentNamer{al: al}
+	})
+	// RegisterReplacing, not Register: registerSharedTools re-runs on every hot
+	// reload, so a same-name re-registration is EXPECTED and must not log a
+	// WARN per agent per reload.
+	agent.Tools.RegisterReplacing(listJobs)
 }
 
 // taskTriggerScheduler returns the installed scheduler under the loop lock.
