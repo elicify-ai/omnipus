@@ -218,7 +218,9 @@ type PlanPhase string
 // The canonical plan phases. The empty string ("") on a fresh/never-run Plan
 // is treated as PhaseIdle by EffectivePlanPhase.
 //
-// PhaseAwaitingOwnerCorrection (ADR-053 C1/FR-147) is the DURABLE plan
+// PhaseAwaitingSupervision (ADR-053 C1/FR-147; renamed by ADR-055/FR-062 —
+// the adjudicator is the plansupervisor System Agent, NOT the plan's owner,
+// which the retired name asserted and FR-011 overturned) is the DURABLE plan
 // condition entered when an all-terminal DAG is judged UNMET by the plan Judge:
 // rather than burning another round re-judging identical evidence (the F2
 // round-burn gate, G-9), the plan parks at this phase while the plan-owner
@@ -230,11 +232,14 @@ type PlanPhase string
 // paused plan-owner session whose plan is in this phase from the
 // failed(interrupted) sweep.
 const (
-	PhaseDispatching             PlanPhase = "dispatching"
-	PhaseJudging                 PlanPhase = "judging"
-	PhaseSynthesizing            PlanPhase = "synthesizing"
-	PhaseIdle                    PlanPhase = "idle"
-	PhaseAwaitingOwnerCorrection PlanPhase = "awaiting_owner_correction"
+	PhaseDispatching  PlanPhase = "dispatching"
+	PhaseJudging      PlanPhase = "judging"
+	PhaseSynthesizing PlanPhase = "synthesizing"
+	PhaseIdle         PlanPhase = "idle"
+	// PhaseAwaitingSupervision is the parked phase — see this block's header
+	// comment. Renamed from the retired owner-correction spelling by
+	// ADR-055/FR-062; greenfield, so pre-rename plan records do not load.
+	PhaseAwaitingSupervision PlanPhase = "awaiting_supervision"
 	// PhaseStalled (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) is
 	// set by PlanEngine.surfaceStallIfAny (pkg/agent/plan_engine.go) when a
 	// RUNNING, non-all-terminal plan has no member currently dispatchable
@@ -244,27 +249,42 @@ const (
 	// PhaseDispatching once a member becomes dispatchable/in-flight again.
 	//
 	// PRECEDENCE (never relax without re-checking pkg/agent/plan_engine.go):
-	// PhaseAwaitingOwnerCorrection is a strictly MORE SPECIFIC condition (a
+	// PhaseAwaitingSupervision is a strictly MORE SPECIFIC condition (a
 	// plan-judge dead end on an all-terminal DAG) and must NEVER be masked by
 	// PhaseStalled — surfaceStallIfAny explicitly refuses to touch PlanPhase
-	// while EffectivePlanPhase() == PhaseAwaitingOwnerCorrection. The two are
-	// mutually exclusive by construction: entering PhaseAwaitingOwnerCorrection
+	// while EffectivePlanPhase() == PhaseAwaitingSupervision. The two are
+	// mutually exclusive by construction: entering PhaseAwaitingSupervision
 	// requires an all-terminal member DAG (applyJudgeRoundOutcomeLocked is its
 	// only writer), while PhaseStalled requires a NON-terminal one (processPlan
 	// only ever reaches the stall check after its own allMembersTerminal check
 	// has already come back false) — so processPlan can never reach the stall
-	// check while genuinely parked at awaiting_owner_correction.
+	// check while genuinely parked at PhaseAwaitingSupervision.
+	//
+	// Disjointness is NOT the same question as correctability: both phases are
+	// members of the supervision-eligible set (IsSupervisionEligiblePhase,
+	// ADR-055/FR-029), because a stalled plan needs an adjudicator exactly as a
+	// parked one does. Widening a GATE to accept either member of a set does
+	// not make the set's members co-occur.
 	PhaseStalled PlanPhase = "stalled"
 )
 
 // validPlanPhases is the set of allowed non-empty PlanPhase values.
 var validPlanPhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
-	PhaseDispatching:             true,
-	PhaseJudging:                 true,
-	PhaseSynthesizing:            true,
-	PhaseIdle:                    true,
-	PhaseAwaitingOwnerCorrection: true,
-	PhaseStalled:                 true,
+	PhaseDispatching:         true,
+	PhaseJudging:             true,
+	PhaseSynthesizing:        true,
+	PhaseIdle:                true,
+	PhaseAwaitingSupervision: true,
+	PhaseStalled:             true,
+}
+
+// supervisionEligiblePhases is the ADR-055/FR-029 supervision-eligible phase
+// set — the phases from which a plan correction may be applied. It has exactly
+// two members and is deliberately NOT "any phase": a plan at dispatching or
+// judging is still rejected.
+var supervisionEligiblePhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
+	PhaseAwaitingSupervision: true,
+	PhaseStalled:             true,
 }
 
 // IsValidPlanPhase reports whether p is a known, explicit plan phase. The
@@ -272,6 +292,30 @@ var validPlanPhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
 // default should use EffectivePlanPhase; this validator only accepts an
 // explicit, non-empty value.
 func IsValidPlanPhase(p PlanPhase) bool { return validPlanPhases[p] }
+
+// IsSupervisionEligiblePhase reports whether p is a member of the
+// supervision-eligible phase set (ADR-055/FR-029): PhaseAwaitingSupervision or
+// PhaseStalled. It is the single named predicate every supervision requirement
+// is stated over — the correction phase gate, the supervision deadline, the
+// attempt counter and the attempt ceiling — so those four can never drift apart
+// into four separate hand-written phase comparisons.
+//
+// Callers holding a *Plan should pass EffectivePlanPhase() rather than the raw
+// PlanPhase field, so an unset ("") phase resolves to PhaseIdle (not eligible)
+// exactly once, at the same place every other phase read resolves it.
+//
+// The empty string is NOT a member: a plan that has never run is not awaiting
+// supervision.
+func IsSupervisionEligiblePhase(p PlanPhase) bool { return supervisionEligiblePhases[p] }
+
+// IsAwaitingSupervision reports whether this plan is currently in the
+// supervision-eligible phase set, resolving an unset phase to PhaseIdle first.
+// Convenience wrapper over IsSupervisionEligiblePhase for the common
+// *Plan-in-hand case; it deliberately does NOT consult State, because the
+// phase's own writers only ever set it while State == StateRunning.
+func (p *Plan) IsAwaitingSupervision() bool {
+	return IsSupervisionEligiblePhase(p.EffectivePlanPhase())
+}
 
 // EffectivePlanPhase returns p.PlanPhase, defaulting an unset ("") value to
 // PhaseIdle.
@@ -297,14 +341,35 @@ const (
 	// the goal loop surfaces). The contract enum
 	// (contracts/components/schemas/Plan.yaml failed_reason) already lists it.
 	FailedReasonBudgetExhausted FailedReason = "budget_exhausted"
+	// FailedReasonDoDUnreachable (ADR-055/FR-035) is the honest-exit terminal:
+	// the Definition of Done cannot be reached from the plan's current state,
+	// either because an applied correction left the plan unable to progress or
+	// because the adjudicator issued the `abandon` verb. It is deliberately its
+	// OWN value rather than a third meaning of judge_rounds_exhausted, because
+	// rounds may still remain when it fires — "we ran out of rounds" and "more
+	// rounds would not help" are different facts and the SPA badge, the
+	// operator and the test all need to tell them apart.
+	FailedReasonDoDUnreachable FailedReason = "dod_unreachable"
+	// FailedReasonSupervisionUnavailable (ADR-055/FR-035, FR-022) is the
+	// terminal for an exhausted supervision attempt ceiling: the plan parked,
+	// was woken, and no valid correction ever arrived. It means the ADJUDICATOR
+	// never delivered — not that the work itself failed — which is why it is
+	// distinct from every other reason here.
+	//
+	// A plan with no chat origin must NEVER reach this value: an absent
+	// source_channel/source_chat_id is a legitimate state, not a wake failure
+	// (FR-012d(4)/(5)).
+	FailedReasonSupervisionUnavailable FailedReason = "supervision_unavailable"
 )
 
 // validFailedReasons is the set of allowed non-empty FailedReason values.
 var validFailedReasons = map[FailedReason]bool{ //nolint:gochecknoglobals
-	FailedReasonJudgeRoundsExhausted: true,
-	FailedReasonStoppedByUser:        true,
-	FailedReasonIdleExpired:          true,
-	FailedReasonBudgetExhausted:      true,
+	FailedReasonJudgeRoundsExhausted:   true,
+	FailedReasonStoppedByUser:          true,
+	FailedReasonIdleExpired:            true,
+	FailedReasonBudgetExhausted:        true,
+	FailedReasonDoDUnreachable:         true,
+	FailedReasonSupervisionUnavailable: true,
 }
 
 // IsValidFailedReason reports whether r is a known, explicit failed reason.
@@ -317,6 +382,72 @@ func IsValidFailedReason(r FailedReason) bool { return validFailedReasons[r] }
 type PlanBounds struct {
 	PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
 	IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
+}
+
+// Supervision is the durable PlanSupervisor adjudication state for one plan
+// (ADR-055/FR-050, contracts/components/schemas/Plan.yaml `supervision`).
+// Server-set only; never accepted from a create or update body. It is one
+// object rather than five loose Plan fields because the five values are read
+// together by every supervision decision, but it is written through FIVE
+// DISCRETE plan.Patch pointers rather than one whole-object pointer — see
+// Patch's supervision block for why.
+//
+// LIFETIME IS PER FIELD, NEVER A BLANKET RULE. A plan leaves the
+// supervision-eligible phase set on EVERY applied correction (that is the
+// contract: an applied correction returns the plan to dispatching), so any
+// "reset everything when the phase is left" rule would zero CorrectionRounds
+// immediately after each increment and every terminal record would read 0.
+// The per-field rule is:
+//
+//	WakeAt           cleared on leaving the set and on an applied correction
+//	WakeError        cleared likewise, and by the next successful wake
+//	Attempts         reset to 0 likewise (never touches CorrectionRounds)
+//	CorrectionRounds CUMULATIVE FOR THE LIFE OF THE PLAN — never reset
+//	SessionID        NEVER cleared; overwritten when the next session is minted
+type Supervision struct {
+	// WakeAt is the RFC 3339 UTC timestamp of the supervision wake receipt. It
+	// does double duty by design: it ARMS the supervision deadline, and it is
+	// the once-per-park dedup key that stops every engine tick re-waking the
+	// same parked plan. LastUnmetTerminalSignature cannot serve as that key —
+	// it is a signature of the MEMBER STATE, which is by definition unchanged
+	// while the plan is parked, so a signature-keyed guard fires every tick.
+	WakeAt string `json:"wake_at,omitempty"`
+	// WakeError is the last supervision wake-publish failure, recorded rather
+	// than logged and forgotten so an undelivered wake is observable on the
+	// record itself.
+	//
+	// A plan with NO chat origin is not a wake error — that case is logged at
+	// INFO with reason=no_chat_origin and must never land here, or a healthy
+	// UI-created plan walks the escalation ladder to
+	// FailedReasonSupervisionUnavailable on a false diagnosis.
+	WakeError string `json:"wake_error,omitempty"`
+	// Attempts counts supervision turns that produced NO valid correction. It
+	// is bounded by the supervision_max_attempts ceiling; exhausting it
+	// terminates the plan failed(supervision_unavailable). Resetting it never
+	// touches CorrectionRounds.
+	Attempts int `json:"attempts,omitempty"`
+	// CorrectionRounds counts corrections APPLIED over the whole life of the
+	// plan. It is an ATTRIBUTION counter, not a budget — nothing gates on it.
+	// Its one reader distinguishes the two causes that share the
+	// judge_rounds_exhausted value: == 0 means the round ceiling was reached
+	// with no correction ever applied; > 0 means corrections consumed the
+	// shared round budget.
+	//
+	// NEVER RESET. See the type comment: a reset-on-leaving-the-phase rule
+	// zeroes it immediately after every increment.
+	CorrectionRounds int `json:"correction_rounds,omitempty"`
+	// SessionID is the real, store-backed session the adjudication turn runs
+	// in. It keeps the adjudication transcript out of the plan owner's session
+	// (Plan.OwnerSessionID is a DIFFERENT session — the owner's) and is the
+	// handle a plan-scoped stop cancels.
+	//
+	// NEVER CLEARED, only overwritten when the next supervision session is
+	// minted: an applied correction returns the plan to dispatching while the
+	// adjudication turn may still be running, and blanking the handle in that
+	// window would leave a stop unable to name the turn it must cancel.
+	// Cancelling an already-finished session is a benign no-op, so retaining
+	// the id costs nothing and closes the window.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // validatePlanBounds validates a (possibly nil) PlanBounds. A nil bounds is
@@ -387,7 +518,7 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	// map[string]string on PlanEngine that dropped on every restart, burning
 	// one spurious JudgeRound per restart). The engine rehydrates its
 	// in-memory gate from this field at boot (bootReconcile). Meaningful only
-	// while PlanPhase == PhaseAwaitingOwnerCorrection; cleared when the plan
+	// while PlanPhase == PhaseAwaitingSupervision; cleared when the plan
 	// (re)enters a fresh dispatch cycle (tryStartApprovedPlan).
 	LastUnmetTerminalSignature string `json:"last_unmet_terminal_signature,omitempty"`
 	// OwnerSessionID is the named durable linkage to the plan-owner AGENT
@@ -401,6 +532,32 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	// boot sweep resolves the exemption through the session-side OwnsPlanID,
 	// which is the reliable direction at boot regardless).
 	OwnerSessionID string `json:"owner_session_id,omitempty"`
+	// Supervision is the durable PlanSupervisor adjudication state
+	// (ADR-055/FR-050). nil until the plan first enters the
+	// supervision-eligible phase set. See the Supervision type for its
+	// strictly per-field lifetime rules.
+	Supervision *Supervision `json:"supervision,omitempty"`
+	// SourceChannel/SourceChatID are the plan's CHAT ORIGIN — the channel and
+	// chat a plan wake delivers its outcome back to (ADR-055/FR-012d). They
+	// mirror task.Task's identically-named pair (pkg/task/task.go), including
+	// its optionality, and exist because a plan previously carried no origin at
+	// all, so its wakes had to invent a synthetic internal destination that the
+	// message path then dropped.
+	//
+	// BOTH ABSENT IS A LEGITIMATE, EXPECTED STATE, not a degraded one: a plan
+	// created over REST from the Plans UI has no chat context to record. Do not
+	// mint a synthetic origin, do not fall back to the owner agent's
+	// last-active channel, and do not treat absence as an error anywhere — the
+	// wake predicate is "both non-empty", and when it is false the owner turn
+	// still runs and its synthesis is still persisted; only the outbound
+	// message is skipped.
+	//
+	// Set at creation only and immutable thereafter, like Owner/CreatedBy.
+	// Never accepted from a create request or a PATCH body: a client-supplied
+	// origin would let a caller redirect another principal's plan outcome into
+	// a conversation of its choosing.
+	SourceChannel string `json:"source_channel,omitempty"`
+	SourceChatID  string `json:"source_chat_id,omitempty"`
 	// Progress is done/total over member tasks (R4/C19/M7). It is
 	// server-computed READ-TIME ONLY by scanning the task store for
 	// plan_id == this plan's ID (see ComputeProgress). json:"-" (review r1

@@ -83,6 +83,19 @@ const (
 	RevisionAppend        RevisionVerb = "append"
 	RevisionSupersede     RevisionVerb = "supersede"
 	RevisionTargetedRetry RevisionVerb = "targeted_retry"
+	// RevisionAbandon (ADR-055/FR-046b) is the honest exit: the adjudicator
+	// judges the Definition of Done unreachable from the plan's current state
+	// and adds no corrective work at all, terminating the plan
+	// failed(dod_unreachable) with the falsified assumption on the record —
+	// rather than burning the remaining round budget on corrections that
+	// cannot succeed. It is the one verb that adds no tail members and names
+	// no existing member.
+	//
+	// This block MUST stay in lockstep with the closed `verb` enum in
+	// contracts/components/schemas/RevisionEntry.yaml, which generates
+	// RevisionEntryVerb.Valid(): a verb present here but absent there produces
+	// a persisted record the generated validator rejects.
+	RevisionAbandon RevisionVerb = "abandon"
 )
 
 // RevisionEntry is the durable record of one owner correction, committed
@@ -104,7 +117,7 @@ type RevisionEntry struct {
 // IntentRecordPatch is the plan-record patch carried inside an intent
 // (FR-148: "the plan-record patch"). It is a narrow, serializable subset of
 // plan.Patch covering exactly the fields a correction may transition — the
-// plan-phase flip (awaiting_owner_correction -> dispatching on a fresh
+// plan-phase flip (awaiting_supervision -> dispatching on a fresh
 // correction), clearing the durable unmet signature, and bumping activity.
 // Kept as plain fields (not *pointers) because an intent record is an
 // immutable, self-contained historical document, not a live Patch.

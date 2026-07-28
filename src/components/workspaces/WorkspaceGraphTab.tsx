@@ -245,7 +245,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
 
         {activePlan && (() => {
           // ADR-053 FE-2 §7 (D7) — the plan's runtime sub-phase. The
-          // re-planning hold (`plan_phase: awaiting_owner_correction`) is the
+          // re-planning hold (`plan_phase: awaiting_supervision`) is the
           // durable, operator-actionable signal: the plan reached
           // all-terminal-but-unmet and is waiting on an owner correction to
           // continue — rendered as a warning chip so it can't blend into the

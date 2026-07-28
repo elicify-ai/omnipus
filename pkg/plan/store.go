@@ -268,6 +268,35 @@ type Patch struct {
 	// OwnerSessionID sets Plan.OwnerSessionID (ADR-053 m-3/FR-147 — named
 	// plan<->owner-session linkage).
 	OwnerSessionID *string
+
+	// --- supervision state (ADR-055/FR-050) ---
+	//
+	// FIVE DISCRETE POINTERS, DELIBERATELY NOT ONE `Supervision **Supervision`.
+	// Patch's whole contract is "only non-nil fields are written", and these
+	// five values are mutated INDEPENDENTLY and with DIFFERENT semantics —
+	// stamp (WakeAt), record (WakeError), increment (Attempts,
+	// CorrectionRounds), reset-to-zero (Attempts) and set-once (SessionID).
+	// Modelling them as a single whole-object pointer (the Bounds convention
+	// above) would make every one of those a read-modify-write over a struct
+	// the caller read earlier — safe only while the engine's plan-decision
+	// mutex is held. The REST layer's Store.Update callers do NOT hold it, so
+	// one concurrent REST update of an unrelated field would clobber an
+	// in-flight supervision write. That is a lost update on precisely the
+	// counters that must not lose one: CorrectionRounds is cumulative for the
+	// life of the plan and drives which terminal message a failed plan gets.
+	//
+	// Set semantics only — no delta/increment fields. The engine reads,
+	// computes and sets under its own lock. A REST-shaped patch leaves all
+	// five nil and the whole supervision object is left untouched on disk.
+	//
+	// A pointer to the zero value is meaningful and distinct from nil:
+	// &"" clears WakeAt/WakeError, and &0 resets Attempts. There is no way to
+	// clear SessionID, and that is intentional (see the Supervision type).
+	SupervisionWakeAt           *string
+	SupervisionWakeError        *string
+	SupervisionAttempts         *int
+	SupervisionCorrectionRounds *int
+	SupervisionSessionID        *string
 }
 
 // Update applies patch to the plan identified by id and persists the result.
@@ -397,6 +426,9 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 	if patch.OwnerSessionID != nil {
 		p.OwnerSessionID = *patch.OwnerSessionID
 	}
+	if err := applySupervisionPatch(p, patch); err != nil {
+		return nil, err
+	}
 	if patch.State != nil {
 		if !IsValidState(*patch.State) {
 			return nil, verr("invalid state %q", *patch.State)
@@ -512,6 +544,70 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		s.OnChange(p)
 	}
 	return p, nil
+}
+
+// applySupervisionPatch applies the five discrete supervision pointers of
+// patch to p (ADR-055/FR-050). It is the ONLY writer of Plan.Supervision.
+//
+// The all-nil case — every REST-shaped patch, and every engine patch that does
+// not touch supervision — returns immediately WITHOUT allocating, so a plan
+// that has never been supervised keeps a nil Supervision and serialises with no
+// `supervision` key at all. That early return is the property test #57c pins:
+// a patch of unrelated fields must leave the whole object byte-identical.
+//
+// A pointer to the zero value is meaningful and NOT the same as nil: &"" clears
+// WakeAt/WakeError and &0 resets Attempts, which is how the engine disarms the
+// deadline and the attempt counter when a plan leaves the supervision-eligible
+// phase set. CorrectionRounds is settable but never set backwards by the
+// engine (it is cumulative for the life of the plan), and SessionID has no
+// clearing path by design — see the Supervision type.
+func applySupervisionPatch(p *Plan, patch Patch) error {
+	if patch.SupervisionWakeAt == nil &&
+		patch.SupervisionWakeError == nil &&
+		patch.SupervisionAttempts == nil &&
+		patch.SupervisionCorrectionRounds == nil &&
+		patch.SupervisionSessionID == nil {
+		return nil
+	}
+	// Validate BEFORE mutating: updateLocked's error paths return without
+	// writing, but p is the loaded in-memory record and a half-applied patch
+	// would be visible to anything holding it.
+	if patch.SupervisionWakeAt != nil && *patch.SupervisionWakeAt != "" {
+		if _, err := time.Parse(time.RFC3339, *patch.SupervisionWakeAt); err != nil {
+			// Rejected rather than stored: `supervision.wake_at` is
+			// `format: date-time` in Plan.yaml and the SPA edge validates it
+			// with a strict datetime schema, so a malformed value would drop
+			// the ENTIRE plan payload at the client rather than just this
+			// field.
+			return verr("supervision.wake_at must be an RFC 3339 timestamp")
+		}
+	}
+	if patch.SupervisionAttempts != nil && *patch.SupervisionAttempts < 0 {
+		return verr("supervision.attempts must not be negative")
+	}
+	if patch.SupervisionCorrectionRounds != nil && *patch.SupervisionCorrectionRounds < 0 {
+		return verr("supervision.correction_rounds must not be negative")
+	}
+
+	if p.Supervision == nil {
+		p.Supervision = &Supervision{}
+	}
+	if patch.SupervisionWakeAt != nil {
+		p.Supervision.WakeAt = *patch.SupervisionWakeAt
+	}
+	if patch.SupervisionWakeError != nil {
+		p.Supervision.WakeError = *patch.SupervisionWakeError
+	}
+	if patch.SupervisionAttempts != nil {
+		p.Supervision.Attempts = *patch.SupervisionAttempts
+	}
+	if patch.SupervisionCorrectionRounds != nil {
+		p.Supervision.CorrectionRounds = *patch.SupervisionCorrectionRounds
+	}
+	if patch.SupervisionSessionID != nil {
+		p.Supervision.SessionID = *patch.SupervisionSessionID
+	}
+	return nil
 }
 
 // Delete removes the plan file for id. A running plan cannot be deleted

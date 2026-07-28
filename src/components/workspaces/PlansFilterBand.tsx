@@ -253,7 +253,7 @@ function PlanFilterTile({
   const cancelled = isPlanCancelled(plan)
   const displayColor = planDisplayColor(plan)
   const displayLabelText = planDisplayLabel(plan)
-  // S2 UAT finding — a plan parked at `awaiting_owner_correction` rendered as
+  // S2 UAT finding — a plan parked at `awaiting_supervision` rendered as
   // plain "Running" here, indistinguishable from one making real progress.
   // Reuses the same `planPhaseChip` helper WorkspaceGraphTab already wires up
   // (ADR-053 FE-2 §7) — this tile was the surface it was missing from.
@@ -346,7 +346,7 @@ function PlanFilterTile({
             {displayLabelText}
           </span>
 
-          {/* S2 UAT finding — a plan parked at `awaiting_owner_correction`
+          {/* S2 UAT finding — a plan parked at `awaiting_supervision`
               rendered as plain "Running" here, indistinguishable from a plan
               actually making progress. Surfaces the same phase chip
               WorkspaceGraphTab already renders (ADR-053 FE-2 §7). */}

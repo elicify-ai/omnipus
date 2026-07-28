@@ -31,11 +31,11 @@ func newCorrectionHarness(t *testing.T) *planEngineHarness {
 	return h
 }
 
-// mustSeedAwaitingCorrection creates a running plan in PhaseAwaitingOwnerCorrection
+// mustSeedAwaitingCorrection creates a running plan in PhaseAwaitingSupervision
 // with the given member tasks. Each member's Status must already be set.
 func mustSeedAwaitingCorrection(t *testing.T, h *planEngineHarness, planID string, members ...*task.Task) *plan.Plan {
 	t.Helper()
-	awaiting := plan.PhaseAwaitingOwnerCorrection
+	awaiting := plan.PhaseAwaitingSupervision
 	sig := "sig-" + planID
 	p := &plan.Plan{
 		ID: planID, Title: planID, WorkspaceID: "ws", OwnerAgentID: "owner",
@@ -522,7 +522,7 @@ func TestCorrection_DoDStaysImmutable(t *testing.T) {
 	p := &plan.Plan{
 		ID: "p-imm", Title: "p-imm", WorkspaceID: "ws", OwnerAgentID: "owner",
 		State:                      plan.StateRunning,
-		PlanPhase:                  plan.PhaseAwaitingOwnerCorrection,
+		PlanPhase:                  plan.PhaseAwaitingSupervision,
 		LastUnmetTerminalSignature: "sig-p-imm",
 		DoD:                        originalDoD,
 	}
@@ -553,7 +553,7 @@ func TestCorrection_DoDStaysImmutable(t *testing.T) {
 }
 
 // TestCorrection_NotInAwaitingPhase_Rejected: corrections are only valid on a
-// plan in awaiting_owner_correction. A plan in dispatching/judging is rejected.
+// plan in awaiting_supervision. A plan in dispatching/judging is rejected.
 func TestCorrection_NotInAwaitingPhase_Rejected(t *testing.T) {
 	h := newCorrectionHarness(t)
 	ctx := context.Background()
@@ -567,7 +567,7 @@ func TestCorrection_NotInAwaitingPhase_Rejected(t *testing.T) {
 		TailMembers: []task.Task{{ID: "m-x", Title: "x", WorkspaceID: "ws", Status: task.StatusNext}},
 	})
 	if err == nil {
-		t.Fatal("AppendCorrection should reject a plan not in awaiting_owner_correction")
+		t.Fatal("AppendCorrection should reject a plan not in awaiting_supervision")
 	}
 }
 
@@ -598,8 +598,8 @@ func TestAppendCorrection_NonOwner_Rejected(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get plan %q: %v", planID, err)
 		}
-		if p.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
-			t.Errorf("plan phase changed to %q on a rejected correction; want awaiting_owner_correction",
+		if p.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+			t.Errorf("plan phase changed to %q on a rejected correction; want awaiting_supervision",
 				p.EffectivePlanPhase())
 		}
 		if p.LastUnmetTerminalSignature == "" {

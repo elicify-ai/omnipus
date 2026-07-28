@@ -62,7 +62,7 @@ properties:
       The durable 8-state lifecycle (S2, the S4 interlock state machine's
       authority). `paused` covers BOTH cooperative cancel-soft grace AND
       a plan-owner session idling while its plan is durably
-      `plan_phase=awaiting_owner_correction` (that condition itself lives
+      `plan_phase=awaiting_supervision` (that condition itself lives
       on the Plan record, not as a 9th state here — see `Plan.plan_phase`
       and R§8.10's lifecycle-to-pill crosswalk).
     example: "running"
@@ -195,7 +195,7 @@ properties:
       Set only when `state == failed`. An open string, not a closed enum
       — the spec enumerates this non-exhaustively ("e.g. `interrupted`,
       `budget_exhausted`, `judge_rounds_exhausted`"), unlike
-      `Plan.failed_reason`'s closed 3-value enum, so this field is left
+      `Plan.failed_reason`'s closed enum, so this field is left
       open rather than guessing at a complete set (flagged for review).
     example: "interrupted"
   created_at:

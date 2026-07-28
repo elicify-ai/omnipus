@@ -811,7 +811,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 //  2. gated approve: the plan's member topology passes plan-lint (approve).
 //  3. members dispatch per DAG: the root member dispatches; a blocked
 //     dependent is held until its dependency is done, then dispatches.
-//  4. all-terminal → plan Judge → unmet → parks at awaiting_owner_correction
+//  4. all-terminal → plan Judge → unmet → parks at awaiting_supervision
 //     (one round consumed).
 //  5. F2: idle ticks over the UNCHANGED all-terminal state burn NO further
 //     round (the gate holds — no re-judge of unchanged state).
@@ -874,7 +874,7 @@ func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
 	// all-terminal: dependent done → the plan is ready to judge.
 	markMemberDone(t, h.tasks, "t2-dep")
 
-	// (4) plan Judge → unmet → awaiting_owner_correction (one round).
+	// (4) plan Judge → unmet → awaiting_supervision (one round).
 	h.judge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 			Met: false, PerCriterion: []task.CriterionVerdict{
@@ -888,8 +888,8 @@ func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
 	if parked.State != plan.StateRunning || parked.JudgeRounds != 1 {
 		t.Fatalf("(4) after unmet: state=%q rounds=%d, want running/1", parked.State, parked.JudgeRounds)
 	}
-	if parked.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
-		t.Fatalf("(4) plan_phase = %q, want awaiting_owner_correction", parked.EffectivePlanPhase())
+	if parked.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+		t.Fatalf("(4) plan_phase = %q, want awaiting_supervision", parked.EffectivePlanPhase())
 	}
 
 	// (5) F2: idle ticks over the UNCHANGED all-terminal state burn NO round.
@@ -999,8 +999,8 @@ func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
 // transient failed member (D4) → transactional append (kill mid-append →
 // pre-append DAG) → done.
 //
-// Each correction verb requires the plan to be durably at awaiting_owner_
-// correction, and AppendCorrection itself resets the phase to dispatching (so
+// Each correction verb requires the plan to be durably at
+// awaiting_supervision, and AppendCorrection itself resets the phase to dispatching (so
 // the engine re-dispatches/re-judges). The two D4 verbs are therefore driven
 // on two freshly-seeded awaiting plans (supersede on plan-t3-sup, targeted-
 // retry on plan-t3-retry) — the same edge-faithful pattern the scoped
@@ -1008,7 +1008,7 @@ func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
 // close the drawn path.
 //
 // Drawn path asserted node-by-node:
-//  1. owner plans: a running plan is driven to awaiting_owner_correction
+//  1. owner plans: a running plan is driven to awaiting_supervision
 //     (unmet-all-done).
 //  2. owner re-plans via SUPERSEDE: the done member is marked ignored-by-Judge
 //     (immutable record), and the auto-reset resets the other failed member.
@@ -1028,7 +1028,7 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	h := newCorrectionHarness(t)
 	ctx := context.Background()
 
-	// (1) owner plans: a running plan driven to awaiting_owner_correction
+	// (1) owner plans: a running plan driven to awaiting_supervision
 	//     (unmet-all-done). Two awaiting plans are seeded — one for the
 	//     SUPERSEDE verb, one for the TARGETED-RETRY verb — because each
 	//     AppendCorrection resets the phase to dispatching.
@@ -1038,8 +1038,8 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 		doneMember("t3-done-r"), failedMember("t3-frozen"))
 	for _, pid := range []string{"plan-t3-sup", "plan-t3-retry"} {
 		p, _ := h.plans.Get(pid)
-		if p.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
-			t.Fatalf("(1) plan %q must be at awaiting_owner_correction (unmet-all-done), got %q",
+		if p.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+			t.Fatalf("(1) plan %q must be at awaiting_supervision (unmet-all-done), got %q",
 				pid, p.EffectivePlanPhase())
 		}
 	}
@@ -1328,7 +1328,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	// CRIT-1: a paused awaiting-correction owner (exemption b) — preserved.
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "plan-bs", Title: "plan-bs", WorkspaceID: "ws", OwnerAgentID: "owner",
-		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingSupervision,
 		LastUnmetTerminalSignature: "sig-bs",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{

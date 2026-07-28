@@ -196,17 +196,17 @@ func TestIsNeedsInputReconstructable_Predicate(t *testing.T) {
 	}
 }
 
-// --- FR-147/C1: awaiting-owner-correction exemption + durable restart ------
+// --- FR-147/C1: awaiting-supervision exemption + durable restart ------
 
 // TestBootSweep_AwaitingCorrectionOwnerExempt verifies exemption (b): a paused
-// plan-owner session whose plan is durably awaiting_owner_correction is NOT
+// plan-owner session whose plan is durably awaiting_supervision is NOT
 // swept, resolved via OwnsPlanID -> plan.PlanPhase (NOT owner_scope).
 func TestBootSweep_AwaitingCorrectionOwnerExempt(t *testing.T) {
 	h := newBootSweepHarness(t)
-	// A plan parked durably at awaiting_owner_correction.
+	// A plan parked durably at awaiting_supervision.
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "plan-1", Title: "plan-1", WorkspaceID: "ws", OwnerAgentID: "owner-agent",
-		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingSupervision,
 		LastUnmetTerminalSignature: "sig-xyz",
 	})
 	// The plan-owner session: paused, owner_scope=human (so owner_scope CANNOT
@@ -250,7 +250,7 @@ func TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept(t *testing.T) {
 
 // TestDurableC1_RestartNoRoundBurn is THE standalone-F2 restart regression
 // (FR-147/FR-193/INV-7 across INV-9). A plan durably parked at
-// awaiting_owner_correction with a persisted last_unmet_terminal_signature
+// awaiting_supervision with a persisted last_unmet_terminal_signature
 // survives a restart (simulated by a fresh PlanEngine with an empty in-memory
 // gate): bootReconcile rehydrates the signature from the plan record, so the
 // first post-restart processPlan does NOT burn a JudgeRound re-judging the
@@ -260,7 +260,7 @@ func TestDurableC1_RestartNoRoundBurn(t *testing.T) {
 	ps := plan.New(filepath.Join(dir, "plans"))
 	ts := task.New(filepath.Join(dir, "tasks"))
 
-	// --- "before restart" engine: drive a plan to awaiting-owner-correction ---
+	// --- "before restart" engine: drive a plan to awaiting-supervision ---
 	judge1 := &fakePlanJudge{resultFn: func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{Met: false, PerCriterion: []task.CriterionVerdict{
 			{CriterionID: "c1", Met: false, Reason: "not done"},
@@ -280,21 +280,21 @@ func TestDurableC1_RestartNoRoundBurn(t *testing.T) {
 	mustCreateTask(t, ts, &task.Task{ID: "t-c1", Title: "t-c1", WorkspaceID: "ws", PlanID: "plan-c1", Status: task.StatusDone})
 
 	// processPlan -> beginPlanJudgeRound -> judge UNMET -> parks at
-	// awaiting_owner_correction + persists last_unmet_terminal_signature.
+	// awaiting_supervision + persists last_unmet_terminal_signature.
 	pe1.processPlan(context.Background(), "plan-c1")
 	// Drain the async judge round goroutine (runPlanJudgeRound runs in its own
 	// goroutine). Poll for the persisted phase rather than a fixed sleep.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		p, _ := ps.Get("plan-c1")
-		if p.EffectivePlanPhase() == plan.PhaseAwaitingOwnerCorrection && p.LastUnmetTerminalSignature != "" {
+		if p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision && p.LastUnmetTerminalSignature != "" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	parked, _ := ps.Get("plan-c1")
-	if parked.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
-		t.Fatalf("plan phase = %q, want awaiting_owner_correction", parked.EffectivePlanPhase())
+	if parked.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+		t.Fatalf("plan phase = %q, want awaiting_supervision", parked.EffectivePlanPhase())
 	}
 	if parked.LastUnmetTerminalSignature == "" {
 		t.Fatal("last_unmet_terminal_signature not persisted")
@@ -322,8 +322,8 @@ func TestDurableC1_RestartNoRoundBurn(t *testing.T) {
 	if after.JudgeRounds != roundsBefore {
 		t.Errorf("JudgeRounds changed across restart: %d -> %d (no round should be burned)", roundsBefore, after.JudgeRounds)
 	}
-	if after.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
-		t.Errorf("plan drifted from awaiting_owner_correction across restart: %q", after.EffectivePlanPhase())
+	if after.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+		t.Errorf("plan drifted from awaiting_supervision across restart: %q", after.EffectivePlanPhase())
 	}
 }
 
@@ -340,7 +340,7 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 	sig := planTerminalSignature([]task.Task{{ID: "t-a", Status: task.StatusDone}})
 	mustCreatePlan(t, ps, &plan.Plan{
 		ID: "plan-chg", Title: "plan-chg", WorkspaceID: "ws", OwnerAgentID: "owner",
-		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingSupervision,
 		LastUnmetTerminalSignature: sig,
 		DoD:                        []task.AcceptanceCriterion{planProseCriterion("must be done")},
 	})
@@ -380,7 +380,7 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 	h := newBootSweepHarness(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "plan-rs", Title: "plan-rs", WorkspaceID: "ws", OwnerAgentID: "owner",
-		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingSupervision,
 		LastUnmetTerminalSignature: "persisted-sig",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{

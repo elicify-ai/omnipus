@@ -139,7 +139,7 @@ export function planSecondaryChipLabel(plan: {
 // auto-switches to Graph (FE-2). `plan_phase` is a runtime-only sub-phase
 // while `state == running` (NOT a state itself — see planStateColors header).
 //
-// `awaiting_owner_correction` is the marquee case: the plan reached all-
+// `awaiting_supervision` is the marquee case: the plan reached all-
 // terminal-but-unmet and durably holds for an owner correction. The goal-pill
 // crosswalk (R§8.10) reconstructs THIS persisted phase as "re-planning" (so
 // it survives restart, reconstructing as re-planning NOT "waiting_on_user").
@@ -157,8 +157,8 @@ export interface PlanPhaseChip { // not-wire-format: pure UI display type (chip 
 
 /**
  * The Graph-view plan-phase chip (FE-2). Returns:
- *  - `{ 'Re-planning — awaiting owner correction', 'warning' }` for
- *    `plan_phase: 'awaiting_owner_correction'` (the durable re-planning hold);
+ *  - `{ 'Re-planning — awaiting supervision', 'warning' }` for
+ *    `plan_phase: 'awaiting_supervision'` (the durable re-planning hold);
  *  - `{ '<Capitalized phase>', 'info' }` for the other non-idle running
  *    sub-phases (dispatching / judging / synthesizing);
  *  - `null` when there's nothing to surface (not running, `idle`, or no phase).
@@ -174,11 +174,11 @@ export function planPhaseChip(plan: {
   if (plan.state !== 'running') return null
   const phase = plan.plan_phase
   if (!phase || phase === 'idle') return null
-  if (phase === 'awaiting_owner_correction') {
-    return { label: 'Re-planning — awaiting owner correction', tone: 'warning' }
+  if (phase === 'awaiting_supervision') {
+    return { label: 'Re-planning — awaiting supervision', tone: 'warning' }
   }
   // `stalled` (swimlane-board UAT fix) — a DIFFERENT warning-tone condition
-  // from awaiting_owner_correction (a live DAG nothing can currently
+  // from awaiting_supervision (a live DAG nothing can currently
   // dispatch, vs. a judge dead end on an all-terminal one). Never collapse
   // the two into the same label/copy — see planPhaseExplanation below for
   // why they also carry distinct explanation text.
@@ -188,7 +188,7 @@ export function planPhaseChip(plan: {
   return { label: phase.charAt(0).toUpperCase() + phase.slice(1), tone: 'info' }
 }
 
-// ── S2 UAT finding — `awaiting_owner_correction` plain-language copy ───────
+// ── S2 UAT finding — `awaiting_supervision` plain-language copy ───────
 //
 // The warning chip above communicates urgency but not WHAT is needed. Before
 // this fix the only explanation anywhere was a hover-only `title` tooltip on
@@ -209,7 +209,7 @@ export function planPhaseChip(plan: {
 // stays in `state: 'running'` throughout this phase, so `PlanActionButton`
 // (ADR-052 §6.8) still renders the ■ Stop action right next to this chip —
 // point to that real control instead of inventing one.
-export const AWAITING_OWNER_CORRECTION_EXPLANATION =
+export const AWAITING_SUPERVISION_EXPLANATION =
   "This plan hit a dead end its own checks can't clear, and is on hold waiting for a correction. There's no in-app action for that yet — Stop this plan (■) and create a new one with the fix instead."
 
 // ── Stalled plan-phase copy (swimlane-board fix) ────────────────────────────
@@ -219,7 +219,7 @@ export const AWAITING_OWNER_CORRECTION_EXPLANATION =
 // still outstanding, but no member is currently dispatchable or in flight
 // (e.g. blocked on a dependency this plan's own dispatch loop can never
 // itself resolve). This is a GENUINELY DIFFERENT condition from
-// `awaiting_owner_correction` above (that one is a judge dead end on an
+// `awaiting_supervision` above (that one is a judge dead end on an
 // all-terminal DAG; this one is a live DAG nothing can currently move) and
 // must never reuse that constant's copy — the two conditions need their own
 // explanations, mirrored via `tone: 'warning'` chips.
@@ -235,7 +235,7 @@ export const STALLED_EXPLANATION =
 
 /**
  * Plain-language explanation for a warning-tone `planPhaseChip` — PHASE-
- * SPECIFIC (never a single generic string), so `awaiting_owner_correction`
+ * SPECIFIC (never a single generic string), so `awaiting_supervision`
  * and `stalled` each render their own accurate copy instead of silently
  * sharing one. Returns null for every other phase (mirrors `planPhaseChip`'s
  * own null-for-nothing-to-show contract) — callers gate rendering on this
@@ -246,8 +246,8 @@ export const STALLED_EXPLANATION =
 export function planPhaseExplanation(plan: { state: PlanState; plan_phase?: string }): string | null {
   if (plan.state !== 'running') return null
   switch (plan.plan_phase) {
-    case 'awaiting_owner_correction':
-      return AWAITING_OWNER_CORRECTION_EXPLANATION
+    case 'awaiting_supervision':
+      return AWAITING_SUPERVISION_EXPLANATION
     case 'stalled':
       return STALLED_EXPLANATION
     default:

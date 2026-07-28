@@ -205,7 +205,7 @@ type PlanEngine struct {
 	// becomes failed(interrupted) within BootSweepBudget, carrying its last
 	// checkpoint + undelivered messages, EXCEPT the two INV-9 exemptions (a
 	// reconstructable parked needs_input, and a paused plan-owner session
-	// whose plan is durably awaiting_owner_correction). Nil in a bare
+	// whose plan is durably awaiting_supervision). Nil in a bare
 	// struct-literal test engine and in any deployment that has not yet wired
 	// the store — Start's sweep step no-ops cleanly when it is absent.
 	lifecycleStore *session.LifecycleStore
@@ -284,7 +284,7 @@ type PlanEngine struct {
 	// the plan record itself — pkg/plan/plan.go's Plan.LastUnmetTerminalSignature
 	// — which applyJudgeRoundOutcomeLocked persists (mirroring the in-memory
 	// entry) whenever a round ends UNMET, and bootReconcile re-seeds THIS map
-	// from at boot for every plan still awaiting owner correction. So a process
+	// from at boot for every plan still awaiting supervision. So a process
 	// restart does NOT drop the gate's authority: the durable field survives,
 	// the in-memory map is rehydrated from it, and the unchanged-state skip
 	// keeps holding across the restart (the very next tick does not need to
@@ -1197,7 +1197,7 @@ func planStallReason(tasks []task.Task) string {
 // by the plan_status WS frame (contracts/asyncapi.yaml, so a live push isn't
 // dropped by the SPA's Zod validation). The frontend renders it via
 // src/lib/planStateColors.ts's planPhaseChip/planPhaseExplanation, mirroring
-// the awaiting_owner_correction pattern exactly. HandoverText itself stays
+// the awaiting_supervision pattern exactly. HandoverText itself stays
 // server-only (never wire-exposed) — it names internal task IDs meant for
 // the owner AGENT's chat turn, not for the chip.
 //
@@ -1211,10 +1211,10 @@ func planStallReason(tasks []task.Task) string {
 // is no longer stalled.
 //
 // PRECEDENCE (see plan.PhaseStalled's doc comment for the full rationale):
-// awaiting_owner_correction is a strictly MORE SPECIFIC condition than a
+// awaiting_supervision is a strictly MORE SPECIFIC condition than a
 // generic stall and must never be masked by it. This is guaranteed
 // structurally (processPlan's own allMembersTerminal check always intercepts
-// before this call while genuinely parked at awaiting_owner_correction) AND
+// before this call while genuinely parked at awaiting_supervision) AND
 // enforced explicitly below as a belt-and-suspenders guard, so a future
 // refactor of that call order cannot silently reintroduce the bug.
 //
@@ -1222,7 +1222,7 @@ func planStallReason(tasks []task.Task) string {
 // allMembersTerminal(tasks) and planStuckAfterMemberCancel(tasks) have both
 // already been ruled out (processPlan's own call order guarantees this).
 func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
-	if p.EffectivePlanPhase() == plan.PhaseAwaitingOwnerCorrection {
+	if p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision {
 		// Never mask a judge dead end with a generic stall note — see the
 		// PRECEDENCE doc above. Structurally unreachable in production (see
 		// plan.PhaseStalled's doc comment) but kept as an explicit guard.
@@ -1294,7 +1294,7 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan, tasks []task.Task) {
 		sig := planTerminalSignature(tasks)
 		if pe.unmetTerminalSignatureUnchanged(p.ID, sig) {
 			logger.DebugCF("plan_engine",
-				"plan judge round skipped: all-terminal state unchanged since last UNMET verdict (awaiting owner correction)",
+				"plan judge round skipped: all-terminal state unchanged since last UNMET verdict (awaiting supervision)",
 				map[string]any{"plan_id": p.ID})
 			return
 		}
@@ -1503,13 +1503,13 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	steering := buildPlanSteeringText(verdict)
 	// ADR-053 C1/FR-147 (INV-2/INV-7): an UNMET verdict on an all-terminal DAG
 	// (the only kind of state the plan Judge ever fires on) durably parks the
-	// plan at plan_phase=awaiting_owner_correction — NOT back to dispatching —
+	// plan at plan_phase=awaiting_supervision — NOT back to dispatching —
 	// persisting the unmet terminal signature so the F2 round-burn gate
 	// survives restart. The plan-owner session sits at lifecycle `paused`
 	// (Phase-2 owner loop's responsibility); the boot sweep exempts that
 	// paused session from the failed(interrupted) sweep via OwnsPlanID ->
-	// plan.PlanPhase == awaiting_owner_correction (FR-118 exemption b).
-	awaiting := plan.PhaseAwaitingOwnerCorrection
+	// plan.PlanPhase == awaiting_supervision (FR-118 exemption b).
+	awaiting := plan.PhaseAwaitingSupervision
 	sig := terminalSig
 	if _, uerr := pe.planStore.Update(current.ID, plan.Patch{
 		JudgeRounds:                &newRounds,
@@ -1706,7 +1706,7 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	// plan:<id> correction-loop chat) is cancelled as part of the Stop
 	// fan-out — Stop cancels it like any session. The owner session ID is
 	// the durable OwnerSessionID on the plan record (set when the plan
-	// first entered awaiting-owner-correction).
+	// first entered awaiting-supervision).
 	if p.OwnerSessionID != "" {
 		sessions = append(sessions, p.OwnerSessionID)
 	}
@@ -2557,7 +2557,7 @@ func (pe *PlanEngine) newRevisionID(planID string) string {
 // --- AppendCorrection (FR-143/G-11, the main correction handler) -----------
 
 // AppendCorrection processes an owner correction to an unmet DoD (FR-143/G-11).
-// The plan MUST be in awaiting_owner_correction. The caller MUST be the plan's
+// The plan MUST be in awaiting_supervision. The caller MUST be the plan's
 // owner (sec-MAJOR-2): the owner-authority gate runs BEFORE any state
 // inspection or mutation, so a non-owner learns nothing about the plan and
 // cannot change it. The correction commits transactionally via the intent-log
@@ -2588,8 +2588,8 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 	if p.State != plan.StateRunning {
 		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is %s, not running", planID, p.State)
 	}
-	if p.EffectivePlanPhase() != plan.PhaseAwaitingOwnerCorrection {
-		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is in phase %q, not awaiting_owner_correction",
+	if p.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+		return nil, fmt.Errorf("plan_engine: AppendCorrection: plan %q is in phase %q, not awaiting_supervision",
 			planID, p.EffectivePlanPhase())
 	}
 	if err := pe.validateCorrection(planID, p, req); err != nil {
@@ -3061,7 +3061,7 @@ func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 // the Judge-input builder calls — it does NOT alter the verdict itself.
 //
 // postUnmetMemberIDs is the set of member IDs whose artifacts were produced
-// after the plan entered awaiting_owner_correction (detected by comparing the
+// after the plan entered awaiting_supervision (detected by comparing the
 // member's CompletedAt against the plan's last unmet-verdict timestamp). The
 // guard flags them in the extra-context text the Judge receives.
 func gamingGuardEvidence(tasks []task.Task, superseded map[string]bool, postUnmetMemberIDs map[string]bool) string {
@@ -3168,7 +3168,7 @@ func (pe *PlanEngine) reconstructCorrections() {
 // processPlan, the in-memory F2 round-burn gate is REHYDRATED from each
 // running plan's persisted LastUnmetTerminalSignature. Without this, a
 // restart would drop the in-memory map and the very first processPlan tick
-// on an awaiting-owner-correction plan would burn one spurious JudgeRound
+// on an awaiting-supervision plan would burn one spurious JudgeRound
 // re-judging identical all-terminal evidence — exactly the standalone-F2
 // restart gap C1 closes. With it, processPlan -> beginPlanJudgeRound ->
 // unmetTerminalSignatureUnchanged sees the rehydrated entry and skips,
@@ -3190,7 +3190,7 @@ func (pe *PlanEngine) bootReconcile(ctx context.Context) {
 			continue
 		}
 		running++
-		// C1 durable rehydration: a plan parked at awaiting_owner_correction
+		// C1 durable rehydration: a plan parked at awaiting_supervision
 		// with a persisted unmet signature re-arms the in-memory gate so the
 		// unchanged all-terminal state is NOT re-judged on the first
 		// post-restart tick. Plans not in that phase have an empty persisted

@@ -172,7 +172,7 @@ describe('parseFrameSafe — judge_verdict (ADR-049 D2/D4/R3 — NO session_id)'
  * taking `state` and `progress` down with it. The UI then only catches up on
  * its 15s poll, which is why this stayed invisible.
  *
- * `awaiting_owner_correction` was missing here while being a live value of
+ * `awaiting_supervision` was missing here while being a live value of
  * `Plan.plan_phase` (pkg/plan/plan.go) that `websocket.go` forwards verbatim
  * as `PlanPhase: p.PlanPhase` — found while adding `stalled`. Enumerated
  * explicitly rather than spot-checked so a future phase added to the Go
@@ -184,7 +184,7 @@ describe('parseFrameSafe — plan_status accepts every emittable plan_phase', ()
     'judging',
     'synthesizing',
     'idle',
-    'awaiting_owner_correction',
+    'awaiting_supervision',
     'stalled',
   ] as const
 

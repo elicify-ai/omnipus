@@ -2238,11 +2238,20 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 			PlanPhase                  *PlanListResponsePlansPlanPhase    `json:"plan_phase,omitempty"`
 			Progress                   *float32                           `json:"progress,omitempty"`
 			Rationale                  *string                            `json:"rationale,omitempty"`
+			SourceChannel              *string                            `json:"source_channel,omitempty"`
+			SourceChatId               *string                            `json:"source_chat_id,omitempty"`
 			StartedAt                  *time.Time                         `json:"started_at,omitempty"`
 			State                      PlanListResponsePlansState         `json:"state"`
-			Title                      string                             `json:"title"`
-			UpdatedAt                  time.Time                          `json:"updated_at"`
-			WorkspaceId                string                             `json:"workspace_id"`
+			Supervision                *struct {
+				Attempts         *int       `json:"attempts,omitempty"`
+				CorrectionRounds *int       `json:"correction_rounds,omitempty"`
+				SessionId        *string    `json:"session_id,omitempty"`
+				WakeAt           *time.Time `json:"wake_at,omitempty"`
+				WakeError        *string    `json:"wake_error,omitempty"`
+			} `json:"supervision,omitempty"`
+			Title       string    `json:"title"`
+			UpdatedAt   time.Time `json:"updated_at"`
+			WorkspaceId string    `json:"workspace_id"`
 		}{
 			{
 				Id:           "01J3ZQK8N2H8VXNRP5T7C9M4WE",

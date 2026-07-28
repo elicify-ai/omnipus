@@ -447,11 +447,11 @@ func TestPlanEngine_JudgeUnmet_StoresSteeringAndWakesOwnerWithoutTerminal(t *tes
 		t.Fatalf("judge_rounds = %d, want 1", got.JudgeRounds)
 	}
 	// ADR-053 C1/FR-147/INV-2: an UNMET verdict on an all-terminal DAG durably
-	// parks the plan at plan_phase=awaiting_owner_correction (NOT dispatching —
+	// parks the plan at plan_phase=awaiting_supervision (NOT dispatching —
 	// that was the pre-C1 in-memory-only behavior). The durable phase is what
 	// the boot sweep's exemption (b) and the pill crosswalk resolve against.
-	if got.PlanPhase != plan.PhaseAwaitingOwnerCorrection {
-		t.Fatalf("plan_phase = %q, want awaiting_owner_correction (C1 durable condition)", got.PlanPhase)
+	if got.PlanPhase != plan.PhaseAwaitingSupervision {
+		t.Fatalf("plan_phase = %q, want awaiting_supervision (C1 durable condition)", got.PlanPhase)
 	}
 	if got.LastUnmetTerminalSignature == "" {
 		t.Fatal("last_unmet_terminal_signature must be persisted on an UNMET all-terminal verdict (C1)")
@@ -594,7 +594,7 @@ func TestPlanEngine_UnmetAllTerminal_NoReJudgeOnUnchangedIdleTick(t *testing.T) 
 			h.judge.callCount(), idleTicks)
 	}
 	if got.State != plan.StateRunning {
-		t.Fatalf("state = %q, want still running (awaiting owner correction, not rounds-exhausted)", got.State)
+		t.Fatalf("state = %q, want still running (awaiting supervision, not rounds-exhausted)", got.State)
 	}
 
 	// A material state change (here: an owner adds a member) must reopen the
@@ -1385,23 +1385,23 @@ func TestPlanEngine_StallNotSurfaced_WhenMemberInFlight(t *testing.T) {
 	}
 }
 
-// TestPlanEngine_StallNeverMasksAwaitingOwnerCorrection is the PRECEDENCE
-// test for the swimlane-board UAT fix: awaiting_owner_correction (a
+// TestPlanEngine_StallNeverMasksAwaitingSupervision is the PRECEDENCE
+// test for the swimlane-board UAT fix: awaiting_supervision (a
 // plan-judge dead end, ADR-053 C1) is a strictly more specific condition
 // than a generic stall and must NEVER be overwritten by one — testers
 // praised that chip by name (see plan.PhaseStalled's doc comment for the
 // full rationale). In production this scenario cannot arise (a plan only
-// ever enters awaiting_owner_correction with an all-terminal member DAG,
+// ever enters awaiting_supervision with an all-terminal member DAG,
 // which processPlan's own allMembersTerminal check always intercepts before
 // reaching surfaceStallIfAny) — this test exercises surfaceStallIfAny's own
 // explicit guard directly, so the invariant is pinned even against a future
 // refactor of that call order.
-func TestPlanEngine_StallNeverMasksAwaitingOwnerCorrection(t *testing.T) {
+func TestPlanEngine_StallNeverMasksAwaitingSupervision(t *testing.T) {
 	h := newTestPlanEngine(t)
 	steeringText := "Plan judge round 1: the plan judge found the Definition of Done UNMET."
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "p1", Title: "p1", WorkspaceID: "ws", OwnerAgentID: "owner",
-		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingOwnerCorrection,
+		State: plan.StateRunning, PlanPhase: plan.PhaseAwaitingSupervision,
 		HandoverText: steeringText,
 	})
 	p, err := h.plans.Get("p1")
@@ -1420,16 +1420,16 @@ func TestPlanEngine_StallNeverMasksAwaitingOwnerCorrection(t *testing.T) {
 	if gerr != nil {
 		t.Fatal(gerr)
 	}
-	if got.PlanPhase != plan.PhaseAwaitingOwnerCorrection {
+	if got.PlanPhase != plan.PhaseAwaitingSupervision {
 		t.Fatalf("PlanPhase = %q, want it to stay %q (never masked by a generic stall)",
-			got.PlanPhase, plan.PhaseAwaitingOwnerCorrection)
+			got.PlanPhase, plan.PhaseAwaitingSupervision)
 	}
 	if got.HandoverText != steeringText {
 		t.Fatalf("HandoverText = %q, want the judge's steering text left untouched, got clobbered", got.HandoverText)
 	}
 	for _, e := range h.notif.eventList() {
 		if e.SourceKind == "plan_stalled" {
-			t.Fatalf("unexpected plan_stalled wake while awaiting_owner_correction holds: %+v", e)
+			t.Fatalf("unexpected plan_stalled wake while awaiting_supervision holds: %+v", e)
 		}
 	}
 }

@@ -14,7 +14,7 @@ import {
   planPhaseChip,
   planPhaseExplanation,
   planDisplayColor,
-  AWAITING_OWNER_CORRECTION_EXPLANATION,
+  AWAITING_SUPERVISION_EXPLANATION,
   STALLED_EXPLANATION,
 } from './planStateColors'
 
@@ -116,9 +116,9 @@ describe('planSecondaryChipLabel — R1 secondary chips (plan_phase / paused_rea
 })
 
 describe('planPhaseChip — ADR-053 FE-2 §7 Graph plan-phase chip (D7, US-14)', () => {
-  it('surfaces awaiting_owner_correction as the re-planning warning (operator-actionable)', () => {
-    expect(planPhaseChip({ state: 'running', plan_phase: 'awaiting_owner_correction' })).toEqual({
-      label: 'Re-planning — awaiting owner correction',
+  it('surfaces awaiting_supervision as the re-planning warning (operator-actionable)', () => {
+    expect(planPhaseChip({ state: 'running', plan_phase: 'awaiting_supervision' })).toEqual({
+      label: 'Re-planning — awaiting supervision',
       tone: 'warning',
     })
   })
@@ -141,7 +141,7 @@ describe('planPhaseChip — ADR-053 FE-2 §7 Graph plan-phase chip (D7, US-14)',
 
   it('returns null when not running (plan_phase is a runtime-only sub-phase)', () => {
     expect(planPhaseChip({ state: 'approved', plan_phase: 'judging' })).toBeNull()
-    expect(planPhaseChip({ state: 'failed', plan_phase: 'awaiting_owner_correction' })).toBeNull()
+    expect(planPhaseChip({ state: 'failed', plan_phase: 'awaiting_supervision' })).toBeNull()
     expect(planPhaseChip({ state: 'draft', plan_phase: 'dispatching' })).toBeNull()
     expect(planPhaseChip({ state: 'done' })).toBeNull()
   })
@@ -150,7 +150,7 @@ describe('planPhaseChip — ADR-053 FE-2 §7 Graph plan-phase chip (D7, US-14)',
   // or in-flight member for (pkg/agent/plan_engine.go's surfaceStallIfAny)
   // must render a distinct, actionable warning chip, never silently blend
   // into a quiet info chip the way dispatching/judging/synthesizing do.
-  it('surfaces stalled as its own warning chip, distinct from awaiting_owner_correction', () => {
+  it('surfaces stalled as its own warning chip, distinct from awaiting_supervision', () => {
     expect(planPhaseChip({ state: 'running', plan_phase: 'stalled' })).toEqual({
       label: 'Stalled — needs a correction',
       tone: 'warning',
@@ -159,16 +159,16 @@ describe('planPhaseChip — ADR-053 FE-2 §7 Graph plan-phase chip (D7, US-14)',
 })
 
 describe('planPhaseExplanation — phase-specific warning-chip copy (swimlane-board fix)', () => {
-  it('resolves awaiting_owner_correction to its own explanation', () => {
-    expect(planPhaseExplanation({ state: 'running', plan_phase: 'awaiting_owner_correction' })).toBe(
-      AWAITING_OWNER_CORRECTION_EXPLANATION,
+  it('resolves awaiting_supervision to its own explanation', () => {
+    expect(planPhaseExplanation({ state: 'running', plan_phase: 'awaiting_supervision' })).toBe(
+      AWAITING_SUPERVISION_EXPLANATION,
     )
   })
 
-  it('resolves stalled to its own DIFFERENT explanation (never reuses the awaiting_owner_correction copy)', () => {
+  it('resolves stalled to its own DIFFERENT explanation (never reuses the awaiting_supervision copy)', () => {
     const explanation = planPhaseExplanation({ state: 'running', plan_phase: 'stalled' })
     expect(explanation).toBe(STALLED_EXPLANATION)
-    expect(explanation).not.toBe(AWAITING_OWNER_CORRECTION_EXPLANATION)
+    expect(explanation).not.toBe(AWAITING_SUPERVISION_EXPLANATION)
   })
 
   it('the stalled explanation never names a raw task UUID — it is static, owner-agent-only detail stays server-side', () => {
@@ -185,6 +185,6 @@ describe('planPhaseExplanation — phase-specific warning-chip copy (swimlane-bo
 
   it('returns null when not running', () => {
     expect(planPhaseExplanation({ state: 'failed', plan_phase: 'stalled' })).toBeNull()
-    expect(planPhaseExplanation({ state: 'draft', plan_phase: 'awaiting_owner_correction' })).toBeNull()
+    expect(planPhaseExplanation({ state: 'draft', plan_phase: 'awaiting_supervision' })).toBeNull()
   })
 })

@@ -62,7 +62,7 @@ const (
 	LifecycleNeedsInput LifecycleState = "needs_input"
 	// LifecyclePaused covers BOTH cooperative cancel-soft grace AND a
 	// plan-owner session idling while its plan is durably
-	// plan_phase=awaiting_owner_correction (that condition itself lives on
+	// plan_phase=awaiting_supervision (that condition itself lives on
 	// the Plan record — pkg/plan — not as a 9th state here; see
 	// R§8.10's lifecycle-to-pill crosswalk). This package does not persist
 	// or interpret plan_phase; a caller layering the plan-owner semantics on

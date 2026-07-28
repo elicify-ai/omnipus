@@ -7809,28 +7809,67 @@ export interface components {
              */
             state: "draft" | "approved" | "running" | "done" | "failed";
             /**
-             * @description Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+             * @description Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
              * @default idle
              * @example idle
              * @enum {string}
              */
-            plan_phase: "dispatching" | "judging" | "synthesizing" | "idle" | "awaiting_owner_correction" | "stalled";
+            plan_phase: "dispatching" | "judging" | "synthesizing" | "idle" | "awaiting_supervision" | "stalled";
             /**
-             * @description ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+             * @description ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
              * @example sha256:3b1c2e9b7d4f6a1c0e2b3d4f5a6b7c8d9e0f1a2b
              */
             readonly last_unmet_terminal_signature?: string;
             /**
-             * @description ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+             * @description ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_supervision`, this session sits at lifecycle `paused`, legitimately idle awaiting adjudication, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9). Distinct from `supervision.session_id`, which is PlanSupervisor's own adjudication session (ADR-055/FR-016b).
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             owner_session_id?: string;
             /**
-             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
              * @example judge_rounds_exhausted
              * @enum {string}
              */
-            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "budget_exhausted";
+            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "budget_exhausted" | "dod_unreachable" | "supervision_unavailable";
+            /** @description ADR-055/FR-050 — the durable PlanSupervisor adjudication state for this plan. Server-set only; never accepted from a create or update body. Absent until the plan first enters the supervision-eligible phase set (`awaiting_supervision`, `stalled`). Every field is optional and independently written — the engine's write path is five discrete `plan.Patch` pointers, not one whole-object pointer, so a concurrent REST update of an unrelated field can never clobber a counter (FR-050, r3 M3-16). */
+            supervision?: {
+                /**
+                 * Format: date-time
+                 * @description RFC 3339 UTC timestamp of the supervision wake receipt. Arms the supervision deadline (FR-021) AND is the once-per-park dedup key that stops every engine tick re-waking the same parked plan (FR-023). Cleared when the plan leaves the supervision-eligible phase set and on every applied correction, so a later re-park re-wakes.
+                 * @example 2026-07-28T10:00:00Z
+                 */
+                wake_at?: string;
+                /**
+                 * @description The last supervision wake-publish failure, recorded rather than WARNed away (FR-024) so an undelivered wake is observable. Cleared by the next successful wake, on an applied correction, and when the plan leaves the supervision-eligible phase set. A plan with no chat origin is NOT a wake error — that case is logged INFO with `reason: no_chat_origin` and never lands here (FR-012d(5)).
+                 * @example notifier unavailable: bus closed
+                 */
+                wake_error?: string;
+                /**
+                 * @description Supervision turns that produced no valid correction, bounded by the `supervision_max_attempts` ceiling (FR-022). Exhausting the ceiling terminates the plan `failed(supervision_unavailable)`. Reset to 0 on an applied correction and when the plan leaves the supervision-eligible phase set. Resetting it never touches `correction_rounds`.
+                 * @example 1
+                 */
+                attempts?: number;
+                /**
+                 * @description Corrections applied to this plan over its whole life. An ATTRIBUTION counter, not a budget (FR-034) — nothing gates on it; FR-035 reads it to tell the two `judge_rounds_exhausted` causes apart. CUMULATIVE AND NEVER RESET: a plan leaves the supervision-eligible phase set on every applied correction, so any reset rule would zero this counter immediately after each increment and every terminal record would read 0 (r3 C3-03).
+                 * @example 2
+                 */
+                correction_rounds?: number;
+                /**
+                 * @description The real, store-backed session PlanSupervisor's adjudication turn runs in (FR-016b) — keeps the adjudication transcript out of the plan owner's session, and is the handle `stop_plan` cancels (FR-044). NEVER cleared, only overwritten when the next supervision session is minted: an applied correction returns the plan to `dispatching` while the adjudication turn may still be running, and blanking the handle in that window would make the stop uncancellable (r3 m3-07). Cancelling an already-finished session is a benign no-op.
+                 * @example 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                 */
+                session_id?: string;
+            };
+            /**
+             * @description ADR-055/FR-012d — the channel this plan was created from, and the channel a plan wake delivers its outcome back to. Mirrors `Task.source_channel` exactly, including its optionality. Server-set at creation only and immutable thereafter; never accepted from `PlanCreateRequest` or any update body. ABSENT IS A LEGITIMATE, EXPECTED STATE, not a degraded one — a plan created over REST from the Plans UI has no chat origin at all. Unlike the task precedent, a `webchat` origin IS recorded here rather than excluded. The wake path requires `source_channel` and `source_chat_id` to BOTH be non-empty before it constructs a chat-origin wake; when either is empty the owner turn still runs and its synthesis is still persisted, no outbound message is published anywhere, and the human-facing surface is the `plan_completed` / `plan_failed` notification.
+             * @example telegram
+             */
+            source_channel?: string;
+            /**
+             * @description ADR-055/FR-012d — the chat within `source_channel` this plan was created from. Mirrors `Task.source_chat_id`. Server-set at creation only; absent whenever the plan has no chat origin. See `source_channel` for the both-non-empty wake predicate.
+             * @example -1001234567890
+             */
+            source_chat_id?: string;
             /**
              * @description Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
              * @example jim
@@ -9024,11 +9063,11 @@ export interface components {
              */
             generation: number;
             /**
-             * @description `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+             * @description `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
              * @example append
              * @enum {string}
              */
-            verb: "append" | "supersede" | "targeted_retry";
+            verb: "append" | "supersede" | "targeted_retry" | "abandon";
             /**
              * @description The owner's stated reason the prior plan state was wrong — the assumption the correction falsifies.
              * @example Assumed the shard schema was stable; it changed upstream.
@@ -9095,7 +9134,7 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
              * @example running
              * @enum {string}
              */
@@ -9177,7 +9216,7 @@ export interface components {
                 reconstructable: boolean;
             };
             /**
-             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed 3-value enum, so this field is left open rather than guessing at a complete set (flagged for review).
+             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
              * @example interrupted
              */
             failed_reason?: string;

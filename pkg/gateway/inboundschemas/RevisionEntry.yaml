@@ -43,12 +43,19 @@ properties:
       - append
       - supersede
       - targeted_retry
+      - abandon
     description: >
       `append` adds a new tail to the DAG. `supersede` marks a `done`
       member's outcome as superseded by a corrective tail (the superseded
       member's own record stays immutable — only Judge weighting
       changes). `targeted_retry` resets a single frozen-transient member
-      for another attempt.
+      for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit:
+      the adjudicator judges the Definition of Done unreachable from the
+      plan's current state and adds no corrective work at all, terminating
+      the plan `failed(dod_unreachable)` with the falsified assumption on
+      the record — as opposed to burning the remaining round budget on
+      corrections that cannot succeed. It is the one verb that adds no
+      tail members and names no existing member.
     example: "append"
   falsified_assumption:
     type: string

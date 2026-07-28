@@ -20,7 +20,7 @@
 //     (isNeedsInputReconstructable re-evaluated AT BOOT, R§8.6 — the stored
 //     needs_input.reconstructable hint is never the authority); and
 //  2. a paused plan-owner session whose plan is durably
-//     plan_phase=awaiting_owner_correction (C1/FR-147), resolved via the named
+//     plan_phase=awaiting_supervision (C1/FR-147), resolved via the named
 //     plan<->owner-session linkage (session.LifecycleRecord.OwnsPlanID ->
 //     plan.Plan.PlanPhase), NOT via owner_scope (which is `human` for a
 //     top-level owner and cannot itself identify the plan).
@@ -54,7 +54,7 @@ type BootSweepResult struct {
 	// left alone (exemption a / FR-119).
 	PreservedNeedsInput []string
 	// PreservedAwaitingCorrection lists paused plan-owner sessions whose plan
-	// is durably awaiting_owner_correction, left alone (exemption b / FR-147).
+	// is durably awaiting_supervision, left alone (exemption b / FR-147).
 	PreservedAwaitingCorrection []string
 	// RebaselinedGoals lists in-flight goals quiesced/re-baselined for a
 	// trigger-semantics change (N-15).
@@ -152,13 +152,13 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		}
 
 		// Exemption (b): a paused plan-owner session whose plan is durably
-		// plan_phase=awaiting_owner_correction is legitimately idle awaiting
+		// plan_phase=awaiting_supervision is legitimately idle awaiting
 		// the owner (C1/FR-147/INV-9). Resolved via the NAMED linkage
 		// (OwnsPlanID -> plan.PlanPhase), NOT via owner_scope — a top-level
 		// owner session's owner_scope is `human`, which cannot identify the
 		// plan. OwnsPlanID is the reciprocal of plan.Plan.OwnerSessionID.
 		if rec.State == session.LifecyclePaused && rec.OwnsPlanID != "" {
-			if pe.planIsAwaitingOwnerCorrection(rec.OwnsPlanID) {
+			if pe.planIsAwaitingSupervision(rec.OwnsPlanID) {
 				result.PreservedAwaitingCorrection = append(result.PreservedAwaitingCorrection, rec.SessionID)
 				continue
 			}
@@ -231,14 +231,14 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 	return nil
 }
 
-// planIsAwaitingOwnerCorrection reports whether planID's durable plan record
-// is parked at plan_phase=awaiting_owner_correction (C1/FR-147). This is the
+// planIsAwaitingSupervision reports whether planID's durable plan record
+// is parked at plan_phase=awaiting_supervision (C1/FR-147). This is the
 // exemption-(b) resolution: a paused owner session whose plan is in this phase
 // is legitimately idle awaiting the owner's correction and MUST NOT be swept
 // (INV-7 preserved across INV-9). Best-effort: a missing/corrupt plan record
 // returns false (the session is then swept — the safe default, since the named
 // linkage cannot be confirmed).
-func (pe *PlanEngine) planIsAwaitingOwnerCorrection(planID string) bool {
+func (pe *PlanEngine) planIsAwaitingSupervision(planID string) bool {
 	if planID == "" || pe.planStore == nil {
 		return false
 	}
@@ -246,7 +246,7 @@ func (pe *PlanEngine) planIsAwaitingOwnerCorrection(planID string) bool {
 	if err != nil {
 		return false
 	}
-	return p.EffectivePlanPhase() == plan.PhaseAwaitingOwnerCorrection
+	return p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision
 }
 
 // isNeedsInputReconstructable is the R§8.6 warm-resume reconstructability

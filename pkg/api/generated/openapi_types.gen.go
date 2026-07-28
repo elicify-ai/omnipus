@@ -2167,10 +2167,12 @@ func (e PlanDodStatus) Valid() bool {
 
 // Defines values for PlanFailedReason.
 const (
-	PlanFailedReasonBudgetExhausted      PlanFailedReason = "budget_exhausted"
-	PlanFailedReasonIdleExpired          PlanFailedReason = "idle_expired"
-	PlanFailedReasonJudgeRoundsExhausted PlanFailedReason = "judge_rounds_exhausted"
-	PlanFailedReasonStoppedByUser        PlanFailedReason = "stopped_by_user"
+	PlanFailedReasonBudgetExhausted        PlanFailedReason = "budget_exhausted"
+	PlanFailedReasonDodUnreachable         PlanFailedReason = "dod_unreachable"
+	PlanFailedReasonIdleExpired            PlanFailedReason = "idle_expired"
+	PlanFailedReasonJudgeRoundsExhausted   PlanFailedReason = "judge_rounds_exhausted"
+	PlanFailedReasonStoppedByUser          PlanFailedReason = "stopped_by_user"
+	PlanFailedReasonSupervisionUnavailable PlanFailedReason = "supervision_unavailable"
 )
 
 // Valid indicates whether the value is a known member of the PlanFailedReason enum.
@@ -2178,11 +2180,15 @@ func (e PlanFailedReason) Valid() bool {
 	switch e {
 	case PlanFailedReasonBudgetExhausted:
 		return true
+	case PlanFailedReasonDodUnreachable:
+		return true
 	case PlanFailedReasonIdleExpired:
 		return true
 	case PlanFailedReasonJudgeRoundsExhausted:
 		return true
 	case PlanFailedReasonStoppedByUser:
+		return true
+	case PlanFailedReasonSupervisionUnavailable:
 		return true
 	default:
 		return false
@@ -2191,18 +2197,18 @@ func (e PlanFailedReason) Valid() bool {
 
 // Defines values for PlanPlanPhase.
 const (
-	PlanPlanPhaseAwaitingOwnerCorrection PlanPlanPhase = "awaiting_owner_correction"
-	PlanPlanPhaseDispatching             PlanPlanPhase = "dispatching"
-	PlanPlanPhaseIdle                    PlanPlanPhase = "idle"
-	PlanPlanPhaseJudging                 PlanPlanPhase = "judging"
-	PlanPlanPhaseStalled                 PlanPlanPhase = "stalled"
-	PlanPlanPhaseSynthesizing            PlanPlanPhase = "synthesizing"
+	PlanPlanPhaseAwaitingSupervision PlanPlanPhase = "awaiting_supervision"
+	PlanPlanPhaseDispatching         PlanPlanPhase = "dispatching"
+	PlanPlanPhaseIdle                PlanPlanPhase = "idle"
+	PlanPlanPhaseJudging             PlanPlanPhase = "judging"
+	PlanPlanPhaseStalled             PlanPlanPhase = "stalled"
+	PlanPlanPhaseSynthesizing        PlanPlanPhase = "synthesizing"
 )
 
 // Valid indicates whether the value is a known member of the PlanPlanPhase enum.
 func (e PlanPlanPhase) Valid() bool {
 	switch e {
-	case PlanPlanPhaseAwaitingOwnerCorrection:
+	case PlanPlanPhaseAwaitingSupervision:
 		return true
 	case PlanPlanPhaseDispatching:
 		return true
@@ -2404,10 +2410,12 @@ func (e PlanListResponsePlansDodStatus) Valid() bool {
 
 // Defines values for PlanListResponsePlansFailedReason.
 const (
-	PlanListResponsePlansFailedReasonBudgetExhausted      PlanListResponsePlansFailedReason = "budget_exhausted"
-	PlanListResponsePlansFailedReasonIdleExpired          PlanListResponsePlansFailedReason = "idle_expired"
-	PlanListResponsePlansFailedReasonJudgeRoundsExhausted PlanListResponsePlansFailedReason = "judge_rounds_exhausted"
-	PlanListResponsePlansFailedReasonStoppedByUser        PlanListResponsePlansFailedReason = "stopped_by_user"
+	PlanListResponsePlansFailedReasonBudgetExhausted        PlanListResponsePlansFailedReason = "budget_exhausted"
+	PlanListResponsePlansFailedReasonDodUnreachable         PlanListResponsePlansFailedReason = "dod_unreachable"
+	PlanListResponsePlansFailedReasonIdleExpired            PlanListResponsePlansFailedReason = "idle_expired"
+	PlanListResponsePlansFailedReasonJudgeRoundsExhausted   PlanListResponsePlansFailedReason = "judge_rounds_exhausted"
+	PlanListResponsePlansFailedReasonStoppedByUser          PlanListResponsePlansFailedReason = "stopped_by_user"
+	PlanListResponsePlansFailedReasonSupervisionUnavailable PlanListResponsePlansFailedReason = "supervision_unavailable"
 )
 
 // Valid indicates whether the value is a known member of the PlanListResponsePlansFailedReason enum.
@@ -2415,11 +2423,15 @@ func (e PlanListResponsePlansFailedReason) Valid() bool {
 	switch e {
 	case PlanListResponsePlansFailedReasonBudgetExhausted:
 		return true
+	case PlanListResponsePlansFailedReasonDodUnreachable:
+		return true
 	case PlanListResponsePlansFailedReasonIdleExpired:
 		return true
 	case PlanListResponsePlansFailedReasonJudgeRoundsExhausted:
 		return true
 	case PlanListResponsePlansFailedReasonStoppedByUser:
+		return true
+	case PlanListResponsePlansFailedReasonSupervisionUnavailable:
 		return true
 	default:
 		return false
@@ -2428,18 +2440,18 @@ func (e PlanListResponsePlansFailedReason) Valid() bool {
 
 // Defines values for PlanListResponsePlansPlanPhase.
 const (
-	PlanListResponsePlansPlanPhaseAwaitingOwnerCorrection PlanListResponsePlansPlanPhase = "awaiting_owner_correction"
-	PlanListResponsePlansPlanPhaseDispatching             PlanListResponsePlansPlanPhase = "dispatching"
-	PlanListResponsePlansPlanPhaseIdle                    PlanListResponsePlansPlanPhase = "idle"
-	PlanListResponsePlansPlanPhaseJudging                 PlanListResponsePlansPlanPhase = "judging"
-	PlanListResponsePlansPlanPhaseStalled                 PlanListResponsePlansPlanPhase = "stalled"
-	PlanListResponsePlansPlanPhaseSynthesizing            PlanListResponsePlansPlanPhase = "synthesizing"
+	PlanListResponsePlansPlanPhaseAwaitingSupervision PlanListResponsePlansPlanPhase = "awaiting_supervision"
+	PlanListResponsePlansPlanPhaseDispatching         PlanListResponsePlansPlanPhase = "dispatching"
+	PlanListResponsePlansPlanPhaseIdle                PlanListResponsePlansPlanPhase = "idle"
+	PlanListResponsePlansPlanPhaseJudging             PlanListResponsePlansPlanPhase = "judging"
+	PlanListResponsePlansPlanPhaseStalled             PlanListResponsePlansPlanPhase = "stalled"
+	PlanListResponsePlansPlanPhaseSynthesizing        PlanListResponsePlansPlanPhase = "synthesizing"
 )
 
 // Valid indicates whether the value is a known member of the PlanListResponsePlansPlanPhase enum.
 func (e PlanListResponsePlansPlanPhase) Valid() bool {
 	switch e {
-	case PlanListResponsePlansPlanPhaseAwaitingOwnerCorrection:
+	case PlanListResponsePlansPlanPhaseAwaitingSupervision:
 		return true
 	case PlanListResponsePlansPlanPhaseDispatching:
 		return true
@@ -2563,10 +2575,12 @@ func (e PlanRestartResponsePlanDodStatus) Valid() bool {
 
 // Defines values for PlanRestartResponsePlanFailedReason.
 const (
-	PlanRestartResponsePlanFailedReasonBudgetExhausted      PlanRestartResponsePlanFailedReason = "budget_exhausted"
-	PlanRestartResponsePlanFailedReasonIdleExpired          PlanRestartResponsePlanFailedReason = "idle_expired"
-	PlanRestartResponsePlanFailedReasonJudgeRoundsExhausted PlanRestartResponsePlanFailedReason = "judge_rounds_exhausted"
-	PlanRestartResponsePlanFailedReasonStoppedByUser        PlanRestartResponsePlanFailedReason = "stopped_by_user"
+	PlanRestartResponsePlanFailedReasonBudgetExhausted        PlanRestartResponsePlanFailedReason = "budget_exhausted"
+	PlanRestartResponsePlanFailedReasonDodUnreachable         PlanRestartResponsePlanFailedReason = "dod_unreachable"
+	PlanRestartResponsePlanFailedReasonIdleExpired            PlanRestartResponsePlanFailedReason = "idle_expired"
+	PlanRestartResponsePlanFailedReasonJudgeRoundsExhausted   PlanRestartResponsePlanFailedReason = "judge_rounds_exhausted"
+	PlanRestartResponsePlanFailedReasonStoppedByUser          PlanRestartResponsePlanFailedReason = "stopped_by_user"
+	PlanRestartResponsePlanFailedReasonSupervisionUnavailable PlanRestartResponsePlanFailedReason = "supervision_unavailable"
 )
 
 // Valid indicates whether the value is a known member of the PlanRestartResponsePlanFailedReason enum.
@@ -2574,11 +2588,15 @@ func (e PlanRestartResponsePlanFailedReason) Valid() bool {
 	switch e {
 	case PlanRestartResponsePlanFailedReasonBudgetExhausted:
 		return true
+	case PlanRestartResponsePlanFailedReasonDodUnreachable:
+		return true
 	case PlanRestartResponsePlanFailedReasonIdleExpired:
 		return true
 	case PlanRestartResponsePlanFailedReasonJudgeRoundsExhausted:
 		return true
 	case PlanRestartResponsePlanFailedReasonStoppedByUser:
+		return true
+	case PlanRestartResponsePlanFailedReasonSupervisionUnavailable:
 		return true
 	default:
 		return false
@@ -2587,18 +2605,18 @@ func (e PlanRestartResponsePlanFailedReason) Valid() bool {
 
 // Defines values for PlanRestartResponsePlanPlanPhase.
 const (
-	AwaitingOwnerCorrection PlanRestartResponsePlanPlanPhase = "awaiting_owner_correction"
-	Dispatching             PlanRestartResponsePlanPlanPhase = "dispatching"
-	Idle                    PlanRestartResponsePlanPlanPhase = "idle"
-	Judging                 PlanRestartResponsePlanPlanPhase = "judging"
-	Stalled                 PlanRestartResponsePlanPlanPhase = "stalled"
-	Synthesizing            PlanRestartResponsePlanPlanPhase = "synthesizing"
+	AwaitingSupervision PlanRestartResponsePlanPlanPhase = "awaiting_supervision"
+	Dispatching         PlanRestartResponsePlanPlanPhase = "dispatching"
+	Idle                PlanRestartResponsePlanPlanPhase = "idle"
+	Judging             PlanRestartResponsePlanPlanPhase = "judging"
+	Stalled             PlanRestartResponsePlanPlanPhase = "stalled"
+	Synthesizing        PlanRestartResponsePlanPlanPhase = "synthesizing"
 )
 
 // Valid indicates whether the value is a known member of the PlanRestartResponsePlanPlanPhase enum.
 func (e PlanRestartResponsePlanPlanPhase) Valid() bool {
 	switch e {
-	case AwaitingOwnerCorrection:
+	case AwaitingSupervision:
 		return true
 	case Dispatching:
 		return true
@@ -3130,6 +3148,7 @@ func (e ProviderCatalogEntryWire) Valid() bool {
 
 // Defines values for RevisionEntryVerb.
 const (
+	RevisionEntryVerbAbandon       RevisionEntryVerb = "abandon"
 	RevisionEntryVerbAppend        RevisionEntryVerb = "append"
 	RevisionEntryVerbSupersede     RevisionEntryVerb = "supersede"
 	RevisionEntryVerbTargetedRetry RevisionEntryVerb = "targeted_retry"
@@ -3138,6 +3157,8 @@ const (
 // Valid indicates whether the value is a known member of the RevisionEntryVerb enum.
 func (e RevisionEntryVerb) Valid() bool {
 	switch e {
+	case RevisionEntryVerbAbandon:
+		return true
 	case RevisionEntryVerbAppend:
 		return true
 	case RevisionEntryVerbSupersede:
@@ -4276,6 +4297,7 @@ func (e SessionMessageRevisionEntryKind) Valid() bool {
 
 // Defines values for SessionMessageRevisionEntryRevisionVerb.
 const (
+	SessionMessageRevisionEntryRevisionVerbAbandon       SessionMessageRevisionEntryRevisionVerb = "abandon"
 	SessionMessageRevisionEntryRevisionVerbAppend        SessionMessageRevisionEntryRevisionVerb = "append"
 	SessionMessageRevisionEntryRevisionVerbSupersede     SessionMessageRevisionEntryRevisionVerb = "supersede"
 	SessionMessageRevisionEntryRevisionVerbTargetedRetry SessionMessageRevisionEntryRevisionVerb = "targeted_retry"
@@ -4284,6 +4306,8 @@ const (
 // Valid indicates whether the value is a known member of the SessionMessageRevisionEntryRevisionVerb enum.
 func (e SessionMessageRevisionEntryRevisionVerb) Valid() bool {
 	switch e {
+	case SessionMessageRevisionEntryRevisionVerbAbandon:
+		return true
 	case SessionMessageRevisionEntryRevisionVerbAppend:
 		return true
 	case SessionMessageRevisionEntryRevisionVerbSupersede:
@@ -7267,7 +7291,7 @@ type DelegateStatusResponse struct {
 		// CreatedAt RFC3339 timestamp this session record was created.
 		CreatedAt time.Time `json:"created_at"`
 
-		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed 3-value enum, so this field is left open rather than guessing at a complete set (flagged for review).
+		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 		FailedReason *string `json:"failed_reason,omitempty"`
 
 		// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
@@ -7312,7 +7336,7 @@ type DelegateStatusResponse struct {
 		// SessionId Unique durable session identifier.
 		SessionId string `json:"session_id"`
 
-		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 		State DelegateStatusResponseSessionState `json:"state"`
 
 		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
@@ -7338,7 +7362,7 @@ type DelegateStatusResponseSessionLaunchProfile string
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
 
-// DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type DelegateStatusResponseSessionState string
 
 // DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
@@ -8881,7 +8905,7 @@ type Plan struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 	FailedReason *PlanFailedReason `json:"failed_reason,omitempty"`
 
 	// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -8896,7 +8920,7 @@ type Plan struct {
 	// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
-	// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+	// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 	LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
 
 	// Owner Username of the user who created this plan. Set server-side at creation; read-only.
@@ -8905,13 +8929,13 @@ type Plan struct {
 	// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
 	OwnerAgentId string `json:"owner_agent_id"`
 
-	// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+	// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_supervision`, this session sits at lifecycle `paused`, legitimately idle awaiting adjudication, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9). Distinct from `supervision.session_id`, which is PlanSupervisor's own adjudication session (ADR-055/FR-016b).
 	OwnerSessionId *string `json:"owner_session_id,omitempty"`
 
 	// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
 	PausedReason *string `json:"paused_reason,omitempty"`
 
-	// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+	// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
 	PlanPhase *PlanPlanPhase `json:"plan_phase,omitempty"`
 
 	// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
@@ -8920,11 +8944,35 @@ type Plan struct {
 	// Rationale ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
 	Rationale *string `json:"rationale,omitempty"`
 
+	// SourceChannel ADR-055/FR-012d — the channel this plan was created from, and the channel a plan wake delivers its outcome back to. Mirrors `Task.source_channel` exactly, including its optionality. Server-set at creation only and immutable thereafter; never accepted from `PlanCreateRequest` or any update body. ABSENT IS A LEGITIMATE, EXPECTED STATE, not a degraded one — a plan created over REST from the Plans UI has no chat origin at all. Unlike the task precedent, a `webchat` origin IS recorded here rather than excluded. The wake path requires `source_channel` and `source_chat_id` to BOTH be non-empty before it constructs a chat-origin wake; when either is empty the owner turn still runs and its synthesis is still persisted, no outbound message is published anywhere, and the human-facing surface is the `plan_completed` / `plan_failed` notification.
+	SourceChannel *string `json:"source_channel,omitempty"`
+
+	// SourceChatId ADR-055/FR-012d — the chat within `source_channel` this plan was created from. Mirrors `Task.source_chat_id`. Server-set at creation only; absent whenever the plan has no chat origin. See `source_channel` for the both-non-empty wake predicate.
+	SourceChatId *string `json:"source_chat_id,omitempty"`
+
 	// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 
 	// State Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
 	State PlanState `json:"state"`
+
+	// Supervision ADR-055/FR-050 — the durable PlanSupervisor adjudication state for this plan. Server-set only; never accepted from a create or update body. Absent until the plan first enters the supervision-eligible phase set (`awaiting_supervision`, `stalled`). Every field is optional and independently written — the engine's write path is five discrete `plan.Patch` pointers, not one whole-object pointer, so a concurrent REST update of an unrelated field can never clobber a counter (FR-050, r3 M3-16).
+	Supervision *struct {
+		// Attempts Supervision turns that produced no valid correction, bounded by the `supervision_max_attempts` ceiling (FR-022). Exhausting the ceiling terminates the plan `failed(supervision_unavailable)`. Reset to 0 on an applied correction and when the plan leaves the supervision-eligible phase set. Resetting it never touches `correction_rounds`.
+		Attempts *int `json:"attempts,omitempty"`
+
+		// CorrectionRounds Corrections applied to this plan over its whole life. An ATTRIBUTION counter, not a budget (FR-034) — nothing gates on it; FR-035 reads it to tell the two `judge_rounds_exhausted` causes apart. CUMULATIVE AND NEVER RESET: a plan leaves the supervision-eligible phase set on every applied correction, so any reset rule would zero this counter immediately after each increment and every terminal record would read 0 (r3 C3-03).
+		CorrectionRounds *int `json:"correction_rounds,omitempty"`
+
+		// SessionId The real, store-backed session PlanSupervisor's adjudication turn runs in (FR-016b) — keeps the adjudication transcript out of the plan owner's session, and is the handle `stop_plan` cancels (FR-044). NEVER cleared, only overwritten when the next supervision session is minted: an applied correction returns the plan to `dispatching` while the adjudication turn may still be running, and blanking the handle in that window would make the stop uncancellable (r3 m3-07). Cancelling an already-finished session is a benign no-op.
+		SessionId *string `json:"session_id,omitempty"`
+
+		// WakeAt RFC 3339 UTC timestamp of the supervision wake receipt. Arms the supervision deadline (FR-021) AND is the once-per-park dedup key that stops every engine tick re-waking the same parked plan (FR-023). Cleared when the plan leaves the supervision-eligible phase set and on every applied correction, so a later re-park re-wakes.
+		WakeAt *time.Time `json:"wake_at,omitempty"`
+
+		// WakeError The last supervision wake-publish failure, recorded rather than WARNed away (FR-024) so an undelivered wake is observable. Cleared by the next successful wake, on an applied correction, and when the plan leaves the supervision-eligible phase set. A plan with no chat origin is NOT a wake error — that case is logged INFO with `reason: no_chat_origin` and never lands here (FR-012d(5)).
+		WakeError *string `json:"wake_error,omitempty"`
+	} `json:"supervision,omitempty"`
 
 	// Title Human-readable plan title.
 	Title string `json:"title"`
@@ -8948,10 +8996,10 @@ type PlanDodKind string
 // PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanDodStatus string
 
-// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 type PlanFailedReason string
 
-// PlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+// PlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
 type PlanPlanPhase string
 
 // PlanState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
@@ -9141,7 +9189,7 @@ type PlanListResponse struct {
 			Text string `json:"text"`
 		} `json:"dod,omitempty"`
 
-		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 
 		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -9156,7 +9204,7 @@ type PlanListResponse struct {
 		// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
 		LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
-		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
 
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
@@ -9165,13 +9213,13 @@ type PlanListResponse struct {
 		// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
 		OwnerAgentId string `json:"owner_agent_id"`
 
-		// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+		// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_supervision`, this session sits at lifecycle `paused`, legitimately idle awaiting adjudication, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9). Distinct from `supervision.session_id`, which is PlanSupervisor's own adjudication session (ADR-055/FR-016b).
 		OwnerSessionId *string `json:"owner_session_id,omitempty"`
 
 		// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
 		PausedReason *string `json:"paused_reason,omitempty"`
 
-		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
 		PlanPhase *PlanListResponsePlansPlanPhase `json:"plan_phase,omitempty"`
 
 		// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
@@ -9180,11 +9228,35 @@ type PlanListResponse struct {
 		// Rationale ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
 		Rationale *string `json:"rationale,omitempty"`
 
+		// SourceChannel ADR-055/FR-012d — the channel this plan was created from, and the channel a plan wake delivers its outcome back to. Mirrors `Task.source_channel` exactly, including its optionality. Server-set at creation only and immutable thereafter; never accepted from `PlanCreateRequest` or any update body. ABSENT IS A LEGITIMATE, EXPECTED STATE, not a degraded one — a plan created over REST from the Plans UI has no chat origin at all. Unlike the task precedent, a `webchat` origin IS recorded here rather than excluded. The wake path requires `source_channel` and `source_chat_id` to BOTH be non-empty before it constructs a chat-origin wake; when either is empty the owner turn still runs and its synthesis is still persisted, no outbound message is published anywhere, and the human-facing surface is the `plan_completed` / `plan_failed` notification.
+		SourceChannel *string `json:"source_channel,omitempty"`
+
+		// SourceChatId ADR-055/FR-012d — the chat within `source_channel` this plan was created from. Mirrors `Task.source_chat_id`. Server-set at creation only; absent whenever the plan has no chat origin. See `source_channel` for the both-non-empty wake predicate.
+		SourceChatId *string `json:"source_chat_id,omitempty"`
+
 		// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
 		StartedAt *time.Time `json:"started_at,omitempty"`
 
 		// State Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
 		State PlanListResponsePlansState `json:"state"`
+
+		// Supervision ADR-055/FR-050 — the durable PlanSupervisor adjudication state for this plan. Server-set only; never accepted from a create or update body. Absent until the plan first enters the supervision-eligible phase set (`awaiting_supervision`, `stalled`). Every field is optional and independently written — the engine's write path is five discrete `plan.Patch` pointers, not one whole-object pointer, so a concurrent REST update of an unrelated field can never clobber a counter (FR-050, r3 M3-16).
+		Supervision *struct {
+			// Attempts Supervision turns that produced no valid correction, bounded by the `supervision_max_attempts` ceiling (FR-022). Exhausting the ceiling terminates the plan `failed(supervision_unavailable)`. Reset to 0 on an applied correction and when the plan leaves the supervision-eligible phase set. Resetting it never touches `correction_rounds`.
+			Attempts *int `json:"attempts,omitempty"`
+
+			// CorrectionRounds Corrections applied to this plan over its whole life. An ATTRIBUTION counter, not a budget (FR-034) — nothing gates on it; FR-035 reads it to tell the two `judge_rounds_exhausted` causes apart. CUMULATIVE AND NEVER RESET: a plan leaves the supervision-eligible phase set on every applied correction, so any reset rule would zero this counter immediately after each increment and every terminal record would read 0 (r3 C3-03).
+			CorrectionRounds *int `json:"correction_rounds,omitempty"`
+
+			// SessionId The real, store-backed session PlanSupervisor's adjudication turn runs in (FR-016b) — keeps the adjudication transcript out of the plan owner's session, and is the handle `stop_plan` cancels (FR-044). NEVER cleared, only overwritten when the next supervision session is minted: an applied correction returns the plan to `dispatching` while the adjudication turn may still be running, and blanking the handle in that window would make the stop uncancellable (r3 m3-07). Cancelling an already-finished session is a benign no-op.
+			SessionId *string `json:"session_id,omitempty"`
+
+			// WakeAt RFC 3339 UTC timestamp of the supervision wake receipt. Arms the supervision deadline (FR-021) AND is the once-per-park dedup key that stops every engine tick re-waking the same parked plan (FR-023). Cleared when the plan leaves the supervision-eligible phase set and on every applied correction, so a later re-park re-wakes.
+			WakeAt *time.Time `json:"wake_at,omitempty"`
+
+			// WakeError The last supervision wake-publish failure, recorded rather than WARNed away (FR-024) so an undelivered wake is observable. Cleared by the next successful wake, on an applied correction, and when the plan leaves the supervision-eligible phase set. A plan with no chat origin is NOT a wake error — that case is logged INFO with `reason: no_chat_origin` and never lands here (FR-012d(5)).
+			WakeError *string `json:"wake_error,omitempty"`
+		} `json:"supervision,omitempty"`
 
 		// Title Human-readable plan title.
 		Title string `json:"title"`
@@ -9212,10 +9284,10 @@ type PlanListResponsePlansDodKind string
 // PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanListResponsePlansDodStatus string
 
-// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 type PlanListResponsePlansFailedReason string
 
-// PlanListResponsePlansPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+// PlanListResponsePlansPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
 type PlanListResponsePlansPlanPhase string
 
 // PlanListResponsePlansState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
@@ -9308,7 +9380,7 @@ type PlanRestartResponse struct {
 			Text string `json:"text"`
 		} `json:"dod,omitempty"`
 
-		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanRestartResponsePlanFailedReason `json:"failed_reason,omitempty"`
 
 		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -9323,7 +9395,7 @@ type PlanRestartResponse struct {
 		// LastActivityAt Idle-expiry clock (ADR D7, default 7 days) — timestamp of the last attempt, state transition, or user interaction on this plan.
 		LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
-		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_owner_correction`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_owner_correction`.
+		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
 
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
@@ -9332,13 +9404,13 @@ type PlanRestartResponse struct {
 		// OwnerAgentId Agent responsible for this plan — woken at decision points (attempts exhausted, plan judge failed, plan complete) via the async-notifier seam (ADR D4).
 		OwnerAgentId string `json:"owner_agent_id"`
 
-		// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_owner_correction`, this session sits at lifecycle `paused`, legitimately idle awaiting the owner, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9).
+		// OwnerSessionId ADR-053 m-3/FR-147 — the durable session that owns this plan (the reciprocal of `SessionLifecycleRecord.owns_plan_id`). While the plan is `awaiting_supervision`, this session sits at lifecycle `paused`, legitimately idle awaiting adjudication, and is exempt from the boot-sweep `failed(interrupted)` transition (INV-9). Distinct from `supervision.session_id`, which is PlanSupervisor's own adjudication session (ADR-055/FR-016b).
 		OwnerSessionId *string `json:"owner_session_id,omitempty"`
 
 		// PausedReason Non-empty when a `running` plan is paused (owner agent disabled mid-loop, judge temporarily unavailable) or when `state == approved` is waiting for a free slot under the global active-loop cap. Empty/absent when not paused.
 		PausedReason *string `json:"paused_reason,omitempty"`
 
-		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+		// PlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
 		PlanPhase *PlanRestartResponsePlanPlanPhase `json:"plan_phase,omitempty"`
 
 		// Progress Completion fraction (0-1), server-computed read-time as done/total over member tasks (`Task.plan_id == this.id`). 0 when there are no member tasks. Never accepted on create/update.
@@ -9347,11 +9419,35 @@ type PlanRestartResponse struct {
 		// Rationale ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
 		Rationale *string `json:"rationale,omitempty"`
 
+		// SourceChannel ADR-055/FR-012d — the channel this plan was created from, and the channel a plan wake delivers its outcome back to. Mirrors `Task.source_channel` exactly, including its optionality. Server-set at creation only and immutable thereafter; never accepted from `PlanCreateRequest` or any update body. ABSENT IS A LEGITIMATE, EXPECTED STATE, not a degraded one — a plan created over REST from the Plans UI has no chat origin at all. Unlike the task precedent, a `webchat` origin IS recorded here rather than excluded. The wake path requires `source_channel` and `source_chat_id` to BOTH be non-empty before it constructs a chat-origin wake; when either is empty the owner turn still runs and its synthesis is still persisted, no outbound message is published anywhere, and the human-facing surface is the `plan_completed` / `plan_failed` notification.
+		SourceChannel *string `json:"source_channel,omitempty"`
+
+		// SourceChatId ADR-055/FR-012d — the chat within `source_channel` this plan was created from. Mirrors `Task.source_chat_id`. Server-set at creation only; absent whenever the plan has no chat origin. See `source_channel` for the both-non-empty wake predicate.
+		SourceChatId *string `json:"source_chat_id,omitempty"`
+
 		// StartedAt RFC 3339 timestamp when the plan transitioned into `running`. Absent until then.
 		StartedAt *time.Time `json:"started_at,omitempty"`
 
 		// State Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
 		State PlanRestartResponsePlanState `json:"state"`
+
+		// Supervision ADR-055/FR-050 — the durable PlanSupervisor adjudication state for this plan. Server-set only; never accepted from a create or update body. Absent until the plan first enters the supervision-eligible phase set (`awaiting_supervision`, `stalled`). Every field is optional and independently written — the engine's write path is five discrete `plan.Patch` pointers, not one whole-object pointer, so a concurrent REST update of an unrelated field can never clobber a counter (FR-050, r3 M3-16).
+		Supervision *struct {
+			// Attempts Supervision turns that produced no valid correction, bounded by the `supervision_max_attempts` ceiling (FR-022). Exhausting the ceiling terminates the plan `failed(supervision_unavailable)`. Reset to 0 on an applied correction and when the plan leaves the supervision-eligible phase set. Resetting it never touches `correction_rounds`.
+			Attempts *int `json:"attempts,omitempty"`
+
+			// CorrectionRounds Corrections applied to this plan over its whole life. An ATTRIBUTION counter, not a budget (FR-034) — nothing gates on it; FR-035 reads it to tell the two `judge_rounds_exhausted` causes apart. CUMULATIVE AND NEVER RESET: a plan leaves the supervision-eligible phase set on every applied correction, so any reset rule would zero this counter immediately after each increment and every terminal record would read 0 (r3 C3-03).
+			CorrectionRounds *int `json:"correction_rounds,omitempty"`
+
+			// SessionId The real, store-backed session PlanSupervisor's adjudication turn runs in (FR-016b) — keeps the adjudication transcript out of the plan owner's session, and is the handle `stop_plan` cancels (FR-044). NEVER cleared, only overwritten when the next supervision session is minted: an applied correction returns the plan to `dispatching` while the adjudication turn may still be running, and blanking the handle in that window would make the stop uncancellable (r3 m3-07). Cancelling an already-finished session is a benign no-op.
+			SessionId *string `json:"session_id,omitempty"`
+
+			// WakeAt RFC 3339 UTC timestamp of the supervision wake receipt. Arms the supervision deadline (FR-021) AND is the once-per-park dedup key that stops every engine tick re-waking the same parked plan (FR-023). Cleared when the plan leaves the supervision-eligible phase set and on every applied correction, so a later re-park re-wakes.
+			WakeAt *time.Time `json:"wake_at,omitempty"`
+
+			// WakeError The last supervision wake-publish failure, recorded rather than WARNed away (FR-024) so an undelivered wake is observable. Cleared by the next successful wake, on an applied correction, and when the plan leaves the supervision-eligible phase set. A plan with no chat origin is NOT a wake error — that case is logged INFO with `reason: no_chat_origin` and never lands here (FR-012d(5)).
+			WakeError *string `json:"wake_error,omitempty"`
+		} `json:"supervision,omitempty"`
 
 		// Title Human-readable plan title.
 		Title string `json:"title"`
@@ -9379,10 +9475,10 @@ type PlanRestartResponsePlanDodKind string
 // PlanRestartResponsePlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanRestartResponsePlanDodStatus string
 
-// PlanRestartResponsePlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so the four don't collapse to one generic "Failed" badge.
+// PlanRestartResponsePlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 type PlanRestartResponsePlanFailedReason string
 
-// PlanRestartResponsePlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_owner_correction` (ADR-053 C1/R§8.8/INV-2/INV-7) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until the owner appends a correction or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the owner exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. PRECEDENCE: `awaiting_owner_correction` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_owner_correction` holds, belt-and-suspenders.
+// PlanRestartResponsePlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
 type PlanRestartResponsePlanPlanPhase string
 
 // PlanRestartResponsePlanState Canonical 5-value plan state machine (ADR D1; Round-1 Grill Reconciliation R1 is the single source of truth for this wire enum). `draft` being authored, not yet runnable. `approved` DoD/owner locked in; the single plan-engine instance auto-advances to `running` on its next tick — or stays `approved` in a legitimate cap-waiting state when the global active-loop cap is full (see `paused_reason`). `running` the engine is dispatching member tasks under the plan judge; see `plan_phase` for the current sub-phase and `paused_reason` for a transient pause. `done` terminal success (plan judge PASS), frozen. `failed` terminal failure — see `failed_reason` for why; frozen, never retried (author a new plan). An unrecognized future value should render as `draft` (forward-compat fallback).
@@ -9819,11 +9915,11 @@ type RevisionEntry struct {
 		MemberId string `json:"member_id"`
 	} `json:"tail_adds"`
 
-	// Verb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+	// Verb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 	Verb RevisionEntryVerb `json:"verb"`
 }
 
-// RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+// RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type RevisionEntryVerb string
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
@@ -10724,7 +10820,7 @@ type SessionLifecycleRecord struct {
 	// CreatedAt RFC3339 timestamp this session record was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed 3-value enum, so this field is left open rather than guessing at a complete set (flagged for review).
+	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 	FailedReason *string `json:"failed_reason,omitempty"`
 
 	// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
@@ -10769,7 +10865,7 @@ type SessionLifecycleRecord struct {
 	// SessionId Unique durable session identifier.
 	SessionId string `json:"session_id"`
 
-	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 	State SessionLifecycleRecordState `json:"state"`
 
 	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
@@ -10791,7 +10887,7 @@ type SessionLifecycleRecordLaunchProfile string
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
 
-// SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_owner_correction` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type SessionLifecycleRecordState string
 
 // SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
@@ -11164,7 +11260,7 @@ type SessionMessageRevisionEntry struct {
 			MemberId string `json:"member_id"`
 		} `json:"tail_adds"`
 
-		// Verb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+		// Verb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 		Verb SessionMessageRevisionEntryRevisionVerb `json:"verb"`
 	} `json:"revision"`
 
@@ -11184,7 +11280,7 @@ type SessionMessageRevisionEntryDirection string
 // SessionMessageRevisionEntryKind defines model for SessionMessageRevisionEntry.Kind.
 type SessionMessageRevisionEntryKind string
 
-// SessionMessageRevisionEntryRevisionVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt.
+// SessionMessageRevisionEntryRevisionVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type SessionMessageRevisionEntryRevisionVerb string
 
 // SessionMessageSteer SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).

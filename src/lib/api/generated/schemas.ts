@@ -846,7 +846,7 @@ type Plan = {
         | "judging"
         | "synthesizing"
         | "idle"
-        | "awaiting_owner_correction"
+        | "awaiting_supervision"
         | "stalled"
       )
     | undefined;
@@ -858,8 +858,21 @@ type Plan = {
         | "stopped_by_user"
         | "idle_expired"
         | "budget_exhausted"
+        | "dod_unreachable"
+        | "supervision_unavailable"
       )
     | undefined;
+  supervision?:
+    | Partial<{
+        wake_at: string;
+        wake_error: string;
+        attempts: number;
+        correction_rounds: number;
+        session_id: string;
+      }>
+    | undefined;
+  source_channel?: string | undefined;
+  source_chat_id?: string | undefined;
   owner_agent_id: string;
   dod?: Array<AcceptanceCriterion> | undefined;
   rationale?: string | undefined;
@@ -1083,7 +1096,7 @@ type RevisionEntry = {
   revision_id: string;
   plan_id: string;
   generation: number;
-  verb: "append" | "supersede" | "targeted_retry";
+  verb: "append" | "supersede" | "targeted_retry" | "abandon";
   falsified_assumption: string;
   tail_adds: Array<{
     member_id: string;
@@ -2951,7 +2964,7 @@ export const Plan: z.ZodType<Plan> = z.object({
       "judging",
       "synthesizing",
       "idle",
-      "awaiting_owner_correction",
+      "awaiting_supervision",
       "stalled",
     ])
     .optional()
@@ -2964,8 +2977,22 @@ export const Plan: z.ZodType<Plan> = z.object({
       "stopped_by_user",
       "idle_expired",
       "budget_exhausted",
+      "dod_unreachable",
+      "supervision_unavailable",
     ])
     .optional(),
+  supervision: z
+    .object({
+      wake_at: z.string().datetime({ offset: true }),
+      wake_error: z.string(),
+      attempts: z.number().int().gte(0),
+      correction_rounds: z.number().int().gte(0),
+      session_id: z.string(),
+    })
+    .partial()
+    .optional(),
+  source_channel: z.string().optional(),
+  source_chat_id: z.string().optional(),
   owner_agent_id: z.string(),
   dod: z.array(AcceptanceCriterion).optional(),
   rationale: z.string().max(4000).optional(),
@@ -3279,7 +3306,7 @@ export const RevisionEntry: z.ZodType<RevisionEntry> = z.object({
   revision_id: z.string().min(1),
   plan_id: z.string().min(1),
   generation: z.number().int().gte(0),
-  verb: z.enum(["append", "supersede", "targeted_retry"]),
+  verb: z.enum(["append", "supersede", "targeted_retry", "abandon"]),
   falsified_assumption: z.string().min(1).max(2000),
   tail_adds: z.array(
     z.object({
@@ -9164,7 +9191,7 @@ export const PlanStatusFrame = z
     type: z.literal("plan_status"),
     plan_id: z.string(),
     state: z.enum(["draft", "approved", "running", "done", "failed"]),
-    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "awaiting_owner_correction", "stalled"]),
+    plan_phase: z.enum(["dispatching", "judging", "synthesizing", "idle", "awaiting_supervision", "stalled"]),
     progress: z.number().min(0).max(1),
     paused_reason: z.string().optional(),
   })

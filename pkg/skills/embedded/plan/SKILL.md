@@ -155,7 +155,7 @@ If the mergeability class requires a join (shard+assemble, exploratory merge):
 
 ## Re-planning checklist (use when the DoD is UNMET)
 
-When the plan Judge returns UNMET and the plan enters `awaiting_owner_correction`,
+When the plan Judge returns UNMET and the plan enters `awaiting_supervision`,
 work through this checklist to choose the right correction verb. The DoD stays
 immutable (G-11) — you never change the criteria; you change the plan's
 execution to meet them.

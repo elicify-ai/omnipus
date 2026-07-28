@@ -104,7 +104,7 @@ properties:
       the Judge is rate-limited/down; no round increment while this holds
       (ephemeral engine-phase signal, pill-only — no lifecycle
       counterpart). `re-planning` the DURABLE `plan_phase =
-      awaiting_owner_correction` condition over a `paused` owner session
+      awaiting_supervision` condition over a `paused` owner session
       (C1 — survives restart, so the pill reconstructs correctly as
       `re-planning`, not `waiting_on_user`, after a boot sweep).
       `judging` a verifier turn is in flight (ephemeral engine-phase

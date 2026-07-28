@@ -199,15 +199,15 @@ describe('WorkspaceGraphTab — active-plan header', () => {
 // Graph (after a plan tile auto-switches to it) sees the durable re-planning
 // hold without leaving the canvas.
 describe('WorkspaceGraphTab — plan-phase chip (ADR-053 FE-2 §7)', () => {
-  it('renders the re-planning warning chip when the active plan is awaiting owner correction', async () => {
+  it('renders the re-planning warning chip when the active plan is awaiting supervision', async () => {
     vi.mocked(fetchPlans).mockResolvedValue([
-      makePlan({ id: 'plan-rp', title: 'Launch', state: 'running', plan_phase: 'awaiting_owner_correction' }),
+      makePlan({ id: 'plan-rp', title: 'Launch', state: 'running', plan_phase: 'awaiting_supervision' }),
     ])
     useWorkspacesStore.setState({ activePlanId: 'plan-rp' })
     renderTab()
 
     const chip = await screen.findByTestId('plan-phase-chip-plan-rp')
-    expect(chip).toHaveTextContent('Re-planning — awaiting owner correction')
+    expect(chip).toHaveTextContent('Re-planning — awaiting supervision')
   })
 
   it('renders a quieter capitalized sub-phase chip while judging', async () => {
@@ -246,13 +246,13 @@ describe('WorkspaceGraphTab — plan-phase chip (ADR-053 FE-2 §7)', () => {
   })
 })
 
-// S2 UAT finding — the ONLY explanation of `awaiting_owner_correction` used
+// S2 UAT finding — the ONLY explanation of `awaiting_supervision` used
 // to be a hover-only `title` tooltip on the chip above (dead on touch, easy
 // to miss). This is now always-visible plain-language text.
 describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the hover-only tooltip)', () => {
   it('renders an always-visible plain-language explanation for the warning chip, not a title tooltip', async () => {
     vi.mocked(fetchPlans).mockResolvedValue([
-      makePlan({ id: 'plan-rp2', title: 'Launch', state: 'running', plan_phase: 'awaiting_owner_correction' }),
+      makePlan({ id: 'plan-rp2', title: 'Launch', state: 'running', plan_phase: 'awaiting_supervision' }),
     ])
     useWorkspacesStore.setState({ activePlanId: 'plan-rp2' })
     renderTab()
@@ -286,9 +286,9 @@ describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the 
   })
 
   // Swimlane-board UAT fix — the stalled explanation must be its own text,
-  // never the awaiting_owner_correction copy, and never a raw task UUID
+  // never the awaiting_supervision copy, and never a raw task UUID
   // (HandoverText names internal IDs meant for the owner agent, not the SPA).
-  it('renders a stalled-specific explanation, distinct from awaiting_owner_correction, with no raw task ID', async () => {
+  it('renders a stalled-specific explanation, distinct from awaiting_supervision, with no raw task ID', async () => {
     vi.mocked(fetchPlans).mockResolvedValue([
       makePlan({ id: 'plan-st2', title: 'Launch', state: 'running', plan_phase: 'stalled' }),
     ])

@@ -341,7 +341,7 @@ describe('PlansFilterBand — ▶/■/Play action button (ADR-052 §6.8)', () =>
   })
 })
 
-// ── S2 UAT finding — a STUCK plan (`plan_phase: awaiting_owner_correction`)
+// ── S2 UAT finding — a STUCK plan (`plan_phase: awaiting_supervision`)
 // rendered as plain "Running", indistinguishable from a plan making real
 // progress (testers saw 4-5 plans parked at once with no signal). Reuses
 // `planPhaseChip` (ADR-053 FE-2 §7), which WorkspaceGraphTab already wired up
@@ -355,19 +355,19 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
     expect(screen.queryByTestId('plan-phase-explanation-plan-run')).not.toBeInTheDocument()
   })
 
-  it('a plan parked at awaiting_owner_correction renders a distinguishable warning chip alongside (not instead of) "Running"', () => {
+  it('a plan parked at awaiting_supervision renders a distinguishable warning chip alongside (not instead of) "Running"', () => {
     renderBand({
-      plans: [makePlan({ id: 'plan-parked', state: 'running', plan_phase: 'awaiting_owner_correction' })],
+      plans: [makePlan({ id: 'plan-parked', state: 'running', plan_phase: 'awaiting_supervision' })],
     })
     expect(screen.getByText('Running')).toBeInTheDocument()
     expect(screen.getByTestId('plan-phase-chip-plan-parked')).toHaveTextContent(
-      'Re-planning — awaiting owner correction',
+      'Re-planning — awaiting supervision',
     )
   })
 
   it('the parked chip comes with an ALWAYS-VISIBLE plain-language explanation — not a hover-only tooltip', () => {
     renderBand({
-      plans: [makePlan({ id: 'plan-parked2', state: 'running', plan_phase: 'awaiting_owner_correction' })],
+      plans: [makePlan({ id: 'plan-parked2', state: 'running', plan_phase: 'awaiting_supervision' })],
     })
     // The tooltip this fix replaces lived on the CHIP (not the explanation
     // text below) — assert directly on the element that used to carry it.
@@ -394,9 +394,9 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
 
   // Swimlane-board UAT fix — a plan the engine cannot currently dispatch or
   // that has nothing in flight (`plan_phase: 'stalled'`) gets its OWN warning
-  // chip + explanation, distinct from the awaiting_owner_correction one above
+  // chip + explanation, distinct from the awaiting_supervision one above
   // — testers must not see two different stuck reasons rendered identically.
-  it('a stalled plan renders its own distinguishable warning chip + explanation, distinct from awaiting_owner_correction', () => {
+  it('a stalled plan renders its own distinguishable warning chip + explanation, distinct from awaiting_supervision', () => {
     renderBand({
       plans: [makePlan({ id: 'plan-stalled', state: 'running', plan_phase: 'stalled' })],
     })
@@ -407,7 +407,7 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
     expect(explanation).toBeVisible()
     expect(explanation.textContent).toMatch(/no in-app action/i)
     expect(explanation.textContent).toMatch(/stop this plan/i)
-    // Must never render the awaiting_owner_correction copy or a raw task ID.
+    // Must never render the awaiting_supervision copy or a raw task ID.
     expect(explanation.textContent).not.toMatch(/dead end/i)
     expect(explanation.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
   })
