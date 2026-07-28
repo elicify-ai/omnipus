@@ -227,6 +227,73 @@ func (a *restAPI) toWirePlan(p plan.Plan) gen.Plan {
 			out.CompletedAt = &ts
 		}
 	}
+	// ADR-053 C1/INV-7 — the durable F2 round-burn gate. Empty until the plan
+	// first parks at awaiting_supervision, and cleared again on a fresh
+	// dispatch cycle, so absence is the normal state for most plans.
+	if p.LastUnmetTerminalSignature != "" {
+		out.LastUnmetTerminalSignature = ptr(p.LastUnmetTerminalSignature)
+	}
+	// ADR-053 m-3/FR-147 — the named plan<->owner-session linkage. Populated by
+	// the owner loop that wraps plan execution; empty before then.
+	if p.OwnerSessionID != "" {
+		out.OwnerSessionId = ptr(p.OwnerSessionID)
+	}
+	// ADR-055/FR-012d — the plan's chat origin. BOTH ABSENT IS A LEGITIMATE,
+	// EXPECTED STATE (a plan created over REST from the Plans UI has no chat
+	// context at all), so each is emitted only when actually set: no synthetic
+	// origin is minted here and no default is invented, exactly as the fields'
+	// own doc comment on plan.Plan requires. They are server-set at creation
+	// and immutable, so this read mapping is their only wire appearance.
+	if p.SourceChannel != "" {
+		out.SourceChannel = ptr(p.SourceChannel)
+	}
+	if p.SourceChatID != "" {
+		out.SourceChatId = ptr(p.SourceChatID)
+	}
+	// ADR-055/FR-050 — durable PlanSupervisor adjudication state. Mirrors the
+	// `bounds` sub-object mapping above: an intermediate value shaped to
+	// oapi-codegen's anonymous field type, populated field by field.
+	//
+	// nil supervision means the plan has never entered the supervision-eligible
+	// phase set, and the whole key is correctly absent. Once the object EXISTS,
+	// the two counters are emitted UNCONDITIONALLY — including at zero —
+	// because zero is a load-bearing value, not an empty one: FR-035 tells a
+	// reader to disambiguate the two `judge_rounds_exhausted` causes by testing
+	// `supervision.correction_rounds == 0`, which no client can do if the
+	// server omits the field precisely when it is zero. The three string/time
+	// members keep normal omitempty semantics — each has a real "not set yet"
+	// state (never woken, last wake succeeded, no session minted).
+	if p.Supervision != nil {
+		s := struct { // not-wire-format: intermediate value shaped to match gen.Plan.Supervision's oapi-codegen anonymous field type, not a parallel wire type
+			Attempts         *int       `json:"attempts,omitempty"`
+			CorrectionRounds *int       `json:"correction_rounds,omitempty"`
+			SessionId        *string    `json:"session_id,omitempty"`
+			WakeAt           *time.Time `json:"wake_at,omitempty"`
+			WakeError        *string    `json:"wake_error,omitempty"`
+		}{
+			Attempts:         ptr(p.Supervision.Attempts),
+			CorrectionRounds: ptr(p.Supervision.CorrectionRounds),
+		}
+		if p.Supervision.SessionID != "" {
+			s.SessionId = ptr(p.Supervision.SessionID)
+		}
+		if p.Supervision.WakeAt != "" {
+			if ts, err := time.Parse(time.RFC3339, p.Supervision.WakeAt); err == nil {
+				s.WakeAt = &ts
+			} else {
+				slog.Warn("rest: plan supervision.wake_at is not RFC3339; omitted from the wire payload",
+					"plan_id", p.ID, "wake_at", p.Supervision.WakeAt, "error", err)
+			}
+		}
+		// FR-024: an undelivered supervisor wake is recorded on the plan
+		// precisely so it is OBSERVABLE. Dropping it here is what made a plan
+		// burn its attempts and terminate failed(supervision_unavailable) with
+		// the recorded cause readable only from ~/.omnipus/plans/<id>.json.
+		if p.Supervision.WakeError != "" {
+			s.WakeError = ptr(p.Supervision.WakeError)
+		}
+		out.Supervision = &s
+	}
 	if a.taskStore != nil {
 		if _, _, progress, err := plan.ComputeProgress(p.ID, a.taskStore); err == nil {
 			pr := float32(progress)
@@ -803,10 +870,17 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 	// present in the request fixes it for every client, not just that form.
 	//
 	// Trade-off accepted (documented on PlanUpdateRequest.bounds): an
-	// individual override can no longer be CLEARED through PUT, only
-	// overwritten with a new value >= 1. Clearing was never reachable from the
-	// SPA anyway — it omits `bounds` entirely once every input is empty, which
-	// was and remains a no-op.
+	// individual override can no longer be CLEARED AT ALL — not through this
+	// handler and not through any other route, because there is no other
+	// route. plan.Patch.Bounds has exactly ONE writer in the whole codebase
+	// (the `patch.Bounds = &b` below); there is no PATCH endpoint, and no agent
+	// tool sets it. So "cannot be cleared through PUT" must not be read as
+	// implying some other endpoint can: an override, once set, can only be
+	// OVERWRITTEN with a new value >= 1, never removed, by any caller.
+	// (Clearing was never reachable from the SPA either — it omits `bounds`
+	// entirely once every input is empty, which was and remains a no-op.)
+	// Restoring clearability needs a deliberate wire change — e.g. an explicit
+	// null-per-field or a `bounds: null` reset sentinel — not a second route.
 	//
 	// KNOWN, ACCEPTED: this read-modify-write straddles the store lock (the
 	// Get above, the Update below), so two concurrent PUTs to the SAME plan
@@ -814,7 +888,16 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 	// inside updateLocked, which is pkg/plan's to make. The race needs two
 	// simultaneous bounds-writing PUTs to one plan; the replace semantics it
 	// replaces lost data on every single SPA save, with no concurrency at all.
-	if req.Bounds != nil {
+	//
+	// The `existing != nil` clause is defensive, not decorative: `existing` is
+	// loaded ~55 lines above under `req.Dod != nil || req.OwnerAgentId != nil ||
+	// req.Bounds != nil`, a strict superset of this condition, so it is
+	// guaranteed non-nil here TODAY. Nothing enforces that coupling across
+	// those 55 lines, though — dropping the `|| req.Bounds != nil` clause from
+	// the load condition during some later refactor would turn every
+	// bounds-carrying PUT into a nil-pointer panic on the very next line. The
+	// extra check costs one comparison and removes that whole failure mode.
+	if req.Bounds != nil && existing != nil {
 		b := &plan.PlanBounds{}
 		if existing.Bounds != nil {
 			if existing.Bounds.IdleExpiryDays != nil {
