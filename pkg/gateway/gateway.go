@@ -2077,7 +2077,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			omnipusGracefulShutdown(runningServices, agentLoop, provider, cfg)
 			return nil
 		case newCfg := <-configReloadChan:
-			if !runningServices.beginReload() {
+			if !runningServices.beginReload(agentLoop.MarkReloadPending) {
 				// NOT a drop: beginReload recorded the request, and the cycle
 				// that owns the in-flight reload will run a follow-up reload
 				// that re-reads this file change from disk before it finishes.
@@ -2139,15 +2139,29 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 // additional reload — with a config re-read from disk — before releasing the
 // slot. Callers must therefore treat false as "accepted, will be served
 // shortly", never as an error.
-func (s *services) beginReload() bool {
+//
+// markPending (AgentLoop.MarkReloadPending in every caller) is invoked on BOTH
+// branches, under the lock, and is what closes the last stale-read window.
+// AgentLoop.TriggerReload has to set the pending flag before it can call
+// reloadFunc — so between those two steps a finishing cycle can see no
+// registered request, clear the flag, and release the slot; the request then
+// arrives with a cleared flag and its poller returns immediately against the
+// older config snapshot. Re-marking here makes "request registered" and "flag
+// set" one atomic step against finishReload/abandonReload's clear, which take
+// the same mutex. The resulting invariant is total: the pending flag is set on
+// every path that leaves the slot claimed or a request recorded, and the only
+// paths that clear it also release the slot, under this same lock.
+func (s *services) beginReload(markPending func()) bool {
 	s.reloadCoalesceMu.Lock()
 	defer s.reloadCoalesceMu.Unlock()
 	if s.reloadInFlight {
 		s.reloadRequested = true
+		markPending()
 		return false
 	}
 	s.reloadInFlight = true
 	s.reloadRequested = false
+	markPending()
 	return true
 }
 
@@ -2216,9 +2230,9 @@ func (s *services) abandonReload(clearPending func()) {
 // accepted. Returning an error there is what dropped the request outright and
 // produced the POST /agents 201 → POST /tasks "agent not found" blocker
 // documented on the services struct's reloadCoalesceMu field.
-func newReloadTrigger(runningServices *services) func() error {
+func newReloadTrigger(runningServices *services, agentLoop *agent.AgentLoop) func() error {
 	return func() error {
-		if !runningServices.beginReload() {
+		if !runningServices.beginReload(agentLoop.MarkReloadPending) {
 			return nil
 		}
 		select {
@@ -3271,7 +3285,7 @@ func setupAndStartServices(
 	// NOT re-create them). restartServices reuses this same HealthServer, so
 	// reloadFunc is never reset to nil after this point.
 	runningServices.manualReloadChan = make(chan struct{}, 1)
-	runningServices.reloadTrigger = newReloadTrigger(runningServices)
+	runningServices.reloadTrigger = newReloadTrigger(runningServices, agentLoop)
 	runningServices.HealthServer.SetReloadFunc(runningServices.reloadTrigger)
 
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {

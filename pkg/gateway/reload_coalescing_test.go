@@ -167,7 +167,7 @@ func newReloadHarness(t *testing.T) *reloadHarness {
 	// the trigger installed on the agent loop so restAPI.triggerReloadAndWait →
 	// AgentLoop.TriggerReload reaches it exactly as it does in the gateway.
 	h.svc.manualReloadChan = make(chan struct{}, 1)
-	h.svc.reloadTrigger = newReloadTrigger(h.svc)
+	h.svc.reloadTrigger = newReloadTrigger(h.svc, al)
 	al.SetReloadFunc(h.svc.reloadTrigger)
 
 	stop := make(chan struct{})
@@ -571,6 +571,100 @@ func TestReloadTrigger_MidFlightRequestIsAcceptedNotRejected(t *testing.T) {
 		"the coalesced request must actually run a second reload")
 }
 
+// TestCreateAgent_PendingFlagClobberedMidTrigger_StillTaskAssignable closes the
+// last stale-read window in this path.
+//
+// AgentLoop.TriggerReload must set the reload-pending flag BEFORE it can
+// register the request with the gateway — registering IS calling reloadFunc. So
+// the two steps are not atomic, and a reload cycle completing between them sees
+// no registered request, clears the flag the caller just set, and releases the
+// slot. The caller then registers against a free slot with a cleared flag, and
+// restAPI.triggerReloadAndWait's poll returns on its very first check — against
+// a registry rebuilt from a config snapshot that predates the caller's write.
+// Same 201-then-"agent not found" outcome as the original blocker, reached
+// through a different door.
+//
+// The window is a few hundred nanoseconds wide in production and cannot be hit
+// by looping and hoping, so it is widened DETERMINISTICALLY here via
+// agent.SetReloadWindowHookForTest, which parks TriggerReload between its two
+// steps. The fix is services.beginReload re-marking pending under
+// reloadCoalesceMu — the same mutex finishReload clears under.
+func TestCreateAgent_PendingFlagClobberedMidTrigger_StillTaskAssignable(t *testing.T) {
+	h := newReloadHarness(t)
+
+	enteredFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	t.Cleanup(release)
+	h.beforeExec = func(idx int) {
+		if idx == 1 {
+			enterOnce.Do(func() { close(enteredFirst) })
+			<-releaseFirst
+			return
+		}
+		// Every LATER reload takes visible time. Without this the broken build
+		// could race a fast follow-up reload in before the poll's first check
+		// and pass by luck; with it, a poller that returns early is guaranteed
+		// to observe the pre-reload registry.
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	// Reload #1 starts and parks. Its config snapshot predates the create below.
+	require.NoError(t, h.svc.reloadTrigger(), "starting the first reload must succeed")
+	select {
+	case <-enteredFirst:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first reload never started executing")
+	}
+
+	// Park the create's TriggerReload between "flag set" and "request
+	// registered" — the window under test.
+	windowOpen := make(chan struct{})
+	windowClose := make(chan struct{})
+	var windowOnce sync.Once
+	agent.SetReloadWindowHookForTest(func() {
+		windowOnce.Do(func() {
+			close(windowOpen)
+			<-windowClose
+		})
+	})
+	t.Cleanup(func() { agent.SetReloadWindowHookForTest(nil) })
+
+	done := make(chan createAgentResult, 1)
+	go func() { done <- h.postAgent("Clobber Window Target") }()
+
+	select {
+	case <-windowOpen:
+	case <-time.After(10 * time.Second):
+		t.Fatal("createAgent never reached the reload trigger")
+	}
+
+	// The create has persisted its agent and set the pending flag, but has NOT
+	// yet registered its request. Let reload #1 finish now: it sees nothing
+	// recorded, so it clears that flag and frees the slot.
+	release()
+	require.Eventually(t, func() bool { return !h.al.IsReloadPending() }, 10*time.Second, 2*time.Millisecond,
+		"precondition: the finishing reload must actually clobber the pending flag the "+
+			"in-flight create had already set — otherwise this test is not exercising the window")
+
+	// The create now registers its request against a free slot and a cleared
+	// flag. Everything after this is the property under test.
+	close(windowClose)
+
+	var res createAgentResult
+	select {
+	case res = <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("createAgent never returned")
+	}
+
+	assertUsable(t, res)
+	assert.GreaterOrEqual(t, res.reloadsAtReturn, 2,
+		"the create must not have been released by reload #1 — a reload triggered by its own "+
+			"request has to complete first; only %d had run", res.reloadsAtReturn)
+}
+
 // TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers guards the
 // abnormal exit: if the coalesced follow-up cannot load config from disk, the
 // cycle must still release the single-flight slot and clear the pending flag.
@@ -579,7 +673,7 @@ func TestReloadTrigger_MidFlightRequestIsAcceptedNotRejected(t *testing.T) {
 func TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers(t *testing.T) {
 	h := newReloadHarness(t)
 
-	require.True(t, h.svc.beginReload(), "slot must be free at the start of the test")
+	require.True(t, h.svc.beginReload(h.al.MarkReloadPending), "slot must be free at the start of the test")
 
 	loadCalls := 0
 	failingLoad := func() (*config.Config, error) {
@@ -603,7 +697,7 @@ func TestReloadCycle_FollowUpConfigLoadFailure_ReleasesSlotAndPollers(t *testing
 	assert.False(t, h.al.IsReloadPending(),
 		"a failed follow-up load must still clear the reload-pending flag, "+
 			"or every triggerReloadAndWait caller hangs for its full deadline")
-	assert.True(t, h.svc.beginReload(),
+	assert.True(t, h.svc.beginReload(h.al.MarkReloadPending),
 		"a failed follow-up load must still release the single-flight slot, "+
 			"or every future reload is wedged")
 }

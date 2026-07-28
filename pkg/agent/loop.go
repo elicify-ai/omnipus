@@ -606,10 +606,44 @@ const (
 // unexpected and log accordingly.
 var ErrReloadNotConfigured = errors.New("reload not configured")
 
-// ErrReloadAlreadyInProgress is returned by TriggerReload when a reload is
-// already running. The caller should treat this as "poll anyway" — the in-flight
-// reload will call ClearReloadPending when it completes, unblocking any poller.
+// ErrReloadAlreadyInProgress is returned by TriggerReload when a reload
+// function reports that a reload is already running. The caller should treat
+// this as "poll anyway" — that reload will call ClearReloadPending when it
+// completes, unblocking any poller.
+//
+// NOT REACHABLE FROM PRODUCTION. The only reloadFunc production installs is the
+// gateway's coalescing trigger (pkg/gateway.newReloadTrigger), which never
+// reports contention as an error: a request arriving mid-reload is recorded and
+// served by a follow-up reload, so it returns nil. This sentinel and the branch
+// that produces it survive as a defensive net for any other reloadFunc (and are
+// exercised by pkg/gateway's rest_auth_test.go, which installs one deliberately)
+// — do not read them as describing live gateway behaviour.
 var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
+
+// reloadWindowHook, when set, runs inside TriggerReload between marking the
+// reload pending and invoking the reload function. It exists SOLELY to let
+// tests widen that window, which is otherwise a few hundred nanoseconds wide
+// and cannot be hit deterministically.
+//
+// That window is load-bearing: a reload cycle finishing inside it would clear
+// the pending flag this call just set, and the caller's poller would then
+// return against a config snapshot that predates the caller's own write. The
+// gateway closes it by re-marking pending inside services.beginReload, under
+// the same mutex that serialises the clear (see MarkReloadPending). Production
+// leaves this nil, so the cost is one atomic load per reload trigger — a path
+// that runs on config writes, not on any hot path.
+var reloadWindowHook atomic.Pointer[func()]
+
+// SetReloadWindowHookForTest installs (or, with nil, removes) the hook that
+// runs inside TriggerReload between MarkReloadPending and the reload function.
+// TEST-ONLY — never call this from production code.
+func SetReloadWindowHookForTest(fn func()) {
+	if fn == nil {
+		reloadWindowHook.Store(nil)
+		return
+	}
+	reloadWindowHook.Store(&fn)
+}
 
 // ErrAgentNotWorkspaceMember is returned by runTurn when the acting agent is
 // not a member of any workspace's CoreTeam (ADR-046 P1, FR-007/008). Execution
@@ -5387,11 +5421,23 @@ func (al *AgentLoop) TriggerReload() error {
 	if al.reloadFunc == nil {
 		return ErrReloadNotConfigured
 	}
-	al.reloadPending.Store(true)
+	// Marking pending here — BEFORE reloadFunc — leaves a window in which a
+	// reload cycle finishing concurrently would clear the flag this call just
+	// set, after which the poller below would return against a stale registry.
+	// The gateway's reload function closes that window by re-marking pending
+	// while it holds the mutex that serialises the clear; see MarkReloadPending
+	// and pkg/gateway's services.beginReload. Do not reorder these two lines
+	// without re-reading both.
+	al.MarkReloadPending()
+	if hook := reloadWindowHook.Load(); hook != nil {
+		(*hook)()
+	}
 	if err := al.reloadFunc(); err != nil {
 		// Only clear the pending flag if this was a genuine failure.
 		// If another reload is already in progress, that reload owns the flag —
 		// clearing it here would prematurely unblock any concurrent poller.
+		// Defensive/test-only in practice: the production reloadFunc coalesces
+		// instead of reporting contention. See ErrReloadAlreadyInProgress.
 		if strings.Contains(err.Error(), "already in progress") {
 			return ErrReloadAlreadyInProgress
 		}
@@ -5399,6 +5445,25 @@ func (al *AgentLoop) TriggerReload() error {
 		return err
 	}
 	return nil
+}
+
+// MarkReloadPending marks a config reload as pending — the flag
+// restAPI.triggerReloadAndWait polls, and the one ClearReloadPending clears.
+//
+// It exists so the gateway can re-assert the flag from INSIDE the critical
+// section that serialises reload bookkeeping. TriggerReload necessarily sets
+// the flag before it can register the request with the gateway (it has to call
+// reloadFunc to do that), so those two steps are not atomic: a reload cycle
+// completing in between sees no registered request, clears the flag, and
+// releases the slot — and the request that arrives a moment later then has a
+// cleared flag and returns immediately against a registry that predates its
+// own write. Calling this from services.beginReload under reloadCoalesceMu
+// makes "the request is registered" and "the flag is set" a single atomic step
+// with respect to the clear, closing the window.
+//
+// Idempotent, safe to call repeatedly and concurrently.
+func (al *AgentLoop) MarkReloadPending() {
+	al.reloadPending.Store(true)
 }
 
 // IsReloadPending reports whether a config reload is currently in flight.

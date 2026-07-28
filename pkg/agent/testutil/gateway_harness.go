@@ -474,38 +474,28 @@ func (g *TestGateway) SeedUser(ctx context.Context, u config.UserConfig, beforeW
 	}
 
 	// Trigger a gateway reload so the in-memory config picks up the new user.
-	// Retry on 500 "reload already in progress" — this is a transient race when
-	// onboarding's own reload (rest_onboarding.go::awaitReload) is still in
-	// flight. The reloading flag is cleared in executeReload's defer, so
-	// re-issuing /reload after a short backoff succeeds.
-	reloadDeadline := time.Now().Add(2 * time.Second)
-	var lastStatus int
-	for {
-		reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
-		if err != nil {
-			return fmt.Errorf("SeedUser: build reload request: %w", err)
-		}
-		reloadReq.Header.Set("Origin", g.URL)
-		reloadResp, err := g.HTTPClient.Do(reloadReq)
-		if err != nil {
-			return fmt.Errorf("SeedUser: POST /reload: %w", err)
-		}
-		_ = reloadResp.Body.Close()
-		lastStatus = reloadResp.StatusCode
-		if reloadResp.StatusCode == http.StatusOK {
-			break
-		}
-		if reloadResp.StatusCode != http.StatusInternalServerError || time.Now().After(reloadDeadline) {
-			return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf(
-				"SeedUser: context canceled during reload retry (last status %d): %w",
-				lastStatus, ctx.Err(),
-			)
-		case <-time.After(50 * time.Millisecond):
-		}
+	//
+	// No retry loop: this used to poll for up to 2s on 500 "reload already in
+	// progress", because the gateway's reload trigger rejected any request that
+	// arrived while another reload was running (e.g. onboarding's own reload via
+	// rest_onboarding.go::awaitReload). That trigger now COALESCES instead of
+	// rejecting — a mid-flight request is recorded and served by a follow-up
+	// reload that re-reads config from disk — so /reload answers 200 and the
+	// 500 this loop existed to absorb can no longer occur. Any non-200 here is
+	// now a genuine failure and must surface immediately rather than being
+	// retried for 2s and reported as something else.
+	reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
+	if err != nil {
+		return fmt.Errorf("SeedUser: build reload request: %w", err)
+	}
+	reloadReq.Header.Set("Origin", g.URL)
+	reloadResp, err := g.HTTPClient.Do(reloadReq)
+	if err != nil {
+		return fmt.Errorf("SeedUser: POST /reload: %w", err)
+	}
+	_ = reloadResp.Body.Close()
+	if reloadResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
 	}
 
 	// Poll with the new user's token (if non-empty) until the auth middleware
