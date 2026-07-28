@@ -106,7 +106,7 @@ type Session struct {
 	// invoking the callback (removeViewer, viewer.go) never contends with the
 	// hot paths those other locks guard.
 	viewerRemovedMu sync.Mutex
-	onViewerRemoved func(viewerID string)
+	onViewerRemoved func(viewerID string, handle any)
 }
 
 // viewerConn tracks one attached viewer's PeerConnection plus its "input"
@@ -139,6 +139,18 @@ type viewerConn struct {
 	// unblocks deterministically, without waiting on pc.Close()'s own
 	// (correct, but asynchronous) teardown to reach the same call.
 	senders []*webrtc.RTPSender
+	// handle is the EXACT *ViewerHandle instance minted for THIS registration
+	// (HandleViewerOfferHandle, viewer.go) -- stored here, at construction,
+	// before this viewerConn is ever published into s.viewers, so it can be
+	// handed back verbatim by removeViewer's onViewerRemoved notification
+	// (GAP 2 fix-wave finding: the notification previously carried only a
+	// bare viewerID, giving a caller -- CaptureSession -- no way to tell a
+	// legitimate eviction of THIS registration apart from a stale
+	// notification racing a newer registration for the same viewerID; see
+	// SetOnViewerRemoved's doc comment). Never mutated after construction, so
+	// reading it in removeViewer under s.viewersMu is race-free even though
+	// the pointer was set outside that lock.
+	handle *ViewerHandle
 }
 
 // NewSession builds a Session backed by a fresh Pion API: an explicit
@@ -253,17 +265,32 @@ func (s *Session) Stats() Stats {
 }
 
 // SetOnViewerRemoved registers fn to be invoked, with the evicted viewer's
-// ID, whenever THIS SESSION -- not an external caller -- decides a viewer's
-// PeerConnection is gone: a terminal ICE/PeerConnection state
-// (Failed/Closed) or an unrecovered Disconnected state past
-// disconnectGracePeriod (see removeViewer in viewer.go, the sole call site,
-// and CloseViewerIfCurrent, which delegates to it). This is how a caller
-// (CaptureSession, pkg/tools/browser/capture_session.go) learns of a
+// ID and the relay-identity handle that registration held (dynamically a
+// *ViewerHandle -- see ViewerHandle's doc comment for why this is declared
+// `any` rather than the concrete type), whenever THIS SESSION -- not an
+// external caller -- decides a viewer's PeerConnection is gone: a terminal
+// ICE/PeerConnection state (Failed/Closed) or an unrecovered Disconnected
+// state past disconnectGracePeriod (see removeViewer in viewer.go, the sole
+// call site, and CloseViewerIfCurrent, which delegates to it). This is how a
+// caller (CaptureSession, pkg/tools/browser/capture_session.go) learns of a
 // RELAY-SIDE-ONLY eviction that the signaling layer above never sees a
 // browser_detach frame for -- e.g. an ICE failure while the browser_ws
 // connection stays open and the SPA silently falls back to its JPEG sink
 // (fix-wave incident: "nothing resumes the JPEG screencast once WebRTC dies
 // mid-session").
+//
+// GAP 2 fix-wave finding: the handle parameter (added alongside the
+// pre-existing viewerID one) lets CaptureSession identity-check this
+// notification against whichever registration it currently has recorded for
+// viewerID (recordViewerRelayHandle) before removing anything, via
+// RemoveViewerIfCurrent -- previously the notification carried only a bare
+// viewerID, so a legitimate eviction of an OLD, already-superseded relay
+// connection racing a NEWER AddViewer registration for the same viewerID
+// could delete the newer registration instead (the relay's OWN
+// cur.pc==pc identity check inside removeViewer already prevented a
+// stale notification from firing at all -- this closes the SAME class of gap
+// one layer up, at the CaptureSession/relay boundary, where no such check
+// previously existed).
 //
 // fn is invoked on whatever goroutine removeViewer runs on (Pion's own
 // PeerConnection state-change callback, or the disconnectGracePeriod
@@ -280,7 +307,7 @@ func (s *Session) Stats() Stats {
 // convention. Intended to be called exactly once, right after NewSession,
 // before any offer can possibly be handled -- see capture_session.go's
 // newCaptureSessionWithDeps.
-func (s *Session) SetOnViewerRemoved(fn func(viewerID string)) {
+func (s *Session) SetOnViewerRemoved(fn func(viewerID string, handle any)) {
 	s.viewerRemovedMu.Lock()
 	s.onViewerRemoved = fn
 	s.viewerRemovedMu.Unlock()
@@ -290,12 +317,12 @@ func (s *Session) SetOnViewerRemoved(fn func(viewerID string)) {
 // any -- see SetOnViewerRemoved's doc comment. Never called while any
 // Session-internal lock is held (removeViewer's sole call site is after its
 // own s.viewersMu.Unlock()).
-func (s *Session) notifyViewerRemoved(viewerID string) {
+func (s *Session) notifyViewerRemoved(viewerID string, handle any) {
 	s.viewerRemovedMu.Lock()
 	fn := s.onViewerRemoved
 	s.viewerRemovedMu.Unlock()
 	if fn != nil {
-		fn(viewerID)
+		fn(viewerID, handle)
 	}
 }
 
@@ -324,7 +351,19 @@ func (s *Session) Close() error {
 	s.viewers = make(map[string]*viewerConn)
 	s.viewersMu.Unlock()
 
+	// Fix-wave finding: this is the FOURTH viewer-teardown site in this
+	// package (removeViewer, CloseViewer, and HandleViewerOfferHandle's
+	// same-viewerID replace branch are the other three) and was the one
+	// still calling vc.pc.Close() WITHOUT stopViewerConn(vc) first -- exactly
+	// the gap those three were hardened to close (see viewerConn's doc
+	// comment, session.go, and stopViewerConn's doc comment, viewer.go): under
+	// real network conditions, pc.Close()'s own close cascade alone can leave
+	// drainViewerRTCP/runInputQueue blocked well past a 60s bound. A full
+	// Session.Close() tearing down every attached viewer at once (e.g. an
+	// agent shutdown with several live viewers) is exactly the same leak
+	// class, just at shutdown instead of a single-viewer eviction.
 	for id, vc := range viewers {
+		s.stopViewerConn(vc)
 		if err := vc.pc.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close viewer %s: %w", id, err))
 		}

@@ -134,7 +134,16 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 		s.logf("%s no audio track yet, answering video-only", prefix)
 	}
 
-	vc := &viewerConn{pc: pc, senders: senders}
+	// pcHandle is minted HERE, before vc is ever published into s.viewers,
+	// and stored on vc itself (viewerConn.handle) as well as returned below
+	// as this call's `handle` -- the SAME pointer instance serves both
+	// purposes so removeViewer's eventual onViewerRemoved notification (GAP 2
+	// fix-wave finding) can hand a caller back the EXACT identity it was
+	// given at registration time, letting it recognize its own registration
+	// with a plain equality check rather than needing a second identity
+	// scheme.
+	pcHandle := &ViewerHandle{viewerID: viewerID, pc: pc}
+	vc := &viewerConn{pc: pc, senders: senders, handle: pcHandle}
 	s.viewersMu.Lock()
 	if old, exists := s.viewers[viewerID]; exists {
 		s.logf("%s replacing existing viewer connection for id %q", prefix, viewerID)
@@ -144,7 +153,7 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 		// below to unblock old's drainViewerRTCP/runInputQueue goroutines.
 		// Safe under s.viewersMu: old's only other writer (the OnDataChannel
 		// handler below) is gated by this same lock.
-		stopViewerConn(old)
+		s.stopViewerConn(old)
 		go func() {
 			if cerr := old.pc.Close(); cerr != nil {
 				s.logf("%s closing previous viewer connection: %v", prefix, cerr)
@@ -160,8 +169,11 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 	// caller to protect via CloseViewerIfCurrent, even if a later step below
 	// fails (SetRemoteDescription/CreateAnswer/SetLocalDescription), because
 	// a concurrent newer offer for the SAME viewerID could already have
-	// replaced this registration before this call returns.
-	handle = &ViewerHandle{viewerID: viewerID, pc: pc}
+	// replaced this registration before this call returns. Reuses pcHandle
+	// (minted above, already stored on vc) rather than constructing a second,
+	// distinct *ViewerHandle for the same registration -- see pcHandle's doc
+	// comment for why the two must be the identical pointer.
+	handle = pcHandle
 
 	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
 		s.logf("%s ICE connection state -> %s", prefix, st.String())
@@ -288,22 +300,35 @@ func (s *Session) scheduleDisconnectEviction(viewerID string, pc *webrtc.PeerCon
 // goroutines blocked well past a 60s bound; calling Stop()/dc.Close()
 // directly here does not depend on the SCTP association at all.
 //
-// pc.Close() itself is still called by every caller of this function
-// (removeViewer, CloseViewer, and the same-viewerID replace branch above) --
-// this only covers the two things that must not wait on it. Safe to call on
-// a nil vc (no-op), one whose senders are still unset (Stop() on a nil slice
-// is simply zero iterations), or one whose dc is still nil (the viewer's
-// "input" data channel hasn't opened yet -- an ordinary, momentary window;
-// nothing to close since wireInputDataChannel/runInputQueue haven't started).
-func stopViewerConn(vc *viewerConn) {
+// pc.Close() itself is still called by every caller of this method
+// (removeViewer, CloseViewer, Close, and the same-viewerID replace branch
+// above) -- this only covers the two things that must not wait on it. Safe
+// to call on a nil vc (no-op), one whose senders are still unset (Stop() on
+// a nil slice is simply zero iterations), or one whose dc is still nil (the
+// viewer's "input" data channel hasn't opened yet -- an ordinary, momentary
+// window; nothing to close since wireInputDataChannel/runInputQueue haven't
+// started).
+//
+// A method on *Session (not a free function) so it can log via s.logf --
+// fix-wave finding: every OTHER teardown call in this package
+// (pc.Close() at each of stopViewerConn's own call sites, plus Close's
+// ingest.Close()) logs its error; snd.Stop()/vc.dc.Close() silently
+// discarding theirs via a bare `_ =` was the one inconsistency, meaning a
+// systemic SRTP/DTLS teardown failure here would have been invisible even
+// though every other failure in the same teardown path is surfaced.
+func (s *Session) stopViewerConn(vc *viewerConn) {
 	if vc == nil {
 		return
 	}
 	for _, snd := range vc.senders {
-		_ = snd.Stop()
+		if err := snd.Stop(); err != nil {
+			s.logf("webrtc: stopViewerConn: RTP sender stop failed: %v", err)
+		}
 	}
 	if vc.dc != nil {
-		_ = vc.dc.Close()
+		if err := vc.dc.Close(); err != nil {
+			s.logf("webrtc: stopViewerConn: data channel close failed: %v", err)
+		}
 	}
 }
 
@@ -342,7 +367,9 @@ func (s *Session) removeViewer(viewerID string, pc *webrtc.PeerConnection) {
 	s.viewersMu.Lock()
 	cur, exists := s.viewers[viewerID]
 	stillCurrent := exists && cur.pc == pc
+	var handle *ViewerHandle
 	if stillCurrent {
+		handle = cur.handle
 		delete(s.viewers, viewerID)
 	}
 	count := len(s.viewers)
@@ -351,13 +378,19 @@ func (s *Session) removeViewer(viewerID string, pc *webrtc.PeerConnection) {
 		return
 	}
 	s.logf("[viewer/%s] disconnected, count now %d", viewerID, count)
-	stopViewerConn(cur)
+	s.stopViewerConn(cur)
 	go func() {
 		if cerr := pc.Close(); cerr != nil {
 			s.logf("[viewer/%s] removeViewer: close failed: %v", viewerID, cerr)
 		}
 	}()
-	s.notifyViewerRemoved(viewerID)
+	// handle is the exact *ViewerHandle instance minted for cur at
+	// registration time (viewerConn.handle, set once in
+	// HandleViewerOfferHandle and never mutated) -- passed through verbatim
+	// so a caller (CaptureSession.removeViewerByRelayHandle) can recognize
+	// its own registration by equality, not just by viewerID (GAP 2
+	// fix-wave finding).
+	s.notifyViewerRemoved(viewerID, handle)
 }
 
 // CloseViewerIfCurrent undoes the specific viewer attempt handle identifies
@@ -416,7 +449,7 @@ func (s *Session) CloseViewer(viewerID string) {
 	// see stopViewerConn's doc comment for why this package does not rely
 	// solely on the pc.Close() call below to unblock
 	// drainViewerRTCP/runInputQueue.
-	stopViewerConn(vc)
+	s.stopViewerConn(vc)
 	if err := vc.pc.Close(); err != nil {
 		s.logf("[viewer/%s] CloseViewer: close failed: %v", viewerID, err)
 	}

@@ -407,17 +407,26 @@ func TestHandleWebRTCOffer_DetachClearsViewerState(t *testing.T) {
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
 
-	// Fabricate a webrtc-attached state (as if handleWebRTCOffer had
-	// succeeded) using a fake CaptureSession, and verify detachWebRTCViewer
-	// tears it down cleanly — this is the readLoop defer / browser_detach
-	// cleanup path (browser_ws.go), tested here without a live relay.
+	// Fabricate a webrtc-attached state as if handleWebRTCOffer had ACTUALLY
+	// succeeded — i.e. via AddViewer + HandleViewerOffer, exactly like
+	// handleWebRTCOffer's own call sequence, so the resulting
+	// *browser.ViewerAttachHandle is real and detachWebRTCViewer's
+	// identity-checked CleanupViewerOffer(att.handle) has something genuine
+	// to act on (fix-wave GAP 1: detachWebRTCViewer no longer tears down via
+	// the bare, viewerID-only Relay().CloseViewer/RemoveViewer pair — see its
+	// doc comment) — and verify detachWebRTCViewer still tears a normal
+	// (non-superseded) attachment down cleanly — this is the readLoop defer /
+	// browser_detach cleanup path (browser_ws.go), tested here without a live
+	// relay.
 	var calls int32
 	relay := &fakeRelay{}
 	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	cs.AddViewer("viewer-1")
+	gen := cs.AddViewer("viewer-1")
+	_, handle, err := cs.HandleViewerOffer("viewer-1", "offer-sdp", gen)
+	require.NoError(t, err)
 
-	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}}
+	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs, handle: handle}}
 	handler.detachWebRTCViewer(&state, "viewer-1")
 
 	require.Nil(t, state.webrtc)
@@ -426,6 +435,68 @@ func TestHandleWebRTCOffer_DetachClearsViewerState(t *testing.T) {
 	closed := append([]string(nil), relay.closedViewers...)
 	relay.mu.Unlock()
 	require.Equal(t, []string{"viewer-1"}, closed)
+}
+
+// TestHandleWebRTCOffer_DetachOfStaleAttachmentDoesNotClobberNewerOfferSameViewerID
+// is GAP 1's OTHER direction: detachWebRTCViewer must not undo a NEWER,
+// still-live registration for the same viewerID when the thing it is
+// actually tearing down (state.webrtc) is an OLDER, already-superseded
+// attachment. This reproduces the traced race directly: offer A commits (its
+// *ViewerAttachHandle lands in state.webrtc); a second offer B for the SAME
+// viewerID (e.g. an ICE-restart reconnect) then registers its own,
+// independent AddViewer generation + relay connection — but has NOT yet
+// itself committed into state.webrtc (commitWebRTCAttachment/webrtcEpoch only
+// guard the single-slot state.webrtc field, not CaptureSession.viewers or the
+// relay's own registry — see detachWebRTCViewer's doc comment). A detach or
+// connection-close then arrives and pulls out A (the still-committed
+// attachment) via takeWebRTCAttachment.
+//
+// Before the GAP 1 fix, detachWebRTCViewer called
+// att.capture.RemoveViewer(viewerID) — UNCONDITIONAL, viewerID-only — which
+// would have deleted B's CaptureSession-level registration too (ViewerCount
+// dropping to 0 while B is still live). CleanupViewerOffer(att.handle) is
+// gen-checked (RemoveViewerIfCurrent) and must leave B's registration
+// completely untouched.
+func TestHandleWebRTCOffer_DetachOfStaleAttachmentDoesNotClobberNewerOfferSameViewerID(t *testing.T) {
+	handler, al := newBrowserWSTestHandler(t, nil)
+	t.Cleanup(handler.Wait)
+
+	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, defaultAgent)
+
+	const viewerID = "viewer-reconnect-race"
+	var calls int32
+	relay := &fakeRelay{}
+	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
+	require.NoError(t, err)
+
+	// Offer A: dispatched first, committed into state.webrtc (the ONLY thing
+	// this connection currently believes is its live WebRTC attachment).
+	genA := cs.AddViewer(viewerID)
+	_, handleA, err := cs.HandleViewerOffer(viewerID, "offer-sdp-a", genA)
+	require.NoError(t, err)
+	state := browserConnState{webrtc: &webrtcAttachment{agentID: defaultAgent.ID, capture: cs, handle: handleA}}
+
+	// Offer B: a SEPARATE, later offer for the SAME viewerID that has ALSO
+	// registered successfully (superseding A's generation in
+	// CaptureSession.viewers) but has NOT itself committed into state.webrtc
+	// yet — modeling the exact window handleWebRTCOffer's own goroutine
+	// occupies between HandleViewerOffer returning and commitWebRTCAttachment
+	// running.
+	genB := cs.AddViewer(viewerID)
+	require.NotEqual(t, genA, genB, "setup: AddViewer must mint a distinct generation per call")
+	_, _, err = cs.HandleViewerOffer(viewerID, "offer-sdp-b", genB)
+	require.NoError(t, err)
+	require.Equal(t, 1, cs.ViewerCount(), "setup: B's registration must be live before the detach races in")
+
+	// A detach (or the connection closing) arrives, targeting the connection's
+	// SINGLE committed attachment — which is still A, since B hasn't
+	// committed.
+	handler.detachWebRTCViewer(&state, viewerID)
+
+	require.Nil(t, state.webrtc, "detach must always clear the connection's committed attachment slot")
+	require.Equal(t, 1, cs.ViewerCount(),
+		"A's stale cleanup must not clobber B's newer, still-live registration for the same viewerID")
 }
 
 // ---------------------------------------------------------------------------

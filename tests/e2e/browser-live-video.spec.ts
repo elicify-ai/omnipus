@@ -66,12 +66,17 @@ const OMNIPUS_HOME =
 // ── Deterministic motion+audio fixture (see module doc for the "why") ──────
 //
 // Design notes:
-//   - #motionLayer (top half) repaints a saturated HSL color from Date.now()
-//     on every requestAnimationFrame. HSL(_, 90%, 45%) never degenerates to
-//     near-black or near-white regardless of hue, so a "not blank" guard on
-//     luminance is meaningful (a hardcoded/frozen-frame bug could not fake
-//     this — it requires the video pipeline to actually deliver new frames
-//     over time).
+//   - #motionLayer (top half) cycles a saturated HSL background via a
+//     compositor-driven CSS @keyframes animation (omnipusHueShift, 2s linear
+//     infinite — see the <style> block below). It deliberately does NOT use
+//     requestAnimationFrame: rAF is throttled, and in an occluded tab stopped
+//     outright, by Chrome, so a rAF-painted background freezes whenever the
+//     captured tab is not foregrounded and the spec then fails as "video is
+//     frozen" while the pipeline is actually healthy. HSL(_, 90%, 45%) never
+//     degenerates to near-black or near-white regardless of hue, so a "not
+//     blank" guard on luminance is meaningful (a hardcoded/frozen-frame bug
+//     could not fake this — it requires the video pipeline to actually
+//     deliver new frames over time).
 //   - #clickLayer (bottom half) starts dark grey (#222) and flips to bright
 //     green (#0f0) on the FIRST click, then back to grey on the second, etc.
 //     Used as the input-latency detector: a huge, unambiguous color jump
@@ -455,8 +460,12 @@ test(
       expect(sampleB.top.r).toBeLessThan(250);
 
       // Genuinely DIFFERENT content — the operator's core acceptance bar.
-      // 1.5s of the motion layer's hue cycle (hue = Date.now()/10 % 360)
-      // shifts hue by ~150 degrees, which is a large, unmistakable RGB move.
+      // The CSS animation sweeps a full 360 degrees every 2s (180 deg/s), so
+      // the 1.5s wait above shifts hue by ~270 degrees: a large, unmistakable
+      // RGB move. (This previously cited ~150 degrees, derived from a
+      // requestAnimationFrame formula, hue = Date.now()/10 % 360, that no
+      // longer exists — the assertion threshold never depended on the figure,
+      // but the stated reasoning was describing deleted code.)
       expect(
         colorDistance(sampleA.top, sampleB.top),
         `top-region color must differ between t0 (${JSON.stringify(sampleA.top)}) and ` +

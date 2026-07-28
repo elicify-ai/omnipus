@@ -13,7 +13,7 @@ package gateway
 // ownership does not include, or re-implementing credential-store seeding
 // from scratch). The launch mechanism itself (BrowserCoordinator.WarmUp
 // actually starting a real Chrome process) is covered by
-// pkg/tools/browser/coldstart_bound_test.go's
+// pkg/tools/browser/warmup_test.go's
 // TestBrowserCoordinator_WarmUp_LaunchesRealChrome.
 
 import (

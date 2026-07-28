@@ -46,13 +46,13 @@ type fakeRelay struct {
 	// RELAY-SIDE-ONLY viewer eviction (an ICE failure, or an unrecovered
 	// disconnect-grace timeout) via triggerViewerRemoved below, exactly the
 	// contract the real webrtc.Session honors from its own removeViewer.
-	onViewerRemoved func(viewerID string)
+	onViewerRemoved func(viewerID string, handle any)
 }
 
 // SetOnViewerRemoved implements the viewerRemover optional capability (see
 // capture_session.go) so tests can exercise CaptureSession's wiring of it
 // without a real webrtc.Session/Pion PeerConnection.
-func (f *fakeRelay) SetOnViewerRemoved(fn func(viewerID string)) {
+func (f *fakeRelay) SetOnViewerRemoved(fn func(viewerID string, handle any)) {
 	f.mu.Lock()
 	f.onViewerRemoved = fn
 	f.mu.Unlock()
@@ -63,13 +63,19 @@ func (f *fakeRelay) SetOnViewerRemoved(fn func(viewerID string)) {
 // SetOnViewerRemoved contract the real webrtc.Session honors from its own
 // removeViewer (pkg/tools/browser/webrtc/viewer.go). Test-only; a no-op if
 // nothing registered a callback (SetOnViewerRemoved never called, or called
-// with a nil fn).
+// with a nil fn). Passes a nil handle: fakeRelay carries no viewerOfferHandler
+// capability, so a viewerID registered via plain AddViewer (this fake's own
+// tests never call HandleViewerOffer through a real offerHandler) has no
+// relay identity recorded (viewerRegistration.relayHandle stays nil,
+// recordViewerRelayHandle's own zero value) — nil correctly matches that,
+// exercising the SAME removeViewerByRelayHandle path production uses rather
+// than a parallel, weaker test-only mechanism.
 func (f *fakeRelay) triggerViewerRemoved(viewerID string) {
 	f.mu.Lock()
 	fn := f.onViewerRemoved
 	f.mu.Unlock()
 	if fn != nil {
-		fn(viewerID)
+		fn(viewerID, nil)
 	}
 }
 
@@ -938,5 +944,224 @@ func TestCaptureSession_RemoveViewer_UnconditionalVariant_WouldClobberNewerAttem
 			"ViewerCount = %d, want 0 -- RemoveViewer(viewerID) is unconditional by design and clobbers ANY generation",
 			got,
 		)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CRITICAL fix (fix-wave 2-reviewer finding, lead-verified): CleanupViewerOffer's
+// fallback branch was NOT identity-safe for one of the two ways handle.relay
+// can be nil.
+//
+// webrtc.Session.HandleViewerOfferHandle returns a true nil handle on SEVEN
+// early-return paths (empty viewerID, empty SDP, no-ingest-video-track
+// timeout, session closed, buildPeerConnection failure, video AddTrack
+// failure, audio AddTrack failure) -- all BEFORE it registers a viewerConn in
+// its own registry (see viewer.go's doc comment for the exact registration
+// point). CleanupViewerOffer's old code:
+//
+//	if cs.offerHandler != nil && handle.relay != nil {
+//	    cs.offerHandler.CloseViewerIfCurrent(handle.relay)   // identity-safe
+//	} else {
+//	    cs.Relay().CloseViewer(handle.viewerID)              // UNCONDITIONAL
+//	}
+//
+// treated "cs.offerHandler != nil && handle.relay == nil" the SAME as
+// "cs.offerHandler == nil" (no supersede-safe capability at all) -- but
+// those are different situations. The doc comment's justification ("no
+// worse than before, since no identity information was ever available") is
+// only true for the latter. For the former -- a REAL *webrtc.Session (which
+// DOES support identity-safe closing) whose OWN attempt merely failed before
+// registering anything -- falling through to the unconditional,
+// viewerID-only CloseViewer can close a completely unrelated, live,
+// already-registered sibling connection for the same viewerID: viewerID is
+// per-CONNECTION (minted once in browser_ws.go), not per-offer, so two
+// concurrent offers for the same viewerID/agent (e.g. offer A stalls in
+// waitForTracks for 15s and ultimately times out; offer B, dispatched later
+// on its own goroutine, registers, commits, and is actively viewed before A's
+// failure is even discovered) are a real, reachable race
+// (dispatchWebRTCOffer spawns one unserialized goroutine per offer frame).
+//
+// fakeOfferRelay below is a RelaySession double that ALSO implements the
+// viewerOfferHandler optional capability (HandleViewerOfferHandle /
+// CloseViewerIfCurrent) with fake, in-memory identity tracking -- no real
+// Pion/ICE machinery needed to reproduce or prove this bug, since the defect
+// is entirely in CleanupViewerOffer's own branching logic, not in the real
+// relay's identity check (which already has its own dedicated Go<->Go proof:
+// pkg/tools/browser/webrtc/session_test.go's
+// TestSessionCloseViewerIfCurrent_SupersededHandleIsNoop_NewerConnectionSurvives).
+// ---------------------------------------------------------------------------
+
+// fakeOfferHandle is fakeOfferRelay's fake analog of *webrtc.ViewerHandle --
+// an opaque per-attempt identity token, returned as `any` from
+// HandleViewerOfferHandle exactly as the real type is.
+type fakeOfferHandle struct {
+	viewerID string
+}
+
+// fakeOfferRelay is a test double for RelaySession that additionally
+// implements viewerOfferHandler, modeling the real webrtc.Session's
+// identity-checked viewer registry (one currently-registered handle per
+// viewerID; CloseViewerIfCurrent only removes it if the handle passed in is
+// STILL the one currently registered) without any real WebRTC/ICE. Embeds
+// fakeRelay for the plain RelaySession methods this test doesn't otherwise
+// exercise; CloseViewer is overridden (not inherited) so it ALSO clears the
+// fake identity registry -- mirroring the real webrtc.Session.CloseViewer's
+// unconditional, viewerID-only semantics -- which is exactly what lets this
+// test detect the CRITICAL bug's unconditional-fallback clobber.
+type fakeOfferRelay struct {
+	fakeRelay
+
+	mu      sync.Mutex
+	current map[string]*fakeOfferHandle
+}
+
+// registerHandleOK simulates a HandleViewerOfferHandle call that reaches
+// registration successfully, returning a fresh handle now current for
+// viewerID (replacing whatever was previously registered there, exactly like
+// the real Session's same-viewerID replace branch).
+func (f *fakeOfferRelay) registerHandleOK(viewerID string) *fakeOfferHandle {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.current == nil {
+		f.current = make(map[string]*fakeOfferHandle)
+	}
+	h := &fakeOfferHandle{viewerID: viewerID}
+	f.current[viewerID] = h
+	return h
+}
+
+// HandleViewerOfferHandle implements viewerOfferHandler. An sdpOffer of
+// exactly "FAIL_BEFORE_REGISTER" simulates one of the real Session's seven
+// early-return failure paths -- a true nil handle, nothing registered.
+// Anything else succeeds and registers, mirroring a real successful offer.
+func (f *fakeOfferRelay) HandleViewerOfferHandle(viewerID, sdpOffer string) (string, any, error) {
+	if sdpOffer == "FAIL_BEFORE_REGISTER" {
+		return "", nil, errors.New("fakeOfferRelay: simulated failure before registration")
+	}
+	h := f.registerHandleOK(viewerID)
+	return "answer-" + viewerID, h, nil
+}
+
+// CloseViewerIfCurrent implements viewerOfferHandler's identity-safe close:
+// a no-op unless handle is STILL the currently-registered one for its
+// viewerID.
+func (f *fakeOfferRelay) CloseViewerIfCurrent(handle any) {
+	h, ok := handle.(*fakeOfferHandle)
+	if !ok || h == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.current[h.viewerID] == h {
+		delete(f.current, h.viewerID)
+	}
+}
+
+// CloseViewer overrides fakeRelay's plain bookkeeping-only implementation:
+// the real webrtc.Session.CloseViewer unconditionally deletes and closes
+// WHATEVER is currently registered for viewerID, regardless of identity --
+// this override reproduces that exact unconditional semantics against the
+// fake registry so the CRITICAL-bug scenario is faithfully reproducible.
+func (f *fakeOfferRelay) CloseViewer(viewerID string) {
+	f.fakeRelay.CloseViewer(viewerID)
+	f.mu.Lock()
+	delete(f.current, viewerID)
+	f.mu.Unlock()
+}
+
+// isCurrentlyRegistered reports whether h is still the registered handle for
+// viewerID in the fake registry.
+func (f *fakeOfferRelay) isCurrentlyRegistered(viewerID string, h *fakeOfferHandle) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.current[viewerID] == h
+}
+
+// TestCaptureSession_CleanupViewerOffer_EarlyFailureMustNotClobberLiveSibling
+// reproduces the CRITICAL incident directly: attempt A (older, dispatched
+// first) ultimately fails BEFORE ever registering anything at the relay --
+// producing a *ViewerAttachHandle with a true nil `relay` field, exactly as
+// CaptureSession.HandleViewerOffer packages a webrtc.Session
+// early-return failure. Attempt B (a totally separate, later-dispatched
+// offer for the SAME viewerID -- viewerID is per-CONNECTION, not per-offer)
+// meanwhile succeeds, registers, and is live. A's cleanup (CleanupViewerOffer)
+// running AFTER B is already registered must NOT touch B's live relay
+// registration -- it has nothing of its OWN to close there.
+//
+// FAILS WITHOUT THE FIX: the old code's fallback branch fires whenever
+// `cs.offerHandler != nil && handle.relay != nil` is false -- true both when
+// offerHandler is nil (no capability at all, the historically-safe case) AND
+// when offerHandler is non-nil but this attempt's OWN handle.relay happens to
+// be nil (the unsafe case this test isolates) -- so it calls
+// cs.Relay().CloseViewer(viewerID) unconditionally, which (via this fake's
+// faithful CloseViewer override) deletes B's live registration.
+func TestCaptureSession_CleanupViewerOffer_EarlyFailureMustNotClobberLiveSibling(t *testing.T) {
+	relay := &fakeOfferRelay{}
+	cs, err := NewCaptureSessionWithDeps(nil, "agent-1", relay, fakeEncoderStarter(new(int32), nil), nil)
+	if err != nil {
+		t.Fatalf("NewCaptureSessionWithDeps: %v", err)
+	}
+
+	const viewerID = "viewer-shared-conn"
+
+	// Attempt A dispatched first (older) -- AddViewer mints its generation
+	// before B's.
+	genA := cs.AddViewer(viewerID)
+	// Attempt B dispatched second (newer) -- supersedes A's generation at the
+	// CaptureSession level, exactly as two browser_webrtc_offer frames on the
+	// same connection would.
+	genB := cs.AddViewer(viewerID)
+	if genA == genB {
+		t.Fatal("setup: AddViewer must mint distinct generations")
+	}
+
+	// B's offer reaches the relay and registers successfully -- it is now
+	// live.
+	answerB, handleB, err := cs.HandleViewerOffer(viewerID, "real-offer-b", genB)
+	if err != nil {
+		t.Fatalf("HandleViewerOffer (B) = %v, want nil", err)
+	}
+	if answerB == "" {
+		t.Fatal("setup: B's HandleViewerOffer returned an empty answer")
+	}
+	if handleB == nil || handleB.relay == nil {
+		t.Fatal("setup: B's handle must have a non-nil relay identity (it registered)")
+	}
+	fakeHandleB, ok := handleB.relay.(*fakeOfferHandle)
+	if !ok {
+		t.Fatalf("setup: B's relay handle has unexpected dynamic type %T", handleB.relay)
+	}
+	if !relay.isCurrentlyRegistered(viewerID, fakeHandleB) {
+		t.Fatal("setup: B must be registered at the relay immediately after its successful offer")
+	}
+
+	// A's offer FINALLY comes back (e.g. after a 15s waitForTracks timeout in
+	// production) with an early failure -- it never reached registration, so
+	// its handle carries a true nil relay identity.
+	_, handleA, err := cs.HandleViewerOffer(viewerID, "FAIL_BEFORE_REGISTER", genA)
+	if err == nil {
+		t.Fatal("setup: expected A's simulated early failure")
+	}
+	if handleA == nil {
+		t.Fatal("setup: HandleViewerOffer must still return a non-nil *ViewerAttachHandle even on early failure")
+	}
+	if handleA.relay != nil {
+		t.Fatalf("setup: expected handleA.relay nil (A never registered), got %#v", handleA.relay)
+	}
+
+	// The bug: A's cleanup must not touch B's unrelated, live registration.
+	cs.CleanupViewerOffer(handleA)
+
+	if !relay.isCurrentlyRegistered(viewerID, fakeHandleB) {
+		t.Fatal("CRITICAL: A's cleanup (which never registered anything of its own at the relay) " +
+			"closed B's live, unrelated relay connection via the unconditional CloseViewer fallback")
+	}
+
+	// Confirm this isn't a blanket no-op: B's OWN CloseViewerIfCurrent call
+	// (via its own cleanup) DOES still work, proving the registry is live and
+	// the assertion above is meaningful, not vacuous.
+	cs.CleanupViewerOffer(handleB)
+	if relay.isCurrentlyRegistered(viewerID, fakeHandleB) {
+		t.Fatal("setup sanity: B's own cleanup should remove its own registration")
 	}
 }

@@ -232,6 +232,22 @@ const (
 	// Stop()->onStopped hook). Fields: {agent_id, session_id, error}.
 	EventBrowserWebRTCStreamStartFailed = "browser.webrtc.stream_start_failed"
 
+	// EventBrowserWarmUpFailed — WARN. The boot-time shared-Chrome warm-up
+	// (tools.browser.warm_at_boot, default true) failed or panicked. NOT
+	// fatal: warm-up is best-effort by contract (Hard Constraint #4) and
+	// Chrome still launches lazily at the first browser tool call — this
+	// records that the operator paid for that lazy cold start (ADR-042:
+	// historically ~30-60s on a fresh install) instead of a warm one.
+	//
+	// Exists because every other browser-lifecycle failure in this package is
+	// auditable (StreamStartFailed, IngestAuthRejected, ViewerOfferFailed)
+	// while warm-up was log-only, so an operator reconstructing "did Chrome
+	// come up at boot?" from the audit trail found nothing at all — silence
+	// that is indistinguishable from "warm-up was disabled" and from
+	// "warm-up succeeded". Fields: {reason} where reason is "error" or
+	// "panic", plus {error}.
+	EventBrowserWarmUpFailed = "browser.warm_up_failed"
+
 	// EventBrowserWebRTCIngestAuthRejected — WARN. A connection to the
 	// loopback-only /api/v1/browser/capture-ingest endpoint was rejected:
 	// either the RemoteAddr was not loopback, or the first frame's

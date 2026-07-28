@@ -144,9 +144,26 @@ func (r *captureRegistry) findByToken(candidateHex string) (agentID string, cs *
 // half-set state (e.g. a non-empty agentID with a nil capture) the type
 // system did nothing to prevent. Both fields non-empty/non-nil together, or
 // the pointer itself is nil — structurally enforced.
+//
+// handle identifies the SPECIFIC HandleViewerOffer attempt that produced this
+// attachment (browser.CaptureSession.HandleViewerOffer's return value, the
+// same *browser.ViewerAttachHandle handleWebRTCOffer already threads through
+// its own failure/superseded-before-commit cleanup branches via
+// CleanupViewerOffer). detachWebRTCViewer MUST tear this attachment down via
+// CleanupViewerOffer(handle), NOT a bare viewerID-keyed
+// Relay().CloseViewer/RemoveViewer pair (fix-wave finding: detachWebRTCViewer
+// was the one teardown path still bypassing the identity check the offer
+// path already uses) — otherwise a detach or connection-close racing a
+// second, still-negotiating offer for the SAME viewerID (an ICE-restart
+// reconnect: commitWebRTCAttachment/epoch only guards this connection's
+// single-slot webrtc field, not CaptureSession.viewers or the relay's own
+// viewer registry, both of which a second HandleViewerOffer call mutates
+// BEFORE it commits) would kill the newer, live PeerConnection instead of
+// the one this attachment actually owns.
 type webrtcAttachment struct {
 	agentID string
 	capture *browser.CaptureSession
+	handle  *browser.ViewerAttachHandle
 }
 
 // webrtcViewerConn is the per-viewer entry in BrowserWSHandler.viewerConns
@@ -441,7 +458,10 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	// cleanup already ran, or is about to run against a DIFFERENT, newer
 	// attachment) — tear down what THIS offer just built instead, mirroring
 	// detachWebRTCViewer's own teardown exactly.
-	if !state.commitWebRTCAttachment(epoch, &webrtcAttachment{agentID: frame.AgentId, capture: cs}) {
+	if !state.commitWebRTCAttachment(
+		epoch,
+		&webrtcAttachment{agentID: frame.AgentId, capture: cs, handle: viewerHandle},
+	) {
 		slog.Info(
 			"browser-webrtc: offer superseded before commit (a newer offer, a detach, or the connection closing "+
 				"arrived first) — tearing down the viewer this offer just registered",
@@ -511,6 +531,34 @@ func webrtcUnavailableReason(cfg *config.Config, mgr *browser.BrowserManager) st
 // tear down what it built instead of attaching a viewer state nobody wants
 // anymore. Safe (and expected) to call unconditionally — every call site now
 // does, rather than gating on state.webrtc != nil first.
+//
+// Fix-wave finding (identity-aware teardown, third bypass): this used to
+// tear down the committed attachment via the bare, viewerID-only
+// att.capture.Relay().CloseViewer(viewerID) + att.capture.RemoveViewer(viewerID)
+// pair — exactly the unsafe pattern handleWebRTCOffer's own failure and
+// superseded-before-commit branches were fixed to stop using (see
+// CleanupViewerOffer's doc comment). commitWebRTCAttachment/webrtcEpoch only
+// guard THIS connection's single-slot state.webrtc field; they do not guard
+// CaptureSession.viewers or the relay's own viewer registry, both of which a
+// SECOND, still-negotiating browser_webrtc_offer for the SAME viewerID (an
+// ICE-restart/reconnect: dispatchWebRTCOffer spawns an unserialized goroutine
+// per offer frame) can mutate — via AddViewer minting a newer generation and
+// HandleViewerOfferHandle registering a newer PeerConnection — BEFORE that
+// second offer ever reaches its own commit attempt. If a detach or
+// connection-close raced in at exactly that point, takeWebRTCAttachment()
+// here still returns the OLDER, already-committed attachment, and the old
+// unconditional pair would close/evict whatever the relay/CaptureSession
+// currently hold for viewerID — i.e. the NEWER offer's live, still-
+// negotiating connection — instead of the one this attachment actually
+// owns. CleanupViewerOffer(att.handle) is the same identity-checked
+// mechanism (ViewerAttachHandle's gen + the relay's own
+// CloseViewerIfCurrent/RemoveViewerIfCurrent) the offer path already relies
+// on: a no-op if att.handle's registration has since been superseded, and a
+// full, real teardown (closes the PeerConnection, arms the grace-stop timer,
+// resumes the JPEG screencast via ReconcileScreencast) when it is still
+// current — which is always true for the ordinary case of a legitimate
+// detach with no second offer in flight, so a normal detach's viewer is
+// still fully removed exactly as before.
 func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID string) {
 	att := state.takeWebRTCAttachment()
 	state.invalidateWebRTCOffer()
@@ -518,8 +566,7 @@ func (h *BrowserWSHandler) detachWebRTCViewer(state *browserConnState, viewerID 
 	if att == nil || att.capture == nil {
 		return
 	}
-	att.capture.Relay().CloseViewer(viewerID)
-	att.capture.RemoveViewer(viewerID)
+	att.capture.CleanupViewerOffer(att.handle)
 }
 
 // registerWebRTCViewerConn / unregisterWebRTCViewerConn maintain

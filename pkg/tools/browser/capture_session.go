@@ -86,11 +86,34 @@ const captureStartTimeout = 20 * time.Second
 // waitForTracksTimeout's doc comment) a second time with no further retry
 // left. Confirmed in the captured logs: capture[ray] stopped at T+35s, the
 // SPA's retry offer arrived at T+45s (under the timeline in effect at
-// capture time) and had to restart the encoder from scratch. 60s comfortably
-// outlives the corrected ~30s worst-case retry arrival (30s of margin), so a
-// retry now reaches a session that is either already flowing (instant
-// answer) or at worst mid-negotiation, instead of always finding it torn
-// down.
+// capture time) and had to restart the encoder from scratch.
+//
+// THE MARGIN, computed against the arm point rather than T0 (this is the
+// step the two previous versions of this comment both got wrong, in
+// opposite directions):
+//
+// The grace timer does NOT start at T0. It is armed by RemoveViewerIfCurrent
+// -> armGraceStopLocked, reached only when the offer FAILS — i.e. at
+// T0+waitForTracksTimeout. The client's single retry is scheduled from that
+// same instant (it reacts to the failure frame immediately, no client-side
+// timeout wait) plus retryDelayMs. So both sides start counting from the
+// same event and waitForTracksTimeout CANCELS OUT:
+//
+//	grace expires at:  T0 + waitForTracksTimeout + captureGracePeriod = T0+75s
+//	retry arrives at:  T0 + waitForTracksTimeout + retryDelayMs       = T0+30s
+//	margin           = captureGracePeriod - retryDelayMs = 60-15      = 45s
+//
+// The margin is therefore 45s, INDEPENDENT of waitForTracksTimeout. Retuning
+// waitForTracksTimeout does not require retuning this value — the earlier
+// "30s of margin" figure came from comparing the retry's T0-relative arrival
+// against captureGracePeriod as though the timer also started at T0, which
+// understated the real margin by exactly one waitForTracksTimeout. The old
+// logs above corroborate the arm point: with the OLD 5s wait and 30s grace,
+// capture stopped at T+35s = 5+30, not at T+30.
+//
+// So 60s leaves 45s of headroom over the retry, and a retry now reaches a
+// session that is either already flowing (instant answer) or at worst
+// mid-negotiation, instead of always finding it torn down.
 var captureGracePeriod = 60 * time.Second
 
 // RelaySession is the subset of *webrtc.Session's API CaptureSession
@@ -120,6 +143,22 @@ type RelaySession interface {
 // browser_detach frame ever arrives to trigger the existing AddViewer/
 // RemoveViewer/Stop/HandleViewerOffer reconcile call sites).
 //
+// GAP 2 fix-wave finding: the callback additionally receives the relay's own
+// identity handle for the evicted registration (dynamically a
+// *webrtc.ViewerHandle -- opaque `any` for the same build-tag-neutral reason
+// viewerOfferHandler's handle parameters are, below), NOT just the bare
+// viewerID the original version of this interface passed. Without it,
+// CaptureSession had no way to tell a legitimate eviction of an OLD,
+// already-superseded relay registration (e.g. an ICE failure on a
+// PeerConnection a NEWER HandleViewerOffer call for the same viewerID has
+// since replaced) apart from a genuinely-current one -- the relay's OWN
+// removeViewer already identity-checks internally before ever firing this
+// callback (cur.pc == pc), but that only protects the RELAY's registry; it
+// says nothing about whether CaptureSession's OWN cs.viewers entry for
+// viewerID still corresponds to the same registration. See
+// recordViewerRelayHandle/removeViewerByRelayHandle for how the handle is
+// used to close that second, independent gap.
+//
 // Detected via a type assertion in newCaptureSessionWithDeps rather than
 // added to RelaySession itself, so:
 //   - the lite build's stub Session (never evicts a viewer on its own --
@@ -128,7 +167,7 @@ type RelaySession interface {
 //   - test fakes (fakeRelay, capture_session_test.go) that don't exercise
 //     this path don't need to implement it either.
 type viewerRemover interface {
-	SetOnViewerRemoved(fn func(viewerID string))
+	SetOnViewerRemoved(fn func(viewerID string, handle any))
 }
 
 // viewerOfferHandler is the optional RelaySession capability for
@@ -151,6 +190,22 @@ type viewerRemover interface {
 type viewerOfferHandler interface {
 	HandleViewerOfferHandle(viewerID, sdpOffer string) (answer string, handle any, err error)
 	CloseViewerIfCurrent(handle any)
+}
+
+// viewerRegistration is the value CaptureSession.viewers stores per attached
+// viewerID (see that field's doc comment): the generation token AddViewer
+// minted for the current attach attempt, and — once known — the relay's own
+// identity handle for that same attempt's registration (dynamically a
+// *webrtc.ViewerHandle, opaque `any` for the same build-tag-neutral reason
+// documented on viewerOfferHandler above). relayHandle is nil until
+// recordViewerRelayHandle sets it (there is a real window, inside
+// HandleViewerOffer, between minting gen via AddViewer and the relay actually
+// registering a connection) and stays nil forever for an attempt that never
+// reaches registration (see CleanupViewerOffer's CRITICAL fix-wave finding)
+// or for a relay with no viewerOfferHandler capability at all.
+type viewerRegistration struct {
+	gen         uint64
+	relayHandle any
 }
 
 // EncoderStarter creates (or re-creates) the gateway-owned encoder page for
@@ -219,14 +274,17 @@ type CaptureSession struct {
 	// callbacks. A counter rather than comparing the callback funcs
 	// themselves (func values are not comparable in Go beyond nil-checks).
 	ingestEpoch uint64
-	// viewers maps an attached viewerID to the generation token AddViewer
-	// minted for its MOST RECENT registration attempt -- see AddViewer and
-	// RemoveViewerIfCurrent's doc comments for why a generation (not just
-	// presence) is needed: two attach attempts for the SAME viewerID can be
-	// in flight at once (a superseded/failed offer racing a newer, winning
-	// one for the same viewerID), and only the CURRENT generation's own
-	// cleanup may remove the entry.
-	viewers map[string]uint64
+	// viewers maps an attached viewerID to its MOST RECENT registration
+	// attempt's viewerRegistration (generation token + relay identity
+	// handle) -- see AddViewer, RemoveViewerIfCurrent, recordViewerRelayHandle
+	// and removeViewerByRelayHandle's doc comments. Two independent identity
+	// checks are needed because two DIFFERENT things can race the SAME
+	// viewerID: a superseded/failed offer's own cleanup racing a newer,
+	// winning offer (guarded by gen, via RemoveViewerIfCurrent) and a
+	// relay-confirmed eviction of an OLD registration racing a newer one
+	// (guarded by relayHandle, via removeViewerByRelayHandle) -- only the
+	// CURRENT registration's own cleanup/eviction may remove the entry.
+	viewers map[string]viewerRegistration
 	// viewerGenSeq is the monotonic counter AddViewer draws each new
 	// generation token from. Guarded by mu, same as viewers itself.
 	viewerGenSeq uint64
@@ -304,7 +362,7 @@ func newCaptureSessionWithDeps(
 		relay:        relay,
 		startEncoder: startEncoder,
 		token:        token,
-		viewers:      make(map[string]uint64),
+		viewers:      make(map[string]viewerRegistration),
 		done:         make(chan struct{}),
 	}
 	// Wire the two optional RelaySession capabilities (viewerRemover,
@@ -313,7 +371,13 @@ func newCaptureSessionWithDeps(
 	// RelaySession itself, so the lite build's stub Session and narrower
 	// test fakes need no matching methods.
 	if vr, ok := relay.(viewerRemover); ok {
-		vr.SetOnViewerRemoved(cs.RemoveViewer)
+		// removeViewerByRelayHandle (NOT the plain, unconditional
+		// RemoveViewer this replaces as the wiring target) -- GAP 2 fix-wave
+		// finding: the plain variant would delete cs.viewers[viewerID]
+		// unconditionally on ANY relay-confirmed eviction notification, even
+		// one describing an OLD registration a NEWER AddViewer call has
+		// since superseded. See removeViewerByRelayHandle's doc comment.
+		vr.SetOnViewerRemoved(cs.removeViewerByRelayHandle)
 	}
 	if oh, ok := relay.(viewerOfferHandler); ok {
 		cs.offerHandler = oh
@@ -842,11 +906,84 @@ func (cs *CaptureSession) HandleViewerOffer(
 	} else {
 		answer, err = cs.relay.HandleViewerOffer(viewerID, sdp)
 	}
+	// GAP 2 fix-wave finding: record the relay's own identity handle for
+	// THIS registration (if any -- see viewerRegistration's doc comment for
+	// when it's nil) alongside gen, so a later relay-confirmed eviction
+	// notification (removeViewerByRelayHandle) can tell whether it describes
+	// the registration currently on file for viewerID before removing
+	// anything. Recorded regardless of err: even a call that later fails
+	// further down (SetRemoteDescription/CreateAnswer/SetLocalDescription)
+	// may already have registered a live PeerConnection at the relay (see
+	// HandleViewerOfferHandle's own doc comment on the registration point) —
+	// that registration is exactly what CleanupViewerOffer's
+	// CloseViewerIfCurrent branch will need to find in order to close it.
+	cs.recordViewerRelayHandle(viewerID, gen, relayHandle)
 	handle = &ViewerAttachHandle{viewerID: viewerID, gen: gen, relay: relayHandle}
 	if err == nil {
 		cs.ReconcileScreencast()
 	}
 	return answer, handle, err
+}
+
+// recordViewerRelayHandle records relayHandle — the exact `any` value
+// HandleViewerOfferHandle returned for THIS attempt — as viewerID's current
+// relay identity, but ONLY if gen still matches the CURRENTLY-registered
+// generation (mirrors RemoveViewerIfCurrent's own identity discipline): a
+// no-op if a NEWER AddViewer call for the same viewerID has since superseded
+// gen (a winning attempt racing this one), so a superseded attempt's own
+// registration can never overwrite the winning attempt's relay identity. Also
+// a no-op if relayHandle is nil (no viewerOfferHandler capability at all, or
+// this specific attempt never reached registration — see CleanupViewerOffer's
+// CRITICAL fix-wave finding for that second case) — nothing meaningful to
+// record either way.
+func (cs *CaptureSession) recordViewerRelayHandle(viewerID string, gen uint64, relayHandle any) {
+	if relayHandle == nil {
+		return
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	reg, exists := cs.viewers[viewerID]
+	if !exists || reg.gen != gen {
+		return
+	}
+	reg.relayHandle = relayHandle
+	cs.viewers[viewerID] = reg
+}
+
+// removeViewerByRelayHandle is wired as the relay's SetOnViewerRemoved
+// callback (see viewerRemover's doc comment) in place of the plain,
+// unconditional RemoveViewer this replaces as that specific wiring target
+// (RemoveViewer itself is UNCHANGED and stays correct for its own remaining
+// legitimate caller, an explicit browser_detach/WS-close — see its doc
+// comment). Removes viewerID's CaptureSession-level registration ONLY if
+// relayHandle is STILL the exact relay identity CURRENTLY recorded for it
+// (recordViewerRelayHandle) — a safe no-op if a NEWER registration for the
+// same viewerID (a fresh AddViewer + HandleViewerOffer, superseding this one)
+// has since taken over, or if viewerID has no relay handle recorded at all
+// yet. Delegates the actual removal to RemoveViewerIfCurrent so both the
+// gen-keyed (CaptureSession-side, offer-cleanup callers) and
+// relay-handle-keyed (this callback's own, relay-eviction callers) identity
+// checks funnel through the SAME single removal path.
+//
+// GAP 2 fix-wave finding this closes: the relay's own removeViewer already
+// identity-checks internally (cur.pc == pc) before ever notifying —
+// that only protects the RELAY's registry. Without this check on the
+// CaptureSession side too, a relay-confirmed eviction of an OLD,
+// already-superseded registration racing a NEWER AddViewer call for the same
+// viewerID would have deleted the newer registration's cs.viewers entry
+// (via the plain, unconditional RemoveViewer this used to be wired to),
+// potentially arming the 60s grace-stop timer under an actively-viewed newer
+// connection.
+func (cs *CaptureSession) removeViewerByRelayHandle(viewerID string, relayHandle any) {
+	cs.mu.Lock()
+	reg, exists := cs.viewers[viewerID]
+	if !exists || reg.relayHandle != relayHandle {
+		cs.mu.Unlock()
+		return
+	}
+	gen := reg.gen
+	cs.mu.Unlock()
+	cs.RemoveViewerIfCurrent(viewerID, gen)
 }
 
 // CleanupViewerOffer undoes ONE SPECIFIC HandleViewerOffer call's attempt to
@@ -881,12 +1018,39 @@ func (cs *CaptureSession) HandleViewerOffer(
 //     — a no-op if a newer AddViewer call for the same viewerID (a winning
 //     offer racing this one) has since superseded it.
 //
-// Falls back to the historical viewerID-only relay close when no
-// supersede-safe capability is available (handle.relay == nil, e.g. a
-// RelaySession fake in a test that doesn't implement viewerOfferHandler) —
-// no worse than before this fix in that case, since no identity information
-// was ever available to make it safer; the CaptureSession-side half
-// (RemoveViewerIfCurrent) stays identity-safe regardless.
+// Falls back to the historical viewerID-only relay close ONLY when the
+// underlying relay has NO supersede-safe capability whatsoever
+// (cs.offerHandler == nil — a lite-build stub, or a RelaySession test fake
+// that doesn't implement viewerOfferHandler) — no worse than before this fix
+// in that case, since no identity information was ever available to make it
+// safer.
+//
+// CRITICAL fix (fix-wave review, 2026-07-28): handle.relay == nil does NOT
+// by itself mean "no identity information available" — a REAL, identity-safe
+// *webrtc.Session (cs.offerHandler != nil) still returns a true nil handle
+// from HandleViewerOfferHandle on any of its SEVEN early-return paths (empty
+// viewerID/SDP, no-ingest-video-track timeout, session closed,
+// buildPeerConnection failure, video/audio AddTrack failure) — all of which
+// run BEFORE that attempt ever registers a viewerConn in the relay's own
+// registry (see viewer.go's doc comment for the exact registration point).
+// THIS attempt has nothing of its own to close there. The old code treated
+// "cs.offerHandler != nil && handle.relay == nil" identically to
+// "cs.offerHandler == nil" and fell through to the unconditional,
+// viewerID-only cs.Relay().CloseViewer(handle.viewerID) — closing WHATEVER
+// currently sits at that key, which can be a completely unrelated, live,
+// already-registered sibling attempt for the SAME viewerID (viewerID is
+// per-CONNECTION, not per-offer — pkg/gateway/browser_ws.go mints it once per
+// connection, and dispatchWebRTCOffer spawns one unserialized goroutine per
+// offer frame, so two concurrent offers for the same viewerID are a real,
+// reachable race: an older offer stalls in waitForTracks for up to 15s and
+// ultimately times out while a newer offer for the same viewerID has already
+// registered, committed, and is being actively viewed). Confirmed by
+// TestCaptureSession_CleanupViewerOffer_EarlyFailureMustNotClobberLiveSibling.
+// The correct behavior for that case is to skip the relay-side close
+// entirely — there is nothing THIS attempt registered to undo.
+//
+// The CaptureSession-side half (RemoveViewerIfCurrent) stays identity-safe
+// (gen-checked) regardless of which of the three cases below applies.
 //
 // Safe to call with a nil handle (no-op) — e.g. a caller that never reached
 // HandleViewerOffer at all.
@@ -894,10 +1058,23 @@ func (cs *CaptureSession) CleanupViewerOffer(handle *ViewerAttachHandle) {
 	if handle == nil {
 		return
 	}
-	if cs.offerHandler != nil && handle.relay != nil {
+	switch {
+	case cs.offerHandler != nil && handle.relay != nil:
+		// Registered, and the relay supports identity-safe closing — undo
+		// ONLY if this exact attempt's connection is still the current one.
 		cs.offerHandler.CloseViewerIfCurrent(handle.relay)
-	} else {
+	case cs.offerHandler == nil:
+		// No supersede-safe capability at all — the historical,
+		// viewerID-only fallback is the best available and is no less safe
+		// than before this fix (no identity information was ever available
+		// here to begin with).
 		cs.Relay().CloseViewer(handle.viewerID)
+	default:
+		// cs.offerHandler != nil but handle.relay == nil: this attempt
+		// failed BEFORE it ever registered anything at the relay (see the
+		// CRITICAL fix comment above) — nothing of ITS OWN exists there to
+		// close, and the unconditional fallback would risk closing an
+		// unrelated, live sibling attempt for the same viewerID instead.
 	}
 	cs.RemoveViewerIfCurrent(handle.viewerID, handle.gen)
 }
@@ -957,7 +1134,11 @@ func (cs *CaptureSession) AddViewer(viewerID string) uint64 {
 	cs.mu.Lock()
 	cs.viewerGenSeq++
 	gen := cs.viewerGenSeq
-	cs.viewers[viewerID] = gen
+	// A fresh registration always starts with no recorded relay identity —
+	// recordViewerRelayHandle fills it in once HandleViewerOffer knows one
+	// (there is a real window here, inside handleWebRTCOffer, between this
+	// call and the relay actually registering a connection).
+	cs.viewers[viewerID] = viewerRegistration{gen: gen}
 	if cs.stopTimer != nil {
 		cs.stopTimer.Stop()
 		cs.stopTimer = nil
@@ -978,19 +1159,26 @@ func (cs *CaptureSession) armGraceStopLocked() {
 }
 
 // RemoveViewer unconditionally unregisters viewerID, regardless of which
-// generation (AddViewer call) is currently registered for it. Correct for
-// its two legitimate callers, both of which already know independently that
-// this IS the right viewer to remove: an explicit browser_detach/WS-close
-// (pkg/gateway/browser_webrtc.go's detachWebRTCViewer, gated upstream by the
-// connection's own committed-attachment/epoch bookkeeping) and a
-// relay-confirmed eviction notification (viewerRemover's SetOnViewerRemoved
-// wiring in newCaptureSessionWithDeps, which only fires once the RELAY's own
-// identity check has confirmed the evicted connection was still the current
-// one). For a caller that does NOT have that independent guarantee — namely,
-// cleaning up a specific HandleViewerOffer attempt that may have already
-// been superseded by a newer one for the same viewerID — use
-// RemoveViewerIfCurrent (via CleanupViewerOffer) instead; see its doc
-// comment for the race this distinction avoids.
+// generation (AddViewer call) is currently registered for it. Both of this
+// package's OWN identity-sensitive teardown paths — an explicit
+// browser_detach/WS-close (pkg/gateway/browser_webrtc.go's
+// detachWebRTCViewer) and a relay-confirmed eviction notification
+// (viewerRemover's SetOnViewerRemoved wiring in newCaptureSessionWithDeps) —
+// now go through the identity-checked CleanupViewerOffer/
+// removeViewerByRelayHandle instead of this method (fix-wave findings: both
+// were found to bypass the identity check that HandleViewerOffer's own
+// failure-cleanup path already used, exactly the class of bug
+// RemoveViewerIfCurrent/CleanupViewerOffer exist to prevent — see their doc
+// comments). RemoveViewer itself is kept as a general-purpose, correct
+// primitive for any FUTURE caller that has its own independent guarantee
+// that viewerID's CURRENT registration is the one to remove (no such
+// guarantee exists for cleaning up a specific HandleViewerOffer attempt that
+// may have already been superseded by a newer one for the same viewerID —
+// that case MUST use RemoveViewerIfCurrent/CleanupViewerOffer, whose doc
+// comments detail the race this distinction avoids), and is exercised
+// directly by this package's own tests to document exactly why the
+// unconditional variant is unsafe for offer-cleanup/eviction-notification
+// use (TestCaptureSession_RemoveViewer_UnconditionalVariant_WouldClobberNewerAttempt).
 //
 // If no viewers remain, arms a captureGracePeriod timer that calls Stop()
 // when it fires — giving a viewer that's merely reloading the panel a
@@ -1019,7 +1207,7 @@ func (cs *CaptureSession) RemoveViewer(viewerID string) {
 // remains correct for its own, different callers.
 func (cs *CaptureSession) RemoveViewerIfCurrent(viewerID string, gen uint64) {
 	cs.mu.Lock()
-	if cur, exists := cs.viewers[viewerID]; !exists || cur != gen {
+	if cur, exists := cs.viewers[viewerID]; !exists || cur.gen != gen {
 		cs.mu.Unlock()
 		return
 	}

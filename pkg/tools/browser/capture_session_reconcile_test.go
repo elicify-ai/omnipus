@@ -294,7 +294,7 @@ func TestCaptureSession_ReconcileScreencast_RemoveViewerResumesDecision(t *testi
 // notifyViewerRemoved) has its own dedicated Go<->Go proof in
 // pkg/tools/browser/webrtc/session_test.go; this test isolates
 // CaptureSession's consumption of that notification (newCaptureSessionWithDeps
-// wiring SetOnViewerRemoved to cs.RemoveViewer).
+// wiring SetOnViewerRemoved to cs.removeViewerByRelayHandle).
 //
 // Deliberately ZERO JPEG viewers (like TestCaptureSession_
 // ReconcileScreencast_RemoveViewerResumesDecision/ResumesOnStop above) so the

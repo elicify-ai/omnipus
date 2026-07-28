@@ -1203,12 +1203,27 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				// in the warm-up chain would take the whole gateway process down
 				// with it — turning an optional latency optimisation into a boot
 				// crash. Contain it and fall back to the lazy path.
+				// Both failure paths below ALSO emit an audit event, not just a
+				// log line. Every other browser-lifecycle failure in this
+				// codebase is auditable (EventBrowserWebRTCStreamStartFailed,
+				// EventBrowserWebRTCIngestAuthRejected,
+				// EventBrowserWebRTCViewerOfferFailed); warm-up was log-only, so
+				// an operator reconstructing "did Chrome come up at boot?" from
+				// the audit trail found nothing — silence indistinguishable from
+				// "warm-up disabled" and from "warm-up succeeded". Success stays
+				// log-only: the audit trail records the exceptional outcome, not
+				// the routine one.
 				defer func() {
 					if r := recover(); r != nil {
 						logger.WarnCF(
 							"browser",
 							"boot-time Chrome warm-up panicked — recovered; will launch lazily at first browser tool use",
 							map[string]any{"panic": fmt.Sprintf("%v", r)},
+						)
+						audit.Emit(
+							context.Background(), agentLoop.AuditLogger(),
+							audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+							map[string]any{"reason": "panic", "error": fmt.Sprintf("%v", r)},
 						)
 					}
 				}()
@@ -1217,6 +1232,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 						"browser",
 						"boot-time Chrome warm-up failed — will launch lazily at first browser tool use",
 						map[string]any{"error": warmErr.Error()},
+					)
+					audit.Emit(
+						context.Background(), agentLoop.AuditLogger(),
+						audit.EventBrowserWarmUpFailed, audit.SeverityWarn,
+						map[string]any{"reason": "error", "error": warmErr.Error()},
 					)
 					return
 				}

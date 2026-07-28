@@ -842,9 +842,15 @@ export function BrowserLiveView({
     machine.onInputChannelClose(() => {
       inputChannelOpenRef.current = false
     })
-    // ADR-047 fallback contract: JPEG never stopped running underneath (it's
-    // a wholly separate WS path, untouched here) — this just drops the video
-    // sink back to null so the <img> sink takes over on the next render, and
+    // ADR-047 fallback contract: the JPEG path is a wholly separate WS path,
+    // untouched here, and stays AVAILABLE — but it is not unconditionally
+    // running. The server pauses the CDP screencast while every JPEG viewer is
+    // also covered by live WebRTC, and resumes it the moment that stops being
+    // true, including on a mid-session relay-side eviction. (An earlier
+    // revision of this comment said JPEG "never stopped running underneath";
+    // that became false once the pause landed.) This handler just drops the
+    // video sink back to null so the <img> sink takes over on the next
+    // render, and
     // clears the DC-open flag so dispatchInput routes back to WS immediately
     // rather than waiting for a stale readyState check to catch up.
     machine.onFallback((reason) => {

@@ -16,11 +16,19 @@
 // offer is not sent until `RTCPeerConnection.iceGatheringState` reaches
 // 'complete', so there is no `onicecandidate`/trickle handling here at all.
 //
-// Fallback contract (wave-plan W2-B): JPEG screencast NEVER stops running
-// underneath (that's owned entirely by browserLiveWs.ts/BrowserLiveView,
-// outside this class) — this class's only job on fallback is to clean up its
-// own PC/data-channel state and tell the caller via `onFallback(reason)` so
-// the caller can drop back to rendering the JPEG `<img>` sink. Triggers:
+// Fallback contract (wave-plan W2-B): the JPEG screencast remains AVAILABLE
+// underneath — but note it is no longer literally always-on. The server pauses
+// the CDP screencast while every JPEG-attached viewer is also covered by a
+// live WebRTC stream, and resumes it as soon as that stops being true
+// (CaptureSession.ReconcileScreencast, plus the relay's own eviction
+// notification for a mid-session WebRTC failure). So "keeps running" is a
+// dynamic per-viewer-coverage guarantee, not an unconditional one; an earlier
+// version of this comment claimed the latter and was wrong once the pause was
+// introduced. Either way it is owned entirely by browserLiveWs.ts/
+// BrowserLiveView, outside this class — this class's only job on fallback is
+// to clean up its own PC/data-channel state and tell the caller via
+// `onFallback(reason)` so the caller can drop back to the `<img>` sink.
+// Triggers:
 //   - a `browser_webrtc_state{available:false}` frame while offering/connected
 //   - no answer within the current answer timeout of sending the offer (see
 //     `hasConnectedOnce`/`firstAnswerTimeoutMs` below — it is NOT always
