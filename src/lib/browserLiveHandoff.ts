@@ -39,9 +39,7 @@
 
 const CHANNEL_NAME = 'omnipus-browser-live-handoff'
 
-/** not-wire-format: local same-origin BroadcastChannel payload — a same-tab
- * lifecycle signal, never serialized across the gateway/SPA boundary. */
-export interface BrowserLiveHandoffMessage {
+export interface BrowserLiveHandoffMessage { // not-wire-format: same-origin BroadcastChannel payload between the docked panel and its pop-out window — a browser-local lifecycle signal that never crosses the gateway/SPA boundary and is never persisted
   type: 'popout-closed'
   sessionId: string
   agentId: string
