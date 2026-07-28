@@ -6989,6 +6989,21 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 						servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
 					}
 					newTools.MCP = config.AgentMCPToolsCfg{Servers: servers}
+				} else if agentRec.Tools != nil {
+					// Symmetric preservation for mcp, mirroring updateAgent's
+					// identical branch above: a request that omits mcp (every
+					// builtin-policy update from the Agents UI does) must not
+					// silently drop the agent's existing MCP server bindings.
+					//
+					// This is not hypothetical here. The SPA's
+					// ToolsAndPermissions editor builds its payload by
+					// spreading the agent's existing tools cfg, but NO gateway
+					// read path populates tools_cfg, so `existing.mcp` is
+					// always undefined and the payload never carries mcp. The
+					// write is triggered by useAutoSave, so a single
+					// allow/ask/deny toggle wiped the bindings with no Save
+					// click and no way to restore them from the UI.
+					newTools.MCP = agentRec.Tools.MCP
 				}
 				agentRec.Tools = newTools
 				return nil
