@@ -267,7 +267,11 @@ describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the 
     // with content but hidden via `hidden`/`display:none` (which
     // `findByTestId` + `.textContent` alone would not catch).
     expect(explanation).toBeVisible()
-    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/supervisor/i)
+    // Pins the RETIRED copy as gone. Corrections now work, so telling the
+    // reader there is "no in-app action" and to create a new plan is false —
+    // asserting only the new wording would let a revert pass silently.
+    expect(explanation.textContent).not.toMatch(/no in-app action|create a new one/i)
     expect(explanation.textContent).toMatch(/stop this plan/i)
     // Does not name the three corrective verbs as if they were reachable —
     // they have no exposed route/control (see planStateColors.ts).
@@ -297,7 +301,11 @@ describe('WorkspaceGraphTab — plan-phase explanation (S2 UAT — replaces the 
 
     const explanation = await screen.findByTestId('plan-phase-explanation-plan-st2')
     expect(explanation).toBeVisible()
-    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/supervisor/i)
+    // Pins the RETIRED copy as gone. Corrections now work, so telling the
+    // reader there is "no in-app action" and to create a new plan is false —
+    // asserting only the new wording would let a revert pass silently.
+    expect(explanation.textContent).not.toMatch(/no in-app action|create a new one/i)
     expect(explanation.textContent).toMatch(/stop this plan/i)
     expect(explanation.textContent).not.toMatch(/dead end/i)
     expect(explanation.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)

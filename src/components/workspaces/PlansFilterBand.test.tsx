@@ -379,7 +379,11 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
     // but hidden via `hidden`/`display:none` (which `getByTestId` +
     // `.textContent` alone would not catch).
     expect(explanation).toBeVisible()
-    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/supervisor/i)
+    // Pins the RETIRED copy as gone. Corrections now work, so telling the
+    // reader there is "no in-app action" and to create a new plan is false —
+    // asserting only the new wording would let a revert pass silently.
+    expect(explanation.textContent).not.toMatch(/no in-app action|create a new one/i)
     // Names the one REAL control available (Stop) instead of inventing UI for
     // the three corrective verbs, which have no exposed route/control yet.
     expect(explanation.textContent).toMatch(/stop this plan/i)
@@ -405,7 +409,11 @@ describe('PlansFilterBand — plan-phase chip distinguishes parked from running 
 
     const explanation = screen.getByTestId('plan-phase-explanation-plan-stalled')
     expect(explanation).toBeVisible()
-    expect(explanation.textContent).toMatch(/no in-app action/i)
+    expect(explanation.textContent).toMatch(/supervisor/i)
+    // Pins the RETIRED copy as gone. Corrections now work, so telling the
+    // reader there is "no in-app action" and to create a new plan is false —
+    // asserting only the new wording would let a revert pass silently.
+    expect(explanation.textContent).not.toMatch(/no in-app action|create a new one/i)
     expect(explanation.textContent).toMatch(/stop this plan/i)
     // Must never render the awaiting_supervision copy or a raw task ID.
     expect(explanation.textContent).not.toMatch(/dead end/i)
