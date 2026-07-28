@@ -515,45 +515,108 @@ func TestListJobs_SubagentParentageDoesNotLeakSubtree(t *testing.T) {
 
 // TestListJobs_SubagentGenerationIsNewestOnly runs BOTH with and without
 // include_terminal, because that is where a naive implementation breaks: a
-// resumed session mints a NEW record rather than mutating the terminal one, so
-// the superseded generation is a legitimate terminal record that would
-// otherwise surface under include_terminal=true and show one session twice.
+// resumed session leaves the superseded generation behind as a legitimate
+// terminal record that would otherwise surface under include_terminal=true and
+// show one delegation twice.
+//
+// The two subtests are the two resume mechanisms spawnCorrectiveFollowUp
+// branches on (pkg/tools/delegate.go), and they are NOT redundant:
+//
+//   - native warm resume reuses the session id and bumps Generation. The real
+//     *session.LifecycleStore already collapses this upstream (one .jsonl per
+//     session id, List returns the tail via Load), so this shape can only reach
+//     the tool through a different JobLifecycleLister.
+//   - 3P cold respawn mints a NEW session id and links back via ResumedFrom.
+//     That one DOES reach the tool as two live records against the real store,
+//     and a dedupe keyed on session id cannot collapse it — which is precisely
+//     the bug this test's second case exists to catch.
 func TestListJobs_SubagentGenerationIsNewestOnly(t *testing.T) {
-	lifecycles := &fakeJobLifecycleStore{records: []session.LifecycleRecord{
-		{SessionID: "ses-1", Generation: 0, WorkspaceID: "ws1", AgentID: "ray",
-			ParentAgentID: "mia", State: session.LifecycleFailed, FailedReason: "interrupted"},
-		{SessionID: "ses-1", Generation: 1, WorkspaceID: "ws1", AgentID: "ray",
-			ParentAgentID: "mia", State: session.LifecycleRunning, ResumedFrom: "ses-1"},
-	}}
-	tool := NewListJobsTool(nil, nil, lifecycles)
-	tool.SetSessionResolver(func() JobSessionResolver {
-		return &fakeSessionResolver{live: map[string]bool{"ses-1": true}}
-	})
+	cases := []struct {
+		name    string
+		records []session.LifecycleRecord
+		// wantID is the session id of the single surviving row.
+		wantID string
+	}{
+		{
+			// Native: same session id, Generation+1. ResumedFrom is the session's
+			// OWN id here — that self-link must never be read as supersession, or
+			// the live row would be dropped along with the stale one.
+			name:   "native_warm_resume_same_session_id",
+			wantID: "ses-1",
+			records: []session.LifecycleRecord{
+				{SessionID: "ses-1", Generation: 0, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", State: session.LifecycleFailed, FailedReason: "interrupted"},
+				{SessionID: "ses-1", Generation: 1, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", State: session.LifecycleRunning, ResumedFrom: "ses-1"},
+			},
+		},
+		{
+			// 3P: a NEW session id, so both records are distinct rows to any
+			// id-keyed dedupe. ResumedFrom is the only thing linking them.
+			name:   "3p_cold_respawn_new_session_id",
+			wantID: "ses-2",
+			records: []session.LifecycleRecord{
+				{SessionID: "ses-1", Generation: 0, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", Is3P: true,
+					State: session.LifecycleFailed, FailedReason: "interrupted"},
+				{SessionID: "ses-2", Generation: 1, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", Is3P: true,
+					State: session.LifecycleRunning, ResumedFrom: "ses-1"},
+			},
+		},
+		{
+			// A chain collapses transitively: every intermediate link is named
+			// by its successor's ResumedFrom.
+			name:   "3p_respawn_chain_collapses_to_the_tail",
+			wantID: "ses-3",
+			records: []session.LifecycleRecord{
+				{SessionID: "ses-1", Generation: 0, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", Is3P: true, State: session.LifecycleFailed},
+				{SessionID: "ses-2", Generation: 1, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", Is3P: true, State: session.LifecycleFailed,
+					ResumedFrom: "ses-1"},
+				{SessionID: "ses-3", Generation: 2, WorkspaceID: "ws1", AgentID: "ray",
+					ParentAgentID: "mia", Is3P: true, State: session.LifecycleRunning,
+					ResumedFrom: "ses-2"},
+			},
+		},
+	}
 
-	for _, includeTerminal := range []bool{false, true} {
-		args := map[string]any{"include_terminal": includeTerminal}
-		roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), args))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewListJobsTool(nil, nil, &fakeJobLifecycleStore{records: tc.records})
+			tool.SetSessionResolver(func() JobSessionResolver {
+				return &fakeSessionResolver{live: map[string]bool{
+					"ses-1": true, "ses-2": true, "ses-3": true,
+				}}
+			})
 
-		if len(roster.Rows) != 1 {
-			t.Fatalf("include_terminal=%v: one session must yield one row, got %d: %v",
-				includeTerminal, len(roster.Rows), rowIDs(roster.Rows))
-		}
-		row := roster.Rows[0]
-		if row.Generation != 1 {
-			t.Errorf("include_terminal=%v: want the newest generation 1, got %d",
-				includeTerminal, row.Generation)
-		}
-		if row.Status != jobStatusRunning {
-			t.Errorf("include_terminal=%v: the newest generation is running, got %q",
-				includeTerminal, row.Status)
-		}
-		// The superseded generation must not be counted as suppressed either —
-		// it is not a row the caller is missing, it is a row that no longer
-		// exists.
-		if roster.Notes != nil && roster.Notes.TerminalSuppressed["subagent"] != 0 {
-			t.Errorf("include_terminal=%v: a superseded generation was counted as suppressed",
-				includeTerminal)
-		}
+			for _, includeTerminal := range []bool{false, true} {
+				args := map[string]any{"include_terminal": includeTerminal}
+				roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), args))
+
+				if len(roster.Rows) != 1 {
+					t.Fatalf("include_terminal=%v: one delegation must yield one row, got %d: %v",
+						includeTerminal, len(roster.Rows), rowIDs(roster.Rows))
+				}
+				row := roster.Rows[0]
+				if row.ID != tc.wantID {
+					t.Errorf("include_terminal=%v: want the surviving session %q, got %q",
+						includeTerminal, tc.wantID, row.ID)
+				}
+				if row.Status != jobStatusRunning {
+					t.Errorf("include_terminal=%v: the newest generation is running, got %q",
+						includeTerminal, row.Status)
+				}
+				// The superseded generation must not be counted as suppressed
+				// either — it is not a row the caller is missing, it is a row
+				// that no longer exists.
+				if roster.Notes != nil && roster.Notes.TerminalSuppressed["subagent"] != 0 {
+					t.Errorf("include_terminal=%v: a superseded generation was counted as suppressed",
+						includeTerminal)
+				}
+			}
+		})
 	}
 }
 
@@ -753,6 +816,127 @@ func TestListJobs_NilStoreIsReportedNotSilentlyEmpty(t *testing.T) {
 
 	if roster.Notes == nil || len(roster.Notes.Errors) != 3 {
 		t.Fatalf("an unwired store must be reported, not read as 'no work': got %+v", roster.Notes)
+	}
+}
+
+// TestListJobs_ScanCeilingIsSpentOnTheCallersOwnRecords is the ordering
+// regression guard: the ownership predicate must run BEFORE the scan ceiling,
+// never after it.
+//
+// The fixture reproduces the real stores' orderings, which are adversarial for
+// the wrong ordering rather than neutral to it. plan.Store.List sorts CreatedAt
+// ASCENDING and task.Store.List sorts EffectivePriority then CreatedAt
+// ascending, so the records a ceiling applied first would KEEP are the oldest
+// and the highest-priority — i.e. it would discard exactly the caller's current
+// work, which is the one thing the tool exists to report.
+//
+// The assertion is the OUTCOME the caller sees, not the ordering of two
+// statements: three owned plans and three owned tasks sitting behind a wall of
+// other principals' records must come back as SIX ROWS. Under the wrong
+// ordering they come back as `rows: []` plus a notes.scan_truncated marker the
+// model has no reason to interpret — and an empty roster reads as "I have no
+// outstanding work".
+func TestListJobs_ScanCeilingIsSpentOnTheCallersOwnRecords(t *testing.T) {
+	const ceiling = 10
+
+	// 50 other-principal records ahead of the caller's own, mirroring the sort
+	// the real stores apply.
+	plans := &fakeJobPlanStore{}
+	tasks := &fakeJobTaskStore{}
+	for i := 0; i < 50; i++ {
+		plans.plans = append(plans.plans, plan.Plan{
+			ID: fmt.Sprintf("pln-jim-%02d", i), WorkspaceID: "ws1", Title: "Jim plan",
+			OwnerAgentID: "jim", State: plan.StateRunning,
+			CreatedAt: fmt.Sprintf("2020-01-01T00:%02d:00Z", i),
+		})
+		tasks.tasks = append(tasks.tasks, task.Task{
+			ID: fmt.Sprintf("tsk-jim-%02d", i), WorkspaceID: "ws1", Title: "Jim task",
+			AgentID: "jim", Status: task.StatusInProgress,
+		})
+	}
+	for i := 0; i < 3; i++ {
+		plans.plans = append(plans.plans, plan.Plan{
+			ID: fmt.Sprintf("pln-mia-%02d", i), WorkspaceID: "ws1", Title: "Mia plan",
+			OwnerAgentID: "mia", State: plan.StateRunning,
+			CreatedAt: fmt.Sprintf("2026-01-01T00:%02d:00Z", i),
+		})
+		tasks.tasks = append(tasks.tasks, task.Task{
+			ID: fmt.Sprintf("tsk-mia-%02d", i), WorkspaceID: "ws1", Title: "Mia task",
+			AgentID: "mia", Status: task.StatusInProgress,
+		})
+	}
+
+	tool := NewListJobsTool(plans, tasks, nil)
+	tool.SetScanCeiling(ceiling)
+
+	roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), map[string]any{}))
+
+	got := rowIDs(roster.Rows)
+	want := map[string]bool{
+		"pln-mia-00": true, "pln-mia-01": true, "pln-mia-02": true,
+		"tsk-mia-00": true, "tsk-mia-01": true, "tsk-mia-02": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("the caller owns %d records behind 100 of somebody else's and must get all of them "+
+			"(ceiling=%d); got %d rows: %v", len(want), ceiling, len(got), got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected row %q — the roster must contain the caller's records only", id)
+		}
+	}
+
+	// And the marker must be ABSENT: the caller owns 3 of each, far below the
+	// ceiling, so nothing about this response is a lower bound. A marker here
+	// would mean scan_truncated still tracks the store's population rather than
+	// the caller's, which is the state that makes it uninterpretable.
+	if roster.Notes != nil && len(roster.Notes.ScanTruncated) != 0 {
+		t.Errorf("scan_truncated must describe the CALLER's population, not the store's; got %+v",
+			roster.Notes.ScanTruncated)
+	}
+}
+
+// TestListJobs_ScanCeilingCountsTheCallersOwnPopulation is the other half: when
+// the caller genuinely owns more than the ceiling, the marker fires and its
+// `present` is the caller's own count — not the store's total, which would
+// leak the size of other principals' work and make the number meaningless.
+func TestListJobs_ScanCeilingCountsTheCallersOwnPopulation(t *testing.T) {
+	plans := &fakeJobPlanStore{}
+	for i := 0; i < 40; i++ {
+		plans.plans = append(plans.plans, plan.Plan{
+			ID: fmt.Sprintf("pln-jim-%02d", i), WorkspaceID: "ws1", Title: "Jim plan",
+			OwnerAgentID: "jim", State: plan.StateRunning,
+		})
+	}
+	for i := 0; i < 12; i++ {
+		plans.plans = append(plans.plans, plan.Plan{
+			ID: fmt.Sprintf("pln-mia-%02d", i), WorkspaceID: "ws1", Title: "Mia plan",
+			OwnerAgentID: "mia", State: plan.StateRunning,
+		})
+	}
+	tool := NewListJobsTool(plans, nil, nil)
+	tool.SetScanCeiling(5)
+
+	roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), map[string]any{"kind": jobKindPlan}))
+
+	if roster.Notes == nil {
+		t.Fatal("a bounded scan must be reported, never presented as a complete one")
+	}
+	marker, ok := roster.Notes.ScanTruncated[jobKindPlan]
+	if !ok {
+		t.Fatalf("want a scan_truncated entry for plan, got %+v", roster.Notes.ScanTruncated)
+	}
+	if marker.Scanned != 5 || marker.Present != 12 {
+		t.Errorf("want scanned=5 present=12 (the CALLER's 12 plans, not the store's 52); got %+v", marker)
+	}
+	if len(roster.Rows) != 5 {
+		t.Fatalf("want the ceiling's worth of the caller's own rows, got %d: %v",
+			len(roster.Rows), rowIDs(roster.Rows))
+	}
+	for _, id := range rowIDs(roster.Rows) {
+		if !strings.HasPrefix(id, "pln-mia-") {
+			t.Errorf("row %q is not the caller's — the ceiling must be spent on owned records", id)
+		}
 	}
 }
 
@@ -1389,7 +1573,7 @@ func TestListJobs_EmittedRowsAreRedactedAndBounded(t *testing.T) {
 			PausedReason: "upstream rejected https://user:" + shortSecret + "@example.com/api"},
 	}}
 	tool := NewListJobsTool(plans, nil, nil)
-	tool.SetConfig(cfg)
+	tool.SetConfig(func() *config.Config { return cfg })
 
 	res := tool.Execute(jobCtx("mia", "ws1"), map[string]any{"kind": jobKindPlan})
 	roster := decodeRoster(t, res)

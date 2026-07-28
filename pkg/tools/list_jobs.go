@@ -48,7 +48,22 @@ type ListJobsTool struct {
 	// no engine is wired and the cap fields are omitted as a pair.
 	getCapSource func() JobCapSnapshotSource
 
-	cfg         *config.Config
+	// getConfig reads the config that drives redaction. A CLOSURE, never a
+	// captured *config.Config, for the same reason getNamer is one — and this
+	// field in particular is where a captured value was WRONG rather than
+	// merely brittle. The gateway's hot reload re-registers every agent's
+	// tools BEFORE it swaps the loop's config (registerSharedTools runs at
+	// pkg/agent/loop.go's reload path, `al.cfg = cfg` runs after it), so a
+	// value captured at wiring time is always one generation stale: the very
+	// reload that turns tools.filter_sensitive_data ON would re-register this
+	// tool with the pre-reload config and keep emitting plan and task titles
+	// unredacted until some unrelated later reload happened to run.
+	//
+	// Making the SETTER take a closure is deliberate: it removes the ability
+	// to pass a value at all, so the eager-capture mistake cannot be repeated
+	// at a future wiring site.
+	getConfig func() *config.Config
+
 	auditLogger *audit.Logger
 
 	// scanCeiling bounds the records one kind contributes to a single call.
@@ -112,9 +127,20 @@ func NewListJobsTool(plans JobPlanLister, tasks JobTaskLister, lifecycles JobLif
 	return &ListJobsTool{plans: plans, tasks: tasks, lifecycles: lifecycles}
 }
 
-// SetConfig installs the config handle used to redact free-text row fields.
-// A nil config disables redaction but never loosens any length bound.
-func (t *ListJobsTool) SetConfig(cfg *config.Config) { t.cfg = cfg }
+// SetConfig installs a LIVE accessor for the config used to redact free-text
+// row fields. It takes a closure rather than a *config.Config so that a hot
+// reload is reflected on the next call — see the getConfig field comment for
+// why a captured value is not merely brittle here but wrong. A nil accessor,
+// or one returning nil, disables redaction but never loosens any length bound.
+func (t *ListJobsTool) SetConfig(get func() *config.Config) { t.getConfig = get }
+
+// config reads the live config, or nil when none is wired.
+func (t *ListJobsTool) config() *config.Config {
+	if t.getConfig == nil {
+		return nil
+	}
+	return t.getConfig()
+}
 
 // SetAuditLogger satisfies the auditLoggerAware contract so the registry can
 // propagate the audit logger after construction. A nil logger is a
@@ -352,7 +378,7 @@ func (t *ListJobsTool) collect(
 	principal, workspaceID string,
 	parsed listJobsArgs,
 ) ([]jobRow, *listJobsNotes) {
-	red := newRedactor(t.cfg)
+	red := newRedactor(t.config())
 	acc := newNotesAccumulator()
 	all := make([]jobRow, 0)
 

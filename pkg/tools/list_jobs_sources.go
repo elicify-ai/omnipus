@@ -115,14 +115,28 @@ type collectResult struct {
 // applyScanCeiling bounds the number of records one kind contributes to a
 // single call (FR-032(d)).
 //
+// IT MUST BE CALLED ON THE CALLER'S OWN RECORDS, AFTER the ownership /
+// parentage predicate — never on the raw store result. The predicates are
+// string compares over records already in memory, so running them first is
+// free, and running them second spends the whole budget on OTHER principals'
+// records before the caller's are even considered. Both stores sort
+// adversarially for that mistake: plan.Store.List sorts CreatedAt ASCENDING
+// (so a ceiling applied first keeps the OLDEST and discards exactly the
+// current work this tool exists to report) and task.Store.List sorts
+// EffectivePriority then CreatedAt ascending. A caller owning three recent
+// plans in a workspace holding 6000 would get `rows: []` plus a
+// notes.scan_truncated the model has no reason to interpret — an empty roster
+// reads as "I have no outstanding work".
+//
 // SCOPE NOTE, stated so it is not mistaken for the full requirement: this
 // bounds the work list_jobs itself performs per kind (normalization,
 // redaction, sorting) and reports it honestly. It does NOT bound the store's
 // own I/O, because all three stores load every record inside List before
 // returning a slice — capping that needs a store-side limit in pkg/plan,
-// pkg/task and pkg/session. `present` is therefore the number of records the
-// store actually returned for this filter, which is the largest population
-// figure obtainable from this side of the API.
+// pkg/task and pkg/session. `present` is therefore the number of records
+// belonging to THIS CALLER that the store returned for this filter, which is
+// both the population the ceiling actually bounds and the only one a
+// scan_truncated marker can mean anything about.
 func applyScanCeiling[T any](records []T, ceiling int) (kept []T, scanned, present int, truncated bool) {
 	present = len(records)
 	if ceiling <= 0 || present <= ceiling {
@@ -149,20 +163,29 @@ func collectPlanRows(
 	if err != nil {
 		return collectResult{err: fmt.Errorf("plan store: %w", err)}
 	}
-	kept, scanned, present, truncated := applyScanCeiling(records, ceiling)
+	// OWNERSHIP FIRST, ceiling second. plan.Filter carries only WorkspaceID, so
+	// this predicate is the only thing narrowing the store's result to the
+	// caller — applying the ceiling before it would spend the entire budget on
+	// other principals' plans (and, given List's CreatedAt-ascending order, on
+	// the OLDEST of them). See applyScanCeiling's doc.
+	owned := make([]*plan.Plan, 0, len(records))
+	for i := range records {
+		p := &records[i]
+		// Fail closed on both sides: an unattributed plan is matched by
+		// nobody, and the principal is already guaranteed non-empty.
+		if p.OwnerAgentID == "" || p.OwnerAgentID != principal {
+			continue
+		}
+		owned = append(owned, p)
+	}
+	kept, scanned, present, truncated := applyScanCeiling(owned, ceiling)
 	res := collectResult{
 		unreadable:    skipped,
 		scanTruncated: truncated,
 		scanned:       scanned,
 		present:       present,
 	}
-	for i := range kept {
-		p := &kept[i]
-		// Fail closed on both sides: an unattributed plan is matched by
-		// nobody, and the principal is already guaranteed non-empty.
-		if p.OwnerAgentID == "" || p.OwnerAgentID != principal {
-			continue
-		}
+	for _, p := range kept {
 		norm := normalizePlan(p)
 		res.rows = append(res.rows, jobRow{
 			Kind:                 jobKindPlan,
@@ -209,32 +232,41 @@ func collectTaskRows(
 	if err != nil {
 		return collectResult{err: fmt.Errorf("task store: %w", err)}
 	}
-	kept, scanned, present, truncated := applyScanCeiling(records, ceiling)
+	// OWNERSHIP AND THE PLAN-MEMBER EXCLUSION FIRST, ceiling second. task.Filter
+	// carries only WorkspaceID here, and the task store is the fastest-growing
+	// of the three (every set_todos scratchpad card is a task), so a ceiling
+	// applied first would spend the budget on other principals' tasks — and,
+	// given List's EffectivePriority-ascending order, discard the caller's own
+	// lower-priority ones first. See applyScanCeiling's doc.
+	owned := make([]*task.Task, 0, len(records))
+	for i := range records {
+		t := &records[i]
+		// Standalone only. task.Filter treats an empty PlanID as "filter off",
+		// so this predicate is inexpressible at the store level today and is
+		// applied here — before the ceiling and before the bounds, so both the
+		// scan budget and the omission counts stay exact against the population
+		// the caller actually owns.
+		if t.PlanID != "" {
+			continue
+		}
+		// CreatedByAgent is THE dispatched predicate. Never CreatedBy: it is
+		// mixed-namespace (rest_tasks.go writes a username into it) and using
+		// it would disclose a human's task titles to a same-named agent.
+		if !taskAssignedTo(t, principal) && !t.CreatedByAgent(principal) {
+			continue
+		}
+		owned = append(owned, t)
+	}
+	kept, scanned, present, truncated := applyScanCeiling(owned, ceiling)
 	res := collectResult{
 		unreadable:    skipped,
 		scanTruncated: truncated,
 		scanned:       scanned,
 		present:       present,
 	}
-	for i := range kept {
-		t := &kept[i]
-		// Standalone only. task.Filter treats an empty PlanID as "filter off",
-		// so this predicate is inexpressible at the store level today and is
-		// applied here — before the bounds, so the omission counts stay exact
-		// against the filtered population.
-		if t.PlanID != "" {
-			continue
-		}
-		assigned := t.AgentID != "" && t.AgentID == principal
-		// CreatedByAgent is THE dispatched predicate. Never CreatedBy: it is
-		// mixed-namespace (rest_tasks.go writes a username into it) and using
-		// it would disclose a human's task titles to a same-named agent.
-		created := t.CreatedByAgent(principal)
-		if !assigned && !created {
-			continue
-		}
+	for _, t := range kept {
 		relation := relationDispatched
-		if assigned {
+		if taskAssignedTo(t, principal) {
 			relation = relationRuns
 		}
 		norm := normalizeTask(t)
@@ -264,6 +296,16 @@ func collectTaskRows(
 	return res
 }
 
+// taskAssignedTo is the `runs` half of the task ownership union, factored out
+// so the admission predicate and the relation label can never drift apart:
+// they are the SAME comparison evaluated at two points (once to decide whether
+// the task is the caller's at all, once to label which reading matched), and a
+// second hand-written copy of it is how "assigned to me" would silently become
+// "dispatched by me" on a row.
+func taskAssignedTo(t *task.Task, principal string) bool {
+	return t.AgentID != "" && t.AgentID == principal
+}
+
 // collectSubagentRows returns the sessions this caller delegated.
 //
 // Parentage is LifecycleRecord.ParentAgentID and nothing else. It must never
@@ -284,7 +326,17 @@ func collectSubagentRows(
 	if err != nil {
 		return collectResult{err: fmt.Errorf("lifecycle store: %w", err)}
 	}
-	kept, scanned, present, truncated := applyScanCeiling(records, ceiling)
+	// PARENTAGE AND LINEAGE COLLAPSE FIRST, ceiling second — the same ordering
+	// the other two kinds use, for the same reason (see applyScanCeiling's
+	// doc). Unlike plans and tasks the store filter DOES carry the parentage
+	// predicate here, so today the ceiling would already see only the caller's
+	// records; the ordering is nonetheless made explicit because
+	// newestGenerations re-checks parentage precisely so a widened store filter
+	// cannot leak, and a budget spent before that re-check would re-open the
+	// undercount half of the same hole. It also makes `present` mean the same
+	// thing for all three kinds: the caller's own records, post-supersession.
+	newest := newestGenerations(records, principal)
+	kept, scanned, present, truncated := applyScanCeiling(newest, ceiling)
 	res := collectResult{
 		unreadable:    skipped,
 		scanTruncated: truncated,
@@ -292,16 +344,10 @@ func collectSubagentRows(
 		present:       present,
 	}
 
-	// One row per SESSION, representing its newest generation (FR-034). A
-	// resumed session mints a NEW record rather than mutating the terminal
-	// one, so without this a followed-up session would show both a live row
-	// and a stale terminal row under include_terminal=true.
-	newest := newestGenerations(kept, principal)
-
-	rows := make([]jobRow, 0, len(newest))
-	ids := make([]string, 0, len(newest))
-	for i := range newest {
-		rec := newest[i]
+	rows := make([]jobRow, 0, len(kept))
+	ids := make([]string, 0, len(kept))
+	for i := range kept {
+		rec := kept[i]
 		norm := normalizeSubagent(rec)
 		rows = append(rows, jobRow{
 			Kind:         jobKindSubagent,
@@ -340,17 +386,52 @@ func collectSubagentRows(
 	return res
 }
 
-// newestGenerations keeps, per session id, only the record with the highest
-// generation — and re-checks the parentage predicate on every record rather
-// than trusting the store filter alone, so a store whose filter is ever
-// widened cannot leak another principal's sessions through this path.
+// newestGenerations collapses each delegation LINEAGE to its newest record, so
+// one delegation is one row (FR-034), and re-checks the parentage predicate on
+// every record rather than trusting the store filter alone, so a store whose
+// filter is ever widened cannot leak another principal's sessions through this
+// path.
+//
+// There are TWO resume mechanisms and they need two different collapse rules —
+// this is not belt-and-braces, each covers a case the other cannot see.
+// spawnCorrectiveFollowUp (pkg/tools/delegate.go) branches on rec.Is3P:
+//
+//	NATIVE (warm resume) — reuses the session id verbatim and mints
+//	Generation+1. Collapsed by the highest-generation rule below. Against the
+//	concrete *session.LifecycleStore this is ALREADY collapsed upstream:
+//	storage is one .jsonl per session id and List returns the tail via Load, so
+//	that store can never hand us two records for one id and the rule is a no-op
+//	on it. It is retained because the dependency here is the JobLifecycleLister
+//	INTERFACE, not that struct, and because it is a map lookup over records
+//	already in memory — not because the concrete store needs it.
+//
+//	3P (cold respawn) — mints a NEW session id (uuid.NewString) and links back
+//	via ResumedFrom. Keying on session id CANNOT collapse this: the two records
+//	have different ids, so both survive and one delegation shows as a stale
+//	terminal row plus a live row under include_terminal=true — the exact
+//	duplicate FR-034 forbids. That case is what the supersession rule below is
+//	for, and it is the rule that actually fires against the real store today.
+//
+// A record named by another record's ResumedFrom is superseded and dropped;
+// chains collapse transitively because every intermediate link is named by its
+// successor. The self-link a native warm resume writes (ResumedFrom equal to
+// its own SessionID) is deliberately NOT a supersession — it is the same
+// session, already handled by the generation rule, and treating it as one
+// would drop the live row along with the stale one.
+//
+// Supersession is only ever recorded from records that PASSED the parentage
+// check, so another principal's record can never suppress one of the caller's.
 func newestGenerations(records []session.LifecycleRecord, principal string) []*session.LifecycleRecord {
 	byID := make(map[string]*session.LifecycleRecord, len(records))
 	order := make([]string, 0, len(records))
+	superseded := make(map[string]bool, len(records))
 	for i := range records {
 		rec := &records[i]
 		if rec.ParentAgentID == "" || rec.ParentAgentID != principal {
 			continue
+		}
+		if rec.ResumedFrom != "" && rec.ResumedFrom != rec.SessionID {
+			superseded[rec.ResumedFrom] = true
 		}
 		prev, ok := byID[rec.SessionID]
 		if !ok {
@@ -364,6 +445,9 @@ func newestGenerations(records []session.LifecycleRecord, principal string) []*s
 	}
 	out := make([]*session.LifecycleRecord, 0, len(order))
 	for _, id := range order {
+		if superseded[id] {
+			continue
+		}
 		out = append(out, byID[id])
 	}
 	return out

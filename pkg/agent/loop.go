@@ -4648,7 +4648,15 @@ func (al *AgentLoop) wireJobRosterForAgent(agent *AgentInstance) {
 		agentLoopJobTaskLister{al: al},
 		agentLoopJobLifecycleLister{al: al},
 	)
-	listJobs.SetConfig(al.GetConfig())
+	// A LIVE closure, never al.GetConfig()'s value: this function is reached
+	// from registerSharedTools, which the hot-reload path runs BEFORE it swaps
+	// al.cfg. A value read here is therefore the PRE-reload config on every
+	// reload, so the reload that enables tools.filter_sensitive_data would be
+	// exactly the one list_jobs missed — it would keep emitting plan and task
+	// titles unredacted until some unrelated later reload happened to run.
+	// (Boot is unaffected, which is what made this invisible.) The setter takes
+	// only a closure so the mistake cannot be re-made here.
+	listJobs.SetConfig(func() *config.Config { return al.GetConfig() })
 	listJobs.SetAgentNamer(func() tools.JobAgentNamer {
 		return agentLoopJobAgentNamer{al: al}
 	})

@@ -238,7 +238,18 @@ const (
 	PhaseIdle         PlanPhase = "idle"
 	// PhaseAwaitingSupervision is the parked phase — see this block's header
 	// comment. Renamed from the retired owner-correction spelling by
-	// ADR-055/FR-062; greenfield, so pre-rename plan records do not load.
+	// ADR-055/FR-062.
+	//
+	// NO CODE REJECTS THE PRE-RENAME VALUE, and nothing here should be read as
+	// promising that it does: Store.load is a ReadFile + Unmarshal with no
+	// validation, and normalize() — which is where phase validation lives — is
+	// called only from Create and updateLocked. A record carrying the old
+	// spelling would therefore LOAD, and surface as an unrecognised phase
+	// downstream rather than as a load failure. That is accepted, not
+	// overlooked: pkg/plan does not exist on main and neither does
+	// contracts/components/schemas/Plan.yaml, so no persisted plan can carry
+	// the old value and there is nothing to migrate. If plans ever ship before
+	// a phase rename, the migration has to be written — this comment is not it.
 	PhaseAwaitingSupervision PlanPhase = "awaiting_supervision"
 	// PhaseStalled (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) is
 	// set by PlanEngine.surfaceStallIfAny (pkg/agent/plan_engine.go) when a
