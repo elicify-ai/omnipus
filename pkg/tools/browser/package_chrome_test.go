@@ -406,6 +406,50 @@ func TestShaVerifyCache_ConcurrentMisses_SingleFlight(t *testing.T) {
 	assert.Equal(t, int64(1), calls.Load())
 }
 
+// TestFindPackageChrome_DockerHeavyFlatLayout_Accepted reproduces the exact
+// on-disk shape docker/Dockerfile.heavy's B2a step produces — Chrome staged
+// FLAT at <root>/chrome (Alpine's apk chromium package layout; no
+// chrome-linux64/ extraction subdir, that's a CfT goreleaser-archive
+// artifact only) plus a chrome.sha256 manifest generated verbatim by the
+// Dockerfile's own pipeline:
+//
+//	sha256sum /usr/local/chromium/chrome \
+//	  | awk '{printf "%s  %s\n", $1, $2}' > /usr/local/chromium/chrome.sha256
+//
+// sha256sum's own output is already "<hash>  <path>" (two spaces); awk's
+// pass-through preserves that shape, so the manifest's second field is the
+// FULL PATH given to sha256sum, not the bare basename "chrome" the other
+// tests in this file use. This proves findPackageChrome — the function the
+// real runtime resolver (exec_resolver.go step 3 / capability.go) actually
+// calls — already accepts this shape; it is docs/internal doctor's
+// (cmd/omnipus/internal/doctor/command.go) OWN separate, narrower
+// duplicate of this layout list that was out of sync and produced a false
+// WARN-BROWSER-008 on a real deployment (fixed there; see
+// TestCheckBrowserPackageChrome_FlatDockerHeavyLayout_NoFalsePositive in
+// cmd/omnipus/internal/doctor/command_test.go). docker/Dockerfile.heavy
+// itself needed no change.
+func TestFindPackageChrome_DockerHeavyFlatLayout_Accepted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("flat linux apk-chromium layout only meaningful on linux/darwin")
+	}
+	root := t.TempDir()
+	binPath := filepath.Join(root, "chrome")
+	content := []byte("#!/bin/sh\nexit 0\n")
+	require.NoError(t, os.WriteFile(binPath, content, 0o755))
+
+	sum := sha256.Sum256(content)
+	manifest := hex.EncodeToString(sum[:]) + "  " + binPath + "\n"
+	shaPath := filepath.Join(root, "chrome.sha256")
+	require.NoError(t, os.WriteFile(shaPath, []byte(manifest), 0o644))
+
+	gotBin, gotSHA := findPackageChrome(root)
+	assert.Equal(t, binPath, gotBin, "flat <root>/chrome (Dockerfile.heavy's real layout) must be discovered")
+	assert.Equal(t, shaPath, gotSHA, "root-level chrome.sha256 must be paired with the flat binary")
+
+	require.NoError(t, chromeintegrity.VerifyChromeSHA256(gotBin, gotSHA),
+		"the sha256sum|awk manifest shape (full path as filename field) must verify against the real binary")
+}
+
 // TestIsUsablePackageRoot covers the helper that drives the multi-root
 // probe. Empty path, missing dir, symlinked dir, regular file, and
 // world-writable dir are all rejected; valid (existing, regular,

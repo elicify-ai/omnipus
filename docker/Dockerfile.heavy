@@ -82,6 +82,22 @@ RUN apk add --no-cache \
 # report the package Chrome clean, with no missing-shared-library or
 # SHA-256-mismatch warning; a live browser_navigate tool call should show
 # no WARN-BROWSER-007 and no managed chrome-for-testing download attempt.
+#
+# NOTE (live-verified post-deploy): this layout stages chrome FLAT at
+# <root>/chrome — Alpine's apk chromium package has no chrome-linux64/
+# extraction subdir, that subdir is a Chrome-for-Testing goreleaser-archive
+# artifact only. This is layout #3 in
+# pkg/tools/browser/package_chrome.go's binaryLayoutsForRoot (the flat
+# layout install.sh's fallback also uses) and the runtime resolver
+# (findPackageChrome) has always accepted it. A Fly deployment from this
+# exact Dockerfile initially showed `omnipus doctor` reporting
+# WARN-BROWSER-008 ("chrome binary is missing") despite the binary and a
+# byte-for-byte-matching chrome.sha256 both being present — that was a bug
+# in cmd/omnipus/internal/doctor/command.go's packageChromeBinaryPath
+# (a duplicate, narrower layout probe that only checked chrome-linux64/
+# chrome, out of sync with binaryLayoutsForRoot), now fixed there. Do NOT
+# reintroduce a chrome-linux64/ subdir or symlink here to work around a
+# doctor regression — that would be masking, not fixing, a future drift.
 RUN set -eux; \
     mkdir -p /usr/local/chromium; \
     cp -rL /usr/lib/chromium/. /usr/local/chromium/; \

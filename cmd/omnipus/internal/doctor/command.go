@@ -342,14 +342,31 @@ func packageChromeRootForDoctor() (root string, ok bool) {
 }
 
 // packageChromeBinaryPath returns the absolute path of the bundled chrome
-// executable inside packageChromeRoot. The layout mirrors CfT's
-// chrome-linux64/chrome (linux) and the macOS .app bundle
-// (darwin — chrome-mac-arm64/Google Chrome for Testing.app/...). Returns
-// "" if the expected binary is not present.
+// executable inside packageChromeRoot. The candidate list MUST mirror
+// pkg/tools/browser/package_chrome.go's binaryLayoutsForRoot — that is the
+// function the real runtime resolver (findPackageChrome, reached via
+// exec_resolver.go step 3 and capability.go) uses to decide whether a
+// package Chrome is usable. Before this fix this helper only recognized
+// CfT's chrome-linux64/chrome extraction-subdir layout, so a package that
+// ships Chrome flat at <root>/chrome (e.g. Alpine's apk chromium package,
+// as staged by docker/Dockerfile.heavy's B2a layout, or install.sh's flat
+// fallback) resolved and verified cleanly at runtime but doctor reported a
+// FALSE WARN-BROWSER-008 ("chrome binary is missing") — the binary was
+// right there, just not at the one path this helper checked. Returns "" if
+// no candidate layout is present.
 func packageChromeBinaryPath(root string) string {
-	linuxPath := filepath.Join(root, "chrome-linux64", "chrome")
-	if _, err := os.Stat(linuxPath); err == nil {
-		return linuxPath
+	candidates := []string{
+		filepath.Join(root, "chrome-linux64", "chrome"),
+		filepath.Join(root, "chrome-headless-shell-linux64", "chrome-headless-shell"),
+		filepath.Join(root, "chrome"),
+		filepath.Join(root, "chrome-headless-shell"),
+		filepath.Join(root, "chrome.exe"),
+		filepath.Join(root, "chrome-headless-shell.exe"),
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
 	}
 	// macOS .app bundle: scan the root for the canonical binary name. The
 	// matcher keeps the loop bounded — chromium/ is shallow.

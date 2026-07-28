@@ -364,6 +364,83 @@ func TestCheckBrowserPackageChrome_BinaryMissing_EmitsCorrectCode(t *testing.T) 
 	assert.Contains(t, found008.message, "chrome binary is missing")
 }
 
+// TestCheckBrowserPackageChrome_FlatDockerHeavyLayout_NoFalsePositive is a
+// regression test for a REAL live deployment bug: docker/Dockerfile.heavy's
+// B2a step stages Alpine's apk-installed chromium FLAT at
+// <chromium-root>/chrome (Alpine's package layout has no chrome-linux64/
+// extraction subdir — that subdir is a Chrome-for-Testing goreleaser-archive
+// artifact only), with a companion chrome.sha256 generated verbatim by:
+//
+//	sha256sum /usr/local/chromium/chrome \
+//	  | awk '{printf "%s  %s\n", $1, $2}' > /usr/local/chromium/chrome.sha256
+//
+// sha256sum's own output is already "<hash>  <path>" (two spaces); the awk
+// pass-through preserves that shape, so the manifest's second field is the
+// FULL PATH given to sha256sum, not the bare basename "chrome". Live
+// evidence from the deployed container (uat-omnipus, image built from this
+// branch) confirmed the manifest content and the live binary's sha256sum
+// match byte-for-byte — the payload and manifest are genuinely correct —
+// yet `omnipus doctor` reported:
+//
+//	WARN-BROWSER-008: package chrome root present (/usr/local/chromium) but
+//	chrome binary is missing — reinstall the omnipus package or remove the
+//	chromium/ directory.
+//
+// Root cause: packageChromeBinaryPath (this package) only ever probed
+// <root>/chrome-linux64/chrome — the CfT extraction-subdir layout — and had
+// drifted out of sync with pkg/tools/browser/package_chrome.go's
+// binaryLayoutsForRoot, which is what the REAL runtime resolver
+// (findPackageChrome, reached via exec_resolver.go step 3 / capability.go)
+// uses and which has always accepted the flat <root>/chrome layout
+// ("flat install.sh layout" — see TestBinaryLayoutsForRoot_AllOSes and
+// TestFindPackageChrome_GoreleaserExtractionSubdir_Found in
+// pkg/tools/browser/package_chrome_test.go). The runtime path was never
+// broken; only this diagnostic's stale, narrower duplicate of the layout
+// list was. docker/Dockerfile.heavy needs no change — its layout already
+// satisfies the verified package-Chrome floor.
+//
+// REVERT-PROOF: reverting packageChromeBinaryPath to check only
+// chrome-linux64/chrome makes this test FAIL (WARN-BROWSER-008 present in
+// the result), because this fixture deliberately has no chrome-linux64/
+// subdirectory — exactly like the real container. With the fix in place
+// (the flat "chrome" candidate added to packageChromeBinaryPath) the test
+// PASSES.
+func TestCheckBrowserPackageChrome_FlatDockerHeavyLayout_NoFalsePositive(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("flat linux apk-chromium layout only meaningful on linux/darwin")
+	}
+
+	root := filepath.Join(t.TempDir(), "chromium")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+
+	chromePath := filepath.Join(root, "chrome")
+	chromeContent := buildMinimalELF64(t, "libc.so.6")
+	require.NoError(t, os.WriteFile(chromePath, chromeContent, 0o755))
+
+	// Reproduce docker/Dockerfile.heavy's `sha256sum | awk` pipeline
+	// verbatim: "<hash>  <full-path-passed-to-sha256sum>\n".
+	sum := sha256.Sum256(chromeContent)
+	manifest := hex.EncodeToString(sum[:]) + "  " + chromePath + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "chrome.sha256"), []byte(manifest), 0o644))
+
+	prevOverride := packageChromeRootOverride
+	packageChromeRootOverride = root
+	t.Cleanup(func() { packageChromeRootOverride = prevOverride })
+
+	warnings := checkBrowserPackageChrome()
+	for _, w := range warnings {
+		assert.NotEqual(
+			t,
+			"WARN-BROWSER-008",
+			w.code,
+			"flat <root>/chrome layout (docker/Dockerfile.heavy's real on-disk shape) must not trigger a binary-missing false positive: %v",
+			w,
+		)
+		assert.NotEqual(t, "WARN-BROWSER-006", w.code,
+			"manifest hash genuinely matches the binary; must not report a mismatch: %v", w)
+	}
+}
+
 // TestCheckBrowserPackageChrome_SymlinkedRoot_NoFalsePass (SEC-NEW-003):
 // when the chromium/ root is a symlink to the synthetic tree (not the real
 // directory), the Lstat-based root check MUST refuse to validate it. The
