@@ -292,6 +292,25 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		p.Goal = goal
 	}
 
+	// FR-012d: record the plan's CHAT ORIGIN — the conversation this plan was
+	// asked for in — so an Owner wake can deliver the plan's outcome back to
+	// the requester instead of into a synthetic internal destination the
+	// message path drops. Read from the turn context, never from args: a
+	// caller-supplied origin would let one principal redirect another's plan
+	// outcome into a conversation of its choosing.
+	//
+	// `webchat` is INCLUDED here, deliberately unlike create_task
+	// (task.go's `channel != "webchat"` guard). A task's result surfaces on the
+	// board, which the web user is already looking at; a plan's outcome has no
+	// such fallback surface, and webchat is the origin most plans actually
+	// have — excluding it would leave the common case with no destination.
+	// Both fields stay empty for a REST/UI-created plan, which is a legitimate
+	// state: the owner turn still runs, only the outbound message is skipped.
+	if channel := ToolChannel(ctx); channel != "" {
+		p.SourceChannel = channel
+		p.SourceChatID = ToolChatID(ctx)
+	}
+
 	if err := t.store.Create(p); err != nil {
 		return ErrorResult(fmt.Sprintf("create_plan failed: %v", err))
 	}

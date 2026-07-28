@@ -875,3 +875,96 @@ func TestTaskCreate_NoPlanID_Unaffected(t *testing.T) {
 		t.Fatalf("plan-less create_task must be unaffected by an unwired plan store: %s", res.ForLLM)
 	}
 }
+
+// TestPlanCreateTool_RecordsChatOrigin proves create_plan records the
+// conversation the plan was asked for in (FR-012d). Without it the plan's
+// SourceChannel/SourceChatID pair stays empty on EVERY plan, so an Owner wake
+// has no destination and the outcome never reaches the requester.
+//
+// webchat is asserted explicitly because create_task deliberately EXCLUDES it
+// and a plan must not: a task's result surfaces on the board the web user is
+// already looking at, a plan's outcome has no such fallback surface.
+func TestPlanCreateTool_RecordsChatOrigin(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		channel string
+		chatID  string
+	}{
+		{"webchat", "webchat", "chat-web-1"},
+		{"telegram", "telegram", "-100123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			planStore, _ := newPlanAndTaskStores(t)
+			tool := NewPlanCreateTool(planStore)
+			tool.SetOwnerValidator(allowOwner)
+
+			ctx := WithAgentID(context.Background(), "jim")
+			ctx = WithWorkspaceID(ctx, "ws-1")
+			ctx = WithToolContext(ctx, tc.channel, tc.chatID)
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":          "Ship it",
+				"owner_agent_id": "jim",
+				"dod":            validCriteriaArg(),
+				"rationale":      "single serial member",
+			})
+			if res.IsError {
+				t.Fatalf("create_plan: %s", res.ForLLM)
+			}
+			var out struct {
+				PlanID string `json:"plan_id"`
+			}
+			if err := json.Unmarshal([]byte(res.ForLLM), &out); err != nil {
+				t.Fatalf("parse result: %v", err)
+			}
+			got, err := planStore.Get(out.PlanID)
+			if err != nil {
+				t.Fatalf("get plan: %v", err)
+			}
+			if got.SourceChannel != tc.channel {
+				t.Errorf("source_channel = %q, want %q", got.SourceChannel, tc.channel)
+			}
+			if got.SourceChatID != tc.chatID {
+				t.Errorf("source_chat_id = %q, want %q", got.SourceChatID, tc.chatID)
+			}
+		})
+	}
+}
+
+// TestPlanCreateTool_NoChannelLeavesOriginEmpty proves an absent origin stays
+// absent rather than being invented. Both fields empty is a legitimate state
+// (a REST/UI-created plan has no chat context); a synthetic origin would send
+// a plan's outcome somewhere nobody asked for it.
+func TestPlanCreateTool_NoChannelLeavesOriginEmpty(t *testing.T) {
+	t.Parallel()
+	planStore, _ := newPlanAndTaskStores(t)
+	tool := NewPlanCreateTool(planStore)
+	tool.SetOwnerValidator(allowOwner)
+
+	ctx := WithWorkspaceID(WithAgentID(context.Background(), "jim"), "ws-1")
+	res := tool.Execute(ctx, map[string]any{
+		"title":          "No origin",
+		"owner_agent_id": "jim",
+		"dod":            validCriteriaArg(),
+		"rationale":      "r",
+	})
+	if res.IsError {
+		t.Fatalf("create_plan: %s", res.ForLLM)
+	}
+	var out struct {
+		PlanID string `json:"plan_id"`
+	}
+	if err := json.Unmarshal([]byte(res.ForLLM), &out); err != nil {
+		t.Fatalf("parse result: %v", err)
+	}
+	got, err := planStore.Get(out.PlanID)
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	if got.SourceChannel != "" || got.SourceChatID != "" {
+		t.Errorf("origin invented: channel=%q chat=%q", got.SourceChannel, got.SourceChatID)
+	}
+}
