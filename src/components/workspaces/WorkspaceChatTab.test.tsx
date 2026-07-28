@@ -5,7 +5,7 @@
 //     ? <ChatRestoreSkeleton />
 //     : <ChatScreen />
 //
-// Session-restore MECHANICS (enterWorkspaceChat, resolveWorkspaceSessionFromServer,
+// Session-restore MECHANICS (enterWorkspaceChat, resolveRememberedSessionFromServer,
 // sessionByWorkspace bookkeeping) are already covered by src/store/session.workspace.test.ts.
 // This file covers the RENDER decision that sits on top of that state — the
 // half of the D4 fix that store-level tests cannot see: before this fix, a
