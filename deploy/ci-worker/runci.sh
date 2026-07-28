@@ -151,10 +151,37 @@ run_gotest() {
   echo ""; echo "=== FLAKE FILTER: re-running failed packages isolated (-p 1): $failed ==="
   local rc=0
   for p in $failed; do
+    # Which TESTS failed the contended run, for this package only. Go prefixes
+    # nothing package-scoped onto "--- FAIL:" lines, so scope by taking the
+    # slice of $out between this package's first failure and its "^FAIL <pkg>"
+    # summary line; simpler and good enough: collect all contended failures once
+    # and intersect per package below (a test name is unique enough in practice).
+    local run1; run1=$(echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u)
     if CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
+      echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
+      echo "$run1" | sed 's/^/    /'
     else
-      echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL' /tmp/rr.log | head; rc=1
+      local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' /tmp/rr.log | awk '{print $3}' | sort -u)
+      local both; both=$(comm -12 <(echo "$run1") <(echo "$run2"))
+      if [ -n "$both" ]; then
+        echo "REAL FAILURE (same test failed BOTH runs): $p"
+        echo "$both" | sed 's/^/    /'
+      else
+        # Both runs failed, but on DIFFERENT tests. That is two independent
+        # flakes, NOT one deterministic failure — the old code called this
+        # "failed twice" and sent an investigation chasing a regression that
+        # did not exist. Still a gate failure; just labelled honestly.
+        echo "GATE FAILURE (different tests failed each run — two independent flakes, not one deterministic failure): $p"
+        echo "  contended run:"; echo "$run1" | sed 's/^/    /'
+        echo "  isolated run:";  echo "$run2" | sed 's/^/    /'
+      fi
+      # Full assertion text, not just the "--- FAIL" header. The header alone
+      # discards the indented failure message, which is the only thing that
+      # makes a failure diagnosable from CI output.
+      echo "  --- isolated-run detail ---"
+      grep -aA 12 -E '^\s*--- FAIL' /tmp/rr.log | head -120
+      rc=1
     fi
   done
   return $rc
