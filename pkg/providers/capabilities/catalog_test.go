@@ -666,6 +666,184 @@ func TestCatalog_Resolve_UnknownModel_Optimistic(t *testing.T) {
 		"optimistic model's budget matches the catalog default (TD-M6)")
 }
 
+// ── Regression: provider-prefixed model id vs. bare catalog entry ──────────
+
+// TestCatalog_Resolve_ProviderPrefixedModel_MatchesBareEntry is the FR-026
+// regression this fix closes. It reproduces the exact real-world shape
+// confirmed live 2026-07-28 (UAT): an agent configured with the
+// OpenRouter-style "z-ai/glm-5.2" model id, against a catalog whose entry
+// for that exact model is keyed by the BARE "glm-5.2" id (text-only — no
+// image modality; the vendor is recorded separately in Model.Provider).
+//
+// Before this fix, Resolve did an exact-string map lookup only. The
+// prefixed id never matched the bare key, so this fell through to the
+// FR-026 optimistic default (text+image) — masking a model the catalog
+// already knows is NOT vision-capable as if it were, and letting the
+// agent loop send a native image block that the real OpenRouter endpoint
+// for this model then rejected with 404 "No endpoints found that support
+// image input" (pkg/agent/loop.go, pkg/agent/media_downgrade.go) — an
+// avoidable failed round trip.
+//
+// This test fails against the pre-fix exact-match-only Resolve (it
+// resolves to the optimistic text+image default instead of the catalog's
+// real text-only entry) and passes once Resolve falls back to a
+// stripped-prefix lookup.
+func TestCatalog_Resolve_ProviderPrefixedModel_MatchesBareEntry(t *testing.T) {
+	seed := completeSeedJSON(`"models":[
+		{"id": "glm-5.2", "provider": "z-ai", "input_modalities": ["text"]}
+	],"default_resize_budget":{"long_edge_px":7680,"max_bytes":10485760}}`)
+	c, err := NewCatalog([]byte(seed), nil, nil, testLogger())
+	require.NoError(t, err)
+
+	m := c.Resolve("z-ai/glm-5.2")
+	assert.Equal(t, []Modality{ModalityText}, m.InputModalities(),
+		"must resolve the catalog's real (text-only) entry, not the FR-026 optimistic image-capable default")
+	assert.False(t, m.Supports(ModalityImage),
+		"z-ai/glm-5.2 is a known non-vision model in the catalog — Supports(image) must be false")
+	assert.True(t, m.Supports(ModalityText))
+}
+
+// TestCatalog_Resolve_DoublePrefixedModel_MatchesBareEntry covers the extra
+// "openrouter/<vendor>/<model>" namespacing onboarding sometimes writes
+// (see openai_compat.normalizeModel's doc comment for the same artifact on
+// the outbound-call side) — the fallback must strip BOTH segments, not
+// just the first, to reach the bare catalog id.
+func TestCatalog_Resolve_DoublePrefixedModel_MatchesBareEntry(t *testing.T) {
+	seed := completeSeedJSON(`"models":[
+		{"id": "glm-5.2", "provider": "z-ai", "input_modalities": ["text"]}
+	],"default_resize_budget":{"long_edge_px":7680,"max_bytes":10485760}}`)
+	c, err := NewCatalog([]byte(seed), nil, nil, testLogger())
+	require.NoError(t, err)
+
+	m := c.Resolve("openrouter/z-ai/glm-5.2")
+	assert.Equal(t, []Modality{ModalityText}, m.InputModalities())
+	assert.False(t, m.Supports(ModalityImage))
+}
+
+// TestCatalog_Resolve_BareModelUnaffectedByPrefixFallback guards against a
+// regression where the prefix-stripping fallback could ever shadow a
+// genuine bare catalog id (e.g. "gpt-4o", which never carries a vendor
+// prefix) — the exact match must still win outright, before the fallback
+// is even attempted.
+func TestCatalog_Resolve_BareModelUnaffectedByPrefixFallback(t *testing.T) {
+	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
+	require.NoError(t, err)
+	m := c.Resolve("gpt-4o")
+	assert.Equal(t, "gpt-4o", m.ID())
+	assert.True(t, m.Supports(ModalityImage))
+}
+
+// ── 2026-07-28 GLM ground-truth revalidation + frontier sync ───────────────
+//
+// See docs/internal/research/provider-media-format-support-2026-07-28.md for
+// the full source list. These tests exercise the REAL committed seed file
+// (via EmbeddedSeed(), not a synthetic fixture) so a future seed edit or
+// regeneration cannot silently drift without failing CI.
+
+// TestEmbeddedSeed_GLMFamily_TextOnlyVerdictsPinned is a regression GUARD,
+// not a bug fix: every verdict it asserts already holds in the shipped seed
+// and this test currently PASSES. It exists because an operator, going only
+// on the real-world observation that "z-ai/glm-5.2 produces working vision
+// via OpenRouter," concluded the seed's glm-5.2:["text"] entry must be
+// wrong. Direct 2026-07-28 fetches of docs.z.ai/guides/llm/<model> for every
+// model below returned "Input Modalities: Text" — the seed was correct all
+// along; the "working vision" is fully explained by the FR-026 optimistic
+// default (and, since this same file's prefix-stripping fix, the exact
+// bare-entry hit) doing exactly what it's documented to do. If a future
+// change flips any of these to image-capable without a harder source than
+// an anecdote, this test must fail and force re-verification against
+// docs.z.ai before merging.
+func TestEmbeddedSeed_GLMFamily_TextOnlyVerdictsPinned(t *testing.T) {
+	s, err := ParseSeed(EmbeddedSeed())
+	require.NoError(t, err)
+	byID := make(map[string]Model, len(s.Models))
+	for _, m := range s.Models {
+		byID[m.ID] = m
+	}
+
+	textOnly := []string{"glm-5", "glm-5.1", "glm-5.2", "glm-4.7", "glm-4.6", "glm-4.5"}
+	for _, id := range textOnly {
+		m, ok := byID[id]
+		require.True(t, ok, "seed must carry an entry for %q", id)
+		assert.Equal(t, []Modality{ModalityText}, m.InputModalities,
+			"%s: docs.z.ai confirms text-only input modalities (2026-07-28 re-validation) — "+
+				"do not flip to image-capable on an operational anecdote alone", id)
+	}
+
+	visionCapable := []string{"glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.5v"}
+	for _, id := range visionCapable {
+		m, ok := byID[id]
+		require.True(t, ok, "seed must carry an entry for %q", id)
+		assert.Contains(t, m.InputModalities, ModalityImage,
+			"%s is z.ai's dedicated vision line (V-suffixed / Turbo) — must remain image-capable", id)
+	}
+}
+
+// TestEmbeddedSeed_NewFrontierModels_RevertProof pins the eight models added
+// in the 2026-07-28 sanity pass. Each assertion distinguishes the seeded
+// entry from what Resolve would return via the FR-026 optimistic default
+// (text+image, catalog default budget) BEFORE the entry existed — i.e. this
+// test fails against a seed missing any of these ids (reverted or
+// regenerated without them) and passes against the current file.
+func TestEmbeddedSeed_NewFrontierModels_RevertProof(t *testing.T) {
+	c, err := NewCatalog(EmbeddedSeed(), nil, nil, testLogger())
+	require.NoError(t, err)
+	def := c.DefaultResizeBudget()
+
+	// Anthropic: the optimistic default never carries "pdf" — Resolve on a
+	// model missing from the seed would report Supports(pdf) == false. Every
+	// one of these must be true, proving a real (non-optimistic) entry.
+	for _, id := range []string{
+		"claude-fable-5", "claude-opus-5", "claude-sonnet-5",
+		"claude-haiku-4-5", "claude-sonnet-4-6",
+	} {
+		m := c.Resolve(id)
+		assert.True(t, m.Supports(ModalityPDF),
+			"%s: must be a real catalog entry with pdf support, not the optimistic default", id)
+		assert.True(t, m.Supports(ModalityImage), "%s: vision-capable per platform.claude.com/docs (2026-07-28)", id)
+		budget := m.Budget()
+		assert.Equal(t, 8000, budget.LongEdgePx, "%s: Anthropic family resize budget", id)
+		assert.Equal(t, int64(10485760), budget.MaxBytes, "%s: Anthropic family resize budget (10 MB)", id)
+	}
+
+	// OpenAI gpt-5.4: the optimistic default already matches on modality
+	// (text+image), so the revert-proof signal is the resize budget — the
+	// optimistic default carries the catalog-wide default (7680px/10MB),
+	// while the real entry carries the OpenAI-family budget (8000px/20MB).
+	{
+		m := c.Resolve("gpt-5.4")
+		assert.True(t, m.Supports(ModalityImage))
+		budget := m.Budget()
+		assert.NotEqual(t, def, budget,
+			"gpt-5.4: must be a real catalog entry, not the optimistic default (same budget would prove a miss)")
+		assert.Equal(t, 8000, budget.LongEdgePx)
+		assert.Equal(t, int64(20971520), budget.MaxBytes)
+	}
+
+	// Moonshot kimi-k2.5: same reasoning as gpt-5.4 — modality matches the
+	// optimistic default by coincidence, budget does not (Kimi's documented
+	// 100 MB request ceiling vs. the 10 MB catalog default).
+	{
+		m := c.Resolve("kimi-k2.5")
+		assert.True(t, m.Supports(ModalityImage),
+			"kimi-k2.5: vision-capable per platform.kimi.ai (native MoonViT encoder)")
+		budget := m.Budget()
+		assert.NotEqual(t, def, budget, "kimi-k2.5: must be a real catalog entry, not the optimistic default")
+		assert.Equal(t, int64(104857600), budget.MaxBytes, "kimi-k2.5: matches kimi-k3's documented 100 MB ceiling")
+	}
+
+	// MiniMax-M2.5: the OPPOSITE distinguishing direction from the others —
+	// the optimistic default WRONGLY grants image support to a text-only
+	// model. Before this entry existed, Resolve("MiniMax-M2.5") would report
+	// Supports(image) == true (optimistic); the real entry must report false.
+	{
+		m := c.Resolve("MiniMax-M2.5")
+		assert.True(t, m.Supports(ModalityText))
+		assert.False(t, m.Supports(ModalityImage),
+			"MiniMax-M2.5: text-only per help.apiyi.com (2026-07-28)")
+	}
+}
+
 // TestOptimisticModel_DefaultBudget (Wave 1 TD-M6) asserts the explicit
 // OptimisticModel helper returns a handle carrying the catalog default
 // budget — not a nil/zero value. This is the closure of the "unknown

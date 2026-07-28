@@ -8,9 +8,10 @@
 // itself is responsible for: the docked <aside> and what it passes down.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { useUiStore } from '@/store/ui'
+import { announcePopoutClosed } from '@/lib/browserLiveHandoff'
 
 const mockBrowserLiveViewProps = vi.fn()
 
@@ -194,5 +195,61 @@ describe('BrowserLivePanel (always-docked)', () => {
     expect(lastProps).toMatchObject({ sessionId: 'sess-2', agentId: 'agent-2' })
     // Still exactly one docked panel — the key remount swaps content, not layout.
     expect(screen.getAllByTestId('browser-live-panel-docked')).toHaveLength(1)
+  })
+
+  // BUG 2 fix (live UAT re-run 2026-07-28) — repro: pop out the live browser
+  // → close that pop-out window → the main app used to show nothing but a
+  // bare "Open browser" button (browserPanel stayed null forever), and
+  // clicking it again re-opened against whatever agent/session happened to
+  // be globally active in chat (Mia + a brand-new about:blank session)
+  // instead of the agent that actually had a live session (Ray). These
+  // tests would FAIL on pre-fix code, where BrowserLivePanel never
+  // subscribed to `onPopoutClosed` at all — `browserPanel` would stay null
+  // forever after the broadcast below, and `browser-live-panel-docked`
+  // would never appear.
+  describe('re-docking on pop-out close (BUG 2 fix)', () => {
+    it('re-opens the docked panel for the EXACT (session, agent) a pop-out announces closing, when nothing is currently docked', async () => {
+      render(<BrowserLivePanel />)
+      expect(useUiStore.getState().browserPanel).toBeNull()
+      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
+
+      act(() => {
+        announcePopoutClosed('sess-ray-live', 'ray')
+      })
+
+      await waitFor(() => {
+        expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-ray-live', agentId: 'ray' })
+      })
+      expect(screen.getByTestId('browser-live-panel-docked')).toBeInTheDocument()
+      expect(mockBrowserLiveViewProps).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'sess-ray-live', agentId: 'ray' }),
+      )
+    })
+
+    it('does NOT clobber an already-docked panel with a stale pop-out-closed broadcast for a different session', async () => {
+      render(<BrowserLivePanel />)
+      act(() => {
+        useUiStore.getState().openBrowserPanel('sess-current', 'agent-current')
+      })
+      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-current', agentId: 'agent-current' })
+
+      act(() => {
+        announcePopoutClosed('sess-stale', 'agent-stale')
+      })
+      // Give the BroadcastChannel a tick to deliver, then confirm nothing changed.
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-current', agentId: 'agent-current' })
+    })
+
+    it('stops listening once unmounted — no re-dock after the panel itself is gone', async () => {
+      const { unmount } = render(<BrowserLivePanel />)
+      unmount()
+
+      act(() => {
+        announcePopoutClosed('sess-after-unmount', 'agent-after-unmount')
+      })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(useUiStore.getState().browserPanel).toBeNull()
+    })
   })
 })

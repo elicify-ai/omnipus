@@ -452,6 +452,8 @@ export type {
   // Wire types migrated from hand-written interfaces:
   Agent,
   Provider,
+  // D18 — model-capabilities warn-and-proceed (contract-first #8):
+  ModelCapabilities,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -1780,11 +1782,46 @@ export function fetchModelCapabilities(): Promise<ModelCapabilities[]> {
 // identical rule. Unknown/unlisted models return false (optimistic — mirrors
 // the server-side FR-026 default in pkg/providers/capabilities/catalog.go),
 // so a stale or incomplete capabilities fetch never spuriously blocks/warns.
+//
+// Mirrors pkg/providers/capabilities/catalog.go's Catalog.Resolve fix
+// (2026-07-28, live UAT): agents' models are provider-prefixed
+// ("z-ai/glm-5.2"), but the /providers/model-capabilities catalog is keyed
+// by the BARE model id ("glm-5.2") — the vendor is recorded separately.
+// An exact-string-only lookup on a prefixed id always misses, silently
+// falling through to the optimistic default even when the catalog carries
+// an authoritative (and possibly negative) entry for that exact model. See
+// findModelCapabilityEntry below for the stripped-prefix fallback, which
+// applies the identical semantics as the Go side.
 export function modelLacksImageCapability(modelId: string | undefined, entries: ModelCapabilities[]): boolean {
   if (!modelId) return false
-  const entry = entries.find((c) => c.id === modelId)
+  const entry = findModelCapabilityEntry(modelId, entries)
   if (!entry) return false
   return !entry.modalities.includes('image')
+}
+
+// findModelCapabilityEntry mirrors pkg/providers/capabilities/catalog.go's
+// Catalog.Resolve + resolveStrippedPrefix exactly: try an exact id match
+// first (so a genuine bare catalog id like "gpt-4o", which never carries a
+// vendor prefix, always wins outright and never reaches the fallback);
+// then strip leading "<segment>/" prefixes one at a time — walking from the
+// longest remaining suffix down to the bare trailing segment — retrying the
+// exact lookup after each strip, stopping at the first hit. This also
+// handles the double-prefixed "openrouter/z-ai/glm-5.2" onboarding artifact
+// (both segments must be stripped to reach the bare "glm-5.2" catalog id).
+// Can never produce a WRONG match: catalog ids are unique, so a stripped
+// suffix that hits is, by construction, the intended model.
+function findModelCapabilityEntry(modelId: string, entries: ModelCapabilities[]): ModelCapabilities | undefined {
+  const exact = entries.find((c) => c.id === modelId)
+  if (exact) return exact
+
+  let rest = modelId
+  for (;;) {
+    const idx = rest.indexOf('/')
+    if (idx < 0 || idx === rest.length - 1) return undefined
+    rest = rest.slice(idx + 1)
+    const match = entries.find((c) => c.id === rest)
+    if (match) return match
+  }
 }
 
 // configureProvider sets a model/provider's API key, endpoint, and/or model.

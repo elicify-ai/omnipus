@@ -71,6 +71,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"sync"
 	"time"
 )
@@ -632,13 +633,62 @@ func (c *Catalog) applySeed(s Seed) {
 // optimistic default (image-capable) when the model is not in the
 // catalog (FR-026). The handle is a deep-owned copy of the catalog
 // state; callers may mutate it freely without affecting catalog state.
+//
+// Every catalog entry is keyed by its BARE model id (e.g. "glm-5.2"); the
+// vendor is recorded separately in Model.Provider (e.g. "z-ai"). Callers,
+// however, often pass a provider-prefixed id — the OpenRouter-style
+// "<vendor>/<model>" routing form ("z-ai/glm-5.2"), sometimes with an extra
+// namespace segment onboarding writes ("openrouter/z-ai/glm-5.2", see
+// openai_compat.normalizeModel). An exact-only lookup on a prefixed id
+// always misses, silently falling through to the FR-026 optimistic
+// default (assume image-capable) even when the catalog carries an
+// authoritative — and possibly negative — entry for that exact model.
+//
+// Confirmed live 2026-07-28 (UAT against z-ai/glm-5.2): the seed already
+// lists "glm-5.2" (provider "z-ai") as text-only, but the prefixed lookup
+// missed it, the optimistic default assumed image support, and the
+// backend sent a native image block that OpenRouter's real endpoint for
+// this model rejected with 404 "No endpoints found that support image
+// input" — an avoidable failed round trip the outcome-based retry then
+// had to paper over (pkg/agent/media_downgrade.go).
+//
+// The fallback below strips leading "<segment>/" prefixes one at a time
+// and retries the exact lookup against each shorter suffix. This can
+// never produce a WRONG match: every model.ID is required unique across
+// the whole catalog (seedFile.validate), so a stripped suffix that hits
+// is, by construction, the intended model. It also cannot regress a
+// prefix that is itself a genuine bare catalog id with no vendor
+// namespace (e.g. "gpt-4o") — those already match on the first, exact
+// lookup and never reach the fallback.
 func (c *Catalog) Resolve(modelID string) *resolvedModel {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	if m, ok := c.models[modelID]; ok {
 		return c.resolve(m)
 	}
+	if m, ok := c.resolveStrippedPrefix(modelID); ok {
+		return c.resolve(m)
+	}
 	return c.optimistic(modelID)
+}
+
+// resolveStrippedPrefix retries the exact catalog lookup after stripping
+// leading "<segment>/" prefixes one at a time (shortest-suffix-first is
+// NOT required for correctness — see Resolve's doc comment — so this walks
+// from the longest remaining suffix down to the bare trailing segment,
+// stopping at the first exact hit). Caller MUST hold the read lock.
+func (c *Catalog) resolveStrippedPrefix(modelID string) (model, bool) {
+	rest := modelID
+	for {
+		idx := strings.IndexByte(rest, '/')
+		if idx < 0 || idx == len(rest)-1 {
+			return model{}, false
+		}
+		rest = rest[idx+1:]
+		if m, ok := c.models[rest]; ok {
+			return m, true
+		}
+	}
 }
 
 // optimistic returns the FR-026 optimistic default for an unknown model.

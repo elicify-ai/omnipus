@@ -94,7 +94,7 @@ describe('submitAnnotation', () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     const [comment, opts] = sendMessageSpy.mock.calls[0]
     expect(comment).toBe(
-      'What does this do?\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. Auto-detected context for this region (<button>): "Submit". The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+      'What does this do?\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. Auto-detected context for this region (<button>): "Submit". An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]',
     )
     expect(opts.mediaRefs).toEqual(['media://ref-1'])
     expect(opts.attachments).toEqual([
@@ -140,7 +140,7 @@ describe('submitAnnotation', () => {
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     expect(sendMessageSpy.mock.calls[0][0]).toBe(
-      'Look at this\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+      'Look at this\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]',
     )
   })
 
@@ -151,7 +151,7 @@ describe('submitAnnotation', () => {
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     expect(sendMessageSpy.mock.calls[0][0]).toBe(
-      'Look at this\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+      'Look at this\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]',
     )
   })
 
@@ -162,7 +162,7 @@ describe('submitAnnotation', () => {
 
     expect(sendMessageSpy).toHaveBeenCalledTimes(1)
     expect(sendMessageSpy.mock.calls[0][0]).toBe(
-      'Still works\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]',
+      'Still works\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]',
     )
     expect(sendMessageSpy.mock.calls[0][1].mediaRefs).toEqual(['media://ref-1'])
   })
@@ -238,7 +238,7 @@ describe('submitAnnotation', () => {
     const [comment] = sendMessageSpy.mock.calls[0]
     const snippet = 'x'.repeat(280) + '…'
     expect(comment).toBe(
-      `What is this?\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. Auto-detected context for this region (<article>): "${snippet}". The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]`,
+      `What is this?\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank. Auto-detected context for this region (<article>): "${snippet}". An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]`,
     )
     // The full 300-char text must NOT appear verbatim — only the capped 280 + ellipsis.
     expect(comment).not.toContain(longText)

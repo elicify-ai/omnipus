@@ -1,9 +1,10 @@
 {
-  "version": "2026-07-23",
+  "version": "2026-07-28",
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-23T00:00:00Z",
-  "source": "freeze-gate re-validation 2026-07-23; see docs/internal/research/provider-media-format-support-2026-07.md",
+  "updated_at": "2026-07-28T00:00:00Z",
+  "source": "freeze-gate re-validation 2026-07-28 (GLM ground-truth check + frontier sync); see docs/internal/research/provider-media-format-support-2026-07-28.md; supersedes 2026-07-23 freeze (docs/internal/research/provider-media-format-support-2026-07.md) for the models listed there",
   "models": [
+    {"id": "gpt-5.4",       "provider": "openai",   "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 20971520}},
     {"id": "gpt-5",         "provider": "openai",   "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 20971520}},
     {"id": "gpt-5-mini",    "provider": "openai",   "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 20971520}},
     {"id": "gpt-5-nano",    "provider": "openai",   "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 20971520}},
@@ -18,6 +19,11 @@
     {"id": "o4-mini",       "provider": "openai",   "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 20971520}},
     {"id": "chatgpt-4o-latest", "provider": "openai", "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 20971520}},
 
+    {"id": "claude-fable-5",      "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
+    {"id": "claude-opus-5",       "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
+    {"id": "claude-sonnet-5",     "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
+    {"id": "claude-haiku-4-5",    "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
+    {"id": "claude-sonnet-4-6",   "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
     {"id": "claude-opus-4-1",     "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
     {"id": "claude-opus-4-0",     "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
     {"id": "claude-sonnet-4-5",   "provider": "anthropic", "input_modalities": ["text", "image", "pdf"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
@@ -70,6 +76,7 @@
     {"id": "glm-4.5",                 "provider": "z-ai", "input_modalities": ["text"]},
 
     {"id": "kimi-k2",                 "provider": "moonshot", "input_modalities": ["text"]},
+    {"id": "kimi-k2.5",               "provider": "moonshot", "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 104857600}},
     {"id": "kimi-k3",                 "provider": "moonshot", "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 104857600}},
     {"id": "moonshot-v1-8k",          "provider": "moonshot", "input_modalities": ["text"]},
     {"id": "moonshot-v1-32k",         "provider": "moonshot", "input_modalities": ["text"]},
@@ -81,6 +88,7 @@
     {"id": "MiniMax-M3",         "provider": "minimax", "input_modalities": ["text", "image"], "resize_budget": {"long_edge_px": 8000, "max_bytes": 10485760}},
     {"id": "MiniMax-M2",         "provider": "minimax", "input_modalities": ["text"]},
     {"id": "MiniMax-M2.1",       "provider": "minimax", "input_modalities": ["text"]},
+    {"id": "MiniMax-M2.5",       "provider": "minimax", "input_modalities": ["text"]},
     {"id": "MiniMax-M2.7",       "provider": "minimax", "input_modalities": ["text"]}
   ],
   "default_resize_budget": {"long_edge_px": 7680, "max_bytes": 10485760}

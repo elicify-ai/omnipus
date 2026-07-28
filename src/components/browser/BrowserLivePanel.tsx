@@ -20,13 +20,46 @@
 // click tears down the stale WS and starts a fresh one for the new target.
 // (The former second remount trigger — the pin toggle flipping the root
 // element type — died with the pin.)
+//
+// BUG 2 fix (live UAT re-run) — popping out closes this docked panel (see
+// handlePopOut below), but closing the pop-out now RE-opens it for the exact
+// same (session, agent) via a same-origin BroadcastChannel signal
+// (browserLiveHandoff.ts) — the pop-out and this panel are separate
+// `window.open` documents with no direct JS reference to each other
+// (`noopener`), so that channel is the only way either side learns the
+// other's lifecycle. Previously nothing restored this panel at all: closing
+// the pop-out left the user with a bare "Open browser" button, and that
+// button (ChatControls.tsx) opens against whatever agent/session is
+// globally active in chat, not necessarily the one the pop-out was actually
+// showing.
 
+import { useEffect } from 'react'
 import { useUiStore } from '@/store/ui'
+import { onPopoutClosed } from '@/lib/browserLiveHandoff'
 import { BrowserLiveView } from './BrowserLiveView'
 
 export function BrowserLivePanel() {
   const browserPanel = useUiStore((s) => s.browserPanel)
   const closeBrowserPanel = useUiStore((s) => s.closeBrowserPanel)
+
+  // BUG 2 fix (live UAT re-run) — re-dock this panel for the EXACT
+  // (sessionId, agentId) a pop-out was showing the instant that pop-out
+  // closes (see browserLiveHandoff.ts's doc comment for the full mechanism
+  // and its known cross-tab scoping limit). Subscribed unconditionally,
+  // BEFORE the `!browserPanel` early return below, so a restore can land
+  // even on a render where this component is currently returning null.
+  // Guarded on `browserPanel` still being null AT DELIVERY TIME (read fresh
+  // from the store inside the callback, not the `browserPanel` closed over
+  // from this render) so a stale/duplicate broadcast never clobbers newer
+  // state — e.g. the user already re-opened a DIFFERENT session's panel by
+  // the time this arrives.
+  useEffect(() => {
+    return onPopoutClosed((sessionId, agentId) => {
+      if (useUiStore.getState().browserPanel === null) {
+        useUiStore.getState().openBrowserPanel(sessionId, agentId)
+      }
+    })
+  }, [])
 
   if (!browserPanel) return null
 

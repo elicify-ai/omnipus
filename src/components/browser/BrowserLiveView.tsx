@@ -60,6 +60,7 @@ import { BrowserWebRTCSession } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
+  computeObjectContainRect,
   framePixelToDeviceCoords,
   isPrintableKey,
   mapClientToDevice,
@@ -129,6 +130,41 @@ export interface BrowserLiveViewProps {
    * may know this before the track metadata is fully available.
    */
   hasAudio?: boolean
+  /**
+   * BUG 1 fix (pop-out "tiny letterboxed video", live UAT re-run) — `false`
+   * (the default) keeps the historical intrinsic-size-capped layout
+   * (`w-auto h-auto max-w-full max-h-full`): the media element never grows
+   * past its own native resolution, only shrinks to fit. That's correct for
+   * the docked panel (BrowserLivePanel.tsx), whose container is usually
+   * close to the native resolution already, and — more importantly —
+   * matches the "container tightly wraps the visible content, no
+   * letterboxing" invariant the annotate-a-region crop math
+   * (containerRef.getBoundingClientRect() used directly, see
+   * finalizeSelection/handlePointerDown's annotate branch) depends on.
+   *
+   * `true` makes the media element FILL its container (`w-full h-full
+   * object-contain`), scaling UP past intrinsic size when the container is
+   * bigger — this is what the fullscreen pop-out route
+   * (routes/_app/browser-live.tsx) needs: a 1600×880 window showing a
+   * 639×316 video was ~90% wasted black space under the capped layout.
+   * Filling introduces real letterbox/pillarbox bars whenever the
+   * container's aspect ratio doesn't match the content's, so every
+   * coordinate-mapping call site routes its raw bounding rect through
+   * `computeObjectContainRect` (browserLiveCoords.ts) first — see
+   * `mapPointerToDeviceCoords` below — to keep pointer/wheel input landing
+   * on the right device pixel regardless.
+   *
+   * Deliberately NOT combined with `canAnnotate` by any caller today: the
+   * annotate-selection overlay and crop math (mapClientToFramePixels /
+   * computeCropRect) read `containerRef.getBoundingClientRect()` directly
+   * with no letterbox correction, so pairing `fillContainer` with
+   * `canAnnotate` would misplace the selection box whenever letterboxing is
+   * actually showing. The pop-out already hard-omits `canAnnotate` (FE-4,
+   * this component's `canAnnotate` doc comment) so the two never collide in
+   * practice — a future caller that wants BOTH must first extend
+   * annotate's rect math the same way.
+   */
+  fillContainer?: boolean
 }
 
 /** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
@@ -311,6 +347,7 @@ export function BrowserLiveView({
   // internal WebRTC signaling result instead of forcing JPEG-forever.
   mediaStream: mediaStreamProp = null,
   hasAudio: hasAudioProp = false,
+  fillContainer = false,
 }: BrowserLiveViewProps) {
   const wsRef = useRef<BrowserLiveWsConnection | null>(null)
   // WebRTC build (W2-B) — the viewer-side PC state machine (browserWebRTC.ts),
@@ -1047,8 +1084,18 @@ export function BrowserLiveView({
     (clientX: number, clientY: number, rect: RectLike): DeviceCoords | null => {
       const dims = activeFrameDims()
       if (!dims) return null
-      if (dims.video) return mapClientToDeviceVideo(clientX, clientY, rect, dims.width, dims.height)
-      return mapClientToDevice(clientX, clientY, rect, dims.width, dims.height, dims.pageScale)
+      // BUG 1 fix — `fillContainer` layouts (the pop-out route) let the media
+      // element grow past its intrinsic size via `object-fit: contain`,
+      // which can letterbox/pillarbox within `rect` whenever the container's
+      // aspect ratio doesn't match the content's. `computeObjectContainRect`
+      // is a no-op when they already match (the docked panel's historical
+      // layout, and most fillContainer frames too) — safe to route through
+      // unconditionally rather than branching on the `fillContainer` prop
+      // here, so this stays correct even if a future container size doesn't
+      // match its content for some other reason.
+      const contentRect = computeObjectContainRect(rect, dims.width, dims.height)
+      if (dims.video) return mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
+      return mapClientToDevice(clientX, clientY, contentRect, dims.width, dims.height, dims.pageScale)
     },
     [activeFrameDims],
   )
@@ -2136,7 +2183,15 @@ export function BrowserLiveView({
             role="application"
             aria-label="Live browser view"
             data-testid="browser-live-frame"
-            className="relative inline-block max-h-full max-w-full select-none outline-none"
+            // BUG 1 fix: `fillContainer` (pop-out route) fills the available
+            // body space instead of shrink-wrapping the media's intrinsic
+            // size — see the prop's own doc comment on why the two layouts
+            // must differ and why that's safe for coordinate mapping
+            // (computeObjectContainRect in mapPointerToDeviceCoords).
+            className={cn(
+              'relative select-none outline-none',
+              fillContainer ? 'h-full w-full' : 'inline-block max-h-full max-w-full',
+            )}
             // ADR-040 D6 — hover cursor communicates the mode at the point of
             // interaction: hidden (synthetic cursor takes over) while
             // actually driving, "watching"/not-allowed while the agent works
@@ -2171,7 +2226,16 @@ export function BrowserLiveView({
                 muted={videoMuted}
                 aria-label="Live browser session"
                 data-testid="browser-live-video"
-                className="block h-auto max-h-full w-auto max-w-full select-none object-contain"
+                // BUG 1 fix: fillContainer stretches to 100% of the
+                // (now-container-sized) box and lets object-contain do the
+                // aspect-preserving fit — the OLD `h-auto w-auto max-h-full
+                // max-w-full` combination can shrink but never grow past
+                // intrinsic size, which is exactly what left the pop-out's
+                // video tiny and letterboxed inside a much larger window.
+                className={cn(
+                  'block select-none object-contain',
+                  fillContainer ? 'h-full w-full' : 'h-auto max-h-full w-auto max-w-full',
+                )}
               />
             ) : (
               <img
@@ -2179,7 +2243,10 @@ export function BrowserLiveView({
                 src={`data:image/jpeg;base64,${frame.data}`}
                 alt="Live browser session"
                 draggable={false}
-                className="block h-auto max-h-full w-auto max-w-full select-none"
+                className={cn(
+                  'block select-none',
+                  fillContainer ? 'h-full w-full object-contain' : 'h-auto max-h-full w-auto max-w-full',
+                )}
                 data-testid="browser-live-img"
               />
             )}

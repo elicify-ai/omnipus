@@ -165,10 +165,26 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
   // attached image" instead of describing the (genuinely sparse) region.
   // Every send now carries this short, constant framing note — appended
   // AFTER the user's own comment (never prepended/rewritten) — telling the
-  // model the image IS attached, IS a cropped screenshot region, and MAY be
+  // model an image WAS sent, IS a cropped screenshot region, and MAY be
   // mostly blank on purpose, so it should describe what it actually sees
   // rather than deny the attachment.
-  const finalComment = `${comment}\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank.${autoContext} The attached image is the source of truth — describe what you actually see rather than saying no image was attached.]`
+  //
+  // Backend-investigation fix (live gateway-log proof, 2026-07-28): the
+  // server can reject/strip the image before it ever reaches the model
+  // (loop.go's outcome_fallback downgrade path logs "provider rejected
+  // media input — retrying with downgraded media block") and replaces it
+  // with its own honest "[attachment unavailable: ...]" marker
+  // (media_downgrade.go). The client sends this note at upload time and
+  // genuinely cannot know whether the image will survive that later,
+  // server-side step — so the note must NOT assert the image arrived (the
+  // old wording's "The attached image is the source of truth" was false
+  // whenever the server had to strip it, and directly contradicted the
+  // server's own marker in the very same message, producing a confused
+  // model response). The wording below stays true in BOTH outcomes: it
+  // only claims an image was sent, and defers to whichever signal the
+  // model actually observes (the image itself, or the server's
+  // unavailable-attachment note) rather than predicting which one wins.
+  const finalComment = `${comment}\n\n[This is a cropped screenshot region from the live browser — it may be mostly blank.${autoContext} An image was sent with this message. If you can see it, treat it as the source of truth and describe exactly what you see rather than saying no image was attached. If instead this message contains a note that the attachment is unavailable, trust that note instead.]`
 
   // sendMessage always targets whatever chat is CURRENTLY active — re-check
   // right before sending (the user could have switched chats during the
