@@ -143,8 +143,14 @@ func TestToolPolicy_InspectSession_JudgeOnly(t *testing.T) {
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	for _, a := range cfg.Agents.List {
-		if a.Type == config.AgentTypeSystem {
-			continue // Judge asserted separately by TestSeed_JudgeSystemAgent
+		// Only the Judge is exempt — it is the one agent inspect_session is
+		// FOR, and it is asserted separately by TestSeed_JudgeSystemAgent.
+		// This used to skip every Type=system agent, which silently widened
+		// into a hole the moment the System-Agents roster grew past the Judge
+		// (ADR-055's PlanSupervisor); PlanSupervisor must be held to the same
+		// explicit-deny rule as everyone else.
+		if a.ID == string(coreagent.IDJudge) {
+			continue
 		}
 		require.NotNilf(t, a.Tools, "agent %q must carry an explicit tools policy", a.ID)
 		p, ok := a.Tools.Builtin.Policies["inspect_session"]

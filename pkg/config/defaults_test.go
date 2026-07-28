@@ -75,10 +75,27 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		t.Errorf("expected seeded ceiling policy 'allow' for verifier-only tool \"inspect_session\", got %q", got)
 	}
 
+	// ADR-055 (PlanSupervisor) — the supervision/containment pair. BOTH
+	// ceilings are "allow" and neither mirrors execute_plan's "ask": an "ask"
+	// or "deny" ceiling on plan_correct would overrule PlanSupervisor's own
+	// seeded "allow" under strictest-wins (the inspect_session defect,
+	// repeated on the next tool), and an "ask" ceiling on stop_plan would
+	// merge Jim's seeded "allow" down to "ask", making a plan owner stopping
+	// their own plan depend on a human answering a prompt. Asserted
+	// explicitly rather than left to the allow-by-default sweep below, so
+	// someone "restoring symmetry" with execute_plan has to delete a named
+	// assertion carrying the reason.
+	if got := cfg.Sandbox.ToolPolicies["plan_correct"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"plan_correct\", got %q", got)
+	}
+	if got := cfg.Sandbox.ToolPolicies["stop_plan"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"stop_plan\", got %q", got)
+	}
+
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6) — 82 static builtin tools (32 general + 11 browser + 35
-	// sysagent + 4 ADR-052 planning/verifier tools), matching
-	// pkg/coreagent's allStaticToolNames literal-for-literal.
+	// constraint 6) — 85 static builtin tools (33 general + 11 browser + 35
+	// sysagent + 4 ADR-052 planning/verifier + 2 ADR-055 supervision tools),
+	// matching pkg/coreagent's allStaticToolNames literal-for-literal.
 	// Browser gained browser_list_tabs / browser_switch_tab / browser_close_tab
 	// (ADR-041 multi-tab), taking browser from 7 to 10, then browser_open_tab
 	// (live-UAT finding, Alex — "no agent tool to open a new tab"), taking it to 11.
@@ -89,7 +106,15 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// ADR-052 added create_plan/execute_plan/run_task/inspect_session, taking
 	// the total from 78 to 82. ADR-053 added message_parent (the child→parent
 	// messaging tool, seeded allow everywhere delegate is), taking it to 83.
-	const wantToolCount = 83
+	// ADR-055 added plan_correct + stop_plan, taking it to 85.
+	//
+	// This literal is a BACKSTOP, not the real guard: package config cannot
+	// import pkg/coreagent (that direction is a cycle), so the one-for-one
+	// identity with allStaticToolNames is asserted from the other side, in
+	// pkg/coreagent's TestCatalog_MatchesGlobalCeilingEntryForEntry. Prefer
+	// replacing this number with that mechanical assertion the next time a
+	// tool is added, rather than growing the literal again.
+	const wantToolCount = 85
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
 		t.Errorf(
 			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",

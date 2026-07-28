@@ -416,6 +416,39 @@ func DefaultConfig() *Config {
 				"execute_plan":    "ask",
 				"run_task":        "ask",
 				"inspect_session": "allow",
+
+				// --- ADR-055 (PlanSupervisor) supervision/containment ---
+				// Both ceilings are "allow", and NEITHER mirrors
+				// execute_plan's "ask" above. Two independent reasons, both
+				// recorded because either alone breaks the feature:
+				//
+				// 1. plan_correct: an "ask" or "deny" ceiling would OVERRULE
+				//    PlanSupervisor's own seeded "allow" under the
+				//    strictest-wins global x agent merge
+				//    (pkg/tools/compositor.go:resolveEffectivePolicyWith) and
+				//    the correction loop would be dead on every install —
+				//    exactly the landed defect the inspect_session note above
+				//    describes, on the very next tool. Raising the ceiling
+				//    grants the tool to nobody by itself: every seeded agent
+				//    except PlanSupervisor carries an explicit per-agent
+				//    "deny" (pkg/coreagent's denyAllThenOverride), and the
+				//    REAL control against an agent with no per-agent entry
+				//    (e.g. one persisted before this tool name existed, which
+				//    would inherit this "allow") is the engine's exact-identity
+				//    gate on the correction path, not the policy layer.
+				//
+				// 2. stop_plan: an "ask" ceiling would silently defeat the
+				//    FR-006b seeding rule. pkg/coreagent seeds stop_plan
+				//    alongside execute_plan at the same per-agent value, so
+				//    Jim gets "allow" — but execute_plan's own ceiling is
+				//    "ask", which merges Jim's "allow" back down to "ask".
+				//    Mirroring that ceiling here "for symmetry" would make the
+				//    plan owner stopping their OWN plan resolve "ask", leaving
+				//    containment dependent on a human answering a prompt. The
+				//    per-agent level mirrors execute_plan; the ceiling
+				//    deliberately does not.
+				"plan_correct": "allow",
+				"stop_plan":    "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds

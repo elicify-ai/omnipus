@@ -40,14 +40,26 @@ func TestSeed_JudgeSystemAgent(t *testing.T) {
 	require.True(t, coreagent.SeedConfig(cfg), "fresh SeedConfig must report modified=true")
 
 	var systemAgents []config.AgentConfig
+	var judges []config.AgentConfig
 	for _, a := range cfg.Agents.List {
 		if a.Type == config.AgentTypeSystem {
 			systemAgents = append(systemAgents, a)
 		}
+		if a.ID == string(coreagent.IDJudge) {
+			judges = append(judges, a)
+		}
 	}
-	require.Len(t, systemAgents, 1, "exactly one type:system agent must be seeded (the Judge)")
+	// The System-Agents roster grew past the Judge with ADR-055
+	// (PlanSupervisor), so this asserts the roster matches SystemAgents()
+	// exactly rather than the old "exactly one" — a count literal here would
+	// have to be edited by every future System Agent, and asserting against
+	// the roster catches the real failure (a System Agent seeded with the
+	// wrong Type, or seeded twice) instead of merely a changed number.
+	require.Len(t, systemAgents, len(coreagent.SystemAgents()),
+		"every agent in SystemAgents() must be seeded exactly once with Type=system")
+	require.Len(t, judges, 1, "the Judge must be seeded exactly once")
 
-	j := systemAgents[0]
+	j := judges[0]
 	assert.Equal(t, "judge", j.ID, "the System Agent must be the Judge")
 	assert.Equal(t, config.AgentTypeSystem, j.Type)
 	assert.True(t, j.Locked, "Judge must be locked")
