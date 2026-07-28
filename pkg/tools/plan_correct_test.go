@@ -234,16 +234,16 @@ func TestPlanCorrect_DenialIsNotAnExistenceOracle(t *testing.T) {
 			"tail_members":         []any{tailMemberArg("t", "c")},
 		}
 	}
-	real := tool.Execute(ctx, args(f.planID))
+	existing := tool.Execute(ctx, args(f.planID))
 	missing := tool.Execute(ctx, args("plan-that-does-not-exist"))
 	otherMissing := tool.Execute(ctx, args("another-nonexistent-plan"))
 
-	if !real.IsError || !missing.IsError || !otherMissing.IsError {
+	if !existing.IsError || !missing.IsError || !otherMissing.IsError {
 		t.Fatal("expected all three calls to be denied")
 	}
-	if real.ForLLM != missing.ForLLM || missing.ForLLM != otherMissing.ForLLM {
+	if existing.ForLLM != missing.ForLLM || missing.ForLLM != otherMissing.ForLLM {
 		t.Fatalf("denials differ — the tool is an existence oracle:\n existing:    %q\n missing:     %q\n missing(2):  %q",
-			real.ForLLM, missing.ForLLM, otherMissing.ForLLM)
+			existing.ForLLM, missing.ForLLM, otherMissing.ForLLM)
 	}
 	if len(spy.calls) != 0 {
 		t.Fatalf("engine reached %d time(s) by a denied caller", len(spy.calls))

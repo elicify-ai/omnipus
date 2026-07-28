@@ -52,6 +52,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- Test seams --------------------------------------------------------
@@ -1145,6 +1146,20 @@ func (pe *PlanEngine) promoteReadyStandaloneTasks() {
 // agreeing (see executeTaskPlanVerified's doc for why that's a real boot-
 // ordering risk, not just an optimization concern).
 func (pe *PlanEngine) dispatchReadyMembers(ctx context.Context, planID string, tasks []task.Task) (dispatchedAny bool) {
+	// NewPlanEngine leaves this a TRUE nil interface when constructed with no
+	// TaskExecutor (see its "typed nil inside an interface" note). Every other
+	// pe.dispatcher call site guards; this one did not, and reached the nil
+	// only once corrections became applicable at all — an engine with no
+	// executor crashed the whole turn instead of reporting it.
+	//
+	// Loud, not silent: with no dispatcher NO member will ever run, so the
+	// plan sits at dispatching forever. That is a wiring defect, not a
+	// condition to swallow.
+	if pe.dispatcher == nil {
+		logger.ErrorCF("plan_engine", "no task dispatcher wired; plan members cannot be dispatched",
+			map[string]any{"plan_id": planID, "ready_members": len(tasks)})
+		return false
+	}
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusNext {
@@ -2242,7 +2257,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 				"source_kind":    sourceKind,
 				"reason":         "no_chat_origin",
 			})
-		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind); err != nil {
+		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p)); err != nil {
 			logger.ErrorCF("plan_engine", "could not dispatch origin-less plan owner turn",
 				map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "error": err.Error()})
 		}
@@ -2318,7 +2333,7 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string) {
 	// p.Supervision again in the same locked body.
 	p.Supervision = updated.Supervision
 
-	if dispatchErr := pe.dispatchPlanTurn(p.ID, planSupervisorAgentID, sessionID, content, sourceKind); dispatchErr != nil {
+	if dispatchErr := pe.dispatchPlanTurn(p.ID, planSupervisorAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p)); dispatchErr != nil {
 		// FR-024 / §20: an undelivered supervision wake is RECORDED on the
 		// plan, not WARNed away — "parked" and "silently stuck" must be
 		// distinguishable from the record alone. Unlike a missing chat origin
@@ -2432,21 +2447,31 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 		buildSupervisionUnavailableHandover(p, maxAttempts))
 }
 
-// supervisionTurnTimeout resolves FR-021's deadline for p.
+// supervisionTurnTimeout resolves FR-021's observation deadline for p:
+// a per-plan Bounds override wins, else the global
+// planning.supervision_turn_timeout_seconds, else the documented 600 s default.
 //
-// NOTE: the spec makes this a config.PlanningConfig field
-// (supervision_turn_timeout_seconds, per-plan overridable via PlanBounds).
-// pkg/config and pkg/plan are outside this change's file ownership, so the
-// package default is used until those fields land; the resolution is already
-// funnelled through this one accessor so wiring them is a one-line change.
-func (pe *PlanEngine) supervisionTurnTimeout(_ *plan.Plan) time.Duration {
-	return defaultSupervisionTurnTimeout
+// pkg/config returns SECONDS (it deliberately carries no scheduling
+// semantics); the conversion to a Duration happens here, and this accessor is
+// the ONLY place it happens.
+func (pe *PlanEngine) supervisionTurnTimeout(p *plan.Plan) time.Duration {
+	var override *int
+	if p != nil && p.Bounds != nil {
+		override = p.Bounds.SupervisionTurnTimeoutSeconds
+	}
+	secs := pe.planningConfig().EffectiveSupervisionTurnTimeoutSeconds(override)
+	return time.Duration(secs) * time.Second
 }
 
-// supervisionMaxAttempts resolves FR-022's ceiling for p. Same config note as
-// supervisionTurnTimeout above.
-func (pe *PlanEngine) supervisionMaxAttempts(_ *plan.Plan) int {
-	return defaultSupervisionMaxAttempts
+// supervisionMaxAttempts resolves FR-022's no-correction attempt ceiling for
+// p: a per-plan Bounds override wins, else the global
+// planning.supervision_max_attempts, else the documented default of 3.
+func (pe *PlanEngine) supervisionMaxAttempts(p *plan.Plan) int {
+	var override *int
+	if p != nil && p.Bounds != nil {
+		override = p.Bounds.SupervisionMaxAttempts
+	}
+	return pe.planningConfig().EffectiveSupervisionMaxAttempts(override)
 }
 
 // dispatchPlanTurn runs a plan wake as a REAL agent turn, bound to a REAL
@@ -2466,7 +2491,12 @@ func (pe *PlanEngine) supervisionMaxAttempts(_ *plan.Plan) int {
 // Returns an error only for a DISPATCH failure (no loop wired, agent does not
 // resolve, no session) — never for the turn's own outcome, which the engine
 // observes through FR-021's deadline rather than a callback.
-func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string) error {
+// turnTimeout bounds a wedged provider and MUST be the SAME number the
+// engine's own FR-021 observation deadline uses (supervisionTurnTimeout) —
+// otherwise a per-plan bounds override moves the deadline the engine watches
+// while leaving the turn itself running against the package default, and the
+// override silently does not apply to the thing it names.
+func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, turnTimeout time.Duration) error {
 	if pe.agentLoop == nil {
 		return fmt.Errorf("plan_engine: no agent loop wired; cannot dispatch a plan turn for %q", planID)
 	}
@@ -2502,7 +2532,7 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 		// Not derived from the engine's stop channel: the turn's cancellation
 		// authority is RequestCancelForSession against sessionID (the Stop
 		// fan-out), and the timeout bounds a wedged provider.
-		turnCtx, cancel := context.WithTimeout(context.Background(), defaultSupervisionTurnTimeout)
+		turnCtx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 		defer cancel()
 		if _, err := al.processTaskDirect(turnCtx, agentID, prompt, sessionKey, sessionID); err != nil {
 			logger.WarnCF("plan_engine", "plan wake turn ended with an error",
@@ -2813,28 +2843,41 @@ func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) bool {
 type CorrectionVerb = plan.RevisionVerb
 
 const (
-	CorrectionAppend        CorrectionVerb = CorrectionVerb(plan.RevisionAppend)
-	CorrectionSupersede     CorrectionVerb = CorrectionVerb(plan.RevisionSupersede)
-	CorrectionTargetedRetry CorrectionVerb = CorrectionVerb(plan.RevisionTargetedRetry)
+	CorrectionAppend        CorrectionVerb = plan.RevisionAppend
+	CorrectionSupersede     CorrectionVerb = plan.RevisionSupersede
+	CorrectionTargetedRetry CorrectionVerb = plan.RevisionTargetedRetry
+	CorrectionAbandon       CorrectionVerb = plan.RevisionAbandon
 )
 
-// ErrCorrectionNotOwner is returned by AppendCorrection when the invoking
-// principal is not the plan's owner (sec-MAJOR-2, FR-143/G-11). Corrections
-// mutate plan state, so only the owner identity recorded on the plan
-// (OwnerAgentID / OwnerSessionID, pkg/plan/plan.go) may issue one.
-var ErrCorrectionNotOwner = errors.New("plan_engine: correction caller is not the plan owner")
+// ErrCorrectionNotAdjudicator is returned by AppendCorrection when the
+// invoking principal is not the PlanSupervisor (ADR-055 D3/FR-6, sec-MAJOR-2).
+//
+// It replaces the retired ErrCorrectionNotOwner, whose rule was the exact
+// inverse: the engine used to admit ONLY the plan's OwnerAgentID, while the
+// plan_correct tool one layer above admits ONLY `plansupervisor`. Because a
+// System Agent can never be a plan's owner (validatePlanOwnerAgentForTool
+// rejects any owner that is not a chat target), the two admissible sets were
+// disjoint and EVERY correction was denied — ADR-055's headline feature was
+// inert. See requireCorrectionAuthority.
+var ErrCorrectionNotAdjudicator = errors.New("plan_engine: correction caller is not the plan adjudicator")
 
 // CorrectionCaller identifies the principal invoking AppendCorrection
-// (sec-MAJOR-2). The engine gates every correction on this identity matching
-// the plan's durable owner linkage:
-//   - AgentID must be non-empty and equal to the plan's OwnerAgentID.
-//   - When the plan's OwnerSessionID is populated (Phase-2 owner loop,
-//     m-3/FR-147), SessionID must equal it. When OwnerSessionID is still
-//     empty (owner session not yet opened), the agent match alone gates.
+// (sec-MAJOR-2). The engine gates every correction on AgentID alone, and only
+// the PlanSupervisor System Agent is admitted (ADR-055 D3/FR-4/FR-6):
 //
-// Callers (REST handler, system tool, or the owner-correction loop) MUST
-// resolve the invoking principal's real agent/session identity — there is no
-// "trusted internal caller" bypass.
+//   - AgentID must equal planSupervisorAgentID. Correction is the
+//     adjudicator's verb; the plan's OWNER has no correction role whatsoever
+//     (FR-4) and is denied by the same opaque message as any stranger, so
+//     "it is my plan" is not a way in.
+//   - SessionID is carried for the audit trail ONLY. It is deliberately NOT
+//     gated: the retired session clause compared it against the plan's
+//     OwnerSessionID, which locked even the owner out of its own plan from
+//     its own chat session (ADR-055 decision 9). OwnerSessionID itself stays
+//     on the plan record — ADR-055 D7 explicitly declines to delete it here.
+//
+// Callers (system tool or an internal supervision loop) MUST resolve the
+// invoking principal's real agent identity — there is no "trusted internal
+// caller" bypass.
 //
 // not-wire-format: engine-internal type; the REST/tool layer maps its
 // authenticated principal to this.
@@ -3120,10 +3163,11 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 	if err != nil {
 		return nil, fmt.Errorf("plan_engine: AppendCorrection: get plan %q: %w", planID, err)
 	}
-	// Owner-authority gate (sec-MAJOR-2): only the plan's owner may correct
-	// it. Runs before any state/phase inspection so a non-owner cannot probe
+	// Adjudicator-authority gate (ADR-055 D3, sec-MAJOR-2): only the
+	// PlanSupervisor may correct a plan — the owner included in "only". Runs
+	// before any state/phase inspection so an unauthorised caller cannot probe
 	// plan state via error differentiation, and before any mutation.
-	if err := pe.requireOwner(caller, p, planID); err != nil {
+	if err := pe.requireCorrectionAuthority(caller, p, planID); err != nil {
 		return nil, err
 	}
 	if p.State != plan.StateRunning {
@@ -3158,7 +3202,7 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 		RevisionID:          revID,
 		PlanID:              planID,
 		Generation:          gen,
-		Verb:                plan.RevisionVerb(req.Verb),
+		Verb:                req.Verb,
 		FalsifiedAssumption: req.FalsifiedAssumption,
 		TailAdds:            tailAddIDs,
 		SupersededMemberID:  req.SupersededMemberID,
@@ -3166,16 +3210,23 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 		Reason:              req.Reason,
 		CreatedAt:           now,
 	}
+	// abandon is the ONE verb that does not return the plan to dispatching: it
+	// terminates it. Its record therefore carries no phase patch, and its
+	// commit adds no members and wires no edges.
+	recPatch := plan.IntentRecordPatch{
+		ClearLastUnmetTerminalSignature: true,
+		PlanPhase:                       plan.PhaseDispatching,
+	}
+	if req.Verb == CorrectionAbandon {
+		recPatch = plan.IntentRecordPatch{}
+	}
 	rec := plan.IntentRecord{
-		IntentID: revID,
-		PlanID:   planID,
-		Members:  req.TailMembers,
-		Edges:    req.TailEdges,
-		Revision: rev,
-		Patch: plan.IntentRecordPatch{
-			ClearLastUnmetTerminalSignature: true,
-			PlanPhase:                       plan.PhaseDispatching,
-		},
+		IntentID:  revID,
+		PlanID:    planID,
+		Members:   req.TailMembers,
+		Edges:     req.TailEdges,
+		Revision:  rev,
+		Patch:     recPatch,
 		CreatedAt: now,
 	}
 	apply := pe.buildCorrectionApplyFunc(planID, req)
@@ -3190,39 +3241,28 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 		return nil, fmt.Errorf("plan_engine: AppendCorrection: apply (no intent log): %w", err)
 	}
 
-	// FR-050 + FR-029(3): the plan has just left the supervision-eligible
-	// phase set (the apply above set plan_phase=dispatching), so the wake
-	// receipt, wake error and attempt counter reset and the correction is
-	// counted — in ONE store write, so a concurrent REST Store.Update (whose
-	// callers do not hold planDecisionMu) cannot interleave between them.
+	// --- abandon: the adjudicated honest exit (ADR-055/FR-046b) -----------
 	//
-	// correction_rounds is INCREMENTED and never reset: it is an attribution
-	// counter for the life of the plan, and it is the only thing that tells
-	// "the round budget ran out with no correction ever applied" apart from
-	// "corrections consumed the budget".
+	// The adjudicator judges the Definition of Done unreachable from the
+	// plan's current state and adds no corrective work at all. The revision is
+	// now durably committed, so the falsified assumption is on the record;
+	// terminate the plan rather than burn the remaining round budget on
+	// corrections that cannot succeed.
 	//
-	// The stall note goes with it. A correction applied to a STALLED plan must
-	// clear that note as part of returning the plan to dispatching, for the
-	// same reason a park does: the plan record is the adjudicator's primary
-	// input, and a stale stall diagnosis alongside a fresh wake is the input
-	// most likely to produce the wrong verb next time.
-	rounds := 1
-	if p.Supervision != nil {
-		rounds = p.Supervision.CorrectionRounds + 1
+	// The reason is dod_unreachable, NOT judge_rounds_exhausted: rounds may
+	// well remain when this fires, and "we ran out of rounds" and "more rounds
+	// would not help" are different facts (see plan.FailedReasonDoDUnreachable).
+	if req.Verb == CorrectionAbandon {
+		pe.countCorrectionAndClearWake(planID, p, revID)
+		pe.clearUnmetTerminalSignature(planID)
+		pe.failPlanLocked(planID, plan.FailedReasonDoDUnreachable, buildAbandonHandover(p, req))
+		return &CorrectionResult{
+			RevisionID: revID, Generation: gen, RevisionEntry: rev,
+			HonestExit: true,
+		}, nil
 	}
-	postPatch := clearSupervisionWakePatch(plan.Patch{SupervisionCorrectionRounds: &rounds})
-	if strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix) {
-		cleared := ""
-		postPatch.HandoverText = &cleared
-	}
-	if _, err := pe.planStore.Update(planID, postPatch); err != nil {
-		// The correction itself is durably committed above; this write only
-		// carries supervision bookkeeping. Surface it — a stuck wake receipt
-		// would let the next tick's deadline fire against a plan that has
-		// already moved.
-		logger.ErrorCF("plan_engine", "AppendCorrection: could not reset supervision state after applying the correction",
-			map[string]any{"plan_id": planID, "revision_id": revID, "error": err.Error()})
-	}
+
+	pe.countCorrectionAndClearWake(planID, p, revID)
 
 	// Record supersession in-memory (for Judge evidence building).
 	if req.Verb == CorrectionSupersede {
@@ -3262,7 +3302,12 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 	// make progress, fail it honestly (no livelock, G-10).
 	if planCannotProgress(tasks) {
 		handover := buildUnreachableDoDHandover(p, tasks)
-		pe.failPlanLocked(planID, plan.FailedReasonJudgeRoundsExhausted, handover)
+		// dod_unreachable, not judge_rounds_exhausted: the correction was
+		// applied and rounds may well remain — "more rounds would not help" is
+		// a different fact from "we ran out of rounds", and this is the
+		// involuntary half of the pair plan.FailedReasonDoDUnreachable
+		// documents (the adjudicated `abandon` above is the deliberate half).
+		pe.failPlanLocked(planID, plan.FailedReasonDoDUnreachable, handover)
 		return &CorrectionResult{
 			RevisionID: revID, Generation: gen, RevisionEntry: rev,
 			HonestExit: true,
@@ -3273,30 +3318,316 @@ func (pe *PlanEngine) AppendCorrection(ctx context.Context, planID string, calle
 	return &CorrectionResult{RevisionID: revID, Generation: gen, RevisionEntry: rev}, nil
 }
 
-// validateCorrection checks the verb-specific preconditions (member exists,
-// correct status, belongs to this plan).
+// countCorrectionAndClearWake performs the post-commit supervision
+// bookkeeping shared by every correction verb (FR-050 + FR-029(3)): the plan
+// has just left the supervision-eligible phase set, so the wake receipt, wake
+// error and attempt counter reset and the correction is counted — in ONE store
+// write, so a concurrent REST Store.Update (whose callers do not hold
+// planDecisionMu) cannot interleave between them.
+//
+// correction_rounds is INCREMENTED and never reset: it is an attribution
+// counter for the life of the plan, and it is the only thing that tells "the
+// round budget ran out with no correction ever applied" apart from
+// "corrections consumed the budget".
+//
+// The stall note goes with it. A correction applied to a STALLED plan must
+// clear that note, for the same reason a park does: the plan record is the
+// adjudicator's primary input, and a stale stall diagnosis alongside a fresh
+// wake is the input most likely to produce the wrong verb next time.
+//
+// p is the plan as read at the top of AppendCorrection; revID is used for the
+// failure log only. Caller must hold planDecisionMu.
+func (pe *PlanEngine) countCorrectionAndClearWake(planID string, p *plan.Plan, revID string) {
+	rounds := 1
+	if p.Supervision != nil {
+		rounds = p.Supervision.CorrectionRounds + 1
+	}
+	postPatch := clearSupervisionWakePatch(plan.Patch{SupervisionCorrectionRounds: &rounds})
+	if strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix) {
+		cleared := ""
+		postPatch.HandoverText = &cleared
+	}
+	if _, err := pe.planStore.Update(planID, postPatch); err != nil {
+		// The correction itself is durably committed by the caller; this write
+		// only carries supervision bookkeeping. Surface it — a stuck wake
+		// receipt would let the next tick's deadline fire against a plan that
+		// has already moved.
+		logger.ErrorCF("plan_engine", "AppendCorrection: could not reset supervision state after applying the correction",
+			map[string]any{"plan_id": planID, "revision_id": revID, "error": err.Error()})
+	}
+}
+
+// buildAbandonHandover renders the handover for an adjudicated abandon
+// (ADR-055/FR-046b). It states the falsified assumption, because that — not
+// the member outcomes — is what makes the exit honest rather than a giving-up.
+func buildAbandonHandover(p *plan.Plan, req CorrectionRequest) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Plan %q was judged unable to reach its Definition of Done and has been "+
+		"abandoned by the adjudicator rather than corrected further.\n\n", p.Title)
+	fmt.Fprintf(&sb, "Falsified assumption: %s\n", strings.TrimSpace(req.FalsifiedAssumption))
+	if reason := strings.TrimSpace(req.Reason); reason != "" {
+		fmt.Fprintf(&sb, "Reason: %s\n", reason)
+	}
+	sb.WriteString("\nNo corrective work was added: the adjudicator judged that no correction " +
+		"could reach this Definition of Done from the plan's current state. Review the DoD itself.")
+	return sb.String()
+}
+
+// validateCorrection is the ENGINE's own, complete precondition check for a
+// correction — not a formality delegating to the tool that called it.
+//
+// It exists as a second, independent line of defence because AppendCorrection
+// is an exported engine entrypoint: pkg/tools/plan_correct.go is one caller,
+// but nothing structurally prevents another (a REST seam, an internal
+// supervision loop, a future tool) from reaching it with a typed request that
+// never passed through the tool's raw-argument parser. Every rule the tool
+// enforces at its boundary is therefore re-enforced here on the TYPED request.
+//
+// The checks, in the order a bad request is cheapest to reject:
+//
+//  1. Payload caps — single-sourced from pkg/plan (MaxTailMembers,
+//     MaxTailEdges, MaxMemberTitleBytes, MaxTextBytes), never re-declared
+//     locally, so the tool and the engine cannot drift apart.
+//  2. The verb/field compatibility matrix. A field that is merely MEANINGLESS
+//     for a verb is rejected rather than silently ignored, because the engine
+//     creates rec.Members/rec.Edges verb-independently — a targeted_retry
+//     carrying 50 tail members would otherwise create all 50.
+//  3. Verb-specific member references (exists, right status, belongs to THIS
+//     plan).
+//  4. FR-030/FR-030b, the supersede pairing rule — see requireSupersedePairing.
+//  5. Tail-edge integrity: no dangling endpoints, no self-edges, no edge
+//     touching the superseded member, and no cycle in the resulting DAG.
 func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req CorrectionRequest) error {
+	if err := validateCorrectionPayloadCaps(req); err != nil {
+		return err
+	}
+	if err := validateCorrectionVerbFields(req); err != nil {
+		return err
+	}
+
+	var supersededMember *task.Task
 	switch req.Verb {
 	case CorrectionSupersede:
+		m, err := pe.validateMemberRef(planID, req.SupersededMemberID, "supersede", task.StatusDone, "done")
+		if err != nil {
+			return err
+		}
+		supersededMember = m
+	case CorrectionTargetedRetry:
+		if _, err := pe.validateMemberRef(planID, req.RetriedMemberID, "targeted_retry", task.StatusFailed, "failed"); err != nil {
+			return err
+		}
+		// targeted_retry adds no work and wires no edges (enforced by the
+		// field matrix above), so there is nothing further to validate.
+		return nil
+	case CorrectionAbandon:
+		// The honest exit names no member and adds no work (enforced by the
+		// field matrix above). Nothing to resolve against the store.
+		return nil
+	case CorrectionAppend:
+		// Tail members are validated below, shared with supersede.
+	default:
+		return fmt.Errorf("plan_engine: unknown correction verb %q", req.Verb)
+	}
+
+	// FR-030b: replacement work must be held to the SAME standard as the work
+	// it replaces. Checked before the edge graph because it is the rule the
+	// whole verb's safety rests on.
+	if req.Verb == CorrectionSupersede {
+		if err := tools.RequireCriteriaInheritance(supersededMember.Criteria, req.TailMembers); err != nil {
+			return fmt.Errorf("plan_engine: %w", err)
+		}
+	}
+
+	members, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err != nil {
+		return fmt.Errorf("plan_engine: could not list members of plan %q: %w", planID, err)
+	}
+	return validateCorrectionTailEdges(members, req)
+}
+
+// validateCorrectionPayloadCaps bounds every unbounded field on the request.
+// The caps live in pkg/plan so this and the plan_correct tool enforce the same
+// numbers by construction (FR-004).
+func validateCorrectionPayloadCaps(req CorrectionRequest) error {
+	if len(req.TailMembers) > plan.MaxTailMembers {
+		return fmt.Errorf("plan_engine: tail_members has %d entries; the maximum is %d",
+			len(req.TailMembers), plan.MaxTailMembers)
+	}
+	if len(req.TailEdges) > plan.MaxTailEdges {
+		return fmt.Errorf("plan_engine: tail_edges has %d entries; the maximum is %d",
+			len(req.TailEdges), plan.MaxTailEdges)
+	}
+	if err := checkCorrectionTextBytes("falsified_assumption", req.FalsifiedAssumption); err != nil {
+		return err
+	}
+	if err := checkCorrectionTextBytes("reason", req.Reason); err != nil {
+		return err
+	}
+	for i := range req.TailMembers {
+		m := &req.TailMembers[i]
+		if len(m.Title) > plan.MaxMemberTitleBytes {
+			return fmt.Errorf("plan_engine: tail_members[%d].title is %d bytes; the maximum is %d",
+				i, len(m.Title), plan.MaxMemberTitleBytes)
+		}
+		if err := checkCorrectionTextBytes(fmt.Sprintf("tail_members[%d].description", i), m.Description); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkCorrectionTextBytes bounds one free-text correction field on BYTES
+// (not runes), matching plan.MaxTextBytes' stated contract.
+func checkCorrectionTextBytes(field, value string) error {
+	if len(value) > plan.MaxTextBytes {
+		return fmt.Errorf("plan_engine: %s is %d bytes; the maximum is %d",
+			field, len(value), plan.MaxTextBytes)
+	}
+	return nil
+}
+
+// validateCorrectionVerbFields is the verb/field compatibility matrix: it
+// states which fields each verb ACCEPTS, so a field that is meaningless for
+// the verb is rejected instead of silently applied.
+func validateCorrectionVerbFields(req CorrectionRequest) error {
+	reject := func(verb string, offenders map[string]bool) error {
+		named := make([]string, 0, len(offenders))
+		for _, field := range []string{"superseded_member_id", "retried_member_id", "tail_members", "tail_edges"} {
+			if offenders[field] {
+				named = append(named, field)
+			}
+		}
+		if len(named) == 0 {
+			return nil
+		}
+		return fmt.Errorf("plan_engine: %s does not accept %s", verb, strings.Join(named, ", "))
+	}
+
+	switch req.Verb {
+	case CorrectionAppend:
+		if err := reject("append", map[string]bool{
+			"superseded_member_id": req.SupersededMemberID != "",
+			"retried_member_id":    req.RetriedMemberID != "",
+		}); err != nil {
+			return err
+		}
+		if len(req.TailMembers) == 0 {
+			return fmt.Errorf("plan_engine: append requires at least one tail member — an append that adds no work is not a correction")
+		}
+	case CorrectionSupersede:
+		if err := reject("supersede", map[string]bool{
+			"retried_member_id": req.RetriedMemberID != "",
+		}); err != nil {
+			return err
+		}
 		if req.SupersededMemberID == "" {
 			return fmt.Errorf("plan_engine: supersede requires superseded_member_id")
 		}
-		if err := pe.validateMemberRef(planID, req.SupersededMemberID, "supersede", task.StatusDone, "done"); err != nil {
+		if err := requireSupersedePairing(req); err != nil {
 			return err
 		}
 	case CorrectionTargetedRetry:
+		if err := reject("targeted_retry", map[string]bool{
+			"superseded_member_id": req.SupersededMemberID != "",
+			"tail_members":         len(req.TailMembers) > 0,
+			"tail_edges":           len(req.TailEdges) > 0,
+		}); err != nil {
+			return err
+		}
 		if req.RetriedMemberID == "" {
 			return fmt.Errorf("plan_engine: targeted_retry requires retried_member_id")
 		}
-		if err := pe.validateMemberRef(planID, req.RetriedMemberID, "targeted_retry", task.StatusFailed, "failed"); err != nil {
+	case CorrectionAbandon:
+		if err := reject("abandon", map[string]bool{
+			"superseded_member_id": req.SupersededMemberID != "",
+			"retried_member_id":    req.RetriedMemberID != "",
+			"tail_members":         len(req.TailMembers) > 0,
+			"tail_edges":           len(req.TailEdges) > 0,
+		}); err != nil {
 			return err
 		}
-	case CorrectionAppend:
-		if len(req.TailMembers) == 0 {
-			return fmt.Errorf("plan_engine: append requires at least one tail member")
+		if strings.TrimSpace(req.FalsifiedAssumption) == "" {
+			return fmt.Errorf(
+				"plan_engine: abandon requires falsified_assumption — terminating a plan as unreachable " +
+					"is only honest when the assumption that turned out to be wrong is on the record")
 		}
 	default:
 		return fmt.Errorf("plan_engine: unknown correction verb %q", req.Verb)
+	}
+	return nil
+}
+
+// requireSupersedePairing enforces FR-030: a supersede MUST carry replacement
+// work.
+//
+// supersede marks a done member's outcome ignored by the judge. Unpaired, it
+// is a way to satisfy an unmet Definition of Done by DISCOUNTING the evidence
+// that failed it instead of fixing the work — which is precisely the move the
+// verb must not enable. Pairing composes atomically: the engine creates tail
+// members verb-independently, so the discounting and the replacement land in
+// the same transactional intent-log commit or neither does.
+//
+// The complementary half (FR-030b, requireCriteriaInheritance) is what stops
+// the pairing being satisfied by one throwaway member: the replacement must
+// carry EVERY acceptance criterion of the member it replaces.
+func requireSupersedePairing(req CorrectionRequest) error {
+	if len(req.TailMembers) > 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"plan_engine: supersede requires at least one tail member: discounting a member's outcome is only " +
+			"a correction when it is paired with replacement work that addresses the same criteria")
+}
+
+// validateCorrectionTailEdges checks the edge list against the plan's real
+// member set: both endpoints must resolve to an existing member of THIS plan
+// or to a tail member created in this same request, self-edges are rejected,
+// no endpoint may name the member being superseded (new work behind a
+// discounted member cannot make progress), and the resulting graph must be
+// acyclic.
+//
+// The acyclicity check matters most here: the engine wires edges INSIDE its
+// transactional intent-log commit, so a cycle discovered there aborts
+// mid-commit, and an unwired cycle is unresolvable by the dispatcher — which,
+// combined with a once-per-park supervision wake, strands the plan permanently.
+func validateCorrectionTailEdges(members []task.Task, req CorrectionRequest) error {
+	if len(req.TailEdges) == 0 {
+		return nil
+	}
+	known := make(map[string]bool, len(members)+len(req.TailMembers))
+	for i := range members {
+		known[members[i].ID] = true
+	}
+	for i := range req.TailMembers {
+		if id := req.TailMembers[i].ID; id != "" {
+			known[id] = true
+		}
+	}
+	for i := range req.TailEdges {
+		e := &req.TailEdges[i]
+		for _, ep := range []struct{ field, id string }{{"from", e.FromTaskID}, {"to", e.ToTaskID}} {
+			if ep.id == "" {
+				return fmt.Errorf("plan_engine: tail_edges[%d]: %s is required", i, ep.field)
+			}
+			if !known[ep.id] {
+				return fmt.Errorf(
+					"plan_engine: tail_edges[%d]: %s %q is neither an existing member of this plan nor a tail member in this correction",
+					i, ep.field, ep.id)
+			}
+		}
+		if e.FromTaskID == e.ToTaskID {
+			return fmt.Errorf("plan_engine: tail_edges[%d]: from and to name the same member (self-edge)", i)
+		}
+		if req.SupersededMemberID != "" &&
+			(e.FromTaskID == req.SupersededMemberID || e.ToTaskID == req.SupersededMemberID) {
+			return fmt.Errorf(
+				"plan_engine: tail_edges[%d]: names member %q, whose outcome this correction is superseding — new work must not depend on it",
+				i, req.SupersededMemberID)
+		}
+	}
+	if err := tools.RequireAcyclic(members, req.TailMembers, req.TailEdges); err != nil {
+		return fmt.Errorf("plan_engine: %w", err)
 	}
 	return nil
 }
@@ -3307,51 +3638,58 @@ func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req Correc
 // (wantStatus=done, statusMsg="done") and CorrectionTargetedRetry
 // (wantStatus=failed, statusMsg="failed") so the only call-site difference is
 // the verb label and the status check.
-func (pe *PlanEngine) validateMemberRef(planID, memberID, verb string, wantStatus task.Status, statusMsg string) error {
+// Returns the resolved member so a caller that needs its body (supersede, for
+// the FR-030b criteria-inheritance check) does not re-read it.
+func (pe *PlanEngine) validateMemberRef(planID, memberID, verb string, wantStatus task.Status, statusMsg string) (*task.Task, error) {
 	t, err := pe.taskStore.Get(memberID)
 	if err != nil {
-		return fmt.Errorf("plan_engine: %s member %q: %w", verb, memberID, err)
+		return nil, fmt.Errorf("plan_engine: %s member %q: %w", verb, memberID, err)
 	}
 	if t.Status != wantStatus {
-		return fmt.Errorf("plan_engine: member %q is %s, not %s (only %s members can be %s)",
+		return nil, fmt.Errorf("plan_engine: member %q is %s, not %s (only %s members can be %s)",
 			memberID, t.Status, statusMsg, statusMsg, verb)
 	}
 	if t.PlanID != planID {
-		return fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
+		return nil, fmt.Errorf("plan_engine: member %q belongs to plan %q, not %q",
 			memberID, t.PlanID, planID)
 	}
-	return nil
+	return t, nil
 }
 
-// requireOwner is the owner-authority gate for AppendCorrection
-// (sec-MAJOR-2, FR-143/G-11). It enforces the three checks that must run
-// before any state/phase inspection so a non-owner cannot probe plan state
-// via error differentiation, and before any mutation:
-//   - AgentID non-empty (a caller with no identity is a non-owner).
-//   - AgentID matches the plan's OwnerAgentID (opaque denial — the real
-//     owner ID is logged server-side, not echoed in the error).
-//   - When OwnerSessionID is populated (Phase-2 owner loop), SessionID must
-//     match it. When OwnerSessionID is empty (owner session not yet opened),
-//     the agent match alone gates.
+// requireCorrectionAuthority is the adjudicator-authority gate for
+// AppendCorrection (ADR-055 D3/FR-6, sec-MAJOR-2). It runs before any
+// state/phase inspection so an unauthorised caller cannot probe plan state via
+// error differentiation, and before any mutation.
 //
-// Returns ErrCorrectionNotOwner (wrapped) on every denial; callers propagate
-// the wrapped sentinel so the REST seam can map to HTTP 403.
-func (pe *PlanEngine) requireOwner(caller CorrectionCaller, p *plan.Plan, planID string) error {
-	if caller.AgentID == "" {
-		return fmt.Errorf("%w: plan %q: caller agent identity is empty", ErrCorrectionNotOwner, planID)
+// THE RULE, in one line: correction is PlanSupervisor's alone — matched on
+// exact system-agent identity — and everyone else, the plan's own OWNER
+// included, is denied.
+//
+// Matching on identity rather than on "is a System Agent" is deliberate
+// (ADR-055 D3): a future System Agent must not silently inherit correction
+// rights by virtue of its type.
+//
+// The denial stays OPAQUE (sec-MAJOR-2): the error names the plan the caller
+// already named and nothing else. It does not echo the plan's OwnerAgentID,
+// does not say who IS authorised, and does not vary with plan state — those
+// details go to the server-side log only.
+//
+// Returns ErrCorrectionNotAdjudicator (wrapped) on every denial; callers
+// propagate the wrapped sentinel so a calling seam can map it to HTTP 403.
+func (pe *PlanEngine) requireCorrectionAuthority(caller CorrectionCaller, p *plan.Plan, planID string) error {
+	if caller.AgentID == planSupervisorAgentID {
+		return nil
 	}
-	if caller.AgentID != p.OwnerAgentID {
-		// Opaque denial (sec-MAJOR-2): do not leak the real OwnerAgentID to a
-		// non-owner. Detail is logged server-side only.
-		logger.WarnCF("plan_engine", "AppendCorrection denied: caller is not plan owner",
-			map[string]any{"plan_id": planID, "caller_agent": caller.AgentID, "owner_agent": p.OwnerAgentID})
-		return fmt.Errorf("%w: plan %q", ErrCorrectionNotOwner, planID)
-	}
-	if p.OwnerSessionID != "" && caller.SessionID != p.OwnerSessionID {
-		return fmt.Errorf("%w: plan %q: caller session does not match the plan's owner session",
-			ErrCorrectionNotOwner, planID)
-	}
-	return nil
+	// An empty AgentID lands here too — a caller with no identity is not the
+	// adjudicator, and gets the same message as one with the wrong identity.
+	logger.WarnCF("plan_engine", "AppendCorrection denied: caller is not the plan adjudicator",
+		map[string]any{
+			"plan_id":      planID,
+			"caller_agent": caller.AgentID,
+			"owner_agent":  p.OwnerAgentID,
+			"adjudicator":  planSupervisorAgentID,
+		})
+	return fmt.Errorf("%w: plan %q", ErrCorrectionNotAdjudicator, planID)
 }
 
 // buildCorrectionApplyFunc returns the idempotent ApplyFunc for a correction.
@@ -3396,6 +3734,12 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 				logger.DebugCF("plan_engine", "targeted-retry reset (may be idempotent no-op)",
 					map[string]any{"task_id": req.RetriedMemberID, "error": err.Error()})
 			}
+		}
+		// abandon terminates the plan rather than returning it to work, so it
+		// must NOT be patched back to dispatching here — AppendCorrection
+		// fails it to dod_unreachable immediately after this commit.
+		if req.Verb == CorrectionAbandon {
+			return nil
 		}
 		// Patch the plan record (clear unmet signature, set phase).
 		dispatching := plan.PhaseDispatching

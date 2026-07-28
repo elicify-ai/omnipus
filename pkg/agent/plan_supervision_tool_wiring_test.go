@@ -300,7 +300,7 @@ func TestWireSupervisionTools_PlanCorrectDeniedBeforeEngineForNonSupervisor(t *t
 
 	// Identity-conditioning: the SAME payload as the PlanSupervisor must NOT
 	// produce the denial. (What it produces instead is the subject of
-	// TestWireSupervisionTools_PlanCorrectSupervisorIsBlockedByEngineOwnerGate.)
+	// TestWireSupervisionTools_PlanCorrectBySupervisorAppliesToTheRealPlan.)
 	supervisorRes := agentInst.Tools.Execute(
 		tools.WithAgentID(context.Background(), tools.PlanSupervisorAgentID), "plan_correct", args)
 	if supervisorRes == nil {
@@ -313,27 +313,28 @@ func TestWireSupervisionTools_PlanCorrectDeniedBeforeEngineForNonSupervisor(t *t
 	}
 }
 
-// TestWireSupervisionTools_PlanCorrectSupervisorIsBlockedByEngineOwnerGate
-// PINS A KNOWN, UNRESOLVED DEFECT that this wiring exposes but cannot fix.
+// TestWireSupervisionTools_PlanCorrectBySupervisorAppliesToTheRealPlan is the
+// end-to-end proof that ADR-055's headline feature is REACHABLE: the
+// PlanSupervisor issues a correction through the real registered tool, against
+// a real PlanEngine and real stores, and the plan's members actually change.
 //
-// The two authority gates in the correction path are mutually exclusive:
+// It replaces a test that PINNED THE OPPOSITE — that the correction was
+// rejected — because the two authority gates in this path used to be mutually
+// exclusive:
 //
-//	tools.PlanCorrectTool  admits ONLY caller == tools.PlanSupervisorAgentID
-//	PlanEngine.requireOwner admits ONLY caller == plan.OwnerAgentID
+//	tools.PlanCorrectTool   admitted ONLY caller == tools.PlanSupervisorAgentID
+//	PlanEngine.requireOwner admitted ONLY caller == plan.OwnerAgentID
 //
-// PlanSupervisor is a seeded System Agent, and a System Agent can never be a
-// plan's OwnerAgentID (validatePlanOwnerAgentForTool rejects any owner that is
-// not a chat target). The two admissible sets are therefore disjoint, and
-// plan_correct cannot apply ANY correction to a plan it did not own — which is
-// every plan. The wiring is correct end to end; the engine's owner gate is
-// what rejects it, one layer below.
+// and a System Agent can never be a plan's OwnerAgentID
+// (validatePlanOwnerAgentForTool rejects any owner that is not a chat target).
+// The admissible sets were disjoint, so plan_correct could not correct ANY
+// plan. The engine's gate is now requireCorrectionAuthority, which admits the
+// adjudicator by identity — this test is what stops that regressing.
 //
-// This test asserts the ACTUAL current behaviour so the gap is measured rather
-// than assumed. It is expected to FAIL when the engine's gate is reconciled
-// with ADR-055's adjudicator model (plan_engine.go — out of scope for this
-// wiring change); that failure is the signal to delete this test, not to
-// re-pin it.
-func TestWireSupervisionTools_PlanCorrectSupervisorIsBlockedByEngineOwnerGate(t *testing.T) {
+// It deliberately asserts the OUTCOME (a new member exists on the plan, the
+// plan left the parked phase), not that a gate returned nil: every one of the
+// controls that shipped broken on this branch had a passing gate-level test.
+func TestWireSupervisionTools_PlanCorrectBySupervisorAppliesToTheRealPlan(t *testing.T) {
 	al, agentInst, planStore := newSupervisionWiringLoop(t)
 
 	mustCreatePlan(t, planStore, &plan.Plan{
@@ -357,27 +358,78 @@ func TestWireSupervisionTools_PlanCorrectSupervisorIsBlockedByEngineOwnerGate(t 
 	if res == nil {
 		t.Fatal("plan_correct returned nil")
 	}
-
-	// The call MUST have reached the engine — that is what this wiring
-	// guarantees. It must NOT have been stopped by the tool's identity gate
-	// or by an unwired hook.
-	if strings.Contains(res.ForLLM, "not permitted to correct plans") {
-		t.Fatalf("stopped at the tool identity gate, never reached the engine: %q", res.ForLLM)
-	}
-	if strings.Contains(res.ForLLM, "plan engine is not installed") ||
-		strings.Contains(res.ForLLM, "not wired (configuration error)") {
-		t.Fatalf("engine hook not wired: %q", res.ForLLM)
+	if res.IsError {
+		t.Fatalf("the PlanSupervisor's correction was rejected — the correction loop is unreachable: %q", res.ForLLM)
 	}
 
+	// OUTCOME 1: the correction added real work to the real plan.
+	members, err := al.taskStore.List(task.Filter{PlanID: "p-gate"})
+	if err != nil {
+		t.Fatalf("list plan members: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("plan has %d members after the correction; want 1 (the appended tail member)", len(members))
+	}
+	if members[0].Title != "retry the fetch" {
+		t.Errorf("appended member title = %q, want %q", members[0].Title, "retry the fetch")
+	}
+	if members[0].PlanID != "p-gate" {
+		t.Errorf("appended member belongs to plan %q, want p-gate", members[0].PlanID)
+	}
+
+	// OUTCOME 2: the plan left the parked phase, so the engine will dispatch
+	// the new work rather than sit waiting for another adjudication.
+	p, err := planStore.Get("p-gate")
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	if p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision {
+		t.Error("plan is still parked awaiting supervision after an applied correction")
+	}
+}
+
+// TestWireSupervisionTools_PlanCorrectByOwnerIsDeniedEndToEnd is the other
+// half of the authority rule (ADR-055 FR-4): the plan's OWNER receives
+// outcomes and may stop/resume, but has NO correction role. Fixing the
+// supervisor's access must not have opened it to everyone.
+func TestWireSupervisionTools_PlanCorrectByOwnerIsDeniedEndToEnd(t *testing.T) {
+	al, agentInst, planStore := newSupervisionWiringLoop(t)
+
+	mustCreatePlan(t, planStore, &plan.Plan{
+		ID: "p-owner", Title: "p-owner", WorkspaceID: "ws",
+		OwnerAgentID: "planner-agent", State: plan.StateRunning,
+		PlanPhase:     plan.PhaseAwaitingSupervision,
+		SourceChannel: "telegram", SourceChatID: "chat-owner",
+	})
+	installRealPlanEngine(t, al, planStore)
+
+	ctx := tools.WithAgentID(context.Background(), "planner-agent")
+	res := agentInst.Tools.Execute(ctx, "plan_correct", map[string]any{
+		"plan_id":              "p-owner",
+		"verb":                 string(plan.RevisionAppend),
+		"falsified_assumption": "it is my plan",
+		"tail_members": []any{map[string]any{
+			"title":    "sneak work in",
+			"criteria": []any{map[string]any{"kind": "prose", "text": "it lands"}},
+		}},
+	})
+	if res == nil {
+		t.Fatal("plan_correct returned nil")
+	}
 	if !res.IsError {
-		t.Fatalf("KNOWN GAP RESOLVED: the PlanSupervisor's correction now succeeds. The engine's "+
-			"requireOwner gate appears to have been reconciled with ADR-055's adjudicator "+
-			"authority model — delete this test. Got: %q", res.ForLLM)
+		t.Fatalf("the plan's OWNER corrected its own plan: %q", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "not the plan owner") &&
-		!strings.Contains(res.ForLLM, "not owner") {
-		t.Logf("note: correction rejected by the engine with an unexpected message "+
-			"(still a rejection, so the gap stands): %q", res.ForLLM)
+	// The denial must leak nothing about who IS authorised.
+	if strings.Contains(strings.ToLower(res.ForLLM), tools.PlanSupervisorAgentID) {
+		t.Errorf("denial names the authorised holder: %q", res.ForLLM)
+	}
+	// And it must have changed nothing.
+	members, err := al.taskStore.List(task.Filter{PlanID: "p-owner"})
+	if err != nil {
+		t.Fatalf("list plan members: %v", err)
+	}
+	if len(members) != 0 {
+		t.Errorf("a denied correction created %d member(s)", len(members))
 	}
 }
 

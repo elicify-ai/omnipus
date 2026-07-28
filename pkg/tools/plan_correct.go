@@ -522,7 +522,7 @@ func (t *PlanCorrectTool) buildCorrection(p *plan.Plan, callerID string, args ma
 
 	// --- FR-030b: the replacement inherits the superseded member's criteria
 	if verb == plan.RevisionSupersede {
-		if err := requireCriteriaInheritance(supersededMember.Criteria, tailMembers); err != nil {
+		if err := RequireCriteriaInheritance(supersededMember.Criteria, tailMembers); err != nil {
 			return req, err
 		}
 	}
@@ -532,7 +532,7 @@ func (t *PlanCorrectTool) buildCorrection(p *plan.Plan, callerID string, args ma
 	if eErr != nil {
 		return req, eErr
 	}
-	if err := requireAcyclic(members, tailMembers, edges); err != nil {
+	if err := RequireAcyclic(members, tailMembers, edges); err != nil {
 		return req, err
 	}
 	req.TailEdges = edges
@@ -672,7 +672,7 @@ func (t *PlanCorrectTool) parseTailMembers(
 	return out, refToID, nil
 }
 
-// requireCriteriaInheritance enforces FR-030b: every acceptance criterion of
+// RequireCriteriaInheritance enforces FR-030b: every acceptance criterion of
 // the superseded member must be carried by the union of the replacement tail
 // members' criteria.
 //
@@ -690,7 +690,10 @@ func (t *PlanCorrectTool) parseTailMembers(
 // names what is missing. An empty superseded criteria set is vacuously
 // satisfied (FR-030's pairing rule still applies, so the bare form of that
 // case is still rejected).
-func requireCriteriaInheritance(superseded []task.AcceptanceCriterion, replacements []task.Task) error {
+//
+// EXPORTED for the same reason as RequireAcyclic below: the engine enforces
+// this rule too, on the typed request, and the two must be one function.
+func RequireCriteriaInheritance(superseded []task.AcceptanceCriterion, replacements []task.Task) error {
 	if len(superseded) == 0 {
 		return nil
 	}
@@ -808,16 +811,22 @@ func parseTailEdges(raw []any, existingIDs map[string]bool, refToID map[string]s
 	return out, nil
 }
 
-// requireAcyclic rejects a correction whose resulting dependency graph
+// RequireAcyclic rejects a correction whose resulting dependency graph
 // contains a cycle. The graph is the plan's existing member DAG (each
 // member's blocked_by edges, restricted to blockers that are themselves
 // members of this plan) plus the new tail members and the new edges.
 //
-// This runs at the tool boundary because the engine wires edges INSIDE its
-// transactional intent-log commit: a cycle discovered there aborts mid-commit.
-// And an un-wired cycle is unresolvable by the dispatcher, which — combined
-// with a once-per-park supervision wake — strands the plan permanently.
-func requireAcyclic(existing []task.Task, tail []task.Task, edges []plan.IntentEdge) error {
+// The engine wires edges INSIDE its transactional intent-log commit, so a
+// cycle discovered there aborts mid-commit; and an un-wired cycle is
+// unresolvable by the dispatcher, which — combined with a once-per-park
+// supervision wake — strands the plan permanently.
+//
+// EXPORTED because PlanEngine.validateCorrection calls this same function on
+// the typed request it is handed. AppendCorrection is an exported engine
+// entrypoint that this tool is only one caller of, so the engine re-enforces
+// the rule independently — and it must be the SAME rule, not a second
+// implementation that can drift.
+func RequireAcyclic(existing []task.Task, tail []task.Task, edges []plan.IntentEdge) error {
 	adj := make(map[string][]string)
 	nodes := make(map[string]bool, len(existing)+len(tail))
 	for i := range existing {

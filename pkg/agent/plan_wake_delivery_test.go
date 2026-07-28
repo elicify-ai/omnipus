@@ -663,7 +663,7 @@ func TestAppendCorrection_AcceptsStalledPhase(t *testing.T) {
 	})
 
 	res, err := h.pe.AppendCorrection(context.Background(), "p1",
-		CorrectionCaller{AgentID: "owner"},
+		supervisorCaller(),
 		CorrectionRequest{
 			Verb:                CorrectionAppend,
 			FalsifiedAssumption: "the blocker would resolve itself",
@@ -700,7 +700,7 @@ func TestAppendCorrection_AcceptsStalledPhase(t *testing.T) {
 		PlanPhase: dispatching,
 	})
 	if _, err := h.pe.AppendCorrection(context.Background(), "p2",
-		CorrectionCaller{AgentID: "owner"},
+		supervisorCaller(),
 		CorrectionRequest{
 			Verb:                CorrectionAppend,
 			FalsifiedAssumption: "x",
@@ -825,7 +825,7 @@ func TestSupervisionState_CorrectionRoundsSurviveAParkCycle(t *testing.T) {
 
 	for round := 1; round <= 2; round++ {
 		if _, err := h.pe.AppendCorrection(context.Background(), "p1",
-			CorrectionCaller{AgentID: "owner"},
+			supervisorCaller(),
 			CorrectionRequest{
 				Verb:                CorrectionAppend,
 				FalsifiedAssumption: fmt.Sprintf("assumption %d was wrong", round),

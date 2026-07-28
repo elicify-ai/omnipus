@@ -916,8 +916,7 @@ func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
 			{CriterionID: in.Criteria[0].ID, Met: true, Reason: "now met"},
 		}}}
 	}
-	t2Plan, _ := h.plans.Get("plan-t2")
-	corrRes, err := h.pe.AppendCorrection(ctx, "plan-t2", CorrectionCaller{AgentID: t2Plan.OwnerAgentID, SessionID: t2Plan.OwnerSessionID}, CorrectionRequest{
+	corrRes, err := h.pe.AppendCorrection(ctx, "plan-t2", supervisorCaller(), CorrectionRequest{
 		Verb: CorrectionAppend, FalsifiedAssumption: "assumed the first attempt was enough",
 		TailMembers: []task.Task{{ID: "t2-tail", Title: "tail", WorkspaceID: "ws", Status: task.StatusNext,
 			WriteSet: []string{"src/tail.go"}, Criteria: conformanceCriterion("t2-tail-c1")}},
@@ -1047,10 +1046,16 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	// (2) owner re-plans via SUPERSEDE: the done member is ignored-by-Judge
 	//     (record stays immutable/done), and the auto-reset resets the other
 	//     failed member t3-other-failed (supersede triggers auto-reset).
-	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-sup", CorrectionCaller{AgentID: "owner"}, CorrectionRequest{
+	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-sup", supervisorCaller(), CorrectionRequest{
 		Verb: CorrectionSupersede, SupersededMemberID: "t3-done",
 		FalsifiedAssumption: "assumed the done member's outcome was correct",
 		Reason:              "supersede the done member — its result is wrong",
+		// FR-030: a supersede must be PAIRED with replacement work. Bare
+		// discounting is rejected by the engine.
+		TailMembers: []task.Task{{
+			ID: "t3-done-replacement", Title: "redo the superseded work",
+			WorkspaceID: "ws", Status: task.StatusNext,
+		}},
 	}); err != nil {
 		t.Fatalf("(2) AppendCorrection supersede: %v", err)
 	}
@@ -1069,7 +1074,7 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	// (3) TARGETED-RETRY (on the second awaiting plan): reset the frozen-
 	//     transient failed member ALONE — the done member stays frozen/done and
 	//     targeted-retry does NOT auto-reset other failed members (D4).
-	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-retry", CorrectionCaller{AgentID: "owner"}, CorrectionRequest{
+	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-retry", supervisorCaller(), CorrectionRequest{
 		Verb: CorrectionTargetedRetry, RetriedMemberID: "t3-frozen",
 		FalsifiedAssumption: "assumed the transient failure was permanent",
 		Reason:              "targeted-retry the frozen-transient member",

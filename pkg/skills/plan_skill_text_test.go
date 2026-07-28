@@ -23,14 +23,19 @@ func planSkillText(t *testing.T) string {
 	return string(b)
 }
 
-// TestPlanSkillEmbeddedText_AgreesWithCorrectionRules is the regression guard
-// no compiler can provide. The skill is a go:embed'ed prompt, so a rule that
-// contradicts the code it describes builds, ships, and is only discovered when
-// an adjudicator follows the prompt and gets its correction rejected.
+// TestPlanSkillEmbeddedText_AgreesWithValidateCorrection is the regression
+// guard no compiler can provide. The skill is a go:embed'ed prompt, so a rule
+// that contradicts the code it describes builds, ships, and is only discovered
+// when an adjudicator follows the prompt and gets its correction rejected.
 //
 // Each assertion below pairs a line of prose with the enforcement that makes
-// it true or false — not with a style preference.
-func TestPlanSkillEmbeddedText_AgreesWithCorrectionRules(t *testing.T) {
+// it true or false — not with a style preference. The name says
+// validateCorrection because that is now genuinely the counterpart:
+// PlanEngine.validateCorrection enforces the pairing rule, the caps, the
+// verb/field matrix and the abandon verb this prompt describes. It was
+// previously named ..._AgreesWithCorrectionRules precisely because the engine
+// did NOT enforce what this test asserts.
+func TestPlanSkillEmbeddedText_AgreesWithValidateCorrection(t *testing.T) {
 	t.Parallel()
 	text := planSkillText(t)
 
