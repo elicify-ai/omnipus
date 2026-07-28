@@ -48,13 +48,15 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// coreAgentIDs mirrors pkg/coreagent's CoreAgentID roster (the CoreAgentID
-// constants IDMia/IDJim/IDAva/IDRay/IDJudge in pkg/coreagent/core.go).
-// pkg/coreagent imports pkg/config (coreagent.SeedConfig operates on
-// *config.Config), so pkg/config cannot import pkg/coreagent's constants
-// without creating an import cycle — these five literal IDs are deliberately
-// mirrored here instead. Keep this set in sync with pkg/coreagent/core.go's
-// CoreAgentID roster if it is ever extended.
+// coreAgentIDs mirrors pkg/coreagent's CoreAgentID roster — the four base
+// agents (IDMia/IDJim/IDAva/IDRay) plus the System Agents (IDJudge,
+// IDPlanSupervisor) in pkg/coreagent/core.go. pkg/coreagent imports pkg/config
+// (coreagent.SeedConfig operates on *config.Config), so pkg/config cannot
+// import pkg/coreagent's constants without creating an import cycle — these
+// literal IDs are deliberately mirrored here instead. Keep this set in sync
+// with pkg/coreagent/core.go's roster whenever it is extended: a seeded ID
+// missing from this map is reported to the operator with the alarming
+// custom-ID data-loss WARN instead of the benign core-ID one.
 //
 // Why the distinction matters: a dropped core ID needs ZERO operator action
 // — coreagent.SeedConfig re-creates any missing core agent (Locked=true)
@@ -67,11 +69,12 @@ import (
 // its old ID — any binding, mailbox, or workspace core_team entry naming the
 // old ID is left dangling.
 var coreAgentIDs = map[string]bool{
-	"mia":   true,
-	"jim":   true,
-	"ava":   true,
-	"ray":   true,
-	"judge": true,
+	"mia":            true,
+	"jim":            true,
+	"ava":            true,
+	"ray":            true,
+	"judge":          true,
+	"plansupervisor": true,
 }
 
 // stripLegacyAgentsList drops any agents.list content that survived from a
@@ -118,7 +121,8 @@ func stripLegacyAgentsList(cfg *Config, cfgPath string, onSelfHeal SelfHealWrite
 
 	if len(coreIDs) > 0 {
 		logger.WarnF("config: dropping legacy agents.list entries for core agent IDs from "+
-			"config.json — no operator action needed: core agents (mia/jim/ava/ray/judge) are "+
+			"config.json — no operator action needed: core agents (mia/jim/ava/ray) and System "+
+			"Agents (judge/plansupervisor) are "+
 			"auto-reseeded moments after boot by coreagent.SeedConfig, and cannot be created via "+
 			"POST /api/v1/agents anyway (locked, core-agent IDs are rejected there)", map[string]any{
 			"dropped_core_agent_ids": coreIDs,

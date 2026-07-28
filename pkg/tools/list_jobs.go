@@ -142,9 +142,14 @@ func (t *ListJobsTool) SetCapStaleness(d time.Duration) { t.capStaleness = d }
 // SetNow overrides the clock. Test seam only.
 func (t *ListJobsTool) SetNow(fn func() time.Time) { t.now = fn }
 
-func (t *ListJobsTool) Name() string           { return "list_jobs" }
-func (t *ListJobsTool) Scope() ToolScope       { return ScopeGeneral }
-func (t *ListJobsTool) Category() ToolCategory { return CategoryDelegation }
+func (t *ListJobsTool) Name() string     { return "list_jobs" }
+func (t *ListJobsTool) Scope() ToolScope { return ScopeGeneral }
+
+// Category is CategoryTasks, not CategoryDelegation: two of the three job
+// kinds it reports (plan, task) are task-domain, and its load-bearing pairing
+// is with stop_plan/execute_plan, which are both CategoryTasks. Category is
+// purely presentational (manifest headings, /api/v1/tools grouping).
+func (t *ListJobsTool) Category() ToolCategory { return CategoryTasks }
 
 // Description is the LLM-facing contract. It is deliberately short: Omnipus
 // sends every tool description on every request, so this text is a fixed

@@ -1164,9 +1164,9 @@ func systemAgentSkills(id CoreAgentID) []string {
 // here would silently start touching the real machine's home directory on
 // every `go test ./pkg/coreagent/...` run. Two other places materialize
 // this constant into the Judge's actual SOUL.md instead, both via
-// pkg/agent's shared agent.SeedJudgeSoulFile so their write semantics never
-// diverge: (a) pkg/gateway's boot sequence (gateway.go's
-// seedJudgeEagerSoul, called right after coreagent.SeedConfig on every real
+// pkg/agent's shared agent.SeedSystemAgentSoulFile so their write semantics
+// never diverge: (a) pkg/gateway's boot sequence (gateway.go's
+// seedSystemAgentEagerSouls, called right after coreagent.SeedConfig on every real
 // boot) backfills it EAGERLY, so a fresh install's Judge profile shows the
 // default standards immediately instead of staying blank until the first
 // judgment; (b) pkg/agent's ensureVerifierSoul (verifier_adjudication.go)
@@ -1222,8 +1222,9 @@ Return ONLY valid JSON of the shape:
 // agent's REAL workspace path anyway (that lives in agent.ResolveAgentHome,
 // and pkg/coreagent cannot import pkg/agent without a cycle).
 //
-// The materialiser is therefore the GATEWAY-SIDE EAGER SEED at boot, a sibling
-// of gateway.go's seedJudgeEagerSoul, writing this constant into
+// The materialiser is therefore the GATEWAY-SIDE EAGER SEED at boot —
+// gateway.go's seedSystemAgentEagerSouls, which iterates SystemAgents() and
+// so covers this id by construction rather than by a second call site. It writes this constant into
 // plansupervisor/SOUL.md only when that file is missing or empty — never over
 // an operator edit. SystemAgentDefaultSoul below is the accessor that seam
 // reads, so the write helper stays id-generic instead of hardcoding a second
@@ -1757,7 +1758,7 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			// Judge's soul (its default judging standards,
 			// JudgeDefaultRubric) is materialized into SOUL.md by
 			// pkg/gateway's eager boot-time seed (gateway.go's
-			// seedJudgeEagerSoul, right after this SeedConfig call returns)
+			// seedSystemAgentEagerSouls, right after this SeedConfig call returns)
 			// and, as a lazy backstop, by pkg/agent's ensureVerifierSoul on
 			// first real verifier dispatch — not here (SeedConfig stays a
 			// pure config-struct mutation with zero filesystem side
@@ -1879,7 +1880,7 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			// see the fresh-seed branch above and JudgeDefaultRubric's doc
 			// comment). Model/Provider are likewise left untouched here;
 			// the Judge's soul-file backfill-when-missing/empty happens
-			// eagerly at gateway boot (seedJudgeEagerSoul) and, as a lazy
+			// eagerly at gateway boot (seedSystemAgentEagerSouls) and, as a lazy
 			// backstop, in pkg/agent's ensureVerifierSoul — never on this
 			// config-mutation path, and never for a soul that already has
 			// real (operator-edited) content, which this re-seed cycle must

@@ -138,11 +138,55 @@ func TestConfigClone_EmptyAgentsList(t *testing.T) {
 	}
 }
 
+// TestStripAgentsListOnDisk_ClassifiesEverySeededID pins the whole seeded
+// roster, not a sample of it. coreAgentIDs is a hand-maintained mirror of
+// pkg/coreagent's roster (the import cycle makes a derived list impossible),
+// so the realistic failure is that a NEW seeded agent is added to coreagent
+// and nobody updates the mirror — which is exactly what happened to
+// plansupervisor: a legacy config.json carrying it was reported to the
+// operator with the alarming "real, operator-authored data loss" WARN for an
+// agent that SeedConfig recreates moments later on the same boot.
+//
+// This asserts the property (every seeded ID classifies as core) rather than
+// the map's contents, so it fails on the omission rather than on a rewrite.
+func TestStripAgentsListOnDisk_ClassifiesEverySeededID(t *testing.T) {
+	// Mirrors pkg/coreagent's seeded roster: the four base agents plus the
+	// System Agents. Kept literal for the same import-cycle reason as
+	// coreAgentIDs itself.
+	seeded := []string{"mia", "jim", "ava", "ray", "judge", "plansupervisor"}
+
+	for _, id := range seeded {
+		t.Run(id, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := `{"version":1,"agents":{"list":[{"id":"` + id + `","name":"X"}]}}`
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+
+			coreIDs, customIDs, written, err := stripAgentsListOnDisk(path)
+			if err != nil {
+				t.Fatalf("stripAgentsListOnDisk failed: %v", err)
+			}
+			if written == nil {
+				t.Fatal("expected the legacy list to be stripped")
+			}
+			if len(customIDs) != 0 {
+				t.Errorf("seeded agent %q was reported as a CUSTOM id (%v) — the operator is "+
+					"told this is unrecoverable data loss, but coreagent.SeedConfig recreates it "+
+					"on this same boot. Add %q to coreAgentIDs.", id, customIDs, id)
+			}
+			if len(coreIDs) != 1 || coreIDs[0] != id {
+				t.Errorf("coreIDs = %v, want [%s]", coreIDs, id)
+			}
+		})
+	}
+}
+
 // TestStripAgentsListOnDisk_SplitsCoreAndCustomIDs is the DoD proof for Bug
-// 1b: core agent IDs (mia/jim/ava/ray/judge) must be reported separately
-// from custom agent IDs so the caller can log accurate, non-misleading
-// guidance (core IDs self-heal with zero operator action; custom IDs are
-// real, unrecoverable-by-migration data loss).
+// 1b: core agent IDs must be reported separately from custom agent IDs so the
+// caller can log accurate, non-misleading guidance (core IDs self-heal with
+// zero operator action; custom IDs are real, unrecoverable-by-migration data
+// loss).
 func TestStripAgentsListOnDisk_SplitsCoreAndCustomIDs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
