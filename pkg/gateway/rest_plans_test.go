@@ -16,10 +16,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -27,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -82,10 +87,40 @@ func newTestRestAPIWithPlans(t *testing.T) *restAPI {
 	// TestDeleteAgent_OwningActivePlan_Rejected for a case that also wires
 	// its own local instance to hold onto the *PlanEngine handle — a second,
 	// harmless SetPlanEngine call, not a conflict; both share the same
-	// planStore/taskStore pointers). Not Start()ed — StopPlan/StopTask are
-	// synchronous store operations, not background-loop-dependent.
-	api.agentLoop.SetPlanEngine(agent.NewPlanEngine(al, api.planStore, api.taskStore, api.taskExecutor))
-	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
+	// planStore/taskStore pointers).
+	//
+	// Not Start()ed: nothing here needs the tick/event loops. ⚠ That does NOT
+	// make StopPlan synchronous — an earlier version of this comment claimed
+	// "StopPlan/StopTask are synchronous store operations" and that was the
+	// bug. StopPlan ends with wakeOwner, which for a plan with no chat origin
+	// (every plan created through this REST harness has none) dispatches a
+	// REAL agent turn on its own goroutine. Left undrained, that turn writes
+	// its session transcript and state into tmpDir AFTER t.TempDir has removed
+	// it — seen in CI as ".../state.json: no such file or directory" from a
+	// test that had already passed.
+	pe := agent.NewPlanEngine(al, api.planStore, api.taskStore, api.taskExecutor)
+	api.agentLoop.SetPlanEngine(pe)
+	// ORDER IS LOAD-BEARING, in two directions:
+	//
+	//  - Within this cleanup: pe.Stop() drains the WHOLE wake turn (wakeWG),
+	//    of which WaitForActiveRequests only ever covered the LLM call itself
+	//    (activeRequests is Add-ed inside runTurn around the provider call,
+	//    loop.go, not around the turn). So Stop first, then wait. Neither is
+	//    redundant: WaitForActiveRequests still covers turns this engine did
+	//    not dispatch — the Run pump and ExecuteBoardTask — which pe.Stop()
+	//    knows nothing about.
+	//  - Against the other cleanups: t.Cleanup runs LIFO, so registering the
+	//    drain HERE (after mustAgentLoop's al.Close above, and after
+	//    t.TempDir's removal at the top of this function) is what makes it
+	//    run BEFORE both of them — the turn must finish while the
+	//    registry/session stores it writes through are still open and while
+	//    tmpDir still exists. Registering it any later in this function is
+	//    fine; hoisting it earlier, or moving it into a caller, silently
+	//    inverts the order and restores the bug.
+	t.Cleanup(func() {
+		pe.Stop()
+		api.agentLoop.WaitForActiveRequests()
+	})
 	return api
 }
 
@@ -514,6 +549,13 @@ func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
 	// synchronous store scan, not engine-loop-dependent).
 	pe := agent.NewPlanEngine(api.agentLoop, api.planStore, api.taskStore, api.taskExecutor)
 	api.agentLoop.SetPlanEngine(pe)
+	// This SECOND engine displaces the harness's own in the loop, so the
+	// harness cleanup's pe.Stop() drains that one, not this one. Drain this
+	// one too — it is a live engine bound to the same stores and the same
+	// tmpDir, and any wake it dispatches outlives the test otherwise.
+	// Registered here (later than the harness's) so it runs first; Stop on an
+	// engine that dispatched nothing is a zero-counter wait.
+	t.Cleanup(pe.Stop)
 
 	wCreate := postPlan(t, api, wsID,
 		`{"workspace_id":"`+wsID+`","title":"Owned plan","owner_agent_id":"`+testPlansAgentID+`"}`)
@@ -727,4 +769,173 @@ func TestPlanPut_DoDAndOwnerFrozenOnceNotDraft(t *testing.T) {
 	require.NotNil(t, final.Dod)
 	require.Len(t, *final.Dod, 1)
 	assert.Equal(t, "ship it", (*final.Dod)[0].Text, "DoD must still be the draft-state value")
+}
+
+// --- The harness's own teardown contract ------------------------------------
+
+// blockingWakeProvider holds a turn open inside the LLM call until the test
+// releases it. A call to it is positive evidence that a REAL turn ran for the
+// agent it is installed on — not that a dispatch was recorded somewhere.
+type blockingWakeProvider struct {
+	mu      sync.Mutex
+	entered chan struct{} // closed on the first call
+	closed  bool
+	gate    chan struct{} // the call blocks until this closes
+}
+
+func newBlockingWakeProvider() *blockingWakeProvider {
+	return &blockingWakeProvider{entered: make(chan struct{}), gate: make(chan struct{})}
+}
+
+func (p *blockingWakeProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	if !p.closed {
+		p.closed = true
+		close(p.entered)
+	}
+	p.mu.Unlock()
+
+	select {
+	case <-p.gate:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &providers.LLMResponse{Content: "acknowledged"}, nil
+}
+
+func (p *blockingWakeProvider) GetDefaultModel() string { return "test-model" }
+
+// TestPlanStopREST_DispatchesARealOwnerWakeTurn pins the fact that makes
+// newTestRestAPIWithPlans's teardown contract necessary: POST /plans/{id}/stop
+// is NOT a synchronous store operation. It reaches PlanEngine.StopPlan, which
+// ends in wakeOwner, and because every plan created through this REST harness
+// has NO chat origin, wakeOwner takes the direct-dispatch leg — a REAL agent
+// turn on its own goroutine, writing a real session transcript into tmpDir.
+// The harness comment used to assert the opposite; that assertion is what let
+// the undrained turn ship.
+//
+// ⚠ WHAT THIS TEST DOES NOT PROVE. It does NOT discriminate the harness's
+// pe.Stop() drain, and it must not be read as if it did. Verified by mutation:
+// with pe.Stop() removed from the cleanup this test is 5/5 GREEN. The reason is
+// structural — activeRequests is Add-ed inside runTurn around the PROVIDER CALL
+// (loop.go), which is exactly where the gate below holds the turn, so
+// WaitForActiveRequests alone covers the held window. The windows pe.Stop()
+// actually adds are the ones this test cannot hold open from outside:
+//
+//   - goroutine start -> the activeRequests.Add (session resolution, context
+//     build, memory recall — all reading and writing tmpDir), and
+//   - the provider call returning -> goroutine exit (persisting the assistant
+//     message, session state, cost — the ".../state.json: no such file or
+//     directory" write in the CI log).
+//
+// Holding either open needs a seam inside the turn that does not exist and is
+// not worth adding. The deterministic drain proof therefore lives one layer
+// down, in pkg/agent's TestPlanEngineStop_DrainsWakeTurnDispatchedByNeverStarted
+// Engine, which calls Stop() directly instead of through a cleanup that
+// WaitForActiveRequests also happens to cover.
+//
+// So the honest claims here are: (1) the stop endpoint really does start an
+// agent turn, (2) teardown does not abandon it mid-LLM-call, and (3) nothing
+// survives teardown.
+func TestPlanStopREST_DispatchesARealOwnerWakeTurn(t *testing.T) {
+	noLeaks := []goleak.Option{
+		goleak.IgnoreCurrent(),
+		// The memory subsystem opens its bleve index lazily, INSIDE the turn,
+		// so these appear after the snapshot. They belong to a
+		// process-lifetime index the memory store owns and closes — outside
+		// any plan-engine teardown contract. (replay_test.go excludes the
+		// same family for the same reason.)
+		goleak.IgnoreTopFunction("github.com/blevesearch/bleve/v2/index/scorch.(*Scorch).introducerLoop"),
+		goleak.IgnoreTopFunction("github.com/blevesearch/bleve/v2/index/scorch.(*Scorch).persisterLoop"),
+		goleak.IgnoreTopFunction("github.com/blevesearch/bleve/v2/index/scorch.(*Scorch).mergerLoop"),
+	}
+
+	const hold = 300 * time.Millisecond
+	prov := newBlockingWakeProvider()
+	var released atomic.Bool
+	// Belt and braces: if any require/Fatal below aborts the subtest before
+	// the releaser is armed, the gate still opens so teardown cannot wedge.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(prov.gate) }) }
+	t.Cleanup(release)
+
+	start := time.Now()
+	t.Run("stop a running plan through the real REST path", func(t *testing.T) {
+		api := newTestRestAPIWithPlans(t)
+
+		// Install the blocking provider on the plan's OWNER, so the only turn
+		// that can block here is the owner wake this test is about.
+		inst, ok := api.agentLoop.GetRegistry().GetAgent(testPlansAgentID)
+		require.True(t, ok, "the harness agent must resolve; the wake dispatch pre-resolves it")
+		inst.Provider = prov
+
+		// The registry lowercases agent ids, so the ADR-046 P1 membership gate
+		// looks the agent up under a key mustAgentLoop's seed (which reads
+		// cfg.Agents.List verbatim) never wrote. Without this the wake turn IS
+		// dispatched but refuses at that gate before ever reaching the
+		// provider — the turn goroutine still runs and still writes, it just
+		// stops being HOLDABLE, which is what this test needs.
+		seedTestWorkspaceMembershipForIDs(t, []string{strings.ToLower(testPlansAgentID)})
+
+		wsID := createTestWorkspace(t, api, "Wake Drain WS")
+		wCreate := postPlan(t, api, wsID,
+			`{"workspace_id":"`+wsID+`","title":"Wake drain","owner_agent_id":"`+testPlansAgentID+`"}`)
+		require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
+		var p gen.Plan
+		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+		require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
+		// PUT can no longer set state (ADR-052 FR-007/A1) — drive
+		// approved->running through the store, as TestDeleteAgent does.
+		running := plan.StateRunning
+		_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
+		require.NoError(t, rerr)
+
+		wStop := postPlanAction(t, api, p.Id, "stop")
+		require.Equal(t, http.StatusOK, wStop.Code, "body=%s", wStop.Body.String())
+
+		// CLAIM (1): a real agent turn ran for the plan's owner. Positive
+		// evidence — the owner's OWN provider was entered — not a recorded
+		// dispatch. This is the limb that fails if StopPlan ever stops waking
+		// the owner, or if the harness's plan is given a chat origin (which
+		// would reroute the wake to the notifier/bus leg instead).
+		select {
+		case <-prov.entered:
+		case <-time.After(10 * time.Second):
+			t.Fatal("POST /plans/{id}/stop started no owner wake turn — the harness's teardown " +
+				"drain would be guarding nothing, and the endpoint no longer does what " +
+				"ADR-052's wakeOwner says it does")
+		}
+
+		go func() {
+			time.Sleep(hold)
+			released.Store(true)
+			release()
+		}()
+	})
+	// Every cleanup newTestRestAPIWithPlans registered — pe.Stop(),
+	// WaitForActiveRequests, al.Close, and t.TempDir's RemoveAll — has run by
+	// the time t.Run returns.
+	elapsed := time.Since(start)
+
+	// CLAIM (2): teardown did not abandon the turn mid-LLM-call. Note honestly
+	// that WaitForActiveRequests alone satisfies this — activeRequests spans
+	// exactly the provider call — so this limb is a guard against teardown
+	// losing BOTH waits, not evidence for the pe.Stop() drain.
+	if !released.Load() {
+		t.Fatalf("the harness teardown finished in %v while the wake turn dispatched by "+
+			"POST /plans/{id}/stop was still inside its LLM call — teardown is abandoning "+
+			"in-flight turns over a t.TempDir() it is about to remove", elapsed)
+	}
+	if elapsed < hold {
+		t.Fatalf("teardown returned after %v but the turn was held for %v", elapsed, hold)
+	}
+	// CLAIM (3): nothing survived teardown.
+	goleak.VerifyNone(t, noLeaks...)
 }
