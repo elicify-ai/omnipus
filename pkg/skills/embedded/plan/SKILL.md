@@ -181,7 +181,7 @@ execution to meet them.
 
 | Situation | Verb | What it does |
 |-----------|------|--------------|
-| A done member's outcome is wrong | **SUPERSEDE** | Marks the done member's outcome ignored-by-Judge (record stays immutable). Optionally append a replacement tail member. |
+| A done member's outcome is wrong | **SUPERSEDE** | Marks the done member's outcome ignored-by-Judge (record stays immutable). REQUIRES replacement tail member(s) in the same call, carrying every acceptance criterion of the superseded member — a supersede with no paired work, or with replacement work held to a weaker standard, is rejected. Discounting the evidence that failed is not a way to meet the DoD. |
 | A failed member should be retried individually | **TARGETED-RETRY** | Resets one specific failed member to `next` without a full Stop/Play. |
 | The plan is missing a step | **APPEND** | Adds new tail member(s) + their dependency edges to the DAG. |
 | No correction can reach the DoD | **ABANDON** | Ends the plan honestly: terminates it `failed` with reason `dod_unreachable`. Mutates no member, carries no member reference and no tail members, and REQUIRES a non-empty falsified assumption — an exit that records no reason is not an audit trail. |

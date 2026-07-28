@@ -382,6 +382,16 @@ func IsValidFailedReason(r FailedReason) bool { return validFailedReasons[r] }
 type PlanBounds struct {
 	PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
 	IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
+	// SupervisionTurnTimeoutSeconds overrides FR-021's supervision observation
+	// deadline for this plan (global default
+	// config.DefaultSupervisionTurnTimeoutSeconds = 600 s). Resolve via
+	// config.PlanningConfig.EffectiveSupervisionTurnTimeoutSeconds, never by
+	// reading the pointer directly.
+	SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
+	// SupervisionMaxAttempts overrides FR-022's no-correction attempt ceiling
+	// for this plan (global default config.DefaultSupervisionMaxAttempts = 3).
+	// Resolve via config.PlanningConfig.EffectiveSupervisionMaxAttempts.
+	SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 }
 
 // Supervision is the durable PlanSupervisor adjudication state for one plan
@@ -461,6 +471,12 @@ func validatePlanBounds(b *PlanBounds) error {
 	}
 	if b.IdleExpiryDays != nil && *b.IdleExpiryDays < 1 {
 		return verr("bounds.idle_expiry_days must be at least 1")
+	}
+	if b.SupervisionTurnTimeoutSeconds != nil && *b.SupervisionTurnTimeoutSeconds < 1 {
+		return verr("bounds.supervision_turn_timeout_seconds must be at least 1")
+	}
+	if b.SupervisionMaxAttempts != nil && *b.SupervisionMaxAttempts < 1 {
+		return verr("bounds.supervision_max_attempts must be at least 1")
 	}
 	return nil
 }
@@ -676,4 +692,91 @@ func (p *Plan) normalize() error {
 		return err
 	}
 	return nil
+}
+
+// --- Corrections (ADR-055 FR-004/FR-046, ADR-053 §3b G-11) ----------------
+//
+// The correction types live HERE, in pkg/plan, and are re-exported from
+// pkg/agent as one-line type aliases — the exact shape IntentEdge already has
+// (intent_log.go). The reason is a hard import constraint, not taste:
+// pkg/agent imports pkg/tools, so pkg/tools cannot import pkg/agent, and the
+// plan_correct tool must name the very same request type the engine consumes.
+// Two structurally-identical declarations would compile and would be two
+// types; a field added to one and not the other is then a silent divergence no
+// compiler reports. pkg/plan is the one package both sides already import.
+
+// Correction payload caps (FR-046 / D-06). Fixed package constants,
+// deliberately NOT config fields and NOT PlanBounds-overridable: no operator
+// use case was stated for varying a title-byte cap per plan, and each override
+// would be a wire addition plus a resolver. They bound the payload processed
+// while the engine holds the process-wide planDecisionMu for the whole of
+// AppendCorrection — the same mutex the plan tick, StopPlan, the judge round
+// and idle expiry take.
+//
+// Both validators read these: the plan_correct tool boundary (which rejects
+// before any mutation) and the engine's own validateCorrection. Promoting one
+// to a config field later is a contained change; demoting a shipped wire field
+// is not.
+//
+// Every bound is on BYTES, not runes. MaxTextBytes bounds exactly three
+// fields: FalsifiedAssumption, Reason, and each tail member's Description.
+// A tail member's Title is bounded by MaxMemberTitleBytes instead.
+const (
+	// MaxTailMembers caps how many new members one correction may add.
+	MaxTailMembers = 20
+	// MaxTailEdges caps how many dependency edges one correction may wire.
+	MaxTailEdges = 40
+	// MaxMemberTitleBytes caps a tail member's title.
+	MaxMemberTitleBytes = 512
+	// MaxTextBytes caps each free-text correction field.
+	MaxTextBytes = 8192
+)
+
+// CorrectionCaller is the authenticated principal issuing a correction
+// (sec-MAJOR-2). Whoever consumes it decides what authority the identity
+// carries — the engine gates on the plan's durable owner linkage
+// (OwnerAgentID / OwnerSessionID), while the plan_correct tool gates on the
+// PlanSupervisor identity before it ever reaches the engine.
+//
+// Callers (REST handler, agent tool, or the owner-correction loop) MUST
+// resolve the invoking principal's real agent/session identity — there is no
+// "trusted internal caller" bypass.
+//
+// not-wire-format: engine/tool-internal; the REST/tool layer maps its
+// authenticated principal to this.
+type CorrectionCaller struct {
+	AgentID   string
+	SessionID string
+}
+
+// CorrectionRequest is a validated correction to a plan whose DoD is unmet
+// (FR-143/G-11, FR-046). Each verb records a revision entry committed
+// transactionally via the intent log (INV-6/N-8).
+//
+// The shape is structurally incapable of carrying a `dod` or an
+// `owner_agent_id` (FR-032): a correction can add work and re-weight evidence,
+// never redefine what success means or who is accountable for it.
+//
+// not-wire-format: engine/tool-internal; the REST/tool layer maps its wire
+// type to this.
+type CorrectionRequest struct {
+	Verb                RevisionVerb `json:"verb"`
+	FalsifiedAssumption string       `json:"falsified_assumption,omitempty"`
+	TailMembers         []task.Task  `json:"tail_members,omitempty"`
+	TailEdges           []IntentEdge `json:"tail_edges,omitempty"`
+	SupersededMemberID  string       `json:"superseded_member_id,omitempty"`
+	RetriedMemberID     string       `json:"retried_member_id,omitempty"`
+	Reason              string       `json:"reason,omitempty"`
+}
+
+// CorrectionResult is the outcome of processing a correction. HonestExit
+// reports that the correction was applied but the plan still had no way to
+// make progress and was failed rather than left to livelock (G-10).
+//
+// not-wire-format: engine/tool-internal.
+type CorrectionResult struct {
+	RevisionID    string        `json:"revision_id"`
+	Generation    int           `json:"generation"`
+	RevisionEntry RevisionEntry `json:"revision_entry"`
+	HonestExit    bool          `json:"honest_exit,omitempty"`
 }

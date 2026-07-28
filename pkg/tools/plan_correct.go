@@ -47,21 +47,15 @@ const PlanSupervisorAgentID = "plansupervisor"
 //     requireOwner gate has, sec-MAJOR-2).
 const correctionDeniedMessage = "plan_correct denied: this caller is not permitted to correct plans"
 
-// Payload caps (FR-046 / D-06). Fixed package constants, deliberately NOT
-// config fields and NOT PlanBounds-overridable: no operator use case was
-// stated for varying a title-byte cap per plan, and each override would be a
-// wire addition plus a resolver. They bound the payload processed while the
-// engine holds the process-wide planDecisionMu for the whole of
-// AppendCorrection.
-//
-// FR-046 places these in pkg/plan so the engine's own validateCorrection
-// shares them; until that move lands they live here, at the boundary that
-// actually enforces them.
+// Payload caps (FR-046 / D-06). The authoritative constants live in pkg/plan
+// so that this boundary and the engine's own validateCorrection enforce one
+// number, not two that happen to agree today; these are local spellings of
+// them, not copies. Changing pkg/plan's value changes both validators.
 const (
-	maxTailMembers      = 20
-	maxTailEdges        = 40
-	maxMemberTitleBytes = 512
-	maxTextBytes        = 8192
+	maxTailMembers      = plan.MaxTailMembers
+	maxTailEdges        = plan.MaxTailEdges
+	maxMemberTitleBytes = plan.MaxMemberTitleBytes
+	maxTextBytes        = plan.MaxTextBytes
 )
 
 // Task-store limits a tail member must also satisfy. A payload that passes
@@ -73,38 +67,19 @@ const (
 	taskStoreMaxDescriptionBytes = 2000
 )
 
-// CorrectionCaller is the authenticated principal issuing a correction.
+// CorrectionCaller and CorrectionRequest are the engine's own correction
+// types, re-exported here as aliases (FR-004). They are declared in pkg/plan
+// and aliased identically from pkg/agent — the plan.IntentEdge precedent —
+// because pkg/tools cannot import pkg/agent (pkg/agent already imports
+// pkg/tools, a cycle) yet this tool must hand the engine the very type it
+// consumes. Aliases, not copies: a value built here IS the engine's value,
+// with no conversion and no shape that can drift.
 //
 // not-wire-format: tool/engine-internal; never crosses the gateway boundary.
-//
-// FR-004 specifies that the engine's CorrectionCaller / CorrectionRequest /
-// CorrectionResult move from pkg/agent to pkg/plan and are re-exported from
-// pkg/agent as type aliases (the plan.IntentEdge precedent), because pkg/tools
-// cannot import pkg/agent (pkg/agent already imports pkg/tools — a cycle).
-// That move has not landed. These declarations carry the identical field set
-// so that when it does, both become one-line aliases at
-// `plan.CorrectionCaller` / `plan.CorrectionRequest` and every use site in
-// this file keeps compiling unchanged.
-type CorrectionCaller struct {
-	AgentID   string
-	SessionID string
-}
-
-// CorrectionRequest is a validated correction, ready for the engine. The
-// shape is structurally incapable of carrying a `dod` or an `owner_agent_id`
-// (FR-032): a correction can add work and re-weight evidence, never redefine
-// what success means or who is accountable for it.
-//
-// not-wire-format: tool/engine-internal.
-type CorrectionRequest struct {
-	Verb                plan.RevisionVerb
-	FalsifiedAssumption string
-	Reason              string
-	SupersededMemberID  string
-	RetriedMemberID     string
-	TailMembers         []task.Task
-	TailEdges           []plan.IntentEdge
-}
+type (
+	CorrectionCaller  = plan.CorrectionCaller
+	CorrectionRequest = plan.CorrectionRequest
+)
 
 // AppendCorrectionFunc applies a validated correction to a running plan. It
 // mirrors *pkg/agent.PlanEngine.AppendCorrection, injected as a func value

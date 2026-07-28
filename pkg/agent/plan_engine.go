@@ -2807,8 +2807,10 @@ func (pe *PlanEngine) HasActivePlansOwnedBy(agentID string) bool {
 
 // --- ADR-053 Phase 2: owner loop + correction (§3/§3b/§3c, G-9..G-12) -----
 
-// CorrectionVerb is the owner-correction verb (FR-143/G-11).
-type CorrectionVerb string
+// CorrectionVerb is the owner-correction verb (FR-143/G-11), re-exported as an
+// alias of plan.RevisionVerb (FR-004) so the verb the engine switches on and
+// the verb the plan_correct tool sends are one type, not two that convert.
+type CorrectionVerb = plan.RevisionVerb
 
 const (
 	CorrectionAppend        CorrectionVerb = CorrectionVerb(plan.RevisionAppend)
@@ -2836,26 +2838,21 @@ var ErrCorrectionNotOwner = errors.New("plan_engine: correction caller is not th
 //
 // not-wire-format: engine-internal type; the REST/tool layer maps its
 // authenticated principal to this.
-type CorrectionCaller struct {
-	AgentID   string
-	SessionID string
-}
+//
+// CorrectionCaller, CorrectionRequest and CorrectionResult are re-exported
+// here as aliases of the pkg/plan declarations (FR-004) so callers importing
+// pkg/agent still get a single-package API, while pkg/tools — which cannot
+// import pkg/agent — names the identical types. IntentEdge below is the
+// in-repo precedent this follows.
+type CorrectionCaller = plan.CorrectionCaller
 
 // CorrectionRequest is an owner correction to an unmet DoD (FR-143/G-11). The
-// owner issues one of three verbs; each records a revision entry committed
+// owner issues one verb; each records a revision entry committed
 // transactionally via the intent-log (INV-6/N-8).
 //
 // not-wire-format: engine-internal type; the REST/tool layer maps its wire
 // type to this.
-type CorrectionRequest struct {
-	Verb                CorrectionVerb `json:"verb"`
-	FalsifiedAssumption string         `json:"falsified_assumption,omitempty"`
-	TailMembers         []task.Task    `json:"tail_members,omitempty"`
-	TailEdges           []IntentEdge   `json:"tail_edges,omitempty"`
-	SupersededMemberID  string         `json:"superseded_member_id,omitempty"`
-	RetriedMemberID     string         `json:"retried_member_id,omitempty"`
-	Reason              string         `json:"reason,omitempty"`
-}
+type CorrectionRequest = plan.CorrectionRequest
 
 // IntentEdge is re-exported here (alias of plan.IntentEdge) so callers importing
 // pkg/agent get a single-package API for corrections. The authoritative type
@@ -2865,12 +2862,7 @@ type IntentEdge = plan.IntentEdge
 // CorrectionResult is the outcome of processing a correction.
 //
 // not-wire-format: engine-internal type.
-type CorrectionResult struct {
-	RevisionID    string             `json:"revision_id"`
-	Generation    int                `json:"generation"`
-	RevisionEntry plan.RevisionEntry `json:"revision_entry"`
-	HonestExit    bool               `json:"honest_exit,omitempty"`
-}
+type CorrectionResult = plan.CorrectionResult
 
 // commitResolver resolves the last boundary commit hash for a plan member
 // (the gitevidence checkpoint) and materializes the member's resume working
