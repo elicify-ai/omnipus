@@ -88,10 +88,29 @@ const FIXTURE_HTML = `<!doctype html>
 <title>Omnipus E2E Live Probe</title>
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+  /* Motion is driven by a CSS @keyframes animation, NOT requestAnimationFrame.
+     rAF is throttled — and in a fully backgrounded/occluded tab, STOPPED — by
+     Chrome, so a rAF-painted background stops changing whenever the captured
+     tab is not foregrounded. That produced a real false failure on the
+     2026-07-28 real-Chrome run: two samples 1.5s apart came back BYTE-IDENTICAL
+     ("video is frozen") even though the WebRTC pipeline was healthy and
+     delivering frames — the PAGE had simply stopped repainting. A CSS
+     animation is driven by the compositor and keeps advancing regardless of
+     tab focus, so "the picture changes" tests the video path rather than
+     Chrome's background-tab scheduling policy. */
   #motionLayer {
     position: fixed; top: 0; left: 0; width: 100%; height: 50%;
     display: flex; align-items: center; justify-content: center;
     color: #fff; font: bold 40px monospace;
+    animation: omnipusHueShift 2s linear infinite;
+  }
+  @keyframes omnipusHueShift {
+    0%   { background-color: hsl(0,   90%, 45%); }
+    20%  { background-color: hsl(72,  90%, 45%); }
+    40%  { background-color: hsl(144, 90%, 45%); }
+    60%  { background-color: hsl(216, 90%, 45%); }
+    80%  { background-color: hsl(288, 90%, 45%); }
+    100% { background-color: hsl(360, 90%, 45%); }
   }
   #clickLayer {
     position: fixed; top: 50%; left: 0; width: 100%; height: 50%;
@@ -106,14 +125,17 @@ const FIXTURE_HTML = `<!doctype html>
   <div id="clickLayer">clicks:0</div>
   <script>
     (function () {
-      function paintMotion() {
-        var hue = (Date.now() / 10) % 360;
+      // The BACKGROUND animation is pure CSS (see @keyframes omnipusHueShift)
+      // so it survives background-tab throttling. This timer only updates the
+      // readable timestamp overlay, which is diagnostic sugar for a human
+      // looking at the attached frames — no assertion depends on it, so its
+      // being throttled in a background tab cannot fail the test.
+      function paintClock() {
         var el = document.getElementById('motionLayer');
-        el.style.backgroundColor = 'hsl(' + hue.toFixed(1) + ',90%,45%)';
-        el.textContent = new Date().toISOString().slice(11, 23);
-        requestAnimationFrame(paintMotion);
+        if (el) el.textContent = new Date().toISOString().slice(11, 23);
       }
-      requestAnimationFrame(paintMotion);
+      paintClock();
+      setInterval(paintClock, 100);
 
       var clicks = 0;
       var audioCtx = null, osc = null, gain = null;
@@ -391,7 +413,32 @@ test(
     let sampleA!: FrameSample;
     let sampleB!: FrameSample;
     await test.step('evidence: video pixels genuinely change over time (not frozen/black)', async () => {
-      sampleA = await sampleFrame(video);
+      // Wait for the FIRST genuinely decoded frame before starting the clock.
+      //
+      // A non-null srcObject only means the MediaStream is attached — it does
+      // NOT mean a frame has been decoded and painted. On a cold capture the
+      // first decoded frame lands a little later, so sampling immediately
+      // yields a legitimately black frame and fails "must not be
+      // near-black/blank" for a reason that has nothing to do with whether
+      // video works. That is exactly what happened on the first attempt of
+      // the 2026-07-28 real-Chrome run (attempt 1 black at t0, retry green) —
+      // a fixed sample point racing an async pipeline, the same anti-pattern
+      // CLAUDE.md calls out (wait ON THE CONDITION, never on a fixed delay).
+      //
+      // Polling here does NOT weaken the assertions below: this only
+      // establishes "streaming has actually begun". Every real claim — the
+      // frame is not black, not a white wash, and CHANGES between t0 and t1 —
+      // is still asserted afterwards, and the poll has a hard budget so a
+      // genuinely black stream still fails loudly rather than hanging.
+      const FIRST_FRAME_BUDGET_MS = 15_000;
+      const firstFrameDeadline = Date.now() + FIRST_FRAME_BUDGET_MS;
+      let firstFrame = await sampleFrame(video);
+      while (luminance(firstFrame.top) <= 20 && Date.now() < firstFrameDeadline) {
+        await page.waitForTimeout(250);
+        firstFrame = await sampleFrame(video);
+      }
+
+      sampleA = firstFrame;
       await page.waitForTimeout(1_500);
       sampleB = await sampleFrame(video);
 
