@@ -1946,13 +1946,30 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// GetSessionStore returns the shared UnifiedStore; when nil (misconfigured
 	// home) the goroutine is a no-op — getCfg returning a nil cfg is guarded
 	// inside executeSweepTick.
-	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
-		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
-	}
 	// Tool-result file sweep runs alongside the transcript sweep on the same
 	// retention window. setupAndStartServices already constructed the store.
+	//
+	// This assignment MUST stay ABOVE startRetentionSweepLoop. The sweep loop
+	// performs a deliberate boot-time sweep BEFORE its first ticker wait
+	// (retention_goroutine.go:81), so it reads retentionToolResultSweepFn
+	// immediately — and that var is a bare package-level func with no mutex or
+	// atomic. Assigning it after the goroutine was launched was a real data
+	// race, caught by `-race` on tests/integration once the package became
+	// race-buildable:
+	//
+	//	Read at … executeSweepTick() retention_goroutine.go:145
+	//	Previous write at … RunContextWithOptions() gateway.go:1955
+	//
+	// The user-visible symptom was the boot-time tool-result sweep
+	// nondeterministically observing nil and silently skipping — which
+	// executeSweepTick's own comment used to excuse as "tests with a disabled
+	// toolStore". Ordering is sufficient rather than a mutex: this is the ONLY
+	// writer in the tree, so once the goroutine starts the value never changes.
 	if runningServices.toolStore != nil {
 		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
+	}
+	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
+		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
 	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
