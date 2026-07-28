@@ -47,7 +47,7 @@ func newSeededJudgeAPI(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
-	// seedJudgeEagerSoul below calls agent.ResolveAgentHome, which resolves
+	// seedSystemAgentEagerSouls below calls agent.ResolveAgentHome, which resolves
 	// the Judge's per-agent workspace via $OMNIPUS_HOME (the SAME
 	// resolution AgentInstance.Home uses at runtime) — NOT via the
 	// tmpDir/homePath value threaded explicitly through this helper. Pin
@@ -65,12 +65,12 @@ func newSeededJudgeAPI(t *testing.T) *restAPI {
 	}
 	coreagent.SeedConfig(cfg)
 	// Mirror the real boot sequence (RunContextWithOptions, gateway.go):
-	// seedJudgeEagerSoul runs right after coreagent.SeedConfig on every real
+	// seedSystemAgentEagerSouls runs right after coreagent.SeedConfig on every real
 	// boot so the Judge's SOUL.md is backfilled with its default rubric
 	// immediately, not only lazily on first verifier dispatch. Calling the
 	// exact same production function here (not a re-implementation) is what
 	// lets TestSeedJudgeEagerSoul_* below prove the fresh-install fix works.
-	seedJudgeEagerSoul(cfg)
+	seedSystemAgentEagerSouls(cfg)
 
 	// ADR-054 D2: agents are per-entity records under entities/agents/<id>.json,
 	// not config.json's agents.list. coreagent.SeedConfig only populates the
@@ -250,16 +250,16 @@ func TestUpdateAgent_JudgeSoulSurvivesReseed(t *testing.T) {
 		"a re-seed cycle (coreagent.SeedConfig/seedSystemAgents) must NOT overwrite an operator-edited Judge soul")
 
 	// The real boot sequence (gateway.go's RunContextWithOptions) also runs
-	// seedJudgeEagerSoul immediately after coreagent.SeedConfig on EVERY
+	// seedSystemAgentEagerSouls immediately after coreagent.SeedConfig on EVERY
 	// boot, not just the first — it must respect the same backfill-only
 	// rule as the config-mutation re-seed above, or every subsequent
 	// restart would clobber an operator's edited Judge soul back to the
 	// compiled default.
-	seedJudgeEagerSoul(cfg)
+	seedSystemAgentEagerSouls(cfg)
 	afterEager, readErr := os.ReadFile(soulPath)
 	require.NoError(t, readErr, "SOUL.md must still exist after the eager boot-time re-seed")
 	assert.Equal(t, editedSoul, string(afterEager),
-		"seedJudgeEagerSoul must NOT overwrite an operator-edited Judge soul on a restart either")
+		"seedSystemAgentEagerSouls must NOT overwrite an operator-edited Judge soul on a restart either")
 
 	// Confirm re-enforcement still ran (Locked/Type/etc. repaired if needed)
 	// without touching soul — GET must still reflect the edited content.
@@ -277,7 +277,7 @@ func TestUpdateAgent_JudgeSoulSurvivesReseed(t *testing.T) {
 // fresh install, the Judge's profile must show its default judging rubric
 // immediately — not an empty soul that only fills in after the first real
 // verifier dispatch. newSeededJudgeAPI now runs the exact production boot
-// sequence (coreagent.SeedConfig then seedJudgeEagerSoul), so this proves
+// sequence (coreagent.SeedConfig then seedSystemAgentEagerSouls), so this proves
 // both the on-disk SOUL.md and the GET /api/v1/agents/judge response carry
 // the default rubric without any prior PUT or verifier dispatch.
 func TestSeedJudgeEagerSoul_FreshInstallSoulVisibleViaGetAgent(t *testing.T) {
@@ -318,14 +318,14 @@ func TestSeedJudgeEagerSoul_FreshInstallSoulVisibleViaGetAgent(t *testing.T) {
 }
 
 // TestSeedJudgeEagerSoul_ZeroByteSoulFileIsBackfilled proves
-// seedJudgeEagerSoul treats a 0-byte SOUL.md (e.g. left behind by an
+// seedSystemAgentEagerSouls treats a 0-byte SOUL.md (e.g. left behind by an
 // interrupted write, or a hand-created empty file) the same as a missing
 // one — it backfills the default rubric rather than leaving the operator
 // with a blank profile.
 func TestSeedJudgeEagerSoul_ZeroByteSoulFileIsBackfilled(t *testing.T) {
 	tmpDir := t.TempDir()
 	// See newSeededJudgeAPI's matching t.Setenv for why this is required:
-	// seedJudgeEagerSoul resolves the Judge's workspace via $OMNIPUS_HOME
+	// seedSystemAgentEagerSouls resolves the Judge's workspace via $OMNIPUS_HOME
 	// (agent.ResolveAgentHome), not via the tmpDir passed to
 	// agentWorkspacePath below — pin them to the same directory.
 	t.Setenv("OMNIPUS_HOME", tmpDir)
@@ -343,10 +343,10 @@ func TestSeedJudgeEagerSoul_ZeroByteSoulFileIsBackfilled(t *testing.T) {
 	soulPath := filepath.Join(workspace, "SOUL.md")
 	require.NoError(t, os.WriteFile(soulPath, []byte{}, 0o644), "seed a 0-byte SOUL.md before eager seeding runs")
 
-	seedJudgeEagerSoul(cfg)
+	seedSystemAgentEagerSouls(cfg)
 
 	got, readErr := os.ReadFile(soulPath)
 	require.NoError(t, readErr)
 	assert.Equal(t, coreagent.JudgeDefaultRubric, string(got),
-		"a 0-byte SOUL.md must be treated as missing and backfilled by seedJudgeEagerSoul")
+		"a 0-byte SOUL.md must be treated as missing and backfilled by seedSystemAgentEagerSouls")
 }

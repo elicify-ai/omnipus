@@ -2877,23 +2877,55 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
-	// ADR-049 D3 — System Agent (Judge) guards.
+	// ADR-049 D3 / ADR-055 — System Agent guards.
 	//
-	// The Judge cannot be disabled — disabling would stall every goal/plan
-	//     loop via the D7 judge-unavailability pause. AgentUpdateRequest carries
-	//     no enabled/disabled field, so a client can only smuggle one as an
-	//     unknown field; sniff the raw body (mirrors the sandbox_profile/
-	//     delegation_policy raw-body-sniff precedent above) and reject a disable
-	//     attempt with a loud 400 rather than a silent drop.
-	if foundAgent.ID == string(coreagent.IDJudge) {
+	// NO seeded System Agent can be disabled. Both of today's members hold a
+	// grant nothing else holds, so switching one off silently breaks the loop
+	// that depends on it: disabling the Judge stalls every goal/plan loop via
+	// the D7 judge-unavailability pause, and disabling the PlanSupervisor —
+	// the SOLE holder of the plan-correction grant — leaves a wedged plan with
+	// no actor able to correct it. The condition is therefore the whole
+	// System-Agent category, not an id equality test: it was `== IDJudge` and
+	// the PlanSupervisor slipped straight through it.
+	//
+	// AgentUpdateRequest carries no enabled/disabled field, so a client can
+	// only smuggle one as an unknown field; sniff the raw body (mirrors the
+	// sandbox_profile/delegation_policy raw-body-sniff precedent above) and
+	// reject a disable attempt with a loud 400 rather than a silent drop.
+	//
+	// NOT the plan kill switch: containment is plan-scoped (stopping a plan
+	// stops its supervision). This only stops a locked System Agent being
+	// switched off through the agent API.
+	//
+	// Both predicates, deliberately: IsSystemAgentID is seeded-ROSTER
+	// membership, so a seeded System Agent stays protected even if its
+	// persisted type was tampered with in config.json (seedSystemAgents
+	// repairs the type at the next boot, but a PUT can land before that);
+	// IsSystem is the persisted-TYPE predicate every sibling System-Agent
+	// guard in this file already uses (the not-deletable 400 above, the
+	// soul-editable carve-out below), so the two categories cannot drift apart
+	// into "deletable: no, disable-able: yes" for the same agent.
+	if coreagent.IsSystemAgentID(coreagent.CoreAgentID(foundAgent.ID)) || foundAgent.IsSystem() {
 		var statePeek struct { // not-wire-format: decode-only local peek at raw body fields to reject a disable attempt, never serialized to any response
 			Enabled  *bool `json:"enabled"`
 			Disabled *bool `json:"disabled"`
 		}
-		_ = json.Unmarshal(rawBody, &statePeek)
+		if peekErr := json.Unmarshal(rawBody, &statePeek); peekErr != nil {
+			// Unreachable by construction — decodeAndValidate above already
+			// parsed this exact body as JSON. Logged rather than discarded so
+			// a future reordering that makes it reachable cannot silently
+			// disarm this guard.
+			slog.Warn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
+				"agent_id", foundAgent.ID, "error", peekErr)
+		}
 		if (statePeek.Enabled != nil && !*statePeek.Enabled) ||
 			(statePeek.Disabled != nil && *statePeek.Disabled) {
-			jsonErr(w, http.StatusBadRequest, "the Judge cannot be disabled")
+			name := strings.TrimSpace(foundAgent.Name)
+			if name == "" {
+				name = foundAgent.ID
+			}
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("the %s System Agent cannot be disabled", name))
 			return
 		}
 	}

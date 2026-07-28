@@ -564,14 +564,14 @@ func TestJudgeRubricFromConfig_NilAgentReturnsEmpty(t *testing.T) {
 	}
 }
 
-// --- SeedJudgeSoulFile (shared write helper, gateway eager seed + this
+// --- SeedSystemAgentSoulFile (shared write helper, gateway eager seed + this
 // package's lazy backstop both call it) -------------------------------------
 
 func TestSeedJudgeSoulFile_SeedsWhenMissing(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "judge")
 
-	if err := SeedJudgeSoulFile(workspace); err != nil {
-		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	if err := SeedSystemAgentSoulFile(workspace, coreagent.IDJudge); err != nil {
+		t.Fatalf("SeedSystemAgentSoulFile: %v", err)
 	}
 
 	got, err := os.ReadFile(filepath.Join(workspace, "SOUL.md"))
@@ -579,7 +579,7 @@ func TestSeedJudgeSoulFile_SeedsWhenMissing(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if string(got) != coreagent.JudgeDefaultRubric {
-		t.Errorf("SeedJudgeSoulFile must write coreagent.JudgeDefaultRubric for a missing file, got %q", string(got))
+		t.Errorf("SeedSystemAgentSoulFile must write coreagent.JudgeDefaultRubric for a missing file, got %q", string(got))
 	}
 }
 
@@ -597,8 +597,8 @@ func TestSeedJudgeSoulFile_TreatsZeroByteFileAsMissing(t *testing.T) {
 		t.Fatalf("WriteFile (0-byte seed): %v", err)
 	}
 
-	if err := SeedJudgeSoulFile(workspace); err != nil {
-		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	if err := SeedSystemAgentSoulFile(workspace, coreagent.IDJudge); err != nil {
+		t.Fatalf("SeedSystemAgentSoulFile: %v", err)
 	}
 
 	got, err := os.ReadFile(soulPath)
@@ -624,8 +624,8 @@ func TestSeedJudgeSoulFile_WhitespaceOnlyFileIsTreatedAsMissing(t *testing.T) {
 		t.Fatalf("WriteFile (whitespace-only seed): %v", err)
 	}
 
-	if err := SeedJudgeSoulFile(workspace); err != nil {
-		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	if err := SeedSystemAgentSoulFile(workspace, coreagent.IDJudge); err != nil {
+		t.Fatalf("SeedSystemAgentSoulFile: %v", err)
 	}
 
 	got, err := os.ReadFile(soulPath)
@@ -648,8 +648,8 @@ func TestSeedJudgeSoulFile_NeverOverwritesExistingContent(t *testing.T) {
 		t.Fatalf("WriteFile (operator edit seed): %v", err)
 	}
 
-	if err := SeedJudgeSoulFile(workspace); err != nil {
-		t.Fatalf("SeedJudgeSoulFile: %v", err)
+	if err := SeedSystemAgentSoulFile(workspace, coreagent.IDJudge); err != nil {
+		t.Fatalf("SeedSystemAgentSoulFile: %v", err)
 	}
 
 	got, err := os.ReadFile(soulPath)
@@ -657,13 +657,13 @@ func TestSeedJudgeSoulFile_NeverOverwritesExistingContent(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if string(got) != operatorEdit {
-		t.Errorf("SeedJudgeSoulFile must never overwrite existing non-empty content, got %q", string(got))
+		t.Errorf("SeedSystemAgentSoulFile must never overwrite existing non-empty content, got %q", string(got))
 	}
 }
 
 func TestSeedJudgeSoulFile_EmptyWorkspaceErrors(t *testing.T) {
-	if err := SeedJudgeSoulFile("   "); err == nil {
-		t.Error("SeedJudgeSoulFile(\"   \") must return an error, got nil")
+	if err := SeedSystemAgentSoulFile("   ", coreagent.IDJudge); err == nil {
+		t.Error("SeedSystemAgentSoulFile(\"   \") must return an error, got nil")
 	}
 }
 

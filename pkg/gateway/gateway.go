@@ -863,15 +863,29 @@ func pluralSuffix(n int) string {
 	return "ies"
 }
 
-// seedJudgeEagerSoul eagerly backfills the Judge System Agent's SOUL.md with
-// its default judging rubric (coreagent.JudgeDefaultRubric) at gateway boot,
-// right after coreagent.SeedConfig has ensured the Judge's AgentConfig
-// entry exists. Fixes an operator-reported UX gap: the Judge's soul used to
-// materialize ONLY lazily, on its first real verifier dispatch
-// (pkg/agent's ensureVerifierSoul) — but the soul is now operator-editable
-// in the SPA (judge_soul_editable_test.go), so a fresh install's Judge
-// profile must show the default standards immediately, not stay blank
-// until the operator has already triggered a judgment.
+// seedSystemAgentEagerSouls eagerly backfills EVERY seeded System Agent's
+// SOUL.md with its compiled default soul (coreagent.SystemAgentDefaultSoul —
+// JudgeDefaultRubric for the Judge, PlanSupervisorDefaultRubric for the
+// PlanSupervisor) at gateway boot, right after coreagent.SeedConfig has
+// ensured their AgentConfig entries exist.
+//
+// It iterates coreagent.SystemAgents() rather than naming ids, so adding a
+// System Agent with a default soul needs no edit here — a previous version
+// looped for the Judge alone, which is precisely how the PlanSupervisor's
+// rubric ended up existing only as a Go constant that never reached disk.
+//
+// FOR THE JUDGE this fixes an operator-reported UX gap: its soul used to
+// materialize ONLY lazily, on its first real verifier dispatch (pkg/agent's
+// ensureVerifierSoul) — but the soul is now operator-editable in the SPA
+// (judge_soul_editable_test.go), so a fresh install's Judge profile must show
+// the default standards immediately, not stay blank until the operator has
+// already triggered a judgment.
+//
+// FOR THE PLANSUPERVISOR this is not a UX nicety but the ONLY seed path
+// (plan-supervisor-spec FR-005 rev 2 deliberately adds no lazy backstop: the
+// Judge's backstop is Judge-gated and sits on the verifier-dispatch path,
+// which a bus-woken PlanSupervisor never reaches). If this call does not
+// fire, the adjudicator wakes with an EMPTY prompt.
 //
 // This call site — pkg/gateway's boot sequence — was chosen over folding
 // the write into coreagent.SeedConfig/seedSystemAgents themselves for two
@@ -883,37 +897,61 @@ func pluralSuffix(n int) string {
 //     mutation with zero filesystem side effects. Adding a disk write there
 //     would start silently touching the real machine's home directory on
 //     every `go test ./pkg/coreagent/...` run.
-//  2. pkg/coreagent cannot cleanly resolve the Judge's REAL workspace path
-//     itself — that resolution (OMNIPUS_HOME lookup, the "main"-sentinel
+//  2. pkg/coreagent cannot cleanly resolve a System Agent's REAL workspace
+//     path itself — that resolution (OMNIPUS_HOME lookup, the "main"-sentinel
 //     special case, ID sanitization/traversal guarding) lives in
 //     agent.ResolveAgentHome, and pkg/coreagent cannot import pkg/agent
 //     (pkg/agent already imports pkg/coreagent — that direction would be a
 //     cycle). Reimplementing the resolution a second time in pkg/coreagent
 //     would be a second source of truth that could silently drift from the
-//     path the Judge's real AgentInstance.Home resolves to at runtime.
+//     path the agent's real AgentInstance.Home resolves to at runtime.
 //
 // pkg/gateway already imports both pkg/agent and pkg/coreagent, so it is
 // the cleanest place that can call the real, single-source-of-truth
-// agent.ResolveAgentHome and land the seed at EXACTLY the directory the
-// Judge's own AgentInstance will later use — then delegates the actual
+// agent.ResolveAgentHome and land each seed at EXACTLY the directory that
+// agent's own AgentInstance will later use — then delegates the actual
 // write (mkdir + backfill-only-when-missing/empty + atomic write) to
-// agent.SeedJudgeSoulFile, the same helper ensureVerifierSoul uses, so the
-// two call sites can never diverge on write semantics. Non-fatal: a
-// failure here is logged at WARN and boot continues — an empty Judge soul
-// is a UX gap, not a boot-blocking condition, and ensureVerifierSoul
-// remains the lazy backstop for any path (e.g. pkg/agent's own test
-// harnesses) that never runs this boot sequence at all.
-func seedJudgeEagerSoul(cfg *config.Config) {
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID != string(coreagent.IDJudge) {
+// agent.SeedSystemAgentSoulFile, the same helper ensureVerifierSoul uses, so
+// the call sites can never diverge on write semantics. In particular the
+// "never overwrite existing non-empty content" rule lives THERE, which is
+// what keeps this safe to run on every boot: an operator's edited soul
+// survives a restart untouched, exactly like the identity/type/locked/
+// tool-policy re-enforcement in seedSystemAgents leaves Model/Provider alone.
+//
+// Non-fatal per agent: a failure is logged at WARN and boot continues, and
+// one agent's failure never skips the rest — an empty soul degrades that
+// agent, it is not a boot-blocking condition.
+func seedSystemAgentEagerSouls(cfg *config.Config) {
+	for _, sa := range coreagent.SystemAgents() {
+		if strings.TrimSpace(coreagent.SystemAgentDefaultSoul(sa.ID)) == "" {
+			// A System Agent with no compiled default soul has nothing to
+			// backfill (its prompt comes from elsewhere). Skipping here keeps
+			// SeedSystemAgentSoulFile's "no default soul" error a real,
+			// loud misconfiguration signal for other callers instead of a
+			// WARN this loop would emit on every boot forever.
 			continue
 		}
-		judgeHome := agent.ResolveAgentHome(&cfg.Agents.List[i], &cfg.Agents.Defaults)
-		if err := agent.SeedJudgeSoulFile(judgeHome); err != nil {
-			slog.Warn("gateway: could not eagerly seed Judge default soul",
-				"error", err, "workspace", judgeHome)
+		idx := -1
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == string(sa.ID) {
+				idx = i
+				break
+			}
 		}
-		return
+		if idx < 0 {
+			// coreagent.SeedConfig runs immediately before this and seeds
+			// every System Agent, so a missing entry means the roster and the
+			// System-Agents list have diverged — loud, because for the
+			// PlanSupervisor this loop is the ONLY path that gives it a prompt.
+			slog.Warn("gateway: System Agent missing from roster; default soul not seeded",
+				"agent_id", string(sa.ID))
+			continue
+		}
+		home := agent.ResolveAgentHome(&cfg.Agents.List[idx], &cfg.Agents.Defaults)
+		if err := agent.SeedSystemAgentSoulFile(home, sa.ID); err != nil {
+			slog.Warn("gateway: could not eagerly seed System Agent default soul",
+				"error", err, "agent_id", string(sa.ID), "workspace", home)
+		}
 	}
 }
 
@@ -1334,8 +1372,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// agent.AgentRegistry.GetDefaultAgent and pkg/routing's
 	// resolveDefaultAgentID consult (ADR-054 D6.4). SeedConfig is a pure
 	// in-memory struct mutation by design, with zero filesystem side effects
-	// (mirrors why seedJudgeEagerSoul below is a separate call site rather
-	// than living inside SeedConfig itself) — so without persisting it here,
+	// (mirrors why seedSystemAgentEagerSouls below is a separate call site
+	// rather than living inside SeedConfig itself) — so without persisting it here,
 	// the singleton lives only in THIS process's in-memory cfg. NewAgentLoop
 	// immediately below reads it fine, so THIS boot resolves correctly, but
 	// config.json on disk never gets it: the very next restart reloads an
@@ -1360,17 +1398,20 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 	}
 
-	// Eagerly seed the Judge System Agent's SOUL.md right after SeedConfig.
-	// Operator-reported UX gap: the Judge's soul only materialized lazily on
-	// its FIRST real verifier dispatch (pkg/agent's ensureVerifierSoul), so a
-	// fresh install's Judge profile showed an empty soul in the SPA — but
-	// the soul is now operator-editable there, so the operator must be able
-	// to see the default judging standards they'd be overriding before ever
-	// running a judgment. seedJudgeEagerSoul writes only to SOUL.md (plain
+	// Eagerly seed every System Agent's SOUL.md right after SeedConfig.
+	// For the Judge this closes an operator-reported UX gap: its soul only
+	// materialized lazily on its FIRST real verifier dispatch (pkg/agent's
+	// ensureVerifierSoul), so a fresh install's Judge profile showed an empty
+	// soul in the SPA — but the soul is now operator-editable there, so the
+	// operator must be able to see the default judging standards they'd be
+	// overriding before ever running a judgment. For the PlanSupervisor this
+	// is the ONLY seed path at all (plan-supervisor-spec FR-005 rev 2 adds no
+	// lazy backstop), so without this call the adjudicator would wake with an
+	// empty prompt. seedSystemAgentEagerSouls writes only to SOUL.md (plain
 	// file I/O, not config.json) so it needs no safeUpdateConfigJSON/configMu
-	// involvement at all. See seedJudgeEagerSoul's doc comment for why this
-	// call site — not coreagent.SeedConfig itself — is where it lives.
-	seedJudgeEagerSoul(cfg)
+	// involvement at all. See its doc comment for why this call site — not
+	// coreagent.SeedConfig itself — is where it lives.
+	seedSystemAgentEagerSouls(cfg)
 
 	msgBus := bus.NewMessageBus()
 	var agentLoop *agent.AgentLoop
