@@ -392,6 +392,60 @@ async function assertCancelCascadesToSubagent(
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
 
+  // ── ORDER IS LOAD-BEARING: switch the agent FIRST, then `/new`. ───────────
+  //
+  // RC6 (2026-07-28) root-caused T24b failing 3/3 on the llm-agents shard to
+  // the OPPOSITE order this helper used to have. The chain, from that run's
+  // artefacts:
+  //
+  //   1. `expect(input).toBeEnabled()` is NOT a readiness gate for the
+  //      composer. The textarea enables while the chat surface is still
+  //      mounting — the trace's DOM snapshots show the agent picker rendering
+  //      NO agent at all (t=3538/3678/3724ms) at the exact moment `/new` was
+  //      submitted (t=3660ms), and `GET /api/v1/commands?surface=web` had only
+  //      been ISSUED 236ms earlier (t=3424ms).
+  //   2. `interceptClientCommand` (src/hooks/useSlashMenu.ts) resolves `/new`
+  //      against `allCommands`, which is populated by that fetch. Empty list →
+  //      `return false` → the text is sent to the BACKEND as an ordinary chat
+  //      message.
+  //   3. The backend honours it as the `clear` command (pkg/commands/cmd_clear.go
+  //      replies "Chat history cleared!" — that exact string was in the failed
+  //      run's DOM and transcript) and mints a session bound to the DEFAULT
+  //      agent, Mia.
+  //   4. `selectAgent(/Jim/i)` then genuinely succeeded — but the SPA's
+  //      subsequent attach to that Mia-bound session called
+  //      `setActiveSession(sessionId, 'mia', …)` and clobbered it straight
+  //      back. Picker timeline from the trace: none → Mia → Jim → Mia.
+  //   5. The delegate prompt therefore executed as MIA, whose seeded policy
+  //      denies `delegate` (pkg/coreagent/core.go:793 — deny-by-default, and
+  //      `delegate` is deliberately not in her allow-list; this is correct
+  //      least-privilege, not a regression). Gateway log, 4×:
+  //      `load_tool(load): no valid tools to load. Rejected: delegate —
+  //      denied by this agent's policy`. No subagent ever ran, so the
+  //      ActivityBar never mounted and the 150s wait below timed out.
+  //
+  // Selecting Jim BEFORE any session exists removes step 4 entirely: there is
+  // no session to attach to, so nothing can clobber the selection. It is safe
+  // with respect to `/new` because `runClientCommand('new')` calls
+  // `startNewSession()` with NO arguments, and `startNewSession` preserves the
+  // current agent (`activeAgentId: agentId ?? state.activeAgentId`,
+  // src/store/session.ts) — the switch survives the reset.
+  //
+  // `selectAgent` also doubles as the real readiness gate the old
+  // `toBeEnabled()` was standing in for: it waits for the picker to be
+  // visible, opens the dropdown (which requires `GET /api/v1/agents` to have
+  // resolved) and asserts the label changed. By the time it returns, the
+  // composer is genuinely mounted.
+  //
+  // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. An
+  // earlier CI investigation (run 27296266639) found Mia's "guide" persona
+  // makes the model REFUSE to delegate even when it CAN; RC6 showed she also
+  // structurally cannot. Either way the parent never emits a delegation frame.
+  // The cancel window comes from the SUBAGENT running long enough (it streams
+  // a multi-hundred-word inline essay), so the parent agent's prose behaviour
+  // is irrelevant — only that it delegates.
+  await selectAgent(page, /Jim/i)
+
   // Use the `/new` client-delivery slash command to create a fresh session
   // and bind the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
   // does NOT bind the SPA — the input falls back to creating a new session
@@ -408,25 +462,35 @@ async function assertCancelCascadesToSubagent(
   // "only nullifies activeSessionId, does not mint a new session" contract
   // the comment below still describes — so this swap is behavior-preserving.
   //
-  // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. CI
-  // investigation (run 27296266639) found Mia's "guide" persona makes the model
-  // REFUSE to delegate ("My role is to explain… not to delegate to subagents"), so the
-  // parent never emits a delegation frame and the subagent-collapsed block never
-  // appears. Jim delegates on the explicit prompt below. The cancel window comes
-  // from the SUBAGENT running long enough (it streams a multi-hundred-word inline
-  // essay), so the parent agent's prose behaviour is irrelevant — only that it
-  // delegates.
   // `/new` only nullifies activeSessionId — it does NOT mint a new
   // session. The SPA creates the session lazily on the first sent message. The
   // workspace-scoped chat IA keeps the page at /#/workspaces/<id>/chat (no
   // session id in the URL), so we discover the new session by diffing the
   // OMNIPUS_HOME/sessions directory before vs. after the turn (below).
+  //
+  // RC6: drive `/new` through the PALETTE, never `fill` + a blind `Enter`.
+  // Typing the text and pressing Enter races the command-list fetch: if
+  // `allCommands` is not yet populated, `interceptClientCommand` falls through
+  // and the literal text "/new" is sent to the backend as chat (see the
+  // ordering note above for the full chain). Selecting the row instead goes
+  // through `executeSlashCommand`, which can only be reached once the command
+  // actually exists in the palette — so the client-side path is guaranteed,
+  // not merely likely. This is also the real user path.
   await input.fill('/new')
-  await input.press('Enter')
-  await expect(input).toBeEnabled({ timeout: 20_000 })
+  const slashMenu = page.locator('[data-testid="slash-menu"]')
+  // Palette rows are role="option" buttons whose accessible name starts with
+  // the command label (ChatScreen.tsx renders `item.label` then
+  // `item.description`). Anchored so it can never match a future "/newfoo".
+  const newSessionCommand = slashMenu.getByRole('option', { name: /^\/new\b/ })
+  await expect(newSessionCommand).toBeVisible({ timeout: 30_000 })
+  await newSessionCommand.click()
 
-  // Switch to Jim so the parent turn will actually delegate.
-  await selectAgent(page, /Jim/i)
+  // Proof the CLIENT path ran: `executeSlashCommand` clears the composer via
+  // `composerRuntime.setText('')` before invoking `runClientCommand`. We never
+  // pressed Enter, so an empty composer can only mean the palette handled it —
+  // if `/new` had escaped to the backend this would still hold text.
+  await expect(input).toHaveValue('', { timeout: 10_000 })
+  await expect(input).toBeEnabled({ timeout: 20_000 })
 
   // Snapshot existing session dirs so we can identify the one THIS turn creates
   // (earlier tests in the same gateway leave their own session dirs behind).
@@ -446,6 +510,23 @@ async function assertCancelCascadesToSubagent(
       mode.closer,
     ].join('\n'),
   )
+
+  // RC6 GUARD — re-assert the routed agent at the LAST possible moment before
+  // the send. `selectAgent` already asserted this above, but in the failure
+  // this guard was written for the picker silently reverted to Mia AFTERWARDS
+  // (a session attach calling `setActiveSession(id, 'mia', …)` clobbered it),
+  // and the only symptom was the ActivityBar wait below dying 150s later with
+  // a bare "element(s) not found". That error names neither the agent nor the
+  // cause. Checking here turns the same defect into an immediate, truthful
+  // failure that says which agent the turn was about to run as. Cheap: this is
+  // a rendered-label read with no network round-trip.
+  await expect(
+    agentPicker(page),
+    'the routed agent must still be Jim at send time — Mia is denied `delegate` ' +
+      'by her seeded policy (pkg/coreagent/core.go), so a silent revert to her ' +
+      'makes the delegation impossible rather than merely slow (RC6)',
+  ).toContainText(/Jim/i, { timeout: 10_000 })
+
   await input.press('Enter')
 
   // Wait for the Activity Bar pill to appear — confirms delegation fired

@@ -326,31 +326,64 @@ test(
 );
 
 // ────────────────────────────────────────────────────────────────────────────────
-// (d) real-LLM smoke — US-1 (best-effort, does NOT gate merge)
-// BDD: Uses OpenRouter CI (OPENROUTER_API_KEY_CI env). Triggers a delegate via natural language.
-//      Best-effort: asserts only that no JS console errors fire, and that IF a SubagentBlock
-//      appears, it behaves correctly. MUST pass or skip gracefully if LLM doesn't call delegate.
+// (d) real-LLM smoke — US-1
+// BDD: Uses OpenRouter CI (OPENROUTER_API_KEY_CI env). Drives a real delegate turn
+//      end-to-end and asserts BOTH that a SubagentBlock renders and behaves, and
+//      that no JS console errors fire during the turn.
 //
 // Traces to: sprint-h-subagent-block-spec.md TDD row 24, SC-H-003, US-1
+//
+// ─── 2026-07-28 (RC6): this test was a coin flip, and its two defects were the
+// prompt, not the product. It used to ask, in deliberately vague natural
+// language, "Please have one of your subagents check what files are in the /tmp
+// directory", and then tolerate a non-delegating answer via an `else` branch.
+// Both halves of that were wrong:
+//
+// 1. TWO TOOLS ANSWER THAT SENTENCE, AND THEY DIFFER ~10x IN RUNTIME. Since
+//    ADR-052 wave1 (f9bcfae7) the catalog also contains `create_task` +
+//    `run_task`. `create_task` is a FULL-manifest tool (pkg/tools/manifest.go —
+//    always sent as a callable def) while `delegate` is LAZY (needs a
+//    `load_tool` round-trip first), so the model is structurally biased toward
+//    the task route. In the failing run Jim said "I'll delegate this to Worker"
+//    and then reached for create_task + run_task; `run_task` blocked the parent
+//    turn for 304 SECONDS, busting the 300s budget by 4s. The passing retry used
+//    `delegate` and finished in 78s. Every delegate-route turn in that shard was
+//    20-80s. So the budget was never the problem and MUST NOT be raised —
+//    bumping 300s → 400s would have made this green while blessing a five-minute
+//    `run_task` as normal. (That runtime is a real product bug, tracked
+//    separately; it is not this test's job to absorb it.)
+// 2. `/tmp` IS OUTSIDE THE SANDBOX. Every route was guaranteed to flail on
+//    blocked tools — `bash` "path outside working dir", `list_directory`
+//    "outside the effective filesystem scope" — which maximised retries and
+//    burned budget. Even the "passing" retry never listed /tmp; it passed only
+//    because the assertion tolerated a failed delegation.
+//
+// The fix names the tool (exactly as this file's passing siblings (a)/(b)/(e)
+// already do) and retargets the work INSIDE the workspace so it can actually
+// succeed. This STRENGTHENS the test: the SubagentBlock branch used to execute
+// roughly half the time and be silently skipped otherwise, so the test
+// advertised coverage it did not provide. It now runs every time, which is why
+// the `else` branch is gone — a turn that renders no block is a real failure.
+// The test is renamed accordingly: what it guards is a clean real-LLM
+// delegation turn, not a wager on the model's tool choice.
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(d) real-LLM smoke: delegate triggered by natural language; no console errors; SubagentBlock if delegated',
+  '(d) real-LLM smoke: a live delegate turn renders a working SubagentBlock with no console errors',
   async ({ page, consoleErrors }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
-    // This test is best-effort (does not gate merge) but must not skip silently.
     requireApiKey(test);
-    // 360s budget, matching cancel-cross-channel.spec.ts's T24a/T24b precedent
-    // for the same root cause: a natural-language prompt with no forced tool
-    // call is non-deterministic, and glm-5.2 (the standard e2e model, swapped
-    // in for the old gemini-2.5-flash pick — see
-    // tests/e2e/fixtures/onboard-via-api.ts) can genuinely take several
-    // minutes for a delegate round-trip under suite load. A too-tight budget
-    // here doesn't just fail this assertion — this repo's cancelOnTeardown
-    // fixture (tests/e2e/fixtures/console-errors.ts) then clicks Stop on
-    // teardown, which cancels the still-in-flight delegate turn too,
-    // producing a confusing "context canceled" server-side error that looks
-    // unrelated to the actual root cause (a plain timeout). Root-caused via
-    // direct gateway-log instrumentation on 2026-07-07 — see PR history.
+    // 360s budget, matching cancel-cross-channel.spec.ts's T24a/T24b precedent:
+    // glm-5.2 (the standard e2e model, swapped in for the old gemini-2.5-flash
+    // pick — see tests/e2e/fixtures/onboard-via-api.ts) can genuinely take a
+    // couple of minutes for a delegate round-trip under suite load. A too-tight
+    // budget here doesn't just fail this assertion — this repo's
+    // cancelOnTeardown fixture (tests/e2e/fixtures/console-errors.ts) then
+    // clicks Stop on teardown, which cancels the still-in-flight delegate turn
+    // too, producing a confusing "context canceled" server-side error that
+    // looks unrelated to the actual root cause (a plain timeout). Root-caused
+    // via direct gateway-log instrumentation on 2026-07-07 — see PR history.
+    // Deliberately UNCHANGED by RC6: see the note above on why raising it would
+    // be the wrong fix.
     test.setTimeout(360_000);
 
     await startFreshChat(page);
@@ -358,50 +391,57 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    // Natural language prompt — no explicit instruction to use delegate.
-    // Let the agent decide whether to delegate based on its own judgment.
+    // Name the tool, and keep the subagent's work inside the sandbox so it can
+    // actually complete (see the RC6 note above). `list_directory` on "." is
+    // the agent's own workspace root and is known-permitted; `/tmp` is not.
+    // No "do not call any other tool" guardrail here: `delegate` is a LAZY
+    // manifest tool, so the model legitimately calls `load_tool` first.
     await input.fill(
-      'Please have one of your subagents check what files are in the /tmp directory.',
+      [
+        'Use the `delegate` tool exactly once to hand this to a subagent:',
+        '  task: "List the files in your current working directory (path \\".\\") and report back what you find."',
+        'Then summarise what the subagent reported.',
+      ].join('\n'),
     );
     await input.press('Enter');
 
-    // Wait for assistant to respond (with or without delegate). 300s leaves
-    // 60s of the 360s test-level ceiling above for the isVisible()/
-    // consoleErrors checks that follow.
+    // The delegation card is the FIRST thing to appear — the collapsed block
+    // renders as soon as the sub-turn starts, well before the parent's final
+    // prose. Assert it before the completed-message count so a turn that never
+    // delegates fails HERE, naming the missing block, instead of 300s later as
+    // a bare "expected 1, received 0" on the assistant-message count (which was
+    // how the RC6 failure presented and why it read as a timeout).
+    //
+    // Use .first(): glm-5.2 occasionally fans out to more than one subagent,
+    // which would make a bare locator strict-mode-fail. We only need >=1.
+    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
+    await expect(
+      collapsedBlock,
+      'the prompt names `delegate` explicitly, so a sub-turn must start and ' +
+        'render a SubagentBlock. No block means the model either took the ' +
+        'create_task/run_task route instead (RC6) or delegation is broken — ' +
+        'check the gateway log for the actual tool calls before touching this ' +
+        'timeout.',
+    ).toBeVisible({ timeout: 240_000 });
+
+    // Now wait for the parent turn to actually finish. 300s total leaves ~60s
+    // of the 360s test-level ceiling for the expansion + a11y checks below.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 300_000 });
 
-    // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
-    // Use .first(): a natural-language prompt is non-deterministic and glm-5.2
-    // sometimes delegates to more than one subagent, which would make a bare locator
-    // strict-mode-fail on isVisible(). We only care whether >=1 block appeared.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
-    // Scoped catch — only swallow stale-locator errors, rethrow others.
-    const delegateOccurred = await collapsedBlock.isVisible({ timeout: 5_000 }).catch((err: unknown) => {
-      if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return false;
-      throw err;
+    // Click to expand — basic expansion must work.
+    await collapsedBlock.click();
+    const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
+    await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
+
+    // a11y check on subagent elements (BDD Scenario 11, US-5).
+    // Traces to: sprint-h-subagent-block-spec.md Scenario 11, line 316
+    await expectA11yClean(page, {
+      include: ['[data-testid^="subagent-"]'],
     });
 
-    if (delegateOccurred) {
-      // Click to expand — basic expansion must work.
-      await collapsedBlock.first().click();
-      const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
-      await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
-
-      // a11y check on subagent elements (BDD Scenario 11, US-5).
-      // Traces to: sprint-h-subagent-block-spec.md Scenario 11, line 316
-      await expectA11yClean(page, {
-        include: ['[data-testid^="subagent-"]'],
-      });
-    } else {
-      // LLM chose not to delegate — that is acceptable for this smoke test.
-      // The primary assertion (no console errors) is captured by the consoleErrors fixture.
-      console.info('(d) smoke: LLM did not call delegate — no SubagentBlock rendered. ' +
-        'Test passes because no console errors occurred and the response completed.');
-    }
-
-    // Primary assertion: zero unexpected JS console errors (captured by consoleErrors fixture).
-    // The fixture asserts this automatically at test end via the `consoleErrors` fixture.
-    // We force-reference the binding to ensure the fixture is active.
+    // Zero unexpected JS console errors (captured by the consoleErrors fixture,
+    // which asserts automatically at test end). Force-reference the binding so
+    // the fixture is active.
     void consoleErrors;
   },
 );
