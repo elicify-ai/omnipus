@@ -294,7 +294,18 @@ _e2e_run_shard() {
   local GATEWAY_PID=
 
   # Inlined (not a nested fn) so it can see the local GATEWAY_PID under `set -u`.
-  trap 'if [ -n "$GATEWAY_PID" ]; then kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; fi; rm -f "$pidfile"' RETURN
+  #
+  # SELF-DISARMING (`trap - RETURN` as the handler's last act), and every local read
+  # defensively defaulted. A `trap … RETURN` is GLOBAL shell state, not function-local:
+  # installing it here leaves it installed after _e2e_run_shard returns, so it fires
+  # AGAIN for whichever function returns next. On the sharded path each _e2e_run_shard
+  # runs in a background subshell, so the trap dies with the subshell and the bug is
+  # invisible. On the SINGLE-GATEWAY path (E2E_SPECS=… or E2E_SHARDED=0) the call is
+  # in-process, so the trap survived into run_e2e and fired on ITS return — by which
+  # point GATEWAY_PID/pidfile were out of scope, and `set -u` turned that into
+  # "GATEWAY_PID: unbound variable", exit 1, AFTER the results had already printed.
+  # That manufactured a false RED on the exact path used for targeted re-verification.
+  trap 'if [ -n "${GATEWAY_PID:-}" ]; then kill "$GATEWAY_PID" 2>/dev/null; wait "$GATEWAY_PID" 2>/dev/null; fi; [ -n "${pidfile:-}" ] && rm -f "$pidfile"; trap - RETURN' RETURN
 
   rm -rf "$home"; mkdir -p "$home"
 
