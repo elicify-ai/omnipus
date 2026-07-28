@@ -449,6 +449,67 @@ func TestOwnerWake_ReachesATurnAndTheOriginChat(t *testing.T) {
 	}
 }
 
+// --- FR-012c: an INTERNAL origin is not a deliverable origin ---------------
+
+// TestInternalOriginPlan_OwnerWakeStillRunsATurn is the case FR-012c was
+// supposed to close and did not.
+//
+// A plan created inside a CLI turn records SourceChannel="cli"
+// (pkg/tools/plan.go). That is NON-EMPTY, so a predicate that asks "is the
+// origin populated?" sends the owner wake down the notifier leg — where
+// processSystemMessage drops it, because `cli` is an internal channel
+// (pkg/constants). The wake published an event, the event became no turn, and
+// every mechanism-level assertion stayed green while the plan's outcome went
+// nowhere.
+//
+// The property under test is the one FR-012c actually states: a wake DISPATCHES
+// AN AGENT TURN. Asserting that directly is what makes this test catch the
+// defect; asserting "the notifier was called" is what let it survive.
+func TestInternalOriginPlan_OwnerWakeStillRunsATurn(t *testing.T) {
+	for _, internal := range []string{"cli", "system", "subagent"} {
+		t.Run(internal, func(t *testing.T) {
+			h := newPlanWakeHarness(t)
+			h.parkPlanAtSupervision(t, "p1", runningPlanWithDoD("p1", internal, internal+"-chat-1"))
+
+			// Family A (supervision) never reads the origin, so it was never
+			// affected — assert it to keep the two families distinguishable.
+			waitForTurn(t, h.supervisor, 1, "supervision wake on a "+internal+"-origin plan")
+
+			h.pe.planDecisionMu.Lock()
+			h.pe.failPlanLocked("p1", plan.FailedReasonJudgeRoundsExhausted, "the plan ran out of rounds")
+			h.pe.planDecisionMu.Unlock()
+
+			// THE assertion: the owner wake ran a real turn. Before the
+			// originCanDeliver fix this timed out at zero turns.
+			waitForTurn(t, h.owner, 1, "owner wake on a "+internal+"-origin plan")
+
+			got, err := h.plans.Get("p1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An internal origin is a HEALTHY state, exactly like no origin at
+			// all: it must not be charged to the supervision escalation ladder.
+			if got.Supervision.WakeError != "" {
+				t.Errorf("an internal-origin plan is healthy: wake_error must stay unset, got %q",
+					got.Supervision.WakeError)
+			}
+			if got.Supervision.Attempts != 1 {
+				t.Errorf("supervision.attempts = %d, want 1 — an internal origin must not inflate the count",
+					got.Supervision.Attempts)
+			}
+			// The synthesis is still persisted somewhere durable.
+			if got.OwnerSessionID == "" {
+				t.Error("an internal-origin plan still needs a real owner session to persist into")
+			}
+			h.pe.wakeWG.Wait()
+			// And nothing was published to a channel that cannot deliver it.
+			if out := drainOutbound(h.msgBus); len(out) != 0 {
+				t.Errorf("an internal-origin plan must publish NOTHING outbound, got %d: %+v", len(out), out)
+			}
+		})
+	}
+}
+
 // --- #31d: the origin-less plan ---------------------------------------------
 
 // TestOriginLessPlan_SupervisedAndDeliveredWithoutAChatLeg is the case a naive

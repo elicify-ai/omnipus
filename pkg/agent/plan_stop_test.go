@@ -395,8 +395,27 @@ func TestApplyJudgeRoundOutcomeLocked_AppliesWhenStillRunning(t *testing.T) {
 	if got.State != plan.StateRunning {
 		t.Errorf("state = %q, want running (unmet does not terminate the plan)", got.State)
 	}
-	if events := h.notif.eventList(); len(events) != 1 {
-		t.Errorf("expected exactly 1 owner-wake notification, got %d: %+v", len(events), events)
+	// FR-012: the UNMET wake is family A — it targets the PlanSupervisor by
+	// DIRECT dispatch and never touches pe.notifier. So the owner's chat
+	// origin must see nothing (FR-016: the adjudicator's deliberation must not
+	// reach the owner's conversation).
+	for _, e := range h.notif.eventList() {
+		if e.SourceKind == "plan_judge_unmet" {
+			t.Errorf("the UNMET wake must NOT be published to the plan's chat origin (FR-016): %+v", e)
+		}
+	}
+	// …but "the notifier was silent" is ALSO what a completely broken wake
+	// looks like, so assert the supervision wake positively: it parked the
+	// plan and armed FR-021's deadline as attempt 1. Without this the test
+	// would keep passing if the UNMET limb stopped waking anyone at all.
+	if got.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+		t.Errorf("plan_phase = %q, want awaiting_supervision — an UNMET outcome must park the plan for the adjudicator",
+			got.EffectivePlanPhase())
+	}
+	if got.Supervision == nil || got.Supervision.WakeAt == "" {
+		t.Errorf("the UNMET wake must stamp supervision.wake_at (it arms the deadline), got %+v", got.Supervision)
+	} else if got.Supervision.Attempts != 1 {
+		t.Errorf("supervision.attempts = %d, want 1 after the first supervision wake", got.Supervision.Attempts)
 	}
 }
 

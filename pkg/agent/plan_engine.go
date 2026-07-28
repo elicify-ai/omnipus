@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -2224,6 +2225,34 @@ func (pe *PlanEngine) touchActivity(planID string) {
 // PlanSupervisor synthesis back: it is denied every write tool and the
 // correction payload carries no synthesis field.
 
+// originCanDeliver reports whether a plan's recorded chat origin can actually
+// carry an owner wake to a human — the question FR-012c is really asking.
+//
+// Two ways it cannot, and only the first was previously handled:
+//
+//  1. The origin is EMPTY (a Plans-UI/REST-created plan). Notify rejects an
+//     empty destination.
+//
+//  2. The origin is an INTERNAL channel — `cli`, `system`, `subagent`
+//     (pkg/constants). A plan created inside a CLI turn records
+//     SourceChannel="cli" (pkg/tools/plan.go), which is NON-EMPTY, so the
+//     old populated-ness predicate sent it down the notifier leg. It then
+//     died one layer downstream: processSystemMessage drops any internal
+//     origin channel, so NO owner turn ran. That is precisely the silent-drop
+//     defect FR-012c exists to close, and it stayed live for every cli-origin
+//     plan because the predicate tested the wrong property.
+//
+// Matching AsyncNotifier.Notify's own both-fields-non-empty check is
+// necessary but NOT sufficient: the drop that loses the wake happens BELOW
+// Notify, so a predicate that only agrees with Notify still loses case 2.
+// Both cases take the direct-dispatch leg, where the turn always runs.
+func originCanDeliver(sourceChannel, sourceChatID string) bool {
+	if sourceChannel == "" || sourceChatID == "" {
+		return false
+	}
+	return !constants.IsInternalChannel(sourceChannel)
+}
+
 // wakeOwner delivers a plan OUTCOME to the plan's owner agent (family B) and
 // guarantees it lands somewhere durable.
 //
@@ -2231,21 +2260,20 @@ func (pe *PlanEngine) touchActivity(planID string) {
 // on first use (ensureOwnerSessionLocked, FR-016c) so the closing synthesis is
 // persisted even when the origin channel's client is gone.
 //
-// Origin handling (FR-012d(4)): the chat leg is taken only when the plan
-// carries a FULLY populated origin. The predicate is deliberately the same one
-// AsyncNotifier.Notify enforces (both fields non-empty), so the two can never
-// disagree. A plan created through the Plans UI legitimately has no origin,
-// and passing its empty fields to Notify would return an error that the
-// supervision escalation ladder reads as "the supervisor is unavailable" —
-// terminating a perfectly healthy plan with a loud, false diagnosis. Instead
-// the owner turn is dispatched DIRECTLY (SendResponse=false): "no chat to
-// deliver to" must never mean "no turn ran".
+// Origin handling (FR-012d(4)): the chat leg is taken only when the plan's
+// origin can ACTUALLY DELIVER. That is deliberately NOT the same as "both
+// fields are populated" — see originCanDeliver. A plan created through the
+// Plans UI legitimately has no origin, and passing its empty fields to Notify
+// would return an error that the supervision escalation ladder reads as "the
+// supervisor is unavailable" — terminating a perfectly healthy plan with a
+// loud, false diagnosis. Instead the owner turn is dispatched DIRECTLY
+// (SendResponse=false): "no chat to deliver to" must never mean "no turn ran".
 //
 // Caller must hold planDecisionMu (every call site already does).
 func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	sessionID := pe.ensureOwnerSessionLocked(p)
 
-	if p.SourceChannel == "" || p.SourceChatID == "" {
+	if !originCanDeliver(p.SourceChannel, p.SourceChatID) {
 		// FR-012d(5): a wake with no chat origin is NOT a failure. It is
 		// logged distinguishably and MUST NOT be recorded as a wake error,
 		// MUST NOT increment the supervision attempt count, and MUST NOT
