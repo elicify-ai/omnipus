@@ -2946,3 +2946,152 @@ func FixtureTaskRunStatusFrame_ManualRun() TaskRunStatusFrame {
 		Status: "in_progress",
 	}
 }
+
+// ── AuditEntry ───────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuditEntry.yaml. Previously ZERO
+// contract coverage (test-coverage gate on fix/uat-v0.1.1-defects, GAP 2).
+
+// FixtureAuditEntry_Populated — a tool_call event with every optional field
+// set (the "full shape" a security_setting_change-adjacent record can carry:
+// actor/resource/old_value/new_value alongside the tool-call fields).
+func FixtureAuditEntry_Populated() AuditEntry {
+	actor := "admin"
+	agentID := "jim"
+	command := "ls -la /tmp"
+	decision := AuditEntryDecision("allow")
+	sessionID := "sess_abc123"
+	tool := "bash"
+	policyRule := "exec: allow"
+	resource := "gateway.god_mode"
+	userID := "cli"
+	return AuditEntry{
+		Timestamp:  time.Date(2026, 5, 16, 10, 30, 0, 0, time.UTC),
+		Event:      "tool_call",
+		Decision:   &decision,
+		Actor:      &actor,
+		AgentId:    &agentID,
+		Command:    &command,
+		SessionId:  &sessionID,
+		Tool:       &tool,
+		PolicyRule: &policyRule,
+		Resource:   &resource,
+		User:       &userID,
+		Parameters: &map[string]any{"command": "ls -la /tmp"},
+		Details:    &map[string]any{"exit_code": float64(0)},
+		OldValue:   &map[string]any{"sandbox.god_mode": false},
+		NewValue:   &map[string]any{"sandbox.god_mode": true},
+	}
+}
+
+// FixtureAuditEntry_ZeroValue — Go zero values. Expected to FAIL: event=""
+// does not match the required pattern ^[a-z_]+$ (one-or-more lowercase
+// letters/underscores — the empty string has zero characters).
+func FixtureAuditEntry_ZeroValue() AuditEntry {
+	return AuditEntry{}
+}
+
+// FixtureAuditEntry_Edge — the minimal legal shape: only the two required
+// fields (timestamp, event) set, every optional field absent. A routine
+// startup/shutdown record looks exactly like this.
+func FixtureAuditEntry_Edge() AuditEntry {
+	return AuditEntry{
+		Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Event:     "startup",
+	}
+}
+
+// ── GodModeStatus ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/GodModeStatus.yaml. Previously
+// ZERO contract coverage (test-coverage gate on fix/uat-v0.1.1-defects, GAP 2).
+
+// FixtureGodModeStatus_Populated — god mode fully armed and active: build
+// supports it, this boot authorized it, and it is currently switched on.
+func FixtureGodModeStatus_Populated() GodModeStatus {
+	return GodModeStatus{
+		Enabled:   true,
+		Available: true,
+		Supported: true,
+		Persisted: true,
+	}
+}
+
+// FixtureGodModeStatus_ZeroValue — Go zero values (all four fields false).
+// UNLIKE most other _ZeroValue fixtures in this file, this is a LEGAL,
+// schema-VALID state, not a failure case: all four fields are plain
+// required booleans with no additional constraint, and false/false/false/
+// false is exactly the real "never armed, build supports it but this
+// install never opted in" fresh-install state GodModeStatus.yaml's own
+// field docs describe. Do not mistake omission-testing convention for a
+// universal "zero value must fail" rule — mustPassComponent is correct here.
+func FixtureGodModeStatus_ZeroValue() GodModeStatus {
+	return GodModeStatus{}
+}
+
+// FixtureGodModeStatus_Edge — the "armed via the UI, pending restart" state
+// called out explicitly in persisted's field doc: persisted=true (operator
+// just enabled it) but available=false (authorization is boot-frozen, so it
+// hasn't taken effect yet) and enabled=false (never active without
+// availability). Distinguishes this fixture's JSON from Populated's — every
+// field flips relative to Populated except Supported.
+func FixtureGodModeStatus_Edge() GodModeStatus {
+	return GodModeStatus{
+		Enabled:   false,
+		Available: false,
+		Supported: true,
+		Persisted: true,
+	}
+}
+
+// ── ModelCapabilities ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ModelCapabilities.yaml (D18).
+// Previously ZERO contract coverage (test-coverage gate on
+// fix/uat-v0.1.1-defects, GAP 2). modalities is a closed 5-member enum
+// array (text/image/pdf/audio/video) — an out-of-enum value reaching the
+// wire would poison the SPA's whole-array Zod validation for this resource
+// (a real bug caught by review), so the enum boundary gets dedicated
+// coverage below (TestContract_ModelCapabilities_InvalidModalityRejected).
+
+// FixtureModelCapabilities_Populated — a vision-and-document-capable model.
+func FixtureModelCapabilities_Populated() ModelCapabilities {
+	return ModelCapabilities{
+		Id: "gemini-2.5-flash",
+		Modalities: []ModelCapabilitiesModalities{
+			ModelCapabilitiesModalitiesText,
+			ModelCapabilitiesModalitiesImage,
+			ModelCapabilitiesModalitiesPdf,
+		},
+	}
+}
+
+// FixtureModelCapabilities_ZeroValue — Go zero values. Expected to FAIL:
+// Modalities is a nil slice with no `omitempty` tag, so it marshals to
+// `"modalities":null`; the schema requires type: array.
+func FixtureModelCapabilities_ZeroValue() ModelCapabilities {
+	return ModelCapabilities{}
+}
+
+// FixtureModelCapabilities_Edge — a text-only model: id set, modalities is a
+// non-nil but EMPTY array (distinct from ZeroValue's null). No minItems is
+// declared on modalities, so an empty array is legal — a model that accepts
+// no input modality at all would be unusual but is not itself a schema
+// violation; the capability list simply carries no entries.
+func FixtureModelCapabilities_Edge() ModelCapabilities {
+	return ModelCapabilities{
+		Id:         "text-only-model",
+		Modalities: []ModelCapabilitiesModalities{},
+	}
+}
+
+// FixtureModelCapabilities_SecondValid — a second, differently-shaped valid
+// model (glm-5.2: text+audio, no image/pdf) — the differentiation-test
+// fixture proving ModelCapabilities isn't hardcoded to always emit the same
+// modality list.
+func FixtureModelCapabilities_SecondValid() ModelCapabilities {
+	return ModelCapabilities{
+		Id: "glm-5.2",
+		Modalities: []ModelCapabilitiesModalities{
+			ModelCapabilitiesModalitiesText,
+			ModelCapabilitiesModalitiesAudio,
+		},
+	}
+}

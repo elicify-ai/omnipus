@@ -5568,6 +5568,22 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		var catalog *capabilities.Catalog
 		if a.agentLoop != nil {
 			catalog = a.agentLoop.GetCapabilityCatalog()
+		} else {
+			// NewAgentLoop always wires the embedded-seed catalog (loop.go
+			// ~:645), so a.agentLoop == nil is a genuine degraded-boot
+			// shape, never a normal path. The client's
+			// modelLacksImageCapability treats an ABSENT catalog entry as
+			// "assume it can" (FR-026's intentional optimistic default),
+			// so an empty [] response here is wire-identical to "the
+			// catalog legitimately has no entries" — a degraded boot
+			// would otherwise silently produce a blanket all-clear (no
+			// vision warnings for anyone) with zero server-side signal
+			// anywhere. Log it so the degraded state is observable; the
+			// response contract itself is unchanged (still [], never a
+			// 500 — this is an advisory endpoint).
+			slog.Warn("rest: model-capabilities requested with no AgentLoop wired — degraded boot, " +
+				"serving an empty catalog (client-side vision warnings will not fire for any model " +
+				"until this is resolved)")
 		}
 		capsOut := make([]gen.ModelCapabilities, 0)
 		if catalog != nil {
@@ -5575,7 +5591,27 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				modalities := snap.Handle.InputModalities()
 				wireModalities := make([]gen.ModelCapabilitiesModalities, 0, len(modalities))
 				for _, m := range modalities {
-					wireModalities = append(wireModalities, gen.ModelCapabilitiesModalities(m))
+					// The INTERNAL Modality type is deliberately open —
+					// pkg/providers/capabilities/modality.go accepts any
+					// non-empty unknown value so an operator can seed a
+					// modality ("3d", "hologram") ahead of runtime support
+					// (asserted by TestParseSeed_AcceptsUnknownModalities).
+					// The WIRE enum is closed. Casting straight across put an
+					// out-of-enum value on the wire, and the SPA validates with
+					// z.array(z.enum(...)), which rejects the ENTIRE array on a
+					// single bad element — so one forward-compat modality
+					// anywhere in the catalog silently disabled the vision
+					// pre-send warning for EVERY model (both call sites swallow
+					// the failure to console.debug). Drop unrepresentable
+					// values instead: a model with ["text","3d"] correctly
+					// reports ["text"], which is exactly right for this
+					// endpoint's advisory purpose — it lacks "image", so the
+					// warning still fires.
+					wm := gen.ModelCapabilitiesModalities(m)
+					if !wm.Valid() {
+						continue
+					}
+					wireModalities = append(wireModalities, wm)
 				}
 				capsOut = append(capsOut, gen.ModelCapabilities{
 					Id:         snap.ID,

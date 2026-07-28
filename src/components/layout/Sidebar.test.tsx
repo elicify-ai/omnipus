@@ -682,8 +682,45 @@ describe('Sidebar — D8: profile-menu Usage/Profile/Settings close the (unpinne
     },
   )
 
+  // NON-DISCRIMINATING GUARD (test-coverage gate on fix/uat-v0.1.1-defects,
+  // GAP 5) — flagged honestly rather than left looking like proof, per the
+  // AgentProfile.test.tsx "reachability probe" convention (see that file's
+  // "Finding A" describe block for the same pattern applied to a different
+  // fix).
+  //
+  // What this asserts: after clicking Usage/Profile/Settings while PINNED,
+  // `isOpen` is still `true`.
+  //
+  // Why it can't tell the fix apart from its own absence: on TODAY's fixed
+  // code, each item's `onSelect={() => { if (!effectivelyPinned) close() }}`
+  // (Sidebar.tsx ~690-707) is reached and correctly SKIPS `close()` because
+  // `effectivelyPinned` is true — `isOpen` stays `true` as an intended
+  // outcome. But on the PRE-D8 code this test is meant to guard against, these
+  // three items had NO `onSelect` prop at all (see the sibling "unpinned"
+  // it.each above and its own D8 header comment) — `close()` was never
+  // reachable in ANY pin state, so `isOpen` ALSO stays `true`, for a
+  // completely unrelated reason (the handler doesn't exist, not "the handler
+  // ran and correctly declined to act"). Both code paths produce the
+  // identical `isOpen === true` outcome this test checks, so it passes
+  // vacuously on the broken code too — it is a reachability/regression-shape
+  // sanity check, not evidence the pinned-guard branch itself executes.
+  //
+  // Why it can't be strengthened from here: the ONLY observable effect of
+  // these items' `onSelect` in production is the guarded `close()` call
+  // itself (confirmed by reading Sidebar.tsx ~690-707) — no toast, no store
+  // write, no distinguishable call, is made either way. The `Link` child
+  // navigates via its own `href` regardless of whether `onSelect` exists at
+  // all (this file's `@tanstack/react-router` mock, ~line 48, renders a
+  // plain `<a href>` with no `onSelect` wiring), so asserting on navigation
+  // doesn't discriminate either. Making this test load-bearing would require
+  // a production-code change to add a distinguishable side effect inside the
+  // guard — out of qa-lead's test-only scope; flagging here for
+  // frontend-lead rather than leaving a false sense of coverage. The
+  // "unpinned" it.each immediately above IS fully discriminating (it fails
+  // outright on the pre-D8 code, since `isOpen` stays `true` there instead of
+  // flipping to `false`) and is what actually protects the D8 fix.
   it.each(['Usage', 'Profile', 'Settings'])(
-    'clicking "%s" in the profile menu does NOT force-close a PINNED sidebar',
+    'NON-DISCRIMINATING: clicking "%s" in the profile menu leaves isOpen=true while PINNED (guarded-skip and never-wired-at-all are indistinguishable here — see comment above)',
     async (label) => {
       // canPin is true in this test file's matchMedia stub, so isPinned:true
       // means effectivelyPinned:true — the `if (!effectivelyPinned) close()`

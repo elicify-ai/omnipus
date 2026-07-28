@@ -13,12 +13,23 @@ primary_region = "fra"
   # The default container seccomp profile blocks syscalls the hardened-exec
   # path needs; enforce would break `bash` with "permission denied".
   OMNIPUS_SANDBOX_MODE = "permissive"
-  # SEC-ADR052-002 defaults TrustPathChrome=false, which makes the gateway
-  # REFUSE the distro Chromium that Dockerfile.heavy installs on purpose
-  # (WARN-BROWSER-007 → "shared Chrome unavailable"). In this image the only
-  # Chrome on $PATH is the apk-packaged one we control, so trusting it is the
-  # correct posture — without this the built-in browser cannot run at all.
-  OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME = "true"
+  # NO trust_path_chrome override here — deliberately.
+  #
+  # An earlier revision of this file set
+  # OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME="true" as a UAT workaround, back
+  # when Dockerfile.heavy shipped a Chromium the resolver refused (B2a). That
+  # override is now not just unnecessary but actively harmful, and it silently
+  # defeated the B2a fix: exec_resolver.go's step 3 (the chrome.sha256-verified
+  # package-Chrome path) only runs when `pathResolved == "" || PreferPackaged`,
+  # and PreferPackaged defaults false (defaults.go:465). So trusting $PATH made
+  # the resolver return the UNVERIFIED $PATH binary and never reach the
+  # verification the image now provides — i.e. a deploy from this file would
+  # have exercised the OLD insecure path while appearing to test the new one.
+  #
+  # Dockerfile.heavy now generates a chrome.sha256 manifest at the package root,
+  # so the default posture (TrustPathChrome=false) resolves correctly on its
+  # own: $PATH is discarded, step 3 finds the verified package Chrome.
+  # SEC-ADR052-002's threat model stays intact.
   # Reverse-proxy origin: drives CanonicalGatewayOrigin, which CSP/CORS and
   # the WS CheckOrigin all validate against. Without it the SPA's WebSocket
   # is rejected at the origin check.

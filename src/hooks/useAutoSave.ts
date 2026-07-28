@@ -75,6 +75,41 @@ interface UseAutoSaveOptions<T> {
    * nothing "saved" to report in either case.
    */
   onSaved?: (saved: T, isCurrent: boolean) => void
+  /**
+   * Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects): called ONCE, at
+   * the exact moment `disabled` transitions false→true, if `data` at that
+   * instant genuinely differs from the last successfully-persisted
+   * snapshot AND no save is currently in flight for it. This is the one
+   * safe window to detect a soon-to-be-discarded edit: the debounce timer
+   * for it is about to be cleared (this same effect's cleanup, triggered by
+   * the `disabled` dep changing), and re-enabling later re-seeds the
+   * baseline from whatever `data` is at THAT point (see `wasDisabledRef`
+   * below) — so unless something acts on this callback, the edit vanishes
+   * with no error, no toast, no log.
+   *
+   * Deliberately NOT an auto-flush trigger. Calling `saveNow()` from here
+   * would use `data` that may already be a transitional, cross-entity
+   * mismatch by the time a caller's OWN reset effects have run (a plain
+   * `disabled: !someReadinessFlag` consumer can legitimately have `data`
+   * partially reflect a newly-swapped identity before its own hydration
+   * effect corrects it) — flushing there is "exactly the cross-entity
+   * clobber this wave fixed" per this file's own `wasDisabledRef` comment.
+   * Callers that want the edit preserved must capture what they need
+   * (typically just an id/name for a user-facing message) and present it —
+   * e.g. a toast telling the operator to redo the change — never a
+   * best-effort re-PUT of a payload this hook can no longer vouch for.
+   *
+   * Guarded internally against firing on a hook's initial mount-disabled
+   * state (`initializedRef` never having seeded a real baseline yet — see
+   * the D3 test "a hook that STARTS disabled... captures its first enable
+   * as the baseline, not a save") and against a save that is already
+   * legitimately in flight for this exact disable transition (the normal
+   * "flush then close" pattern, e.g. `AgentProfile`'s
+   * `handleCloseAgentSheet` — its `saveNow()` call sets `isSavingRef`
+   * synchronously, before the store write that flips `disabled` true lands
+   * in a later render, so this callback correctly stays silent for it).
+   */
+  onDisabledWithPendingChanges?: (data: T) => void
 }
 
 interface UseAutoSaveResult {
@@ -115,7 +150,7 @@ export function useAutoSave<T>(
   // Merge note (hotfix/v0.1.1): flushAuthToken was retired hook-wide — the
   // keepalive flush now carries the CSRF double-submit header instead of a
   // bearer token. onSaved is this lineage's draft-ownership callback.
-  const { debounceMs = 500, disabled = false, flushUrl, beaconFlush, onSaved } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl, beaconFlush, onSaved, onDisabledWithPendingChanges } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -183,6 +218,10 @@ export function useAutoSave<T>(
   // be a stable identity across renders.
   const onSavedRef = useRef(onSaved)
   onSavedRef.current = onSaved
+  // Finding A: same always-fresh-ref pattern for the new disable-transition
+  // callback (see its own doc comment on `UseAutoSaveOptions` above).
+  const onDisabledWithPendingChangesRef = useRef(onDisabledWithPendingChanges)
+  onDisabledWithPendingChangesRef.current = onDisabledWithPendingChanges
 
   const hasPendingChanges = useCallback(() => {
     return JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current
@@ -291,6 +330,38 @@ export function useAutoSave<T>(
 
   useEffect(() => {
     if (disabled) {
+      // Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects): on the
+      // TRANSITION into disabled (not on every commit while already
+      // disabled — `!wasDisabledRef.current` below is only true the first
+      // time), check whether `data` right now genuinely differs from the
+      // last successfully-persisted snapshot. If it does, the debounce
+      // timer that would have saved it (armed by the PREVIOUS instance of
+      // this same effect, while enabled) is about to be cancelled by that
+      // instance's own cleanup — and the re-arm branch further down will
+      // later reseed the baseline from whatever `data` is AT RE-ENABLE
+      // TIME, making `hasPendingChanges()` read `false` with nothing ever
+      // having reached the server. See `UseAutoSaveOptions.onDisabledWithPendingChanges`'s
+      // doc comment for why this only ever REPORTS the loss (never
+      // attempts an automatic flush).
+      //
+      // Two guards against false positives:
+      //   - `initializedRef.current` — a hook that STARTS disabled (the
+      //     common `disabled: !someReadinessFlag` shape) has never seeded a
+      //     real baseline yet (`lastSavedJsonRef` is still its initial
+      //     `''`), so comparing the hardcoded-default `data` against `''`
+      //     would trivially "differ" with nothing real to lose.
+      //   - `!isSavingRef.current` — a save already in flight for this
+      //     exact transition (the normal "flush then tear down" pattern,
+      //     e.g. `AgentProfile.handleCloseAgentSheet` calling `saveNow()`
+      //     synchronously before the store write that will flip `disabled`
+      //     true on the next render) is being handled, not lost — reporting
+      //     it here would be a false alarm on the CORRECT path.
+      if (!wasDisabledRef.current && initializedRef.current && !isSavingRef.current) {
+        const jsonAtDisable = JSON.stringify(data)
+        if (jsonAtDisable !== lastSavedJsonRef.current) {
+          onDisabledWithPendingChangesRef.current?.(data)
+        }
+      }
       // Remember that we were disabled so the NEXT commit where `disabled`
       // is false — whenever that happens — knows a re-arm is owed, however
       // many renders (or however much `data` drifted underneath) happened

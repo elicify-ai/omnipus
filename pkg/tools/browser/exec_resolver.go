@@ -372,7 +372,9 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 		// re-resolution instead of repeating a claim that is no longer
 		// true.
 		if failPath != "" {
-			if info, statErr := os.Stat(failPath); statErr == nil && !info.IsDir() {
+			info, statErr := os.Stat(failPath)
+			switch {
+			case statErr == nil && !info.IsDir():
 				logger.InfoCF("browser",
 					"cached chromium resolution failure is stale — binary now exists, evicting and re-resolving",
 					map[string]any{"path": failPath})
@@ -391,7 +393,39 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 				// returning here — the freshly-discovered binary still
 				// needs the same --version probe every other candidate
 				// gets before being trusted (FIX-CRIT-001 discipline).
-			} else {
+			case statErr != nil && !os.IsNotExist(statErr):
+				// The re-stat itself failed with something OTHER than a
+				// plain "not exist" — permission revoked on a parent dir,
+				// an I/O error, a symlink loop, etc. This branch used to
+				// discard statErr silently and with NO log at all (unlike
+				// both siblings: the "stale, now exists" branch above logs
+				// InfoCF, the no-failPath branch below logs DebugCF). Main
+				// risk stays closed either way — an unreadable path can
+				// never be misread as "binary exists", so this still
+				// conservatively falls through to replaying the cached
+				// failure — but if the TRUE CAUSE changed after the
+				// failure was cached (exactly the misleading-stale-
+				// diagnosis family B2c(ii) already fixed once for the
+				// "now exists" direction), the operator was left with only
+				// the stale original diagnosis, age-annotated, for the
+				// rest of the TTL, with no signal that the re-check itself
+				// hit something new and unexpected. Log it and surface it
+				// in the returned error instead of dropping it.
+				logger.DebugCF("browser",
+					"cached chromium resolution failure replayed — re-checking the cached path hit an "+
+						"unexpected error (not a plain not-exist); the underlying cause may have "+
+						"changed since the failure was cached",
+					map[string]any{
+						"path":     failPath,
+						"stat_err": statErr.Error(),
+					})
+				return "", cacheAgeAnnotateWithStatErr(failErr, failUntil, statErr)
+			default:
+				// Plain ENOENT (or the no-error-but-is-a-directory corner
+				// case) — the expected, genuine-failure case: the cached
+				// diagnosis still holds and there is nothing new to
+				// report beyond the standard age annotation. Unchanged
+				// from before this fix.
 				return "", cacheAgeAnnotate(failErr, failUntil)
 			}
 		} else {
@@ -636,6 +670,25 @@ func cacheAgeAnnotate(err error, failUntil time.Time) error {
 		"%w (cached result from %s ago; re-checked automatically after the negative-cache TTL expires)",
 		err,
 		age,
+	)
+}
+
+// cacheAgeAnnotateWithStatErr is cacheAgeAnnotate plus a second annotation for
+// the case where the cheap re-stat performed before replaying a cached
+// failure (B2c(ii)) itself failed with something OTHER than a plain
+// not-exist — a permission change, an I/O error, a symlink loop, etc. That
+// distinction matters: a plain not-exist means the original diagnosis is
+// still accurate (nothing has changed), whereas an unexpected re-stat error
+// means the true cause MAY have changed since the failure was cached, and
+// the replayed original error text cannot reflect that. Surfacing it here
+// (in addition to the DebugCF log at the call site) means a caller that
+// prints the returned error verbatim — an agent narrating a tool result, an
+// API error field — still carries the signal even if logs aren't consulted.
+func cacheAgeAnnotateWithStatErr(err error, failUntil time.Time, statErr error) error {
+	return fmt.Errorf(
+		"%w; additionally, re-checking the cached path just now failed unexpectedly (%w) rather than confirming it is simply still missing — the underlying cause may have changed since this failure was cached",
+		cacheAgeAnnotate(err, failUntil),
+		statErr,
 	)
 }
 

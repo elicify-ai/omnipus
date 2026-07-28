@@ -10,6 +10,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +138,17 @@ func TestWSHandlerValidAuth(t *testing.T) {
 // When the client sends {"type":"auth","token":"wrong"},
 // Then the server sends an error frame and closes the connection.
 // Traces to: wave5b-system-agent-spec.md — Scenario: WebSocket invalid auth (E5)
+//
+// GAP 1 (D5 test-coverage gate): asserts EXACT equality against the shared
+// wsAuthErrInvalidToken constant (websocket.go), not a loose substring. Prior
+// to this fix the assertion checked for "unauthorized" — a string the D5 fix
+// (commit b764a484) removed from the wire in favor of a human-readable
+// message, which had gone undetected because nobody re-ran this test after
+// the copy change. Comparing to the constant itself means a future edit that
+// changes the copy in websocket.go but forgets the identical browser_ws.go
+// mirror call site (or vice versa) fails exactly one of the two tests that
+// reference it — see TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation
+// in browser_ws_test.go for the mirrored assertion.
 func TestWSHandlerInvalidAuth(t *testing.T) {
 	const testToken = "ws-correct-token"
 	handler, _, _ := newTestWSHandler(t)
@@ -161,12 +173,107 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 	var frame replayFrameDecoder
 	require.NoError(t, json.Unmarshal(resp, &frame))
 	assert.Equal(t, "error", frame.Type)
-	assert.Contains(t, strings.ToLower(frame.Message), "unauthorized")
+	assert.Equal(t, wsAuthErrInvalidToken, frame.Message,
+		"chat WS invalid-token error must carry the shared wsAuthErrInvalidToken constant verbatim")
 
 	// After error frame, connection must be closed.
 	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed after invalid auth")
+}
+
+// TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant verifies that a
+// non-"auth" first frame (no session cookie present, so the frame path is
+// reached) is rejected with the shared wsAuthErrBadFirstFrame constant, and
+// that the connection is unusable afterward.
+// BDD: Given a freshly dialed chat WS connection with no cookie,
+// When the client's first frame is {"type":"message",...} (not "auth"),
+// Then the server sends {"type":"error","message":wsAuthErrBadFirstFrame}
+// and the connection cannot be used for further frames.
+// Traces to: GAP 1 (D5 test-coverage gate) — websocket.go:770-779.
+func TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	// First frame is a "message" frame, not the required "auth" envelope.
+	badFirst := wsClientFrameTestHelper{Type: "message", Content: "no auth frame sent"}
+	badData, err := json.Marshal(badFirst)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, badData))
+
+	_, resp, err := conn.ReadMessage()
+	require.NoError(t, err, "must receive error frame for a non-auth first frame")
+	var frame replayFrameDecoder
+	require.NoError(t, json.Unmarshal(resp, &frame))
+	assert.Equal(t, "error", frame.Type)
+	assert.Equal(t, wsAuthErrBadFirstFrame, frame.Message,
+		"chat WS bad-first-frame error must carry the shared wsAuthErrBadFirstFrame constant verbatim")
+
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	_, _, err = conn.ReadMessage()
+	assert.Error(t, err, "connection must be closed after a bad first frame")
+}
+
+// TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant verifies that when
+// no accounts, no CLI token, and no OMNIPUS_BEARER_TOKEN are configured, and
+// dev_mode_bypass is explicitly off, the handshake is rejected with the
+// shared wsAuthErrNoUsers constant rather than silently admitted.
+// BDD: Given Gateway.Users is empty, Gateway.CLIToken is nil,
+// OMNIPUS_BEARER_TOKEN is unset, and dev_mode_bypass=false,
+// When the client sends any {"type":"auth","token":"..."} frame,
+// Then the server sends {"type":"error","message":wsAuthErrNoUsers} and
+// closes the connection — fail closed, not fail open.
+// Traces to: GAP 1 (D5 test-coverage gate) — websocket.go:813-831. No existing
+// test previously exercised this branch at all (verified: only the
+// DevModeBypass=true / no-auth path was covered by
+// TestWSHandlerNoAuthRequired).
+func TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
+	os.Unsetenv("OMNIPUS_BEARER_TOKEN")
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host: "127.0.0.1", Port: 8080,
+			DevModeBypass: false, // explicit: fail closed, not the dev-mode fallback.
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	handler := newWSHandler(msgBus, al, "")
+	t.Cleanup(handler.Wait)
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+
+	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "any-token-nothing-is-configured"}
+	authData, err := json.Marshal(authFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
+
+	_, resp, err := conn.ReadMessage()
+	require.NoError(t, err, "must receive error frame before connection closes")
+	var frame replayFrameDecoder
+	require.NoError(t, json.Unmarshal(resp, &frame))
+	assert.Equal(t, "error", frame.Type)
+	assert.Equal(t, wsAuthErrNoUsers, frame.Message,
+		"chat WS no-users-configured error must carry the shared wsAuthErrNoUsers constant verbatim")
+
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	_, _, err = conn.ReadMessage()
+	assert.Error(t, err, "connection must be closed when no auth identity is configured at all")
 }
 
 // TestWSHandlerMalformedFrame verifies that invalid JSON does not close the connection.

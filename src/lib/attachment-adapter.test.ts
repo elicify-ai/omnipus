@@ -455,6 +455,55 @@ describe('omnipusAttachmentAdapter — D18 vision-capability warn-and-proceed', 
     expect(complete.status).toEqual({ type: 'complete' })
   })
 
+  // 7-reviewer-gate follow-on finding: this catch used to reduce ANY
+  // failure -- including an ApiSchemaError, which means the vision
+  // pre-send warning is disabled for EVERY model, not just this one send
+  // -- to a single console.debug, indistinguishable from an ordinary
+  // network hiccup. REVERT-PROOF: on unfixed code this logs via
+  // console.debug with one generic message regardless of error type; after
+  // the fix it logs via console.warn (never console.debug) and the
+  // ApiSchemaError case gets a materially different message calling out
+  // that the check is disabled for ALL models.
+  it('logs a schema-validation failure via console.warn with a distinct "disabled for ALL models" message, and still sends', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const schemaErr = new api.ApiSchemaError('GET /api/v1/providers/model-capabilities', [{ path: [], message: 'invalid' }], {})
+    vi.mocked(api.fetchModelCapabilities).mockRejectedValue(schemaErr)
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    const complete = await omnipusAttachmentAdapter.send(pending)
+
+    expect(complete.status).toEqual({ type: 'complete' })
+    expect(getAddToast()).not.toHaveBeenCalled()
+    expect(debugSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/disabled for all models/i),
+      schemaErr,
+    )
+
+    warnSpy.mockRestore()
+    debugSpy.mockRestore()
+  })
+
+  it('logs an ordinary (non-schema) capability-check failure via console.warn too, but WITHOUT the "disabled for ALL models" wording', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const networkErr = new Error('network down')
+    vi.mocked(api.fetchModelCapabilities).mockRejectedValue(networkErr)
+
+    const pending = await omnipusAttachmentAdapter.add({ file: mkFile('photo.png', 'image/png') })
+    const complete = await omnipusAttachmentAdapter.send(pending)
+
+    expect(complete.status).toEqual({ type: 'complete' })
+    expect(debugSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.any(String), networkErr)
+    const [message] = warnSpy.mock.calls[0] as [string, unknown]
+    expect(message).not.toMatch(/disabled for all models/i)
+
+    warnSpy.mockRestore()
+    debugSpy.mockRestore()
+  })
+
   it('skips the capability check entirely (no fetch) when the agent is not in the cached ["agents"] list', async () => {
     queryClient.setQueryData(['agents'], [])
 

@@ -4241,3 +4241,271 @@ func TestReplayErrorFrame_PayloadOmitEmpty(t *testing.T) {
 	assert.Contains(t, string(rawPop), `"code":"rate_limited"`,
 		"payload.llm_error.code must carry the classifier code")
 }
+
+// ── AuditEntry ───────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuditEntry.yaml. Previously ZERO
+// contract coverage — flagged by the test-coverage gate on
+// fix/uat-v0.1.1-defects (GAP 2).
+
+func TestContract_AuditEntry_Populated(t *testing.T) {
+	// Traces to: AuditEntry.yaml — required: [timestamp, event]; every
+	// optional field also set (the security_setting_change-adjacent shape).
+	mustPassComponent(t, "AuditEntry", FixtureAuditEntry_Populated())
+}
+
+func TestContract_AuditEntry_ZeroValue(t *testing.T) {
+	// Traces to: AuditEntry.yaml — event: pattern ^[a-z_]+$ (one-or-more).
+	// Go zero value has Event="" which does not match (zero characters).
+	mustFailComponent(t, "AuditEntry", FixtureAuditEntry_ZeroValue(),
+		"zero value: event=\"\" does not match pattern ^[a-z_]+$ (requires 1+ chars)")
+}
+
+func TestContract_AuditEntry_Edge(t *testing.T) {
+	// Traces to: AuditEntry.yaml — only required fields set (timestamp,
+	// event); every optional field absent. A routine startup/shutdown
+	// record has exactly this shape.
+	mustPassComponent(t, "AuditEntry", FixtureAuditEntry_Edge())
+}
+
+func TestContract_AuditEntry_Differentiation(t *testing.T) {
+	// Two structurally different, both-valid entries must not collapse to
+	// the same JSON — catches a hardcoded/constant-fixture regression.
+	f1 := FixtureAuditEntry_Populated()
+	f2 := FixtureAuditEntry_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and Edge AuditEntry fixtures must produce different JSON")
+	mustPassComponent(t, "AuditEntry", f1)
+	mustPassComponent(t, "AuditEntry", f2)
+}
+
+func TestContract_AuditEntry_InvalidDecisionRejected(t *testing.T) {
+	// Traces to: AuditEntry.yaml — decision enum: [allow, deny, error].
+	doc := map[string]any{
+		"timestamp": "2026-05-16T10:30:00Z",
+		"event":     "policy_eval",
+		"decision":  "maybe", // NOT in enum
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuditEntry", raw),
+		"decision='maybe' must fail — not in enum [allow, deny, error]")
+}
+
+func TestContract_AuditEntry_InvalidEventPatternRejected(t *testing.T) {
+	// Traces to: AuditEntry.yaml — event: pattern ^[a-z_]+$. Uppercase and
+	// hyphenated values (as a caller might accidentally pass, e.g. a Go
+	// constant rendered as "ToolCall" or "tool-call") must be rejected —
+	// only lowercase letters and underscores are legal.
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{"uppercase", "ToolCall"},
+		{"hyphenated", "tool-call"},
+		{"digits", "tool_call_2"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := map[string]any{
+				"timestamp": "2026-05-16T10:30:00Z",
+				"event":     tc.event,
+			}
+			raw, err := json.Marshal(doc)
+			require.NoError(t, err)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuditEntry", raw),
+				"event=%q must fail — does not match pattern ^[a-z_]+$", tc.event)
+		})
+	}
+}
+
+// ── GodModeStatus ────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/GodModeStatus.yaml. Previously
+// ZERO contract coverage — flagged by the test-coverage gate on
+// fix/uat-v0.1.1-defects (GAP 2).
+
+func TestContract_GodModeStatus_Populated(t *testing.T) {
+	// Traces to: GodModeStatus.yaml — required: [enabled, available,
+	// supported, persisted], additionalProperties: false. Fully armed/active.
+	mustPassComponent(t, "GodModeStatus", FixtureGodModeStatus_Populated())
+}
+
+func TestContract_GodModeStatus_ZeroValue(t *testing.T) {
+	// UNLIKE most _ZeroValue contract tests, all-false is schema-VALID here:
+	// every field is a plain required boolean with no further constraint,
+	// and false/false/false/false is the real "never armed" fresh-install
+	// state per GodModeStatus.yaml's own field docs. This test intentionally
+	// asserts PASS, not FAIL — the anti-shortcut concern for a bool-only
+	// resource is additionalProperties/enum-adjacent rejection, not "zero
+	// value must be invalid".
+	mustPassComponent(t, "GodModeStatus", FixtureGodModeStatus_ZeroValue())
+}
+
+func TestContract_GodModeStatus_Edge(t *testing.T) {
+	// Traces to: GodModeStatus.yaml persisted field doc — the "armed via the
+	// UI, pending restart" state: persisted=true, available=false,
+	// enabled=false.
+	mustPassComponent(t, "GodModeStatus", FixtureGodModeStatus_Edge())
+}
+
+func TestContract_GodModeStatus_Differentiation(t *testing.T) {
+	f1 := FixtureGodModeStatus_Populated()
+	f2 := FixtureGodModeStatus_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated (all true) and Edge (pending-restart) GodModeStatus fixtures must produce different JSON")
+	mustPassComponent(t, "GodModeStatus", f1)
+	mustPassComponent(t, "GodModeStatus", f2)
+}
+
+func TestContract_GodModeStatus_RejectsExtraneousField(t *testing.T) {
+	// Traces to: GodModeStatus.yaml — additionalProperties: false.
+	doc := map[string]any{
+		"enabled":          true,
+		"available":        true,
+		"supported":        true,
+		"persisted":        true,
+		"restart_required": false, // not a GodModeStatus field (belongs to GodModeUpdateResponse)
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "GodModeStatus", raw),
+		"GodModeStatus with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_GodModeStatus_MissingRequiredFieldRejected(t *testing.T) {
+	// Traces to: GodModeStatus.yaml — required: [enabled, available,
+	// supported, persisted]. Every field is a plain bool with no omitempty,
+	// so a legitimately-constructed Go struct can never omit one — this
+	// guards the wire contract itself (e.g. a handwritten partial JSON
+	// response) rather than anything reachable through the generated type.
+	doc := map[string]any{
+		"enabled":   true,
+		"available": true,
+		"supported": true,
+		// "persisted" omitted
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "GodModeStatus", raw),
+		"GodModeStatus missing required 'persisted' must fail")
+}
+
+// ── ModelCapabilities ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ModelCapabilities.yaml (D18).
+// Previously ZERO contract coverage — flagged by the test-coverage gate on
+// fix/uat-v0.1.1-defects (GAP 2). modalities is a closed 5-member enum array
+// (text/image/pdf/audio/video); an out-of-enum value reaching the wire was
+// identified by review as a real bug that would poison the SPA's whole-array
+// Zod validation for this resource, so the enum boundary gets dedicated,
+// explicit coverage (TestContract_ModelCapabilities_InvalidModalityRejected).
+
+func TestContract_ModelCapabilities_Populated(t *testing.T) {
+	// Traces to: ModelCapabilities.yaml — required: [id, modalities],
+	// additionalProperties: false.
+	mustPassComponent(t, "ModelCapabilities", FixtureModelCapabilities_Populated())
+}
+
+func TestContract_ModelCapabilities_ZeroValue(t *testing.T) {
+	// Traces to: ModelCapabilities.yaml — modalities: required, type: array.
+	// Go zero value has a nil (non-omitempty) Modalities slice, which
+	// marshals to `"modalities":null` — schema requires type: array.
+	mustFailComponent(t, "ModelCapabilities", FixtureModelCapabilities_ZeroValue(),
+		"zero value has nil Modalities (marshals to null); schema requires type: array")
+}
+
+func TestContract_ModelCapabilities_Edge(t *testing.T) {
+	// Traces to: ModelCapabilities.yaml — an empty (non-nil) modalities
+	// array is legal (no minItems declared).
+	mustPassComponent(t, "ModelCapabilities", FixtureModelCapabilities_Edge())
+}
+
+func TestContract_ModelCapabilities_Differentiation(t *testing.T) {
+	// Two DIFFERENT models with DIFFERENT modality lists must produce
+	// DIFFERENT JSON — catches a handler that always returns the same
+	// hardcoded capability entry regardless of which model was requested.
+	f1 := FixtureModelCapabilities_Populated()   // gemini-2.5-flash: text+image+pdf
+	f2 := FixtureModelCapabilities_SecondValid() // glm-5.2: text+audio
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"two different models must produce different ModelCapabilities JSON")
+	assert.Contains(t, string(raw1), `"id":"gemini-2.5-flash"`)
+	assert.Contains(t, string(raw2), `"id":"glm-5.2"`)
+	mustPassComponent(t, "ModelCapabilities", f1)
+	mustPassComponent(t, "ModelCapabilities", f2)
+}
+
+// TestContract_ModelCapabilities_InvalidModalityRejected pins the enum
+// boundary a review flagged as a real bug: modalities is a closed 5-member
+// enum (text/image/pdf/audio/video), and an out-of-enum string reaching the
+// wire would poison the SPA's whole-array Zod validation for this resource
+// (one bad entry fails the entire array, not just that element). This test
+// asserts the SERVER-SIDE contract rejects such a payload outright, so a
+// handler that forwards an un-validated provider-reported modality string
+// can never actually reach the wire in schema-valid form.
+func TestContract_ModelCapabilities_InvalidModalityRejected(t *testing.T) {
+	// Traces to: ModelCapabilities.yaml — modalities[].enum:
+	// [text, image, pdf, audio, video].
+	tests := []struct {
+		name      string
+		modality  string
+		wantError bool
+	}{
+		{"unknown_modality_wibble", "wibble", true},
+		{"case_sensitivity_Text", "Text", true}, // enum is lowercase-only
+		{"valid_text", "text", false},
+		{"valid_video", "video", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := map[string]any{
+				"id":         "test-model",
+				"modalities": []string{tc.modality},
+			}
+			raw, err := json.Marshal(doc)
+			require.NoError(t, err)
+			validationErr := validateAgainstComponentSchemaRawJSON(t, "ModelCapabilities", raw)
+			if tc.wantError {
+				assert.Error(t, validationErr,
+					"modalities=[%q] must fail — not a member of the enum [text,image,pdf,audio,video]", tc.modality)
+			} else {
+				assert.NoError(t, validationErr,
+					"modalities=[%q] must pass — is a member of the enum", tc.modality)
+			}
+		})
+	}
+}
+
+func TestContract_ModelCapabilities_RejectsExtraneousField(t *testing.T) {
+	// Traces to: ModelCapabilities.yaml — additionalProperties: false.
+	doc := map[string]any{
+		"id":         "test-model",
+		"modalities": []string{"text"},
+		"provider":   "google", // not a ModelCapabilities field
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ModelCapabilities", raw),
+		"ModelCapabilities with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_ModelCapabilities_MissingRequiredIdRejected(t *testing.T) {
+	// Traces to: ModelCapabilities.yaml — required: [id, modalities].
+	doc := map[string]any{
+		"modalities": []string{"text"},
+		// "id" omitted
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ModelCapabilities", raw),
+		"ModelCapabilities missing required 'id' must fail")
+}

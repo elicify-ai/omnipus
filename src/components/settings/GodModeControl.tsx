@@ -61,7 +61,14 @@ export function GodModeControl() {
   // boot that was not yet authorized). Never opens for a disable.
   const [restartModalOpen, setRestartModalOpen] = useState(false)
 
-  const enabled = godMode?.enabled === true
+  // NOTE: `godMode.enabled` is deliberately NOT read anywhere in this
+  // component. It is a server-derived convenience (== available && persisted)
+  // meaning "live in THIS process", and binding any UI to it is precisely what
+  // caused D1/D19: it reads false in BOTH S0 (never armed) and S1 (armed,
+  // pending restart), so the switch showed OFF while armed and requestToggle()
+  // could only ever compute `!enabled` = true. Everything here binds to
+  // `persisted` (intent) or `available` (this boot was authorized), which
+  // together distinguish all the states this UI needs.
   const available = godMode?.available === true
   // persisted = the raw config intent (sandbox.god_mode), read directly and
   // NOT gated by availability (D1/D19). This is the field the switch's
@@ -162,7 +169,19 @@ export function GodModeControl() {
         data-testid="god-mode-control"
         className={[
           'rounded-lg border px-4 py-3.5 transition-colors',
-          enabled
+          // Danger styling keys on `persisted`, NOT `enabled` — same signal the
+          // switch itself binds to (see requestToggle) and the same one the
+          // Security Health check uses server-side (rest.go's god-mode-armed
+          // issue triggers on cfg.Sandbox.GodMode).
+          //
+          // `enabled` means "live in THIS process" and is false in state S1
+          // (authorized, pending restart). Keying the card on it produced a red
+          // ON switch sitting inside a calm, muted card — a milder replay of the
+          // exact switch-vs-banner contradiction the D1 fix existed to remove.
+          // S1 is one restart away from disabling the kernel sandbox, egress
+          // restrictions and the shell guard for every agent, so it must read as
+          // dangerous, not as reassuring.
+          persisted
             ? 'border-[var(--color-error)]/60 bg-[var(--color-error)]/10'
             : 'border-[var(--color-error)]/30 bg-[var(--color-surface-1)]',
         ].join(' ')}
@@ -173,7 +192,9 @@ export function GodModeControl() {
               <Warning
                 size={16}
                 weight="fill"
-                className={enabled ? 'text-[var(--color-error)]' : 'text-amber-400'}
+                // Keyed on `persisted` for the same reason as the card border
+                // above: S1 (armed, pending restart) must not render as calm.
+                className={persisted ? 'text-[var(--color-error)]' : 'text-amber-400'}
               />
               <p className="text-sm font-semibold text-[var(--color-secondary)]">God-mode</p>
             </div>

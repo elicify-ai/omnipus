@@ -61,16 +61,24 @@ was visible before deployment.
 (seed `trust_path_chrome` in the heavy image, or have the resolver trust a Chromium the image itself
 installed), not an operator workaround.
 
-**B2b — persisted `config.json` silently overrides the documented env var.** Setting
-`OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME=true` (the binding named in `pkg/config/config.go:2927`)
-had **no effect**, because `config.json` on the mounted volume already carried
-`"trust_path_chrome": false` and file config wins. There is no warning that an explicitly-set env
-var was ignored. Verified on the live machine:
+**B2b — ~20 documented env vars were dead (double-prefix bug).** Setting
+`OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME=true` had **no effect**.
 
-```
-ENV=true
-config.json:  trust_path_chrome": false     <- this is what the gateway used
-```
+> **CORRECTION (2026-07-28).** This section originally attributed B2b to "persisted `config.json`
+> silently overrides the env var — file config wins." **That diagnosis was wrong**, and it was mine.
+> A later root-cause pass disproved it with a standalone `caarlos0/env` repro: `env.Parse` runs
+> *after* the file load (`pkg/config/config.go`), and `SetDefaultsForZeroValuesOnly` is false, so
+> env **should** win. The env var never resolved at all.
+>
+> Real cause: `ToolsConfig.Browser` carried `envPrefix:"OMNIPUS_TOOLS_BROWSER_"` on the OUTER field
+> *and* every child field carried a fully-qualified `env:"OMNIPUS_TOOLS_BROWSER_..."` tag. The
+> library concatenates them, so it looked up
+> `OMNIPUS_TOOLS_BROWSER_OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME` — a name nobody sets.
+>
+> This made the defect far larger than reported here: **all 16 `BrowserToolConfig` env vars** were
+> dead, plus 5 in `AgentDefaults.SubTurn`; `ReadFileToolConfig` had no `env` tags at all. The
+> pre-existing tests missed it because they set env **equal to** the JSON value, so they passed on
+> the broken code. Fixed, with a reflection-based guardrail walking the entire `Config` struct.
 
 An operator configuring this in `fly.toml`, compose, or a k8s manifest gets silence and a still-dead
 feature. This is also what fooled the lead of this UAT: checking that the variable was *set* is not
@@ -171,10 +179,10 @@ Reported by **3 of 9 testers**. Reads as data loss even when the data survives.
 | D7 | MEDIUM | Team graph: adding an agent without drawing an edge silently discards it on reload (warned only in a transient banner) |
 | D8 | MEDIUM | A stale `aria-hidden` overlay swallows the first click on Settings after navigating from the user menu |
 | D9 | MEDIUM | Inconsistent error presentation for the same auth failure: bare unstyled full-screen text (Chat), chromed inline error with Retry (Graph/Team), or a silent bounce to login (Board/List/Calendar/Media) |
-| D10 | LOW | `#/nonexistent` renders a blank void with no nav, unlike the graceful "Workspace not found" used elsewhere |
-| D11 | LOW | Agent claimed it wrote `research-brief.md` to the workspace; Media tab shows no files |
+| D10 | ~~LOW~~ **NOT A DEFECT** | ~~`#/nonexistent` renders a blank void~~ — **RETRACTED 2026-07-28.** Not reproducible. The branded 404 (`__root.tsx`'s `notFoundComponent`) has shipped since March and was verified rendering correctly in a real browser against this very deployment ("404 / This page drifted into the deep. / Back to Chat"). Most likely the tester caught a page mid-auth-redirect (D2), making this a *symptom of D2*, not an independent routing bug |
+| D11 | ~~LOW~~ **BY DESIGN** | ~~Agent file missing from Media tab~~ — **RETRACTED 2026-07-28.** ADR-051 Rev 4 defines a deliberate three-way split: `write_file` → `workspaces/<id>/work/`, chat uploads → media library, `send_file` → ephemeral. Nothing is lost. The real (LOW) defect is discoverability, fixed as an empty-state copy change |
 | D12 | LOW | `Mcp` / `Tool_discovery` break the Title Case convention used by every other tool category |
-| D13 | LOW | Feishu, DingTalk, WeCom, IRC show 2-letter monograms while 9 other channels have real icons |
+| D13 | LOW | **5 channels, not 4** (corrected 2026-07-28 — the tester missed Slack): Slack, Feishu, DingTalk, WeCom, IRC show 2-letter monograms while 8 others have real icons. IRC is a legitimate permanent exception (a protocol, not a brand). **Not fixed:** no CC0/MIT asset could be sourced for Feishu/DingTalk/WeCom, and ADR-031 already rejected a Slack mark over trademark |
 | D14 | LOW | SearXNG row has no status badge or action button, unlike every other search provider |
 
 **UX issues** (multi-tester where noted): the Agents list buries the built-in roster below an

@@ -15,7 +15,7 @@
 // exactly like the composer's own AttachmentAdapter does internally
 // (src/lib/attachment-adapter.ts), just without needing the runtime.
 
-import { uploadFiles, inspectBrowserElement, fetchModelCapabilities, modelLacksImageCapability } from '@/lib/api'
+import { uploadFiles, inspectBrowserElement, fetchModelCapabilities, modelLacksImageCapability, ApiSchemaError } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import { mediaRefURL } from '@/lib/library-attachment'
 import { queryClient } from '@/lib/queryClient'
@@ -99,7 +99,22 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
       }
     }
   } catch (err) {
-    console.debug('[browser] model-capability check failed:', err)
+    // Best-effort — a failure here must never block the send. But it must
+    // not vanish into console.debug either: an ApiSchemaError means the
+    // vision pre-send warning is DISABLED FOR EVERY MODEL until the
+    // contract drift is fixed (Constraint #8 requires schema-validation
+    // failures to be visible, not silently swallowed to a success-shaped
+    // no-op), which is a materially different — and more urgent — signal
+    // than an ordinary network hiccup. Distinguish the two rather than
+    // flattening both to the same log line.
+    if (err instanceof ApiSchemaError) {
+      console.warn(
+        '[browser] model-capability check failed schema validation — the vision pre-send warning is disabled for ALL models until this contract drift is fixed:',
+        err,
+      )
+    } else {
+      console.warn('[browser] model-capability check failed (best-effort, send proceeds regardless):', err)
+    }
   }
 
   const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)

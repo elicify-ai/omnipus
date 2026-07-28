@@ -1165,4 +1165,148 @@ describe('useAutoSave', () => {
     expect(saveFn).toHaveBeenCalledTimes(1)
     expect(saveFn).toHaveBeenLastCalledWith({ v: 2 })
   })
+
+  // ── Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects): onDisabledWithPendingChanges ──
+  //
+  // The D3 fix (above) correctly does NOT flush at disable-time (flushing
+  // there with a stale closure is the cross-entity clobber D3 itself fixed)
+  // and correctly re-arms the baseline from the CURRENT data on re-enable —
+  // but nothing between those two correct behaviors preserved or surfaced a
+  // genuinely pending edit that existed the moment `disabled` became true.
+  // `hasPendingChanges()` silently reads `false` after the re-arm, with the
+  // edit never having reached the server — no error, no toast, no log. See
+  // `AgentProfile.test.tsx`'s "Finding A" tests for the real-world reachable
+  // case (a store-driven agent switch bypassing `handleCloseAgentSheet`).
+  //
+  // These tests pin `onDisabledWithPendingChanges` directly against the
+  // hook, independent of any consumer component.
+
+  it('Finding A: onDisabledWithPendingChanges fires when disabled flips true with a genuine unsaved edit', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const onDisabledWithPendingChanges = vi.fn()
+    let data: { id: string } = { id: 'A' }
+    let disabled = false
+
+    const { rerender } = renderHook(
+      ({ d, dis }) => useAutoSave(d, saveFn, { debounceMs: 10000, disabled: dis, onDisabledWithPendingChanges }),
+      { initialProps: { d: data, dis: disabled } },
+    )
+    // Seed the baseline — nothing pending yet.
+    await act(async () => { vi.advanceTimersByTime(50) })
+    expect(onDisabledWithPendingChanges).not.toHaveBeenCalled()
+
+    // A genuine, unsaved edit — debounce is 10s, well short of firing.
+    data = { id: 'A-edited' }
+    rerender({ d: data, dis: disabled })
+
+    // Disabled BEFORE the debounce ever fires (e.g. a store-driven switch
+    // away from this entity).
+    disabled = true
+    rerender({ d: data, dis: disabled })
+
+    expect(saveFn).not.toHaveBeenCalled()
+    expect(onDisabledWithPendingChanges).toHaveBeenCalledTimes(1)
+    expect(onDisabledWithPendingChanges).toHaveBeenCalledWith({ id: 'A-edited' })
+  })
+
+  it('Finding A: onDisabledWithPendingChanges does NOT fire when disabling with no pending edit (nothing was lost)', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const onDisabledWithPendingChanges = vi.fn()
+    const data = { id: 'A' }
+    let disabled = false
+
+    const { rerender } = renderHook(
+      ({ dis }) => useAutoSave(data, saveFn, { debounceMs: 100, disabled: dis, onDisabledWithPendingChanges }),
+      { initialProps: { dis: disabled } },
+    )
+    await act(async () => { vi.advanceTimersByTime(200) })
+
+    // Disable with data UNCHANGED since the baseline was seeded.
+    disabled = true
+    rerender({ dis: disabled })
+
+    expect(onDisabledWithPendingChanges).not.toHaveBeenCalled()
+  })
+
+  it('Finding A: onDisabledWithPendingChanges does NOT fire for a hook that STARTS disabled (never seeded a real baseline — the D3 "starts disabled" shape)', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const onDisabledWithPendingChanges = vi.fn()
+    // Hardcoded useState defaults, like AgentProfile's form fields before
+    // the agent query resolves — `disabled: true` from the very first render.
+    let data = { name: '' }
+    const disabled = true
+
+    const { rerender } = renderHook(
+      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 50, disabled, onDisabledWithPendingChanges }),
+      { initialProps: { d: data } },
+    )
+
+    // Data hydrates WHILE still disabled — must not be mistaken for a lost
+    // edit; there was never a real baseline to lose it from.
+    data = { name: 'Real Agent Name' }
+    rerender({ d: data })
+
+    await act(async () => { vi.advanceTimersByTime(100) })
+    expect(onDisabledWithPendingChanges).not.toHaveBeenCalled()
+  })
+
+  it('Finding A: onDisabledWithPendingChanges does NOT fire when a save is already in flight at disable time (the close-flush pattern)', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const onDisabledWithPendingChanges = vi.fn()
+    let data: { id: string } = { id: 'A' }
+    let disabled = false
+
+    const { result, rerender } = renderHook(
+      ({ d, dis }) => useAutoSave(d, saveFn, { debounceMs: 10000, disabled: dis, onDisabledWithPendingChanges }),
+      { initialProps: { d: data, dis: disabled } },
+    )
+    await act(async () => { vi.advanceTimersByTime(50) })
+
+    data = { id: 'A-edited' }
+    rerender({ d: data, dis: disabled })
+
+    // Mirror AgentProfile.handleCloseAgentSheet: flush explicitly BEFORE
+    // disabling. `saveNow()` (== `doSave()`) sets the hook's internal
+    // `isSavingRef` synchronously, before its first `await` — this
+    // synchronous `act()` call captures exactly that moment, with the save
+    // still genuinely in flight (the mocked promise hasn't resolved yet).
+    act(() => {
+      result.current.saveNow()
+    })
+
+    disabled = true
+    rerender({ d: data, dis: disabled })
+
+    expect(onDisabledWithPendingChanges).not.toHaveBeenCalled()
+
+    // Let the in-flight save actually resolve so it doesn't leak a dangling
+    // promise/timer into a later test.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+  })
+
+  it('Finding A: onDisabledWithPendingChanges fires only ONCE per disable transition, not on every subsequent render while still disabled', async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined)
+    const onDisabledWithPendingChanges = vi.fn()
+    let data: { id: string } = { id: 'A' }
+    let disabled = false
+
+    const { rerender } = renderHook(
+      ({ d, dis }) => useAutoSave(d, saveFn, { debounceMs: 10000, disabled: dis, onDisabledWithPendingChanges }),
+      { initialProps: { d: data, dis: disabled } },
+    )
+    await act(async () => { vi.advanceTimersByTime(50) })
+
+    data = { id: 'A-edited' }
+    rerender({ d: data, dis: disabled })
+
+    disabled = true
+    rerender({ d: data, dis: disabled })
+    expect(onDisabledWithPendingChanges).toHaveBeenCalledTimes(1)
+
+    // Further renders while STILL disabled (e.g. an unrelated prop
+    // changing elsewhere in the consumer) must not re-fire it.
+    rerender({ d: data, dis: disabled })
+    rerender({ d: data, dis: disabled })
+    expect(onDisabledWithPendingChanges).toHaveBeenCalledTimes(1)
+  })
 })

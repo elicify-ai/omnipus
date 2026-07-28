@@ -22,7 +22,7 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { createSession, uploadFiles, fetchModelCapabilities, modelLacksImageCapability } from "@/lib/api";
+import { createSession, uploadFiles, fetchModelCapabilities, modelLacksImageCapability, ApiSchemaError } from "@/lib/api";
 import type { Agent } from "@/lib/api";
 import { mediaRefURL } from "@/lib/library-attachment";
 import { queryClient } from "@/lib/queryClient";
@@ -222,7 +222,24 @@ export const omnipusAttachmentAdapter = {
           }
         }
       } catch (err) {
-        console.debug("[attachment] model-capability check failed:", err);
+        // Best-effort — a failure here must never block the send. But it
+        // must not vanish into console.debug either: an ApiSchemaError
+        // means the vision pre-send warning is DISABLED FOR EVERY MODEL
+        // until the contract drift is fixed (Constraint #8 requires
+        // schema-validation failures to be visible, not silently
+        // swallowed to a success-shaped no-op), which is a materially
+        // different -- and more urgent -- signal than an ordinary
+        // network hiccup. Distinguish the two rather than flattening
+        // both to the same log line (mirrors browserAnnotate.ts's
+        // identical D18 capability-check catch).
+        if (err instanceof ApiSchemaError) {
+          console.warn(
+            "[attachment] model-capability check failed schema validation — the vision pre-send warning is disabled for ALL models until this contract drift is fixed:",
+            err,
+          );
+        } else {
+          console.warn("[attachment] model-capability check failed (best-effort, send proceeds regardless):", err);
+        }
       }
     }
 
