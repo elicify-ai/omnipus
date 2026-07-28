@@ -223,14 +223,34 @@ export const browserLiveImgFallback = (page: Page) =>
   page.locator('[data-testid="browser-live-img"]');
 
 /**
- * Poll for whichever live-view sink appears first (video, JPEG fallback, or
- * neither within `timeoutMs`). Deliberately NOT a `Promise.race` of two
- * `waitFor` calls — both `waitFor` timeouts would still be in flight when the
- * first one resolves, and a bare race between two "resolve to null after
- * timeoutMs" promises does not reliably tell you which (if either) sink was
- * ever actually visible. A manual poll gives an unambiguous, honest answer:
- * "video", "img", or `null` (neither ever appeared — a capture-path failure,
- * not merely a WebRTC-specific one).
+ * Poll until the live view settles on the WebRTC `<video>` sink, or the
+ * deadline expires — then report what it actually settled on: `"video"`,
+ * `"img"` (JPEG fallback only), or `null` (neither ever appeared, i.e. a
+ * capture-path failure rather than a WebRTC-specific one).
+ *
+ * CRITICAL — it must NOT return on the first `img` sighting. JPEG is
+ * architecturally guaranteed to paint FIRST on every healthy cold start, so
+ * returning early on it would false-red essentially every run, including on a
+ * fast machine:
+ *
+ *   - `BrowserLiveView.tsx` renders `mediaStream ? <video> : <img>`, and
+ *     `mediaStream` is non-null only once WebRTC negotiation COMPLETES.
+ *   - The JPEG frame arrives over a separate, always-on CDP screencast with
+ *     `screencastEveryNthFrame = 1` (pkg/tools/browser/live.go) — sub-second
+ *     first paint.
+ *   - WebRTC negotiation legitimately takes seconds to tens of seconds:
+ *     `waitForTracksTimeout` is 15s and the SPA's cold-start
+ *     `firstAnswerTimeoutMs` is 30s.
+ *
+ * So the honest question is never "which appeared first" — it is "did video
+ * EVER arrive within the budget". Seeing `img` is the expected intermediate
+ * state, not a verdict. We keep polling past it and only conclude `"img"`
+ * when the whole budget elapsed with the video sink never showing up.
+ *
+ * Deliberately NOT a `Promise.race` of two `waitFor` calls: both timeouts
+ * would still be in flight when the first resolves, and racing two
+ * "resolve to null after timeoutMs" promises cannot tell you which sink was
+ * actually visible. A manual poll gives an unambiguous answer.
  */
 export async function waitForLiveSink(
   page: Page,
@@ -239,10 +259,18 @@ export async function waitForLiveSink(
   const video = browserLiveVideo(page);
   const img = browserLiveImgFallback(page);
   const deadline = Date.now() + timeoutMs;
+  let sawImg = false;
   while (Date.now() < deadline) {
+    // Video wins the moment it appears, whenever that happens — including
+    // long after the JPEG sink has been showing.
     if (await video.isVisible().catch(() => false)) return 'video';
-    if (await img.isVisible().catch(() => false)) return 'img';
+    if (!sawImg && (await img.isVisible().catch(() => false))) {
+      sawImg = true;
+    }
     await page.waitForTimeout(500);
   }
-  return null;
+  // Budget exhausted. Distinguish "picture mode worked but video never came"
+  // (a WebRTC-path failure) from "nothing rendered at all" (a capture-path
+  // failure) — the two need very different investigations.
+  return sawImg ? 'img' : null;
 }

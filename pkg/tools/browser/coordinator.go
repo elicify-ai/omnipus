@@ -63,6 +63,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -899,6 +900,25 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	// whichever tabs currently live in the default context.
 	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(callCtx, rc.Browser))
 	if err != nil {
+		// Name the bound when it was OURS that fired. A bare "context deadline
+		// exceeded" leaves an operator unable to tell a wedged CDP transport
+		// from this call's own budget expiring, or to know how long it waited
+		// — and this call sits on the WebRTC cold-start critical path, where
+		// that distinction is exactly what a timeout investigation needs.
+		// Only claim the default bound when the caller supplied no earlier
+		// deadline of its own; otherwise the caller's budget is what expired.
+		if errors.Is(err, context.DeadlineExceeded) {
+			if _, callerHadDeadline := ctx.Deadline(); !callerHadDeadline {
+				return "", fmt.Errorf(
+					"browser: coordinator: Extensions.loadUnpacked timed out after %s (Chrome may be unresponsive): %w",
+					loadExtensionDefaultTimeout, err,
+				)
+			}
+			return "", fmt.Errorf(
+				"browser: coordinator: Extensions.loadUnpacked exceeded the caller's deadline (Chrome may be unresponsive): %w",
+				err,
+			)
+		}
 		return "", fmt.Errorf("browser: coordinator: Extensions.loadUnpacked failed: %w", err)
 	}
 	c.mu.Lock()

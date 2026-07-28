@@ -32,6 +32,7 @@
 //	CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestWebRTCInputRoundTrip_LatencyAndPayloadIntegrity$' -p 1 ./pkg/gateway/
 //
 // never the full gateway suite / ./....
+
 package gateway
 
 import (
@@ -205,7 +206,10 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcState), stateFrame.Type)
 	require.True(t, stateFrame.Available, "browser_webrtc_state.available must be true on a successful offer")
 
-	require.NoError(t, viewer.pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answerFrame.Sdp}))
+	require.NoError(
+		t,
+		viewer.pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answerFrame.Sdp}),
+	)
 
 	select {
 	case <-viewer.dcOpen:
@@ -312,10 +316,19 @@ func TestWebRTCInputRoundTrip_LatencyAndPayloadIntegrity(t *testing.T) {
 	require.NotEmpty(t, got1.viewerID)
 
 	// (b) Latency budget.
-	require.Lessf(t, elapsed1, testInputDispatchBudget,
+	require.Lessf(
+		t,
+		elapsed1,
+		testInputDispatchBudget,
 		"input dispatch took %s, want < %s (see testInputDispatchBudget's doc comment for the evidence behind this budget)",
-		elapsed1, testInputDispatchBudget)
-	t.Logf("OBSERVED input round-trip dispatch latency (frame 1, mouse_move): %s (budget %s)", elapsed1, testInputDispatchBudget)
+		elapsed1,
+		testInputDispatchBudget,
+	)
+	t.Logf(
+		"OBSERVED input round-trip dispatch latency (frame 1, mouse_move): %s (budget %s)",
+		elapsed1,
+		testInputDispatchBudget,
+	)
 
 	// --- Frame 2: a DIFFERENT kind, DIFFERENT field set, no coordinates at
 	// all — a hardcoded/stubbed sink that just echoed frame 1's shape back
@@ -344,8 +357,17 @@ func TestWebRTCInputRoundTrip_LatencyAndPayloadIntegrity(t *testing.T) {
 	var decoded2 generated.BrowserInputFrame
 	require.NoError(t, json.Unmarshal(got2.raw, &decoded2))
 	require.Equal(t, "key_down", decoded2.Kind)
-	require.NotEqual(t, decoded1.Kind, decoded2.Kind, "the two frames must be observed as genuinely different, not a hardcoded echo")
-	require.Nil(t, decoded2.X, "key_down frame must carry no X — a hardcoded responder echoing frame 1's shape would fail this")
+	require.NotEqual(
+		t,
+		decoded1.Kind,
+		decoded2.Kind,
+		"the two frames must be observed as genuinely different, not a hardcoded echo",
+	)
+	require.Nil(
+		t,
+		decoded2.X,
+		"key_down frame must carry no X — a hardcoded responder echoing frame 1's shape would fail this",
+	)
 	require.NotNil(t, decoded2.Key)
 	require.Equal(t, key2, *decoded2.Key)
 	require.NotNil(t, decoded2.Code)
@@ -355,5 +377,9 @@ func TestWebRTCInputRoundTrip_LatencyAndPayloadIntegrity(t *testing.T) {
 
 	require.Lessf(t, elapsed2, testInputDispatchBudget,
 		"second frame's input dispatch took %s, want < %s", elapsed2, testInputDispatchBudget)
-	t.Logf("OBSERVED input round-trip dispatch latency (frame 2, key_down): %s (budget %s)", elapsed2, testInputDispatchBudget)
+	t.Logf(
+		"OBSERVED input round-trip dispatch latency (frame 2, key_down): %s (budget %s)",
+		elapsed2,
+		testInputDispatchBudget,
+	)
 }

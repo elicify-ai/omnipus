@@ -1123,6 +1123,98 @@ func TestSessionInputDataChannelPreservesOrderUnderSlowSink(t *testing.T) {
 	}
 }
 
+// TestSessionCloseViewerIfCurrent_SupersededHandleIsNoop_NewerConnectionSurvives
+// is the Go<->Go regression guard for the reviewer-traced supersede race: a
+// superseded/failed offer's own cleanup must not be able to tear down a
+// NEWER, already-committed offer's live viewer connection for the SAME
+// viewerID. Mirrors TestSessionViewerLegReplacement_SameViewerID_
+// OldPCClosedNewPCFlows's replacement scenario, but proves the SPECIFIC
+// supersede-safety property CloseViewerIfCurrent adds on top of that: the
+// OLDER handle's cleanup call is a safe no-op once superseded, rather than
+// blindly closing whatever is currently registered for viewerID (which plain
+// CloseViewer(viewerID) does, and which pkg/gateway/browser_webrtc.go's
+// handleWebRTCOffer used to call directly for exactly this cleanup).
+func TestSessionCloseViewerIfCurrent_SupersededHandleIsNoop_NewerConnectionSurvives(t *testing.T) {
+	sess := relay.NewSession(relay.Config{}, nil, safeLogf(t))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	enc := newFakeEncoder(t, true)
+	enc.startPumping(t)
+	offerE, err := sess.HandleIngestOffer(nonTrickleOffer(t, enc.pc))
+	if err != nil {
+		t.Fatalf("HandleIngestOffer: %v", err)
+	}
+	setAnswer(t, enc.pc, offerE)
+
+	const viewerID = "viewer-race"
+
+	// --- older (losing) offer ---
+	viewerA := newFakeViewer(t, true)
+	answerA, handleA, err := sess.HandleViewerOfferHandle(viewerID, nonTrickleOffer(t, viewerA.pc))
+	if err != nil {
+		t.Fatalf("HandleViewerOfferHandle (A): %v", err)
+	}
+	if handleA == nil {
+		t.Fatal("HandleViewerOfferHandle (A) returned a nil handle on success")
+	}
+	setAnswer(t, viewerA.pc, answerA)
+	waitCond(t, testWait, "viewer A to receive video RTP", func() bool { return viewerA.videoPkts.Load() > 5 })
+
+	// --- newer (winning) offer, SAME viewerID -- replaces A in the registry,
+	// closing A's PC (the ordinary same-viewerID reconnect/replace path,
+	// already covered by TestSessionViewerLegReplacement_SameViewerID_
+	// OldPCClosedNewPCFlows). ---
+	viewerB := newFakeViewer(t, true)
+	answerB, handleB, err := sess.HandleViewerOfferHandle(viewerID, nonTrickleOffer(t, viewerB.pc))
+	if err != nil {
+		t.Fatalf("HandleViewerOfferHandle (B): %v", err)
+	}
+	if handleB == nil {
+		t.Fatal("HandleViewerOfferHandle (B) returned a nil handle on success")
+	}
+	setAnswer(t, viewerB.pc, answerB)
+	waitCond(t, testWait, "viewer B to receive video RTP", func() bool { return viewerB.videoPkts.Load() > 5 })
+
+	if got := sess.Stats().Viewers; got != 1 {
+		t.Fatalf("Stats().Viewers after B replaces A = %d, want 1", got)
+	}
+
+	// A's own cleanup runs AFTER B has already won -- simulating a slow or
+	// ultimately-failed offer A's teardown racing in late. Without the
+	// identity check this would close B's live PeerConnection: plain
+	// CloseViewer(viewerID) closes WHATEVER is currently registered.
+	sess.CloseViewerIfCurrent(handleA)
+
+	// B must be completely unaffected: still registered, still receiving
+	// media, still reachable via SendToViewer.
+	if got := sess.Stats().Viewers; got != 1 {
+		t.Fatalf("Stats().Viewers after A's superseded cleanup = %d, want still 1 (B must survive)", got)
+	}
+	videoBefore := viewerB.videoPkts.Load()
+	waitCond(t, testWait, "viewer B to KEEP receiving video after A's superseded cleanup", func() bool {
+		return viewerB.videoPkts.Load() > videoBefore+5
+	})
+	if sendErr := sess.SendToViewer(viewerID, []byte("x")); sendErr != nil {
+		t.Fatalf("SendToViewer(B) after A's superseded cleanup: %v -- B's registration was disturbed", sendErr)
+	}
+
+	// A SECOND call with the same (already-superseded) handleA must also be
+	// a safe no-op (idempotent) -- and so must a nil handle.
+	sess.CloseViewerIfCurrent(handleA)
+	sess.CloseViewerIfCurrent(nil)
+	if got := sess.Stats().Viewers; got != 1 {
+		t.Fatalf("Stats().Viewers after redundant/nil CloseViewerIfCurrent calls = %d, want still 1", got)
+	}
+
+	// Now B's OWN (current) handle DOES tear it down -- proving
+	// CloseViewerIfCurrent still works for the connection it's actually
+	// meant for, not just unconditionally no-oping.
+	sess.CloseViewerIfCurrent(handleB)
+	waitCond(t, testWait, "viewer count to drop to 0 once B's OWN handle closes it", func() bool {
+		return sess.Stats().Viewers == 0
+	})
+}
+
 // TestSessionViewerICEDisconnect_ClientVanishesWithoutSignaling_ServerEvictsAndClosesPC
 // is the fix-wave CRIT regression guard (two independent reviewers, conf
 // 85-90): before this fix, viewer.go's OnConnectionStateChange handler

@@ -383,14 +383,27 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 			map[string]any{"session_id": sessID})
 	}
 
-	cs.AddViewer(viewerID)
-	answer, offerErr := cs.HandleViewerOffer(viewerID, frame.Sdp)
+	// gen/viewerHandle make this offer's cleanup IDENTITY-AWARE. Both
+	// CaptureSession.viewers and the relay's own registry are keyed by
+	// viewerID alone, and ensureCaptureSession memoizes, so two offers on
+	// this connection for the same agent share one CaptureSession and one
+	// registry key. A viewerID-only cleanup from a SUPERSEDED offer would
+	// therefore close whatever PeerConnection currently sits at that key —
+	// i.e. the NEWER, already-committed offer's live connection — and delete
+	// the viewers entry it depends on, dropping ViewerCount() to 0 and arming
+	// the 60s captureGracePeriod stop timer while that viewer is actively
+	// watching. Symptom: WebRTC connects, then spontaneously drops to picture
+	// mode seconds-to-a-minute later, with logs showing only an unrelated
+	// supersede/grace-timer trail. CleanupViewerOffer no-ops unless the
+	// registered entry is the one THIS offer created — the same identity
+	// discipline removeViewer already applies on the ICE-eviction path.
+	gen := cs.AddViewer(viewerID)
+	answer, viewerHandle, offerErr := cs.HandleViewerOffer(viewerID, frame.Sdp, gen)
 	if offerErr != nil {
-		cs.RemoveViewer(viewerID)
 		// Fix 8: a broken/aborted viewer PeerConnection must not stay
-		// registered on the relay — CloseViewer is idempotent-safe (a no-op
-		// if HandleViewerOffer never got far enough to register one).
-		cs.Relay().CloseViewer(viewerID)
+		// registered on the relay — CleanupViewerOffer is idempotent-safe (a
+		// no-op if HandleViewerOffer never got far enough to register one).
+		cs.CleanupViewerOffer(viewerHandle)
 		// 2026-07-28 incident fix: classify this SPECIFIC failure mode
 		// (errors.Is against webrtc.ErrNoIngestVideoTrack — waitForTracks
 		// gave up before the encoder's video track ever arrived) separately
@@ -436,8 +449,11 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 			"viewer_id", viewerID,
 			"session_id", sessID,
 		)
-		cs.Relay().CloseViewer(viewerID)
-		cs.RemoveViewer(viewerID)
+		// Identity-aware, for the same reason as the offer-failure path above:
+		// if the newer offer that superseded us has ALREADY registered its own
+		// PeerConnection under this viewerID, a viewerID-keyed teardown here
+		// would kill that live connection instead of ours.
+		cs.CleanupViewerOffer(viewerHandle)
 		return
 	}
 	h.registerWebRTCViewerConn(viewerID, wc, sessID)

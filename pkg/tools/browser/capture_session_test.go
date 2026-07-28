@@ -40,6 +40,37 @@ type fakeRelay struct {
 	// success answer), so a test can simulate "video started flowing during
 	// this exact offer" without needing real ingest/CDP machinery.
 	videoArrivesOnOffer bool
+	// onViewerRemoved backs the optional viewerRemover capability
+	// (SetOnViewerRemoved) -- set by newCaptureSessionWithDeps's type
+	// assertion since fakeRelay implements it, letting a test simulate a
+	// RELAY-SIDE-ONLY viewer eviction (an ICE failure, or an unrecovered
+	// disconnect-grace timeout) via triggerViewerRemoved below, exactly the
+	// contract the real webrtc.Session honors from its own removeViewer.
+	onViewerRemoved func(viewerID string)
+}
+
+// SetOnViewerRemoved implements the viewerRemover optional capability (see
+// capture_session.go) so tests can exercise CaptureSession's wiring of it
+// without a real webrtc.Session/Pion PeerConnection.
+func (f *fakeRelay) SetOnViewerRemoved(fn func(viewerID string)) {
+	f.mu.Lock()
+	f.onViewerRemoved = fn
+	f.mu.Unlock()
+}
+
+// triggerViewerRemoved simulates the relay itself evicting viewerID (e.g. an
+// ICE failure, or an unrecovered disconnect-grace timeout) — exactly the
+// SetOnViewerRemoved contract the real webrtc.Session honors from its own
+// removeViewer (pkg/tools/browser/webrtc/viewer.go). Test-only; a no-op if
+// nothing registered a callback (SetOnViewerRemoved never called, or called
+// with a nil fn).
+func (f *fakeRelay) triggerViewerRemoved(viewerID string) {
+	f.mu.Lock()
+	fn := f.onViewerRemoved
+	f.mu.Unlock()
+	if fn != nil {
+		fn(viewerID)
+	}
 }
 
 func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) {
@@ -805,8 +836,107 @@ func TestCaptureSession_HandleOffersDelegateToRelay(t *testing.T) {
 		t.Fatalf("HandleIngestOffer = (%q, %v), want (\"ingest-answer-sdp\", nil)", answer, err)
 	}
 
-	answer, err = cs.HandleViewerOffer("viewer-x", "viewer-offer-sdp")
+	gen := cs.AddViewer("viewer-x")
+	answer, handle, err := cs.HandleViewerOffer("viewer-x", "viewer-offer-sdp", gen)
 	if err != nil || answer != "viewer-answer-viewer-x" {
 		t.Fatalf("HandleViewerOffer = (%q, %v), want (\"viewer-answer-viewer-x\", nil)", answer, err)
+	}
+	if handle == nil {
+		t.Fatal("HandleViewerOffer returned a nil handle on success, want non-nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Supersede-safety fix (reviewer finding, traced mechanism): a superseded
+// WebRTC offer's cleanup could tear down a NEWER, already-committed offer's
+// live viewer connection, because CaptureSession.viewers was keyed ONLY by
+// viewerID with no notion of "which attempt." AddViewer now mints a
+// generation token per attempt; RemoveViewerIfCurrent/CleanupViewerOffer
+// only act if that generation is still the one currently registered. The
+// relay-level half of this fix (webrtc.Session.CloseViewerIfCurrent, using a
+// REAL *ViewerHandle identity check against real Pion PeerConnections) has
+// its own dedicated Go<->Go proof:
+// pkg/tools/browser/webrtc/session_test.go's
+// TestSessionCloseViewerIfCurrent_SupersededHandleIsNoop_NewerConnectionSurvives.
+// The two tests below isolate the CaptureSession-level half.
+// ---------------------------------------------------------------------------
+
+// TestCaptureSession_CleanupViewerOffer_OlderAttemptCannotClobberNewerAttempt
+// proves the fix directly: two AddViewer calls for the SAME viewerID (an
+// older, ultimately-failed/superseded offer attempt racing a newer, winning
+// one -- exactly pkg/gateway/browser_webrtc.go's handleWebRTCOffer scenario)
+// must not let the OLDER attempt's cleanup erase the newer attempt's
+// registration. Uses the plain fakeRelay (no viewerOfferHandler support), so
+// this isolates the CaptureSession-level generation check specifically —
+// cs.offerHandler stays nil, exercising CleanupViewerOffer's fallback
+// relay-close branch alongside the (always-active) generation-checked
+// RemoveViewerIfCurrent call.
+func TestCaptureSession_CleanupViewerOffer_OlderAttemptCannotClobberNewerAttempt(t *testing.T) {
+	relay := &fakeRelay{}
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(new(int32), nil))
+
+	const viewerID = "viewer-race"
+
+	genA := cs.AddViewer(viewerID) // older (losing) attempt
+	genB := cs.AddViewer(viewerID) // newer (winning) attempt supersedes A
+	if genA == genB {
+		t.Fatal("setup: AddViewer must mint a distinct generation per call, even for the same viewerID")
+	}
+	if got := cs.ViewerCount(); got != 1 {
+		t.Fatalf("ViewerCount after two AddViewer calls for the same viewerID = %d, want 1", got)
+	}
+
+	// A's own (losing) cleanup runs AFTER B has already superseded it --
+	// simulating a slow/failed offer A whose teardown races in late.
+	handleA := &ViewerAttachHandle{viewerID: viewerID, gen: genA}
+	cs.CleanupViewerOffer(handleA)
+
+	// B's registration must be completely untouched: without the fix, the
+	// old unconditional RemoveViewer(viewerID) this replaces would have
+	// deleted B's entry here (see the sibling test below for direct proof of
+	// that old behavior).
+	if got := cs.ViewerCount(); got != 1 {
+		t.Fatalf("ViewerCount after A's superseded cleanup = %d, want still 1 (B must survive)", got)
+	}
+
+	// B's OWN cleanup DOES remove it -- proving this isn't an unconditional
+	// no-op, just a correctly-scoped one.
+	handleB := &ViewerAttachHandle{viewerID: viewerID, gen: genB}
+	cs.CleanupViewerOffer(handleB)
+	if got := cs.ViewerCount(); got != 0 {
+		t.Fatalf("ViewerCount after B's OWN cleanup = %d, want 0", got)
+	}
+
+	// A nil handle (a caller that never reached a HandleViewerOffer attempt
+	// at all) must be a safe no-op.
+	cs.CleanupViewerOffer(nil)
+}
+
+// TestCaptureSession_RemoveViewer_UnconditionalVariant_WouldClobberNewerAttempt
+// documents WHY CleanupViewerOffer/RemoveViewerIfCurrent exist: the plain,
+// pre-existing RemoveViewer(viewerID) is UNCONDITIONAL and would incorrectly
+// clobber a newer attempt's registration if it were used for offer cleanup —
+// exactly the bug this fix-wave closes for the gateway's two cleanup call
+// sites (offer failure, and offer superseded before commit).
+// RemoveViewer(viewerID) itself is UNCHANGED and stays correct for its own
+// two legitimate unconditional callers (an explicit browser_detach, and a
+// relay-confirmed eviction notification — see its doc comment) — this test
+// is not about those callers, only about contrasting the old mechanism with
+// the new one.
+func TestCaptureSession_RemoveViewer_UnconditionalVariant_WouldClobberNewerAttempt(t *testing.T) {
+	relay := &fakeRelay{}
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(new(int32), nil))
+
+	const viewerID = "viewer-race"
+	cs.AddViewer(viewerID)
+	cs.AddViewer(viewerID) // a newer attempt supersedes the first
+
+	cs.RemoveViewer(viewerID) // the OLD, viewerID-only cleanup mechanism
+
+	if got := cs.ViewerCount(); got != 0 {
+		t.Fatalf(
+			"ViewerCount = %d, want 0 -- RemoveViewer(viewerID) is unconditional by design and clobbers ANY generation",
+			got,
+		)
 	}
 }

@@ -7,6 +7,7 @@
 //
 // Traces to: QA wave task "TDD WAVE — live-browser WebRTC video feature"
 // item 2 ("Input ordering under burst").
+
 package webrtc_test
 
 import (
@@ -92,7 +93,10 @@ func TestSessionInputDataChannelPreservesOrderUnderFastBurst(t *testing.T) {
 	if len(seen) != n {
 		t.Fatalf(
 			"expected exactly %d messages (none dropped -- a %d-message burst is well under inputQueueCapacity=64), got %d: %v",
-			n, n, len(seen), seen,
+			n,
+			n,
+			len(seen),
+			seen,
 		)
 	}
 	for i, s := range seen {

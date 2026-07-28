@@ -26,28 +26,76 @@ import (
 
 // --- browserWarmUpEnabled ---------------------------------------------------
 
-func TestBrowserWarmUpEnabled_DefaultLocalConfig(t *testing.T) {
+// warmUpEligibleConfig returns a config that SHOULD satisfy
+// browserWarmUpEnabled, so each test below can negate exactly one input and
+// attribute the result to that input alone.
+//
+// It must NOT be a bare &config.Config{}: warm-up is gated on
+// Tools.Browser.WarmAtBoot, whose "default true" lives in
+// config.DefaultConfig() (pkg/config/defaults.go), not in the Go zero value.
+// A zero-valued struct therefore has WarmAtBoot == false and is NOT eligible
+// — an earlier revision of these tests built one and asserted eligibility,
+// which failed for a reason that had nothing to do with what each test was
+// actually trying to prove. TestBrowserWarmUpEnabled_DefaultConfigEnablesIt
+// below pins the real default separately, against DefaultConfig() itself.
+func warmUpEligibleConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.Tools.Browser.Enabled = true
-	// CDPURL empty (local managed mode) — the common case.
+	cfg.Tools.Browser.WarmAtBoot = true
+	// CDPURL left empty (local managed mode) — the common case.
+	return cfg
+}
 
+// TestBrowserWarmUpEnabled_DefaultConfigEnablesIt pins the shipped default
+// against the REAL config constructor rather than a hand-built literal: a
+// fresh install must warm Chrome at boot. If someone flips the default in
+// pkg/config/defaults.go, this fails — the hand-built configs in the other
+// tests here would not notice.
+func TestBrowserWarmUpEnabled_DefaultConfigEnablesIt(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if !cfg.Tools.Browser.WarmAtBoot {
+		t.Fatal("expected tools.browser.warm_at_boot to default TRUE in DefaultConfig()")
+	}
+	if !cfg.Tools.Browser.Enabled {
+		t.Fatal("precondition: expected tools.browser.enabled to default true")
+	}
 	if !browserWarmUpEnabled(cfg) {
+		t.Fatal("expected a default config to be warm-up eligible")
+	}
+}
+
+func TestBrowserWarmUpEnabled_DefaultLocalConfig(t *testing.T) {
+	if !browserWarmUpEnabled(warmUpEligibleConfig()) {
 		t.Fatal("expected warm-up enabled for a local (non-remote-CDP), enabled browser config")
 	}
 }
 
+// TestBrowserWarmUpEnabled_WarmAtBootFalseDisablesIt covers the operator
+// opt-out itself — the whole point of the config field. Turning it off must
+// disable EAGER warm-up while leaving browser tools available (Chrome then
+// launches lazily at first use); this predicate is the eager half.
+func TestBrowserWarmUpEnabled_WarmAtBootFalseDisablesIt(t *testing.T) {
+	cfg := warmUpEligibleConfig()
+	cfg.Tools.Browser.WarmAtBoot = false
+
+	if browserWarmUpEnabled(cfg) {
+		t.Fatal("expected warm-up DISABLED when tools.browser.warm_at_boot is false")
+	}
+}
+
 func TestBrowserWarmUpEnabled_RemoteCDPURLDisablesWarmUp(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Tools.Browser.Enabled = true
+	cfg := warmUpEligibleConfig()
 	cfg.Tools.Browser.CDPURL = "ws://remote-chrome:9222"
 
 	if browserWarmUpEnabled(cfg) {
-		t.Fatal("expected warm-up DISABLED when tools.browser.cdp_url is set — must never launch a local Chrome in remote-CDP mode")
+		t.Fatal(
+			"expected warm-up DISABLED when tools.browser.cdp_url is set — must never launch a local Chrome in remote-CDP mode",
+		)
 	}
 }
 
 func TestBrowserWarmUpEnabled_ToolDisabledDisablesWarmUp(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := warmUpEligibleConfig()
 	cfg.Tools.Browser.Enabled = false
 
 	if browserWarmUpEnabled(cfg) {
@@ -56,20 +104,19 @@ func TestBrowserWarmUpEnabled_ToolDisabledDisablesWarmUp(t *testing.T) {
 }
 
 func TestBrowserWarmUpEnabled_SkipEnvVarFullyShortCircuits(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Tools.Browser.Enabled = true
-	// CDPURL empty — would otherwise be warm-up-eligible.
+	cfg := warmUpEligibleConfig()
 
 	t.Setenv("OMNIPUS_SKIP_BROWSER_PREPROVISION", "1")
 
 	if browserWarmUpEnabled(cfg) {
-		t.Fatal("expected OMNIPUS_SKIP_BROWSER_PREPROVISION=1 to fully disable warm-up regardless of an otherwise-eligible config")
+		t.Fatal(
+			"expected OMNIPUS_SKIP_BROWSER_PREPROVISION=1 to fully disable warm-up regardless of an otherwise-eligible config",
+		)
 	}
 }
 
 func TestBrowserWarmUpEnabled_SkipEnvVarOnlyHonorsExactValueOne(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Tools.Browser.Enabled = true
+	cfg := warmUpEligibleConfig()
 
 	t.Setenv("OMNIPUS_SKIP_BROWSER_PREPROVISION", "true") // not the literal "1"
 

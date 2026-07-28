@@ -29,6 +29,7 @@
 //
 // Traces to: QA wave task "TDD WAVE — live-browser WebRTC video feature"
 // item 3 ("Input backpressure is observable, not silent").
+
 package webrtc
 
 import (
@@ -116,7 +117,8 @@ func TestInputQueueDropOldest_OverflowHappensButHasNoProductionCounter(t *testin
 	if final[len(final)-1] != burstSize-1 {
 		t.Fatalf(
 			"the LAST-sent message must always survive drop-oldest (freshest state wins over a stale backlog), got last=%d want %d",
-			final[len(final)-1], burstSize-1,
+			final[len(final)-1],
+			burstSize-1,
 		)
 	}
 	t.Logf(

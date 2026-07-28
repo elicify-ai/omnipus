@@ -3,7 +3,6 @@
 package webrtc
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -43,20 +42,6 @@ const gatherTimeout = 10 * time.Second
 // own one-shot automatic retry (see captureGracePeriod's doc comment in
 // capture_session.go for why THAT retry needed its own alignment fix too).
 const waitForTracksTimeout = 15 * time.Second
-
-// ErrNoIngestVideoTrack is the sentinel HandleViewerOffer wraps (via %w) when
-// waitForTracks times out with no video track ever having arrived. Exported
-// so pkg/gateway/browser_webrtc.go can classify this SPECIFIC failure mode
-// (errors.Is) separately from every other HandleViewerOffer error (bad SDP,
-// closed session, PC/track-negotiation failures) for logging/audit
-// observability — distinguishing "the capture pipeline just hadn't produced
-// a frame yet" from a generic runtime error, per the 2026-07-28 incident
-// (see waitForTracksTimeout's doc comment): a viewer-offer failure of THIS
-// specific shape is not a capability gate (disabled/not_capable/lite_build)
-// and not necessarily a real defect either — it can be a legitimate,
-// transient cold-start race — but it deserves its own name in logs/audit
-// rather than being indistinguishable from every other "error".
-var ErrNoIngestVideoTrack = errors.New("no ingest video track")
 
 // audioGraceTimeout bounds how much LONGER waitForTracks keeps waiting for
 // the audio track once video is already present. The viewer PeerConnection

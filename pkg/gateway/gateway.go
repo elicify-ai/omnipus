@@ -1184,8 +1184,34 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// than inlined here) so the exact decision logic gateway.RunContext acts
 	// on is unit-testable without booting a full gateway.
 	if browserWarmUpEnabled(cfg) {
-		if sharedBrowserCoordinator := findSharedBrowserCoordinator(agentLoop.BrowserManagers()); sharedBrowserCoordinator != nil {
+		sharedBrowserCoordinator := findSharedBrowserCoordinator(agentLoop.BrowserManagers())
+		if sharedBrowserCoordinator == nil {
+			// Do NOT fall through silently. Warm-up being enabled but finding
+			// nothing to warm is otherwise indistinguishable from "warm-up is
+			// off" and from "warm-up is still running" — an operator who set
+			// warm_at_boot and then sees a slow first interaction would have
+			// no way to tell which of the three happened.
+			logger.InfoCF(
+				"browser",
+				"boot-time Chrome warm-up enabled but no shared browser coordinator was found — nothing to warm; Chrome will launch lazily at first browser tool use",
+				nil,
+			)
+		} else {
 			go func() {
+				// Boot must never die on a browser problem (Hard Constraint #4).
+				// The error path is already best-effort, but an unexpected PANIC
+				// in the warm-up chain would take the whole gateway process down
+				// with it — turning an optional latency optimisation into a boot
+				// crash. Contain it and fall back to the lazy path.
+				defer func() {
+					if r := recover(); r != nil {
+						logger.WarnCF(
+							"browser",
+							"boot-time Chrome warm-up panicked — recovered; will launch lazily at first browser tool use",
+							map[string]any{"panic": fmt.Sprintf("%v", r)},
+						)
+					}
+				}()
 				if warmErr := sharedBrowserCoordinator.WarmUp(ctx); warmErr != nil {
 					logger.WarnCF(
 						"browser",

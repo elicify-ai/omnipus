@@ -11,7 +11,7 @@
 //  2. it never asserts packet counts keep growing across a SECOND,
 //     independent sampling window — a single snapshot cannot distinguish
 //     "media streams continuously" from "one burst arrived, then the
-//     encoder stalled/died" (the server-side analogue of "the picture is
+//     encoder stalled/died" (the server-side analog of "the picture is
 //     actually moving" / "the audio is actually live", not a one-shot
 //     delivery).
 //
@@ -22,6 +22,7 @@
 // Traces to: QA wave task "TDD WAVE — live-browser WebRTC video feature"
 // items 4 ("Audio track is genuinely carried, not just counted") and 5
 // ("Video frame advancement").
+
 package webrtc_test
 
 import (
@@ -73,12 +74,18 @@ func TestSessionVideoPacketGrowth_SustainedAcrossTwoIndependentWindows(t *testin
 	w2 := viewer.videoPkts.Load()
 
 	if !(w1 > w0) {
-		t.Fatalf("video packets did not grow in sampling window 1: %d -> %d (single burst, not continuous streaming)", w0, w1)
+		t.Fatalf(
+			"video packets did not grow in sampling window 1: %d -> %d (single burst, not continuous streaming)",
+			w0,
+			w1,
+		)
 	}
 	if !(w2 > w1) {
 		t.Fatalf(
 			"video packets did not grow in sampling window 2: %d -> %d -> %d (one burst then silence, not sustained streaming)",
-			w0, w1, w2,
+			w0,
+			w1,
+			w2,
 		)
 	}
 	t.Logf("OBSERVED video packet growth across 2 independent windows: %d -> %d -> %d", w0, w1, w2)
@@ -129,13 +136,25 @@ func TestSessionAudioTrack_GenuinelyCarried_OpusCodecAndSustainedGrowth(t *testi
 	a2 := viewer.audioPkts.Load()
 
 	if !(a1 > a0) {
-		t.Fatalf("audio packets did not grow in sampling window 1: %d -> %d (single burst, not continuous streaming)", a0, a1)
+		t.Fatalf(
+			"audio packets did not grow in sampling window 1: %d -> %d (single burst, not continuous streaming)",
+			a0,
+			a1,
+		)
 	}
 	if !(a2 > a1) {
 		t.Fatalf(
 			"audio packets did not grow in sampling window 2: %d -> %d -> %d (one burst then silence, not sustained streaming)",
-			a0, a1, a2,
+			a0,
+			a1,
+			a2,
 		)
 	}
-	t.Logf("OBSERVED audio packet growth across 2 independent windows: %d -> %d -> %d (codec=%s)", a0, a1, a2, stats.AudioCodec)
+	t.Logf(
+		"OBSERVED audio packet growth across 2 independent windows: %d -> %d -> %d (codec=%s)",
+		a0,
+		a1,
+		a2,
+		stats.AudioCodec,
+	)
 }

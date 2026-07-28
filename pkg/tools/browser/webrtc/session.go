@@ -100,14 +100,45 @@ type Session struct {
 	// goroutine calling this never contends with the ingest/attach hot path.
 	pliForwardMu     sync.Mutex
 	lastPLIForwardAt time.Time
+
+	// viewerRemovedMu/onViewerRemoved back SetOnViewerRemoved -- see its doc
+	// comment. A separate lock from mu/viewersMu/pliForwardMu so a caller
+	// invoking the callback (removeViewer, viewer.go) never contends with the
+	// hot paths those other locks guard.
+	viewerRemovedMu sync.Mutex
+	onViewerRemoved func(viewerID string)
 }
 
 // viewerConn tracks one attached viewer's PeerConnection plus its "input"
 // data channel (nil until the viewer opens it, which happens asynchronously
 // after the answer is sent -- SendToViewer must tolerate that window).
+//
+// senders backs an explicit, code-owned termination path for this viewer's
+// per-connection goroutines -- see removeViewer's doc comment (viewer.go)
+// for the CI incident this closes: this package must not rely SOLELY on
+// Pion's own close cascade (PeerConnection.Close -> RTPTransceiver.Stop ->
+// RTPSender.Stop for drainViewerRTCP; separately PeerConnection.Close ->
+// SCTPTransport.Stop -> sctpAssociation.Abort -> per-stream read error ->
+// DataChannel.OnClose for runInputQueue) to unblock those goroutines'
+// blocking reads promptly -- that cascade is correct on a clean/fast
+// transport but is several hops deep through a third-party library and,
+// under real network conditions (packet loss, a degraded transport), was
+// observed to leave both goroutines blocked well past a 60s bound.
+// removeViewer/CloseViewer (via stopViewerConn) now call Stop() on senders
+// AND dc.Close() directly and synchronously, in addition to (not instead
+// of) the existing pc.Close() teardown -- dc.Close() (unlike relying on the
+// whole SCTP association's abort) tears down JUST this one data channel's
+// underlying stream directly, which is what runInputQueue's dc.OnClose
+// handler (inputdc.go, unchanged) is already waiting on to fire.
 type viewerConn struct {
 	pc *webrtc.PeerConnection
 	dc *webrtc.DataChannel
+	// senders holds every RTPSender this viewer's PeerConnection negotiated
+	// (video, and audio if present) -- removeViewer/CloseViewer call
+	// Stop() on each directly so drainViewerRTCP's blocking sender.Read()
+	// unblocks deterministically, without waiting on pc.Close()'s own
+	// (correct, but asynchronous) teardown to reach the same call.
+	senders []*webrtc.RTPSender
 }
 
 // NewSession builds a Session backed by a fresh Pion API: an explicit
@@ -218,6 +249,53 @@ func (s *Session) Stats() Stats {
 		AudioCodec:   s.audioCodec,
 		VideoPackets: s.videoPktCount.Load(),
 		AudioPackets: s.audioPktCount.Load(),
+	}
+}
+
+// SetOnViewerRemoved registers fn to be invoked, with the evicted viewer's
+// ID, whenever THIS SESSION -- not an external caller -- decides a viewer's
+// PeerConnection is gone: a terminal ICE/PeerConnection state
+// (Failed/Closed) or an unrecovered Disconnected state past
+// disconnectGracePeriod (see removeViewer in viewer.go, the sole call site,
+// and CloseViewerIfCurrent, which delegates to it). This is how a caller
+// (CaptureSession, pkg/tools/browser/capture_session.go) learns of a
+// RELAY-SIDE-ONLY eviction that the signaling layer above never sees a
+// browser_detach frame for -- e.g. an ICE failure while the browser_ws
+// connection stays open and the SPA silently falls back to its JPEG sink
+// (fix-wave incident: "nothing resumes the JPEG screencast once WebRTC dies
+// mid-session").
+//
+// fn is invoked on whatever goroutine removeViewer runs on (Pion's own
+// PeerConnection state-change callback, or the disconnectGracePeriod
+// time.AfterFunc) -- AFTER every Session-internal lock removeViewer holds has
+// already been released, so fn is free to call back into this Session (e.g.
+// Stats()) without risking a self-deadlock. Not invoked for an explicit
+// CloseViewer(viewerID) -- every CloseViewer caller already knows the viewer
+// is gone and drives its own cleanup directly; it IS invoked via
+// CloseViewerIfCurrent, since that method is itself just an identity-checked
+// call into removeViewer.
+//
+// A nil fn (the zero value, if SetOnViewerRemoved is never called) makes
+// removeViewer's notification a no-op, matching InputSink's own nil-is-valid
+// convention. Intended to be called exactly once, right after NewSession,
+// before any offer can possibly be handled -- see capture_session.go's
+// newCaptureSessionWithDeps.
+func (s *Session) SetOnViewerRemoved(fn func(viewerID string)) {
+	s.viewerRemovedMu.Lock()
+	s.onViewerRemoved = fn
+	s.viewerRemovedMu.Unlock()
+}
+
+// notifyViewerRemoved invokes the registered onViewerRemoved callback, if
+// any -- see SetOnViewerRemoved's doc comment. Never called while any
+// Session-internal lock is held (removeViewer's sole call site is after its
+// own s.viewersMu.Unlock()).
+func (s *Session) notifyViewerRemoved(viewerID string) {
+	s.viewerRemovedMu.Lock()
+	fn := s.onViewerRemoved
+	s.viewerRemovedMu.Unlock()
+	if fn != nil {
+		fn(viewerID)
 	}
 }
 
