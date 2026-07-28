@@ -72,7 +72,10 @@ func TestExecuteReload_MarksDegradedOnCredInjectionFailure(t *testing.T) {
 		bundle:         sentinelBundle,
 		credStore:      credStore,
 	}
-	svc.reloading.Store(true) // executeReload will Store(false) via defer
+	// Simulate the single-flight slot being held by the caller. executeReload no
+	// longer releases it — runReloadCycle owns the release, so that it can run a
+	// coalesced follow-up reload before letting triggerReloadAndWait pollers go.
+	svc.reloadInFlight = true
 
 	// Execute the reload with a config that requires credential injection.
 	// This should fail because the store is locked.
@@ -187,7 +190,10 @@ func TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential(t *testing.T) 
 		bundle:         sentinelBundle,
 		credStore:      credStore,
 	}
-	svc.reloading.Store(true) // executeReload will Store(false) via defer
+	// Simulate the single-flight slot being held by the caller. executeReload no
+	// longer releases it — runReloadCycle owns the release, so that it can run a
+	// coalesced follow-up reload before letting triggerReloadAndWait pollers go.
+	svc.reloadInFlight = true
 
 	err = executeReload(context.Background(), al, newCfg, &p, svc, msgBus, true)
 	if err == nil {

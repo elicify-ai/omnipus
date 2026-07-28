@@ -2557,10 +2557,26 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// between TriggerReload (which may swap the live config) and the read below.
 	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.ModelName
 
-	// Persistence succeeded. Trigger reload so the in-memory config picks up the new agent.
+	// Persistence succeeded. Reload so the in-memory config — and, critically,
+	// the AgentRegistry — pick up the new agent BEFORE we answer 201.
+	//
+	// triggerReloadAndWait, not the bare TriggerReload this used to call: the
+	// registry is rebuilt by exactly one path (executeReload →
+	// ReloadProviderAndConfig → NewAgentRegistry), so until that runs, the agent
+	// exists in cfg.Agents.List (SwapConfig already applied it) but NOT in the
+	// registry. That split is directly observable to the caller:
+	// validatePlanOwnerAgent reads the list and accepts the agent, while
+	// validateTaskAgentID reads the registry and rejects it as "not found" — so
+	// a 201 here was followed by POST /tasks 400 on the very agent we just
+	// created. Waiting closes that window; the coalescing in
+	// services.beginReload/finishReload is what makes the wait actually cover a
+	// request that arrived mid-reload (waiting alone would return when the
+	// IN-FLIGHT reload ends, and that reload's config snapshot predates this
+	// write).
+	//
 	// The "warning" field signals a partial success — frontend must check this field.
 	var createReloadWarning string
-	if err := a.agentLoop.TriggerReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("config reload after agent create failed", "error", err)
 		createReloadWarning = fmt.Sprintf("config reload failed: %v", err)
 	}
@@ -3510,10 +3526,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// nothing short of one re-syncs registry.GetDefaultAgent's cached
 	// override AND the registry's nested RouteResolver's own config
 	// snapshot — the two ladders this bug fix makes agree.
+	//
+	// triggerReloadAndWait (not the bare TriggerReload): a default-agent flip is
+	// only real once the registry's cached override AND its nested
+	// RouteResolver snapshot are rebuilt, which only a completed reload does.
+	// Returning 200 before that is the ADR-037 anti-pattern — a control that
+	// looks like it worked and changed no routing. Same reasoning as createAgent.
 	needsReload := req.Soul != nil || defaultAgentIDChanged
 	var reloadWarning string
 	if needsReload {
-		if err := a.agentLoop.TriggerReload(); err != nil {
+		if err := a.triggerReloadAndWait(); err != nil {
 			slog.Error("config reload after agent update failed", "error", err)
 			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
 		}
@@ -5126,10 +5148,16 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
-	// Persistence succeeded. Trigger reload so the in-memory config picks up the new token.
+	// Persistence succeeded. Reload so the in-memory config picks up the new token.
 	// If reload fails, the new token is on disk but not yet active — return 500 so the
 	// caller knows the token is not yet in effect and can retry.
-	if err := a.agentLoop.TriggerReload(); err != nil {
+	//
+	// triggerReloadAndWait (not the bare TriggerReload): the caller's very next
+	// request authenticates with the token in this response body, so returning
+	// before the reload lands hands out a token that 401s. A request that
+	// arrives mid-reload used to be dropped entirely, making that permanent
+	// until some unrelated reload happened to run.
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("config reload after token rotation failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
 		return
@@ -5807,8 +5835,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 			return
 		}
-		// Trigger reload so the in-memory config picks up the new API key.
-		if err := a.agentLoop.TriggerReload(); err != nil {
+		// Reload so the in-memory config picks up the new API key. Waiting (not
+		// the bare TriggerReload) because the 500 below promises the caller the
+		// key is NOT live yet — that promise is only meaningful if we actually
+		// waited for the reload to finish. It also stops a request that arrived
+		// mid-reload from being silently dropped (services.beginReload
+		// coalescing) and returning 200 with the old key still in force.
+		if err := a.triggerReloadAndWait(); err != nil {
 			slog.Error("config reload after provider update failed", "error", err)
 			jsonErr(
 				w,
@@ -7029,25 +7062,28 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// "allow" because LoadToolPolicy returns the stale pointer. The earlier
 	// "no reload needed" claim was wrong — config-on-disk and the in-memory
 	// pointer are decoupled. Reload is cheap and idempotent.
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		// ErrReloadNotConfigured is normal in unit tests where the full gateway
-		// reload pipeline is not wired — treat it as a no-op and continue.
-		if !errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Error("agent tools update: reload failed — in-memory policy not updated",
-				"agent_id", agentID, "error", err)
-			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
-				if auditErr := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger, "agent.tools_policy",
-					map[string]any{"agent_id": agentID, "saved": true},
-					map[string]any{"agent_id": agentID, "reload_error": err.Error()},
-				); auditErr != nil {
-					slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
-				}
+	//
+	// triggerReloadAndWait (not the bare TriggerReload): this is a fail-open
+	// authorization path. Returning 200 while the rebuild is still queued means
+	// a tool freshly bumped to "deny"/"ask" keeps executing as "allow" for the
+	// duration. It also folds in the ErrReloadNotConfigured no-op for unit
+	// tests, and — with services.beginReload's coalescing — a request that
+	// arrives mid-reload is served by a follow-up reload rather than dropped.
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error("agent tools update: reload failed — in-memory policy not updated",
+			"agent_id", agentID, "error", err)
+		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			if auditErr := audit.EmitSecuritySettingChange(
+				r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": agentID, "saved": true},
+				map[string]any{"agent_id": agentID, "reload_error": err.Error()},
+			); auditErr != nil {
+				slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
 			}
-			jsonErr(w, http.StatusServiceUnavailable,
-				"config saved but in-memory reload failed; restart the gateway or retry")
-			return
 		}
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but in-memory reload failed; restart the gateway or retry")
+		return
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match

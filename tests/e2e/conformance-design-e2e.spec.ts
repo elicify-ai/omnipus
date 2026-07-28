@@ -200,13 +200,27 @@ function proseCriterion(text: string): Criterion {
  * need a textual LLM reply, so no special tools are required.
  */
 async function createMainAgent(page: Page, name: string): Promise<string> {
-  const res = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/agents', {
+  const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
     type: 'Main',
     name,
     soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
   })
   if (!res.ok) {
     throw new Error(`createMainAgent: POST /agents failed ${res.status}: ${res.raw}`)
+  }
+  // A 201 carrying a `warning` means the create persisted but the in-memory
+  // reload behind it did not complete — so the AgentRegistry may not know this
+  // agent yet, and the very next POST /tasks will reject it as "agent not
+  // found". Failing here is a TIGHTENING, not a relaxation: it makes CI report
+  // the real cause at the point of creation instead of a mystifying downstream
+  // "agent not found" several steps later. (Mid-reload creates are no longer a
+  // warning case at all — the gateway coalesces the reload request rather than
+  // dropping it — so any warning now means a genuine reload failure.)
+  if (res.body.warning) {
+    throw new Error(
+      `createMainAgent: POST /agents returned 201 with a reload warning, so the agent may not ` +
+        `be registered in memory and is not safely usable: ${res.body.warning}`,
+    )
   }
   return res.body.id
 }

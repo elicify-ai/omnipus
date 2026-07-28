@@ -191,7 +191,33 @@ type services struct {
 	DeviceService    *devices.Service
 	HealthServer     *health.Server
 	manualReloadChan chan struct{}
-	reloading        atomic.Bool
+	// reloadCoalesceMu guards reloadInFlight and reloadRequested. Together they
+	// single-flight config reloads AND coalesce the requests that arrive while
+	// one is already running, instead of dropping them.
+	//
+	// RELEASE BLOCKER this replaced: reloadInFlight used to be a bare
+	// atomic.Bool, and a failed CompareAndSwap made reloadTrigger return
+	// "reload already in progress" — the request was DROPPED, and nothing ever
+	// re-queued it. The in-memory AgentRegistry is rebuilt by exactly one path
+	// (executeReload → restartServices → ReloadProviderAndConfig →
+	// NewAgentRegistry; AgentRegistry.UpsertAgent has no production callers), so
+	// a dropped request left an agent that POST /agents had already persisted
+	// (and answered 201 for) permanently invisible to AgentRegistry.GetAgent.
+	// The fingerprint: POST /plans accepted that agent (validatePlanOwnerAgent
+	// reads cfg.Agents.List, which SwapConfig had already updated) while
+	// POST /tasks rejected it as `agent "x" not found` (validateTaskAgentID
+	// reads the registry). Under load a reload takes tens of seconds instead of
+	// sub-second, so every concurrent create landed mid-reload and was silently
+	// dropped — deterministic, 9/9 in CI.
+	//
+	// reloadRequested is the coalescing flag: set when a reload is requested
+	// while one is in flight. The owning cycle then runs an ADDITIONAL reload
+	// with a config re-read from disk, because the in-flight reload's config
+	// snapshot was taken before the requester's write and therefore cannot
+	// serve it.
+	reloadCoalesceMu sync.Mutex
+	reloadInFlight   bool
+	reloadRequested  bool
 	reloadTrigger    func() error
 	credStore        *credentials.Store
 	// toolStore owns the on-disk tool-result offload directory. Exposed here
@@ -2000,6 +2026,50 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	defer stopWatch()
 
+	// loadReloadConfig re-reads config.json for a reload. It backs the /reload
+	// path AND every coalesced follow-up reload — the latter MUST re-read from
+	// disk, since the whole reason a request was coalesced is that its write
+	// post-dates the running reload's snapshot.
+	//
+	// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this path
+	// bypasses safeUpdateConfigJSON's configMu + selfWriteReg registration, so
+	// if the single-user-model role self-heal writes config.json here, the write
+	// must be registered manually or the watcher's next tick would misidentify
+	// it as an external edit.
+	loadReloadConfig := func() (*config.Config, error) {
+		newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
+			configPath, credStore, selfHealWriteHook(runningServices.selfWriteReg),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("loading config for reload: %w", err)
+		}
+		// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent store —
+		// config.LoadConfig* strips agents.list on every load
+		// (legacy_agents_list.go), and this reload path is a separate
+		// config-load call site from restAPI.refreshConfigAndRewireServices's
+		// own bridge. Strict variant: a roster-population failure here must
+		// reject this reload attempt exactly like the config-load/validation
+		// failures around it, not silently proceed with an empty/stale roster
+		// (see populateAgentsListFromEntityStoreStrict's doc for why) — and mark
+		// the service degraded so /health surfaces it.
+		if err = populateAgentsListFromEntityStoreStrict(newCfg, homePath); err != nil {
+			runningServices.markReloadDegraded(
+				fmt.Errorf("reload rejected: agent roster population failed: %w", err),
+			)
+			return nil, fmt.Errorf("agent roster population failed: %w", err)
+		}
+		if err = newCfg.ValidateProviders(); err != nil {
+			return nil, fmt.Errorf("config validation failed: %w", err)
+		}
+		return newCfg, nil
+	}
+
+	// runOneReload is the production executor handed to runReloadCycle. provider
+	// is captured by address because executeReload swaps it in place on success.
+	runOneReload := func(c *config.Config) error {
+		return executeReload(ctx, agentLoop, c, &provider, runningServices, msgBus, allowEmptyStartup)
+	}
+
 	for {
 		select {
 		case <-agentLoopCtx.Done():
@@ -2007,59 +2077,20 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			omnipusGracefulShutdown(runningServices, agentLoop, provider, cfg)
 			return nil
 		case newCfg := <-configReloadChan:
-			if !runningServices.reloading.CompareAndSwap(false, true) {
-				logger.Warn("Config reload skipped: another reload is in progress")
+			if !runningServices.beginReload() {
+				// NOT a drop: beginReload recorded the request, and the cycle
+				// that owns the in-flight reload will run a follow-up reload
+				// that re-reads this file change from disk before it finishes.
+				logger.Info("Config reload coalesced into the in-flight reload")
 				continue
 			}
-			err := executeReload(ctx, agentLoop, newCfg, &provider, runningServices, msgBus, allowEmptyStartup)
-			if err != nil {
-				logger.Errorf("Config reload failed: %v", err)
-			}
+			runReloadCycle(agentLoop, runningServices, newCfg, runOneReload, loadReloadConfig)
 		case <-manualReloadChan:
+			// The slot was already claimed by reloadTrigger before it signalled
+			// this channel, so do NOT call beginReload here — runReloadCycle
+			// takes ownership of the release directly.
 			logger.Info("Manual reload triggered via /reload endpoint")
-			// LoadConfigWithStoreAndSelfHealHook (not LoadConfigWithStore): this
-			// path bypasses safeUpdateConfigJSON's configMu + selfWriteReg
-			// registration, so if the single-user-model role self-heal writes
-			// config.json here, the write must be registered manually or the
-			// watcher's next tick would misidentify it as an external edit.
-			newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
-				configPath, credStore, selfHealWriteHook(runningServices.selfWriteReg),
-			)
-			if err != nil {
-				logger.Errorf("Error loading config for manual reload: %v", err)
-				agentLoop.ClearReloadPending()
-				runningServices.reloading.Store(false)
-				continue
-			}
-			// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent store —
-			// config.LoadConfig* strips agents.list on every load
-			// (legacy_agents_list.go), and this manual-reload path is a
-			// separate config-load call site from restAPI.
-			// refreshConfigAndRewireServices's own bridge. Strict variant: a
-			// roster-population failure here must reject this reload attempt
-			// exactly like the config-load/validation failures around it, not
-			// silently proceed with an empty/stale roster (see
-			// populateAgentsListFromEntityStoreStrict's doc for why) — and mark
-			// the service degraded so /health surfaces it.
-			if err = populateAgentsListFromEntityStoreStrict(newCfg, homePath); err != nil {
-				logger.Errorf("Manual reload: agent roster population failed: %v", err)
-				runningServices.markReloadDegraded(fmt.Errorf("manual reload rejected: agent roster population failed: %w", err))
-				agentLoop.ClearReloadPending()
-				runningServices.reloading.Store(false)
-				continue
-			}
-			if err = newCfg.ValidateProviders(); err != nil {
-				logger.Errorf("Config validation failed: %v", err)
-				agentLoop.ClearReloadPending()
-				runningServices.reloading.Store(false)
-				continue
-			}
-			err = executeReload(ctx, agentLoop, newCfg, &provider, runningServices, msgBus, allowEmptyStartup)
-			if err != nil {
-				logger.Errorf("Manual reload failed: %v", err)
-			} else {
-				logger.Info("Manual reload completed successfully")
-			}
+			runReloadCycle(agentLoop, runningServices, nil, runOneReload, loadReloadConfig)
 		}
 	}
 }
@@ -2098,6 +2129,175 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.DeviceService = snap.DeviceService
 }
 
+// beginReload claims the single-flight reload slot.
+//
+// Returns true when the caller now OWNS the reload and must run a cycle
+// (runReloadCycle), which is then responsible for releasing the slot.
+//
+// Returns false when a reload is already in flight. The caller's request is NOT
+// dropped: it is recorded in reloadRequested, and the owning cycle runs an
+// additional reload — with a config re-read from disk — before releasing the
+// slot. Callers must therefore treat false as "accepted, will be served
+// shortly", never as an error.
+func (s *services) beginReload() bool {
+	s.reloadCoalesceMu.Lock()
+	defer s.reloadCoalesceMu.Unlock()
+	if s.reloadInFlight {
+		s.reloadRequested = true
+		return false
+	}
+	s.reloadInFlight = true
+	s.reloadRequested = false
+	return true
+}
+
+// finishReload decides the fate of the reload slot at the end of one reload,
+// atomically with respect to beginReload.
+//
+// Returns true when another reload was requested while the one that just
+// finished was running: the request is consumed, the slot is RETAINED, and the
+// caller must run one more reload. Retaining the slot rather than releasing and
+// re-acquiring is what makes a coalesced successor indivisible from its
+// predecessor.
+//
+// Returns false when nothing is outstanding. Only then does it invoke
+// clearPending — the agent loop's reload-pending flag, which
+// restAPI.triggerReloadAndWait polls — and release the slot, both under the
+// same lock acquisition as the check. Clearing that flag BETWEEN a reload and
+// its coalesced successor would release pollers against a registry rebuilt from
+// the older config snapshot: the very stale read this mechanism exists to
+// prevent, entered through a different door.
+//
+// Because the check, the clear and the release happen under one lock, a
+// concurrent beginReload either lands before it (and is observed as
+// reloadRequested) or after it (and claims the freed slot itself). It can never
+// fall between the two and be lost.
+func (s *services) finishReload(clearPending func()) bool {
+	s.reloadCoalesceMu.Lock()
+	defer s.reloadCoalesceMu.Unlock()
+	if s.reloadRequested {
+		s.reloadRequested = false
+		return true
+	}
+	clearPending()
+	s.reloadInFlight = false
+	return false
+}
+
+// abandonReload force-releases the slot without serving any outstanding
+// request. Used only on a cycle's abnormal exits (panic, or a follow-up config
+// load that failed), where continuing to hold the slot would wedge every future
+// reload for the process lifetime, and by the trigger's unreachable
+// channel-full fail-safe.
+//
+// clearPending may be nil (the trigger's fail-safe never owned the pending
+// flag). When non-nil it is invoked BEFORE the slot is released and under the
+// same lock, matching finishReload's ordering: releasing first would let a new
+// trigger claim the slot and then have its freshly-set pending flag cleared by
+// this call.
+func (s *services) abandonReload(clearPending func()) {
+	s.reloadCoalesceMu.Lock()
+	defer s.reloadCoalesceMu.Unlock()
+	if clearPending != nil {
+		clearPending()
+	}
+	s.reloadInFlight = false
+	s.reloadRequested = false
+}
+
+// newReloadTrigger builds the reload trigger closure wired into
+// AgentLoop.SetReloadFunc, health.Server.SetReloadFunc and the sysagent tool
+// deps. It claims the single-flight slot and hands the reload to the consumer
+// loop over manualReloadChan.
+//
+// It NEVER reports "reload already in progress" as an error any more. A request
+// that arrives while a reload is running is recorded by beginReload and served
+// by a follow-up reload; the caller is told nil, because the request really was
+// accepted. Returning an error there is what dropped the request outright and
+// produced the POST /agents 201 → POST /tasks "agent not found" blocker
+// documented on the services struct's reloadCoalesceMu field.
+func newReloadTrigger(runningServices *services) func() error {
+	return func() error {
+		if !runningServices.beginReload() {
+			return nil
+		}
+		select {
+		case runningServices.manualReloadChan <- struct{}{}:
+			return nil
+		default:
+			// Unreachable in practice: the slot stays held until the consuming
+			// cycle finishes, which is strictly after the receive, so the cap-1
+			// channel is always drained whenever the slot is free. Kept as a
+			// fail-safe — release the slot rather than wedging every future
+			// reload behind a claim nobody will ever finish.
+			runningServices.abandonReload(nil)
+			return fmt.Errorf("reload already queued")
+		}
+	}
+}
+
+// runReloadCycle runs one config reload plus every reload coalesced into it
+// while it was running, then releases the single-flight slot and clears the
+// agent loop's reload-pending flag exactly once, at the very end.
+//
+// The caller MUST already own the slot — either beginReload returned true, or
+// the reloadTrigger closure claimed it before signalling manualReloadChan.
+//
+// first is the config for the initial reload (the file-watcher path already has
+// a candidate), or nil to load it from disk via loadNext (the /reload path).
+// Every coalesced follow-up always re-reads from disk: serving it from the
+// snapshot the previous reload used would defeat the entire point.
+//
+// exec runs one reload (executeReload in production) and loadNext re-reads
+// config.json; both are parameters so the coalescing contract can be tested
+// without standing up the full service-restart pipeline.
+func runReloadCycle(
+	agentLoop *agent.AgentLoop,
+	runningServices *services,
+	first *config.Config,
+	exec func(*config.Config) error,
+	loadNext func() (*config.Config, error),
+) {
+	slotHeld := true
+	defer func() {
+		// Abnormal exit only (panic, or a follow-up config load that failed).
+		// On the normal path finishReload already cleared the pending flag and
+		// released the slot, and slotHeld is false.
+		if slotHeld {
+			runningServices.abandonReload(agentLoop.ClearReloadPending)
+		}
+	}()
+
+	cfg := first
+	for {
+		if cfg == nil {
+			loaded, err := loadNext()
+			if err != nil {
+				logger.Errorf("Config reload aborted: %v", err)
+				return
+			}
+			cfg = loaded
+		}
+		if err := exec(cfg); err != nil {
+			logger.Errorf("Config reload failed: %v", err)
+		} else {
+			logger.Info("Config reload completed successfully")
+		}
+		if !runningServices.finishReload(agentLoop.ClearReloadPending) {
+			slotHeld = false
+			return
+		}
+		// A reload was requested while the one above was running. That
+		// requester's write landed AFTER the reload's config snapshot was taken,
+		// so the reload it just waited through cannot have picked it up. Re-read
+		// config from disk and reload again. We still hold the slot and the
+		// pending flag is still set, so a triggerReloadAndWait poller stays
+		// blocked across this boundary.
+		logger.Info("Serving coalesced config reload request")
+		cfg = nil
+	}
+}
+
 func executeReload(
 	ctx context.Context,
 	agentLoop *agent.AgentLoop,
@@ -2107,13 +2307,10 @@ func executeReload(
 	msgBus *bus.MessageBus,
 	allowEmptyStartup bool,
 ) error {
-	// Defers run LIFO: ClearReloadPending fires first (unblocks triggerReloadAndWait pollers),
-	// then reloading fires (allows the next CAS to succeed). A concurrent TriggerReload
-	// that races between these two defers gets ErrReloadAlreadyInProgress and polls — safe
-	// because triggerReloadAndWait polls through ErrReloadAlreadyInProgress so the pending
-	// flag is never cleared prematurely.
-	defer runningServices.reloading.Store(false)
-	defer agentLoop.ClearReloadPending()
+	// NOTE: this function deliberately does NOT release the reload slot or clear
+	// the agent loop's reload-pending flag. Its caller (runReloadCycle) owns
+	// both, because only the caller knows whether another reload was coalesced
+	// into this one and must therefore still run before pollers are released.
 
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
@@ -3074,19 +3271,7 @@ func setupAndStartServices(
 	// NOT re-create them). restartServices reuses this same HealthServer, so
 	// reloadFunc is never reset to nil after this point.
 	runningServices.manualReloadChan = make(chan struct{}, 1)
-	runningServices.reloadTrigger = func() error {
-		if !runningServices.reloading.CompareAndSwap(false, true) {
-			return fmt.Errorf("reload already in progress")
-		}
-		select {
-		case runningServices.manualReloadChan <- struct{}{}:
-			return nil
-		default:
-			// Should not happen, but reset flag if channel is full.
-			runningServices.reloading.Store(false)
-			return fmt.Errorf("reload already queued")
-		}
-	}
+	runningServices.reloadTrigger = newReloadTrigger(runningServices)
 	runningServices.HealthServer.SetReloadFunc(runningServices.reloadTrigger)
 
 	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {

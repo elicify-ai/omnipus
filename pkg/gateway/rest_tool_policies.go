@@ -7,12 +7,10 @@
 package gateway
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -185,23 +183,26 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	// ReloadProviderAndConfig → NewAgentRegistry rebuilds every instance with the
 	// new GlobalPolicies, mirroring the delegation_policy path in updateAgent.
 	//
-	// Reload-failure semantics mirror updateAgent's delegation_policy path: the
-	// config IS persisted, so we never 500 (that would wrongly signal the write
-	// failed). ErrReloadNotConfigured is the no-reload-loop case (tests / minimal
-	// embeddings) and is benign. A genuine reload error is logged at Error — it
-	// means running agents may keep the previous global policy until the next
-	// restart, which an operator must see in the logs.
-	if err := a.agentLoop.TriggerReload(); err != nil {
-		if errors.Is(err, agent.ErrReloadNotConfigured) {
-			slog.Debug("rest: tool policies persisted; live reload not configured on this loop",
-				"error", err)
-		} else {
-			slog.Error(
-				"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
-				"error",
-				err,
-			)
-		}
+	// Reload-failure semantics mirror updateAgent's soul path: the config IS
+	// persisted, so we never 500 (that would wrongly signal the write failed).
+	// A genuine reload error is logged at Error — it means running agents may
+	// keep the previous global policy until the next restart, which an operator
+	// must see in the logs.
+	//
+	// triggerReloadAndWait (not the bare TriggerReload): this is the fail-open
+	// authorization-bypass path described above, so the response must not claim
+	// the tightening is enforced while the rebuild is still queued. It also
+	// absorbs ErrReloadNotConfigured (the no-reload-loop case in tests / minimal
+	// embeddings) as a benign no-op, and — via services.beginReload's coalescing
+	// — a request that arrives mid-reload is served by a follow-up reload
+	// instead of being dropped, which used to leave the old policy live
+	// indefinitely.
+	if err := a.triggerReloadAndWait(); err != nil {
+		slog.Error(
+			"rest: reload after tool policies update failed; running agents may keep the previous global policy until restart",
+			"error",
+			err,
+		)
 	}
 
 	slog.Info("rest: global tool policies updated",
