@@ -786,6 +786,31 @@ func (c *BrowserCoordinator) KillCount() int {
 	return c.killCount
 }
 
+// loadExtensionDefaultTimeout bounds LoadExtension's Extensions.loadUnpacked
+// CDP call when the caller's own ctx carries no deadline of its own (see
+// boundedCallContext). 20s matches cdppipe's own defaultDialTimeout (the
+// bound on actually launching + dialing Chrome, which by the time
+// LoadExtension runs has already succeeded) and capture_session.go's sibling
+// captureStartTimeout, which bounds the very next step (encoder-page
+// inject+navigate) in the one production flow that calls this with a
+// meaningful caller ctx (defaultEncoderStarter) — that constant's own doc
+// comment describes its budget as "generous for a cold managed-Chrome
+// extension load", i.e. sized for exactly the operation this constant now
+// bounds.
+const loadExtensionDefaultTimeout = 20 * time.Second
+
+// boundedCallContext returns a context to use for a one-shot bounded CDP
+// call: ctx unchanged (wrapped in a no-op cancel for a uniform, always-safe
+// `defer cancel()`) when it already carries a deadline — honoring the
+// caller's own bound, however short or long — otherwise a child of ctx
+// bounded by def. ctx must not be nil (callers normalize it first).
+func boundedCallContext(ctx context.Context, def time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, def)
+}
+
 // LoadExtension installs the unpacked extension at c.cfg.ExtensionDir into the
 // shared Chrome via CDP Extensions.loadUnpacked — requires the running Chrome
 // to have been launched with --remote-debugging-pipe (always true here) and
@@ -802,6 +827,9 @@ func (c *BrowserCoordinator) KillCount() int {
 // extension id Chrome assigned, which should match cfg.ExtensionID when the
 // manifest pins a "key" (wave-plan key decision 1).
 func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c.mu.Lock()
 	rootCtx := c.rootCtx
 	dir := c.cfg.ExtensionDir
@@ -816,6 +844,28 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	if rc == nil || rc.Browser == nil {
 		return "", fmt.Errorf("browser: coordinator: shared Chrome browser handle unavailable")
 	}
+
+	// Bound the CDP round trip and HONOR the caller's own context — before
+	// this fix, ctx was accepted as a parameter but referenced NOWHERE in
+	// this function's body: the actual CDP call ran against c.rootCtx (the
+	// coordinator's long-lived, deadline-free context) instead, so a
+	// caller-supplied deadline/cancellation (e.g. capture_session.go's
+	// defaultEncoderStarter, which forwards its own request-scoped ctx) had
+	// no effect whatsoever, and the call could only ever be unblocked by the
+	// coordinator itself shutting down.
+	//
+	// boundedCallContext(ctx, loadExtensionDefaultTimeout) honors ctx as-is
+	// when it already carries a deadline (however short or long the caller
+	// chose), and falls back to the 20s default otherwise (e.g.
+	// launchChrome's best-effort auto-load below, which passes
+	// context.Background()). Unlike createTab's target-attach (manager.go's
+	// runFirstAttach), Extensions.loadUnpacked has no long-lived background
+	// goroutine bound to its call context — chromedp.Browser.execute's
+	// per-command listener (browser.go) is scoped to just this one round
+	// trip — so wrapping ctx directly in a plain deadline is safe here; no
+	// racing-goroutine trick is needed.
+	callCtx, cancel := boundedCallContext(ctx, loadExtensionDefaultTimeout)
+	defer cancel()
 	// WithEnableInIncognito(true) (WebRTC build W2-A, corrected per ADR-048):
 	// every per-agent browser context this coordinator creates is a raw CDP
 	// target.CreateBrowserContext — which cdproto's own doc comment
@@ -847,7 +897,7 @@ func (c *BrowserCoordinator) LoadExtension(ctx context.Context) (string, error) 
 	// remains useful even then: it is what lets the extension's
 	// chrome.tabs.query resolve the RIGHT tab (the attached agent's) among
 	// whichever tabs currently live in the default context.
-	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(rootCtx, rc.Browser))
+	id, err := extensions.LoadUnpacked(dir).WithEnableInIncognito(true).Do(cdp.WithExecutor(callCtx, rc.Browser))
 	if err != nil {
 		return "", fmt.Errorf("browser: coordinator: Extensions.loadUnpacked failed: %w", err)
 	}
@@ -932,6 +982,28 @@ func (c *BrowserCoordinator) Shutdown() {
 			"kill_count": c.killCount,
 		},
 	)
+}
+
+// WarmUp ensures the shared Chrome process is launched and ready (CDP pipe
+// live, and — when tools.browser.* configured an ExtensionDir/ExtensionID —
+// the capture extension loaded, via launchChrome's existing best-effort
+// auto-load) WITHOUT registering any agent or creating a per-agent browser
+// context. This is the gateway's boot-time warm-up hook: instead of leaving
+// Chrome launch, first tab, and extension load entirely lazy until an
+// agent's first browser tool call (the unbounded cold start recorded at
+// 30-60s historically), the gateway calls this once at boot so the first
+// real interaction finds Chrome already up.
+//
+// Thin public wrapper over the exact same ensureLaunched every Register call
+// already funnels through: single-flight (a concurrent WarmUp racing a real
+// Register serializes on the same c.launching/c.launchDone latch — whichever
+// wins launches, the other observes c.launched), idempotent (a no-op once
+// Chrome is already live), and panic-safe (ensureLaunched's own deferred
+// cleanup). A per-agent Chrome pool (one Chrome per agent) is explicitly out
+// of scope here — tracked separately as issue #570; this warms only the ONE
+// shared, gateway-scoped Chrome this file documents (D1/D4).
+func (c *BrowserCoordinator) WarmUp(ctx context.Context) error {
+	return c.ensureLaunched(ctx)
 }
 
 // --- internals ------------------------------------------------------------

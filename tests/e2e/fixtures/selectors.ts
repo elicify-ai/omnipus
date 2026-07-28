@@ -179,3 +179,70 @@ export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) =>
   // AgentPicker shows only the agent name (no em-dash tagline).
   await expect(picker).toContainText(name, { timeout: 5_000 });
 };
+
+// ── Live browser panel (ADR-038/039/040/041/047) ──────────────────────────
+//
+// Ground truth (src/components/browser/BrowserLiveView.tsx):
+//   - "Watch live" launcher — aria-label="Watch live" (BrowserNavigateBlock /
+//     BrowserToolBlock, src/components/chat/tools/), opens the app-root
+//     BrowserLivePanel onto the globally-active session/agent.
+//   - data-testid="browser-live-panel-docked" — the docked panel's <aside>
+//     root (BrowserLivePanel.tsx).
+//   - data-testid="browser-live-frame" — the pointer/keyboard capture
+//     surface (role="application"), present once the first frame (JPEG or
+//     WebRTC) has arrived.
+//   - data-testid="browser-live-video" — the WebRTC <video> sink. ONLY
+//     rendered when a live MediaStream is actually attached (mediaStream
+//     truthy) — its presence is the one honest signal that this session is
+//     really running the WebRTC video/audio path, not the JPEG fallback.
+//   - data-testid="browser-live-img" — the JPEG-screencast <img> sink,
+//     rendered instead whenever no WebRTC stream is attached (capability
+//     gate, negotiation failure, or a genuine regression). A test that wants
+//     to prove "video is live" MUST see browser-live-video, never treat
+//     browser-live-img as an acceptable substitute — see
+//     browser-live-video.spec.ts's honesty gate for the full rationale.
+
+/** The "Watch live" launcher rendered on a browser tool-call row in chat. */
+export const watchLiveButton = (page: Page) =>
+  page.getByRole('button', { name: 'Watch live' }).first();
+
+/** The docked live-browser panel's root element. */
+export const browserLivePanel = (page: Page) =>
+  page.locator('[data-testid="browser-live-panel-docked"]');
+
+/** The pointer/keyboard capture surface inside the live panel (present once a frame has arrived). */
+export const browserLiveFrame = (page: Page) =>
+  page.locator('[data-testid="browser-live-frame"]');
+
+/** The WebRTC `<video>` sink — presence proves a real live MediaStream is attached (not the JPEG fallback). */
+export const browserLiveVideo = (page: Page) =>
+  page.locator('[data-testid="browser-live-video"]');
+
+/** The JPEG-screencast `<img>` fallback sink — presence WITHOUT `browserLiveVideo` means WebRTC never attached. */
+export const browserLiveImgFallback = (page: Page) =>
+  page.locator('[data-testid="browser-live-img"]');
+
+/**
+ * Poll for whichever live-view sink appears first (video, JPEG fallback, or
+ * neither within `timeoutMs`). Deliberately NOT a `Promise.race` of two
+ * `waitFor` calls — both `waitFor` timeouts would still be in flight when the
+ * first one resolves, and a bare race between two "resolve to null after
+ * timeoutMs" promises does not reliably tell you which (if either) sink was
+ * ever actually visible. A manual poll gives an unambiguous, honest answer:
+ * "video", "img", or `null` (neither ever appeared — a capture-path failure,
+ * not merely a WebRTC-specific one).
+ */
+export async function waitForLiveSink(
+  page: Page,
+  timeoutMs = 90_000,
+): Promise<'video' | 'img' | null> {
+  const video = browserLiveVideo(page);
+  const img = browserLiveImgFallback(page);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await video.isVisible().catch(() => false)) return 'video';
+    if (await img.isVisible().catch(() => false)) return 'img';
+    await page.waitForTimeout(500);
+  }
+  return null;
+}

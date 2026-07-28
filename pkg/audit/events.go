@@ -241,6 +241,24 @@ const (
 	// rejected ingest-auth attempt"). Fields: {remote_addr, reason}.
 	EventBrowserWebRTCIngestAuthRejected = "browser.webrtc.ingest_auth_rejected"
 
+	// EventBrowserWebRTCViewerOfferFailed — WARN. A viewer's
+	// browser_webrtc_offer was accepted (the capability gate passed and the
+	// agent's CaptureSession started/already existed) but
+	// CaptureSession.HandleViewerOffer itself failed — distinct from
+	// EventBrowserWebRTCStreamStartFailed (which is specifically cs.Start()
+	// failing to bring the encoder page up at all). Added 2026-07-28: before
+	// this event existed, a failed viewer offer was visible only as an
+	// unstructured slog.Warn line (pkg/gateway/browser_webrtc.go's
+	// handleWebRTCOffer) with no audit trail and no way to distinguish a
+	// genuinely transient ingest-track race from a real defect without
+	// reading raw logs. reason classifies the failure: "ingest_timeout" when
+	// the underlying error is webrtc.ErrNoIngestVideoTrack (waitForTracks
+	// gave up before the encoder's video track arrived — see that sentinel's
+	// doc comment for the incident this closes), "error" for every other
+	// HandleViewerOffer failure (bad SDP, closed session, PC/track
+	// negotiation). Fields: {agent_id, session_id, viewer_id, reason, error}.
+	EventBrowserWebRTCViewerOfferFailed = "browser.webrtc.viewer_offer_failed"
+
 	// EventChannelInstanceConfigured — INFO. An operator created or updated a
 	// channel instance's configuration via PUT /api/v1/channels/{id}/configure
 	// (SEC-23 / #289). Emitted by pkg/gateway/rest.go's configureChannel handler

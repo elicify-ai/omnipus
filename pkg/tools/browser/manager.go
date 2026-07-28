@@ -1039,6 +1039,67 @@ func (m *BrowserManager) registerFreshSessionLocked(
 	return snapshotTabsLocked(se)
 }
 
+// firstAttachTimeout bounds runFirstAttach's wait for the very first
+// chromedp.Run on a freshly created chromedp context — used by both
+// bootstrapBrowserCtx (a session's initial browser-owning context) and
+// createTab (every subsequent/adopted tab). Both sit on the cold-start
+// critical path a slow attach can push past the browser WS handler's 60s
+// read deadline (createFirstTab → bootstrapBrowserCtx/createTab for an
+// agent's default tab; capture_session.go's defaultEncoderStarter →
+// createTab for the WebRTC encoder page).
+//
+// By the time either call runs, Chrome itself is ALREADY launched and
+// dialed — the coordinator's ensureLaunched (coordinator.go) / this
+// manager's own managed-mode ensureStarted already completed the actual
+// process spawn + CDP-pipe handshake, bounded by cdppipe's own
+// defaultDialTimeout (20s). What's left here is only CDP target
+// creation/adoption + attach (AttachToTarget plus a handful of Enable()
+// round trips) against a browser that is already up and responding, which
+// should be fast. 20s matches that same dial-timeout scale (and
+// capture_session.go's sibling captureStartTimeout, also 20s, which bounds
+// the very next step in the encoder-page flow) — generous enough to absorb
+// a slow/loaded host without falsely failing a legitimately slow-but-working
+// attach, while keeping the total cold-start budget comfortably under the
+// 60s WS deadline this bug feeds.
+var firstAttachTimeout = 20 * time.Second
+
+// runFirstAttach races fn — expected to be exactly one first chromedp.Run(ctx)
+// call on a freshly created chromedp context — against timeout, WITHOUT
+// deriving a timed-out child of ctx to pass into Run itself. That distinction
+// is load-bearing: chromedp.Run's own doc comment warns "it's generally a bad
+// idea to use a context timeout on the first Run call, as it will stop the
+// entire browser" — and here specifically, chromedp's attachTarget spawns
+// `go c.Target.run(ctx)`, a background goroutine that reads CDP events for
+// the tab's ENTIRE remaining lifetime using the exact ctx object handed to
+// Run (chromedp.go/target.go, chromedp v0.15.1). Wrapping that ctx itself in
+// context.WithTimeout would silently kill that goroutine — and therefore the
+// tab's own CDP event processing — the instant the bound elapsed, corrupting
+// an otherwise perfectly healthy, already-attached tab, not merely bounding
+// how long we wait for the attach to finish.
+//
+// Racing fn on its own goroutine avoids that: ctx (the object chromedp.
+// NewContext returned, whose cancel is the tab's own lifetime) is passed to
+// Run completely unmodified. On timeout we do NOT touch ctx here — the
+// caller cancels it (via the same cancel() it already calls on any other
+// attach error), which unblocks fn's in-flight CDP calls via ctx.Done() and
+// lets its goroutine exit on its own; fn's result (buffered, capacity 1) is
+// then discarded. This mirrors the exact call-then-cancel-on-error shape
+// createTab/bootstrapBrowserCtx already had — only the wait itself is now
+// bounded.
+func runFirstAttach(fn func() error, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf(
+			"browser: timed out after %s waiting for the browser to attach the tab (target may be unresponsive)",
+			timeout,
+		)
+	}
+}
+
 // bootstrapBrowserCtx creates the ONE-TIME browser-owning chromedp context
 // for a brand-new browsing context: chromedp.NewContext(allocCtx) followed by
 // a forcing chromedp.Run (no actions) so the browser actually launches
@@ -1088,7 +1149,7 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 		opts = append(opts, chromedp.WithExistingBrowserContext(m.browserCtxID))
 	}
 	ctx, cancel := chromedp.NewContext(allocCtx, opts...)
-	if err := chromedp.Run(ctx); err != nil {
+	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
 	}
@@ -1126,7 +1187,11 @@ func (m *BrowserManager) lookupTabLocked(sessionID string, index int) (*sessionE
 // tab-creating/adopting call site in this file shares, all obeying the exact
 // discipline Session()'s doc comment above describes (never wrap the FIRST
 // Run on a fresh ctx in a timeout — chromedp binds the target's lifetime to
-// that first Run's context).
+// that first Run's context). The wait for that first Run is still bounded —
+// via runFirstAttach(firstAttachTimeout), which races the call on its own
+// goroutine and cancels ctx on timeout instead of deriving a timed-out child
+// of ctx to hand to Run itself; see runFirstAttach's doc comment for exactly
+// why that distinction matters.
 //
 // parentCtx MUST be a context that already owns the browsing context's
 // running *Browser — i.e. a sessionEntry.browserCtx (see its doc comment),
@@ -1154,7 +1219,7 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	}
 	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
 
-	if err := chromedp.Run(ctx); err != nil {
+	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, err
 	}

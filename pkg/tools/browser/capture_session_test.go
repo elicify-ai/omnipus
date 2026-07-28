@@ -32,6 +32,14 @@ type fakeRelay struct {
 	recaptureCalls int
 	closeCalls     int
 	stats          webrtc.Stats
+	// videoArrivesOnOffer, when true, flips stats.HasVideo to true as part
+	// of a SUCCESSFUL HandleViewerOffer call (FIX WAVE A finding 2
+	// coverage) — a faithful-enough model of the real relay's contract
+	// (pkg/tools/browser/webrtc/viewer.go's waitForTracks blocks until the
+	// ingest video track exists BEFORE HandleViewerOffer can ever return a
+	// success answer), so a test can simulate "video started flowing during
+	// this exact offer" without needing real ingest/CDP machinery.
+	videoArrivesOnOffer bool
 }
 
 func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) {
@@ -54,6 +62,9 @@ func (f *fakeRelay) HandleViewerOffer(viewerID, sdp string) (string, error) {
 		f.viewerOffers = make(map[string]string)
 	}
 	f.viewerOffers[viewerID] = sdp
+	if f.videoArrivesOnOffer {
+		f.stats.HasVideo = true
+	}
 	return "viewer-answer-" + viewerID, nil
 }
 

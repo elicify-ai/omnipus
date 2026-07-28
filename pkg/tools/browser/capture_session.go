@@ -62,7 +62,36 @@ const captureStartTimeout = 20 * time.Second
 // (wave-plan W2-A item 4: "stopped on last detach with a ~30s grace timer").
 // A var (not const) so capture_session_test.go can shrink it for a fast
 // deterministic grace-stop test without a real 30s sleep.
-var captureGracePeriod = 30 * time.Second
+//
+// Bumped 30s -> 60s (2026-07-28 incident, live DEBUG-level evidence on
+// uat-omnipus, timeline corrected 2026-07-28 per frontend-lead review of
+// src/lib/browserWebRTC.ts): a failed offer's own failure signal — a
+// browser_webrtc_state frame with available=true and a non-empty reason —
+// can take up to waitForTracksTimeout (15s, webrtc/ingest.go) to arrive
+// after the ORIGINAL offer was sent, since that's how long HandleViewerOffer
+// waits for the encoder's video track before giving up. The SPA's
+// applyState reacts to that reason-bearing frame IMMEDIATELY (it does not
+// wait out a fixed client-side timeout first) and then fires its ONE
+// automatic re-offer retryDelayMs (15s) later — so the worst-case retry
+// arrival is roughly waitForTracksTimeout + retryDelayMs =~ 30s after the
+// original offer, not the ~45s this comment previously assumed (that
+// earlier estimate was based on a client-side firstAnswerTimeoutMs wait that
+// does not actually gate this path, and was itself already stale the moment
+// it was written — it computed the margin against the OLD 5s
+// waitForTracksTimeout even though this same fix-wave raised it to 15s).
+// At the old 30s captureGracePeriod value the grace timer could expire right
+// around when that retry was due, racing it — a retry sometimes hit an
+// already-Stop()'d session and had to cold-start the whole encoder pipeline
+// from zero, losing the identical video-track race (see
+// waitForTracksTimeout's doc comment) a second time with no further retry
+// left. Confirmed in the captured logs: capture[ray] stopped at T+35s, the
+// SPA's retry offer arrived at T+45s (under the timeline in effect at
+// capture time) and had to restart the encoder from scratch. 60s comfortably
+// outlives the corrected ~30s worst-case retry arrival (30s of margin), so a
+// retry now reaches a session that is either already flowing (instant
+// answer) or at worst mid-negotiation, instead of always finding it torn
+// down.
+var captureGracePeriod = 60 * time.Second
 
 // RelaySession is the subset of *webrtc.Session's API CaptureSession
 // depends on. Exported (and named independently of the concrete type) so
@@ -687,8 +716,31 @@ func (cs *CaptureSession) HandleIngestOffer(sdp string) (answer string, err erro
 // HandleViewerOffer delegates to the relay's HandleViewerOffer — a viewer's
 // SDP offer, arriving as a browser_webrtc_offer frame on the main browser
 // WS.
+//
+// FIX WAVE A finding 2: reconciles the JPEG screencast pause decision again
+// on a successful return, not just on the AddViewer/RemoveViewer/Stop viewer-
+// set-change events ReconcileScreencast's other call sites already cover.
+// This closes a real gap: for a BRAND NEW capture session (the ordinary
+// single-viewer case), AddViewer runs BEFORE the ingest side has connected at
+// all, so its own ReconcileScreencast call is guaranteed to observe
+// Stats().HasVideo == false and correctly leave the JPEG screencast running
+// (see TestCaptureSession_ReconcileScreencast_StaysResumedWhenVideoNotFlowingYet)
+// — and nothing else ever re-checked afterward, so BOTH the CDP screencast
+// encode and the WebRTC encode ran for the ENTIRE session even once video was
+// flowing (the "choppy input under heavy video" UAT regression). The relay's
+// own waitForTracks (pkg/tools/browser/webrtc/viewer.go) blocks until the
+// ingest video track exists before HandleViewerOffer can ever return a
+// success answer, so a nil err here is exactly the moment this session's
+// video-flowing transition (false->true) becomes observable — reconciling
+// right here catches it unconditionally, independent of whether this was the
+// viewer whose AddViewer call happened to run before or after that
+// transition.
 func (cs *CaptureSession) HandleViewerOffer(viewerID, sdp string) (answer string, err error) {
-	return cs.relay.HandleViewerOffer(viewerID, sdp)
+	answer, err = cs.relay.HandleViewerOffer(viewerID, sdp)
+	if err == nil {
+		cs.ReconcileScreencast()
+	}
+	return answer, err
 }
 
 // Recapture signals both halves of the recapture path (wave-plan W2-A item

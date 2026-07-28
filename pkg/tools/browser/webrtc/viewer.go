@@ -40,7 +40,16 @@ func (s *Session) HandleViewerOffer(viewerID string, sdpOffer string) (answer st
 
 	videoTrack, audioTrack, ok := s.waitForTracks(waitForTracksTimeout)
 	if !ok {
-		return "", fmt.Errorf("webrtc: viewer %s: no ingest video track after waiting %s", prefix, waitForTracksTimeout)
+		// %w wraps ErrNoIngestVideoTrack (ingest.go) so the gateway
+		// (browser_webrtc.go) can classify this SPECIFIC failure mode via
+		// errors.Is, separately from every other HandleViewerOffer error —
+		// see ErrNoIngestVideoTrack's doc comment. Message text is unchanged
+		// from before this fix (still "no ingest video track after waiting
+		// <N>s") so existing log-scraping/greps keep matching.
+		return "", fmt.Errorf(
+			"webrtc: viewer %s: %w after waiting %s",
+			prefix, ErrNoIngestVideoTrack, waitForTracksTimeout,
+		)
 	}
 
 	s.mu.Lock()

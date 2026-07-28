@@ -156,6 +156,17 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// doc comment.
 	lastInputErrorMessage string
 
+	// webrtcMu guards webrtc and webrtcEpoch below (FIX WAVE A finding 1).
+	// browser_webrtc_offer processing now runs off readLoop's own goroutine
+	// (dispatchWebRTCOffer, browser_webrtc.go) so a slow/CDP-bound offer can
+	// never block readLoop's ReadMessage loop — which means committing the
+	// resulting attachment can now race readLoop's OWN synchronous
+	// browser_detach handling and its connection-close cleanup, both of
+	// which still run directly on readLoop's goroutine while an offer's
+	// background goroutine may still be negotiating. Every access to
+	// webrtc/webrtcEpoch outside a fresh, single-goroutine test fixture must
+	// go through the methods below, never the bare fields.
+	webrtcMu sync.Mutex
 	// webrtc tracks this connection's attached WebRTC viewer (ADR-047 D4,
 	// wave-plan W2-A) — separate from the JPEG screencast attachment above
 	// (sessionID/mgr), since both paths can be active simultaneously on the
@@ -165,10 +176,79 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// field pair (fix-wave simplification): the two were always set and
 	// cleared together, so the pair could represent an illegal
 	// half-set/half-nil state the type system did nothing to prevent.
-	// webrtc != nil iff a browser_webrtc_offer has succeeded and not yet
-	// been torn down (viewer detach, connection close, or a stream
-	// failure).
+	// webrtc != nil iff a browser_webrtc_offer has succeeded, COMMITTED (see
+	// commitWebRTCAttachment), and not yet been torn down (viewer detach,
+	// connection close, or a stream failure).
 	webrtc *webrtcAttachment
+	// webrtcEpoch increments every time this connection either (a) begins
+	// processing a NEW browser_webrtc_offer frame (beginWebRTCOffer, called
+	// synchronously from readLoop the instant the frame is dispatched — see
+	// that method's doc comment for why the bump must happen there, not
+	// inside the goroutine it spawns) or (b) is told to give up any
+	// in-flight offer (invalidateWebRTCOffer — an explicit browser_detach or
+	// the connection itself closing). A background offer goroutine captures
+	// the epoch beginWebRTCOffer returned and, once it finishes negotiating,
+	// only commits its result via commitWebRTCAttachment if that captured
+	// value still matches current — i.e. nothing newer (another offer, a
+	// detach, or a close) has superseded it in the meantime. A stale commit
+	// attempt tears down what it built instead of silently attaching a
+	// viewer state this connection no longer wants.
+	webrtcEpoch uint64
+}
+
+// beginWebRTCOffer bumps this connection's webrtcEpoch and returns the new
+// value. Called synchronously — still on readLoop's own goroutine — the
+// instant a browser_webrtc_offer frame is dispatched (dispatchWebRTCOffer,
+// browser_webrtc.go), BEFORE the goroutine that will actually process it is
+// spawned. Bumping here rather than inside that (unpredictably-scheduled)
+// goroutine is what keeps epoch ordering aligned with the ORDER frames
+// actually arrived in: a second offer frame dispatched a moment later always
+// observes (and invalidates) whatever the first offer's goroutine captured,
+// regardless of which goroutine the Go scheduler happens to run first.
+func (s *browserConnState) beginWebRTCOffer() uint64 {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	s.webrtcEpoch++
+	return s.webrtcEpoch
+}
+
+// invalidateWebRTCOffer bumps webrtcEpoch without starting a new offer —
+// used by an explicit browser_detach and by the connection-close cleanup
+// (both via detachWebRTCViewer) so a background offer goroutine that hasn't
+// committed yet (see commitWebRTCAttachment) recognizes, whenever it
+// eventually finishes negotiating, that this connection no longer wants its
+// result.
+func (s *browserConnState) invalidateWebRTCOffer() {
+	s.webrtcMu.Lock()
+	s.webrtcEpoch++
+	s.webrtcMu.Unlock()
+}
+
+// commitWebRTCAttachment installs att as this connection's WebRTC attachment
+// iff epoch still matches the CURRENT webrtcEpoch — returns false (does not
+// install) if a newer offer, an explicit detach, or the connection closing
+// already invalidated this generation while handleWebRTCOffer was
+// negotiating in the background.
+func (s *browserConnState) commitWebRTCAttachment(epoch uint64, att *webrtcAttachment) bool {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	if s.webrtcEpoch != epoch {
+		return false
+	}
+	s.webrtc = att
+	return true
+}
+
+// takeWebRTCAttachment atomically reads and clears this connection's WebRTC
+// attachment (used by detachWebRTCViewer) — safe to call whether or not an
+// offer goroutine is concurrently trying to commit one, since both go
+// through the same webrtcMu.
+func (s *browserConnState) takeWebRTCAttachment() *webrtcAttachment {
+	s.webrtcMu.Lock()
+	defer s.webrtcMu.Unlock()
+	att := s.webrtc
+	s.webrtc = nil
+	return att
 }
 
 // minInputErrorInterval is the minimum gap between two IDENTICAL real-input-
@@ -479,9 +559,15 @@ func (h *BrowserWSHandler) readLoop(
 		if state.mgr != nil && state.sessionID != "" {
 			h.detach(state.mgr, state.sessionID, viewerID, userID)
 		}
-		if state.webrtc != nil {
-			h.detachWebRTCViewer(&state, viewerID)
-		}
+		// detachWebRTCViewer is called unconditionally (not gated on
+		// state.webrtc != nil): a browser_webrtc_offer dispatched via
+		// dispatchWebRTCOffer may still be negotiating in the background
+		// when this connection closes, with nothing committed to state.webrtc
+		// yet — detachWebRTCViewer's invalidateWebRTCOffer call (FIX WAVE A
+		// finding 1) is what tells that goroutine, once it finishes, to tear
+		// down what it built instead of attaching a viewer state this
+		// now-closed connection can never use.
+		h.detachWebRTCViewer(&state, viewerID)
 	}()
 
 	for {
@@ -542,11 +628,22 @@ func (h *BrowserWSHandler) readLoop(
 			h.handleTabAction(wc, &state, viewerID, data)
 		case string(generated.WsFrameTypeBrowserDetach):
 			h.handleDetach(wc, &state, viewerID, userID)
-			if state.webrtc != nil {
-				h.detachWebRTCViewer(&state, viewerID)
-			}
+			// Unconditional for the same reason as readLoop's own cleanup
+			// defer above: an in-flight background offer (dispatchWebRTCOffer)
+			// may not have committed to state.webrtc yet, but this explicit
+			// detach must still invalidate it.
+			h.detachWebRTCViewer(&state, viewerID)
 		case string(generated.WsFrameTypeBrowserWebrtcOffer):
-			h.handleWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
+			// FIX WAVE A finding 1: dispatched onto its own goroutine
+			// (dispatchWebRTCOffer, browser_webrtc.go) rather than handled
+			// inline — handleWebRTCOffer's slow path (cs.Start's CDP round
+			// trip, HandleViewerOffer's waitForTracks) must never block THIS
+			// ReadMessage loop, since gorilla only services the PongHandler
+			// (which refreshes the 60s read deadline set below) from inside a
+			// ReadMessage call. A synchronous call here previously starved
+			// every Pong, killing the JPEG screencast fallback along with the
+			// stalled WebRTC attempt — see dispatchWebRTCOffer's doc comment.
+			h.dispatchWebRTCOffer(wc, &state, viewerID, userID, data, cfg)
 		default:
 			wc.sendCriticalGen(generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),

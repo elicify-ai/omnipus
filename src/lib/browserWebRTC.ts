@@ -48,8 +48,6 @@
 // still cold — including the one automatic retry above, if that retry also
 // starts from `hasConnectedOnce === false`.
 
-import type { BrowserWebRTCStateFrame } from '@/lib/api/generated/asyncapi-types'
-
 /** The four states this machine is ever in. 'failed' is folded into
  * 'fallback' as a *reason string* passed to `onFallback` rather than a
  * separate public state — from the caller's point of view "ICE failed" and
@@ -91,6 +89,25 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
    * candidate set — better than wedging in 'offering' forever on a stuck
    * gathering). Default 3000. */
   iceGatheringTimeoutMs?: number
+}
+
+/**
+ * The subset of `BrowserWebRTCStateFrame` `applyState` reacts to. `reason` is
+ * deliberately widened from the frame's generated (currently 4-value) enum
+ * to a plain `string` — fix-wave C: this class only ever checks *truthiness*
+ * of `reason` and forwards it verbatim to `onFallback`, it never pattern-
+ * matches against the enum's specific literal members, so it must not
+ * require the wire enum to already enumerate a value (e.g. a prospective
+ * "ingest_timeout") before this class can react to it correctly. Not itself
+ * a wire type — never constructed from raw JSON; the one real call site
+ * (BrowserLiveView.tsx) always narrows an already-Zod-validated
+ * `BrowserWebRTCStateFrame`, which satisfies this structurally (its `reason`
+ * union is a subtype of `string`).
+ */
+interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of BrowserWebRTCStateFrame (reason enum -> string) so applyState reacts correctly to a reason value the generated wire enum doesn't list yet; never constructed from raw JSON itself
+  available: boolean
+  reason?: string
+  active?: boolean
 }
 
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
@@ -238,24 +255,58 @@ export class BrowserWebRTCSession {
    * Feed in every `browser_webrtc_state` frame the gateway sends. Only acts
    * when it signals unavailability WHILE a session is actually in flight —
    * deciding whether/when to `start()` on an *available* signal is the
-   * caller's job (wave-plan W2-B wiring note), so an available:true frame is
-   * intentionally a no-op here UNLESS it also reports `active:false` after
-   * this session had already connected (fix-wave B, MED): the gateway pushes
-   * `available:false` on an ordinary stop, but the relay can also drop out
-   * from under an established connection while the capability itself stays
-   * available (`active` flips false without `available` following it) — the
-   * contract calls that a fallback trigger too, same as any other
-   * mid-session failure.
+   * caller's job (wave-plan W2-B wiring note), so an available:true frame
+   * with neither a `reason` nor `active:false` is intentionally a no-op
+   * here — that's the routine post-attach "you may offer" re-announcement
+   * (`announceWebRTCAvailability`, sent with no reason at all).
+   *
+   * fix-wave C (the "first-offer failure never surfaces" defect,
+   * 2026-07-28): a HandleViewerOffer failure is reported as
+   * `available:true` (WebRTC as a *capability* is still fine) with a
+   * populated `reason` (e.g. "error", or a future distinct value like
+   * "ingest_timeout") — `active` is NOT sent as an explicit `false` on that
+   * frame (the gateway's Go `*bool` + `omitempty` encoding only ever
+   * serializes a literal `true` or omits the field entirely, see
+   * `sendWebRTCState`/pkg/gateway/browser_webrtc.go), so it arrives on the
+   * wire as `undefined`, not `false`. The OLD logic here only ever reacted
+   * to `active === false` while `this._state === 'connected'` — for a FIRST
+   * offer, the machine has never left `'offering'` (no PC was ever built
+   * server-side), so that check never matched, and the frame was a complete
+   * no-op: the user then waited out the full `firstAnswerTimeoutMs` (30s)
+   * local timer before anything visibly changed, even though the gateway
+   * had already reported failure within seconds.
+   *
+   * The fix: a truthy `reason` alongside `available:true` is ALWAYS a
+   * genuine failure report for THIS connection's in-flight attempt — the
+   * routine re-announcement never carries one — so react to `reason`
+   * presence directly (while `offering` OR `connected`), regardless of
+   * `active`. This is forward-compatible with any future reason string
+   * (e.g. a prospective "ingest_timeout") without this file needing to know
+   * its exact spelling — the wire's `reason` is passed straight through as
+   * the fallback reason, exactly like the `available:false` branch already
+   * does.
+   *
+   * The `active === false` check is kept as a fallback trigger in its own
+   * right (defensive — some future/test caller may construct a frame with
+   * an explicit `false` and no `reason`) but is only reachable once this
+   * session had already connected: an ordinary in-flight `offering` attempt
+   * with `active:false` and NO reason is still treated as ambiguous/benign
+   * rather than assumed to be a failure.
    */
-  applyState(frame: Pick<BrowserWebRTCStateFrame, 'available' | 'reason' | 'active'>): void {
+  applyState(frame: BrowserWebRTCStateSignal): void {
     if (!frame.available) {
       if (this._state === 'offering' || this._state === 'connected') {
         this._fallback(frame.reason ?? 'unavailable')
       }
       return
     }
+    if (this._state !== 'offering' && this._state !== 'connected') return
+    if (frame.reason) {
+      this._fallback(frame.reason)
+      return
+    }
     if (frame.active === false && this._state === 'connected') {
-      this._fallback(frame.reason ?? 'stream-stopped')
+      this._fallback('stream-stopped')
     }
   }
 

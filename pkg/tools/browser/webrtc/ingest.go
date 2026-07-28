@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -20,7 +21,42 @@ const gatherTimeout = 10 * time.Second
 // waitForTracksTimeout bounds how long HandleViewerOffer waits for the
 // ingest side's video track to exist before rejecting the viewer (the
 // encoder may not have connected yet).
-const waitForTracksTimeout = 5 * time.Second
+//
+// Root-caused live on uat-omnipus (2026-07-28, DEBUG-level relay logs
+// captured across two independent capture-session cycles, see the incident
+// writeup this const's history references): with the encoder already warm
+// (extension loaded, Chrome running), the FULL ingest handshake — encoder
+// page reachable, tabCapture, offer, ICE-connect, audio's first RTP packet —
+// consistently completed in UNDER 1 SECOND. The VIDEO track's first RTP
+// packet, however, consistently arrived ~5s AFTER that (VP8 software-encoder
+// warm-up/first-keyframe latency on this deployment's shared vCPU), i.e.
+// almost EXACTLY at the boundary of the previous 5s value here — losing the
+// race on both observed cycles by a hair, 100% reproducibly, not a flake.
+// Bumped to 15s: 3x the observed ~5s video-track latency, while staying
+// safely inside the SPA's firstAnswerTimeoutMs budget (30s,
+// src/lib/browserWebRTC.ts) for the overwhelmingly common warm-Chrome case
+// this deployment exhibited. A genuinely cold Start() (extension/Chrome
+// never launched before, up to captureStartTimeout=20s +
+// bringToFrontTimeout=5s in capture_session.go) can still exhaust the SPA's
+// 30s budget regardless of this value — that pre-existing, documented
+// cold-start risk is unchanged by this fix and is mitigated by the SPA's
+// own one-shot automatic retry (see captureGracePeriod's doc comment in
+// capture_session.go for why THAT retry needed its own alignment fix too).
+const waitForTracksTimeout = 15 * time.Second
+
+// ErrNoIngestVideoTrack is the sentinel HandleViewerOffer wraps (via %w) when
+// waitForTracks times out with no video track ever having arrived. Exported
+// so pkg/gateway/browser_webrtc.go can classify this SPECIFIC failure mode
+// (errors.Is) separately from every other HandleViewerOffer error (bad SDP,
+// closed session, PC/track-negotiation failures) for logging/audit
+// observability — distinguishing "the capture pipeline just hadn't produced
+// a frame yet" from a generic runtime error, per the 2026-07-28 incident
+// (see waitForTracksTimeout's doc comment): a viewer-offer failure of THIS
+// specific shape is not a capability gate (disabled/not_capable/lite_build)
+// and not necessarily a real defect either — it can be a legitimate,
+// transient cold-start race — but it deserves its own name in logs/audit
+// rather than being indistinguishable from every other "error".
+var ErrNoIngestVideoTrack = errors.New("no ingest video track")
 
 // audioGraceTimeout bounds how much LONGER waitForTracks keeps waiting for
 // the audio track once video is already present. The viewer PeerConnection

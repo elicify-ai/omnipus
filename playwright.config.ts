@@ -30,5 +30,17 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    launchOptions: {
+      args: [
+        // browser-live-video.spec.ts needs the VIEWER's (this Playwright-
+        // driven Chromium's) own WebAudio AnalyserNode to run immediately —
+        // no prior user gesture required — so it can sample the live
+        // <video> sink's audio track without any autoplay-policy ambiguity.
+        // Harmless for every other spec: it only relaxes a restriction,
+        // never tightens one, and no other spec asserts on gesture-gated
+        // audio/autoplay behavior either way.
+        '--autoplay-policy=no-user-gesture-required',
+      ],
+    },
   },
 });

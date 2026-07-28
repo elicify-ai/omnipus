@@ -3181,6 +3181,33 @@ type BrowserToolConfig struct {
 	// config, never a bare os.Getenv, for its own decision; the env var is
 	// consulted only as an explicit override layered on top.
 	CaptureSharedContext bool `json:"capture_shared_context" env:"OMNIPUS_TOOLS_BROWSER_CAPTURE_SHARED_CONTEXT"`
+
+	// WarmAtBoot launches the shared Chrome eagerly during gateway boot
+	// (BrowserCoordinator.WarmUp) instead of lazily on the first browser
+	// tool call. Default true.
+	//
+	// Why eager: the lazy path resolves the binary, launches Chrome over the
+	// CDP pipe, creates the first tab and loads the capture extension, all
+	// inside whatever request first needs a browser. That cold start is
+	// expensive (ADR-042 records ~30-60s historically on a fresh install)
+	// and its cost lands on a user-facing interaction — including the
+	// WebRTC offer path, where it has to fit inside the browser
+	// WebSocket's own 60s read deadline.
+	//
+	// Turning this off does NOT disable the browser: tools stay available
+	// and Chrome still launches lazily at first use. It only trades a
+	// slower first interaction for a cheaper, quieter boot — useful on
+	// memory-tight hosts, or where an operator does not want a browser
+	// process running until something actually asks for one.
+	//
+	// Warm-up is best-effort and never blocks or fails boot (Hard
+	// Constraint #4, graceful degradation): a failure is logged at WARN and
+	// the lazy path remains the fallback. It is additionally skipped
+	// entirely by OMNIPUS_SKIP_BROWSER_PREPROVISION=1, which test harnesses
+	// use for a fully browser-inert boot, and it is never attempted when
+	// browser tools are disabled or when CDPURL points at a remote Chrome
+	// this gateway does not own.
+	WarmAtBoot bool `json:"warm_at_boot" env:"OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT"`
 }
 
 // IsFilterSensitiveDataEnabled returns true if sensitive data filtering is enabled

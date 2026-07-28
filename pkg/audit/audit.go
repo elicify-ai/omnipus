@@ -165,6 +165,7 @@ func IsValidEventName(e EventName) bool {
 		EventBrowserWebRTCStreamStopped,
 		EventBrowserWebRTCStreamStartFailed,
 		EventBrowserWebRTCIngestAuthRejected,
+		EventBrowserWebRTCViewerOfferFailed,
 		// security_change.go.
 		EventSecuritySettingChange,
 		// Misc event names emitted by other packages with stable wire

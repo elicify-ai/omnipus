@@ -1124,6 +1124,81 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}()
 	}
 
+	// Boot-time browser WARM-UP (distinct from Preprovision above):
+	// Preprovision only RESOLVES (and, on a fresh install, downloads) a
+	// Chromium binary — it never launches the process. Chrome launch, the
+	// agent's first tab, and the CDP capture-extension load stayed entirely
+	// lazy, deferred to an agent's first browser tool call
+	// (BrowserManager.ensureStarted, reached via Session()/createFirstTab()).
+	// That lazy path is the unbounded cold start ADR-042 recorded at 30-60s
+	// historically — long enough to blow past the browser WS handler's 60s
+	// read deadline and tear down the connection. Kick the actual launch off
+	// here too so the shared Chrome is already up (process live, CDP pipe
+	// dialed, capture extension loaded if configured — see
+	// BrowserCoordinator.WarmUp) by the time any agent's first interaction
+	// needs it.
+	//
+	// Only ONE shared, gateway-scoped Chrome exists regardless of agent
+	// count (coordinator.go's whole design) — this warms that ONE instance,
+	// found via the first browser manager whose Coordinator() is non-nil (in
+	// coordinator mode every agent's manager is attached to the exact same
+	// *browser.BrowserCoordinator, so any one of them resolves it). A
+	// per-agent Chrome pool is explicitly out of scope — tracked separately
+	// as issue #570.
+	//
+	// Respects tools.browser.cdp_url: in remote-CDP mode there is nothing to
+	// warm (an operator-managed Chromium elsewhere; launching a local Chrome
+	// here would be wrong and wasteful), so this is skipped entirely when
+	// cdp_url is set. tools.browser.enabled (default true — browser tools
+	// are a standard built-in like exec/web/cron) additionally gates it so a
+	// deployment that has explicitly disabled browser tooling doesn't pay
+	// for it either.
+	//
+	// Operator opt-out: `tools.browser.warm_at_boot`
+	// (config.BrowserToolConfig.WarmAtBoot, env
+	// OMNIPUS_TOOLS_BROWSER_WARM_AT_BOOT), default true — following the same
+	// "default true" pattern as LiveViewEnabled/WebRTCEnabled/
+	// CaptureSharedContext. Setting it false keeps browser tools fully
+	// available and simply defers the Chrome launch to first use; it does
+	// not disable the browser.
+	//
+	// Skippable via OMNIPUS_SKIP_BROWSER_PREPROVISION=1 — the same escape
+	// hatch an integration test harness needs whenever it wants a fully
+	// browser-inert boot (no launch attempt of any kind, eager or lazy):
+	// without it, a harness that configures a real/valid exec_path for a
+	// browser-tool test would otherwise have this warm-up race a test's
+	// t.TempDir() cleanup exactly like the historical Preprovision-download
+	// flake this mirrors the escape hatch for.
+	//
+	// Best-effort + non-blocking, matching the Preprovision loop's own
+	// contract exactly: boot must not stall or fail on a browser problem
+	// (CLAUDE.md graceful degradation, Hard Constraint #4). A bare `go
+	// func(){}()`, not joined by anything — gateway shutdown does not wait
+	// for it, so it cannot delay RunContext's return. ctx is the gateway's
+	// own shutdown-aware context (canceled when the gateway is asked to
+	// stop); WarmUp's underlying ensureLaunched/exec-path resolution honors
+	// it for cancellation during resolution, and BrowserCoordinator.Shutdown
+	// (invoked from the gateway's own Close path, not from here) remains the
+	// sole process-kill path regardless of whether this warm-up finished.
+	// browserWarmUpEnabled/findSharedBrowserCoordinator are extracted (rather
+	// than inlined here) so the exact decision logic gateway.RunContext acts
+	// on is unit-testable without booting a full gateway.
+	if browserWarmUpEnabled(cfg) {
+		if sharedBrowserCoordinator := findSharedBrowserCoordinator(agentLoop.BrowserManagers()); sharedBrowserCoordinator != nil {
+			go func() {
+				if warmErr := sharedBrowserCoordinator.WarmUp(ctx); warmErr != nil {
+					logger.WarnCF(
+						"browser",
+						"boot-time Chrome warm-up failed — will launch lazily at first browser tool use",
+						map[string]any{"error": warmErr.Error()},
+					)
+					return
+				}
+				logger.InfoCF("browser", "shared Chrome warmed up at boot", nil)
+			}()
+		}
+	}
+
 	// B1.2(d): wire the per-thread restrict-failure audit emitter into the
 	// sandbox package now that the agent loop (and thus the audit logger) is
 	// constructed. The hook bridges sandbox → audit without an import cycle —
@@ -1687,6 +1762,53 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			}
 		}
 	}
+}
+
+// browserWarmUpEnabled reports whether RunContextWithOptions' boot-time
+// browser warm-up (see the "Boot-time browser WARM-UP" block above) should
+// run for cfg, given the current process environment. Extracted as a small,
+// pure predicate — no side effects, no coordinator/manager access — so the
+// exact decision gateway.go's boot sequence makes is unit-testable without
+// booting a full gateway.
+//
+// cfg.Tools.Browser.WarmAtBoot (default true, see its doc comment on
+// BrowserToolConfig) is the operator's opt-out: setting it false keeps browser
+// tools fully available and simply defers the Chrome launch to first use.
+//
+// cfg.Tools.Browser.Enabled (default true) and an empty CDPURL together mean
+// "this deployment wants local browser automation" — an empty/remote-CDP or
+// explicitly-disabled config must never trigger a local Chrome launch.
+//
+// OMNIPUS_SKIP_BROWSER_PREPROVISION=1 is an unconditional override: when
+// set, this returns false regardless of cfg, matching Preprovision's own
+// long-standing "escape hatch a test harness needs" contract (see the boot
+// wiring's doc comment for why an integration test harness needs one).
+func browserWarmUpEnabled(cfg *config.Config) bool {
+	return cfg.Tools.Browser.WarmAtBoot &&
+		cfg.Tools.Browser.Enabled &&
+		cfg.Tools.Browser.CDPURL == "" &&
+		os.Getenv("OMNIPUS_SKIP_BROWSER_PREPROVISION") != "1"
+}
+
+// findSharedBrowserCoordinator returns the ONE gateway-scoped
+// *browser.BrowserCoordinator shared across every agent's *browser.
+// BrowserManager in coordinator mode (nil when none is attached — e.g. every
+// agent is configured for remote CDP, or the list is empty). All managers in
+// coordinator mode share the exact same coordinator instance
+// (pkg/agent/loop.go's registerSharedTools wiring), so the first non-nil
+// Coordinator() found is sufficient; there is no need to look further once
+// one is found. Extracted from the boot-time warm-up wiring so it is
+// unit-testable in isolation with fake managers.
+func findSharedBrowserCoordinator(mgrs []*browser.BrowserManager) *browser.BrowserCoordinator {
+	for _, mgr := range mgrs {
+		if mgr == nil {
+			continue
+		}
+		if coord := mgr.Coordinator(); coord != nil {
+			return coord
+		}
+	}
+	return nil
 }
 
 // servicesSnapshot captures all fields that restartServices and executeReload

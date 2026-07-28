@@ -476,6 +476,14 @@ func DefaultConfig() *Config {
 				// false; the JPEG browser_screencast fallback keeps working
 				// either way.
 				CaptureSharedContext: true,
+				// Launch the shared Chrome during boot rather than on the
+				// first browser tool call. Default TRUE: the lazy cold start
+				// is expensive (ADR-042: ~30-60s on a fresh install) and
+				// lands on a user-facing interaction, including the WebRTC
+				// offer path where it must fit inside the browser
+				// WebSocket's 60s read deadline. Best-effort — a warm-up
+				// failure is logged and the lazy path still works.
+				WarmAtBoot: true,
 			},
 			Skills: SkillsToolsConfig{
 				ToolConfig: ToolConfig{

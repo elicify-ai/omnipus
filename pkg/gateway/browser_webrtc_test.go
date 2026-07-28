@@ -46,10 +46,35 @@ type fakeRelay struct {
 	// packet counts frozen across ticks — zero value matches every existing
 	// caller's prior "always webrtc.Stats{}" expectation).
 	stats webrtc.Stats
+	// viewerOfferErr, when set, is returned by HandleViewerOffer instead of a
+	// success answer — 2026-07-28 incident coverage (ingest-timeout
+	// classification, TestHandleWebRTCOffer_ViewerOfferFailed_*): lets tests
+	// exercise the offerErr branch of handleWebRTCOffer with a controlled
+	// error (e.g. one wrapping webrtc.ErrNoIngestVideoTrack) without waiting
+	// out a real waitForTracksTimeout. nil (the zero value) preserves every
+	// existing caller's "always succeeds" expectation.
+	viewerOfferErr error
+	// viewerOfferBlock, when non-nil, makes HandleViewerOffer wait on it
+	// before returning (FIX WAVE A finding 1 coverage): simulates a slow
+	// negotiation — the real relay's waitForTracks can legitimately wait up
+	// to waitForTracksTimeout — so a test can prove readLoop's own goroutine
+	// is NOT blocked by it. nil (the zero value) preserves every existing
+	// caller's "returns immediately" expectation.
+	viewerOfferBlock chan struct{}
 }
 
 func (f *fakeRelay) HandleIngestOffer(sdp string) (string, error) { return "ingest-answer", nil }
 func (f *fakeRelay) HandleViewerOffer(viewerID, sdp string) (string, error) {
+	f.mu.Lock()
+	err := f.viewerOfferErr
+	block := f.viewerOfferBlock
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
+	if err != nil {
+		return "", err
+	}
 	return "viewer-answer-" + viewerID, nil
 }
 
@@ -166,7 +191,7 @@ func TestHandleWebRTCOffer_GateLadder_DisabledByConfig(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "webrtc_enabled=false must report available=false")
@@ -180,7 +205,7 @@ func TestHandleWebRTCOffer_GateLadder_InvalidFrame(t *testing.T) {
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", []byte("not json"), al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", []byte("not json"), al.GetConfig(), 0)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -206,7 +231,7 @@ func TestHandleWebRTCOffer_GateLadder_MissingFields(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -235,7 +260,7 @@ func TestHandleWebRTCOffer_GateLadder_UnknownAgent(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -288,7 +313,7 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -368,7 +393,7 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "a launch failure must degrade to available=false, never break the JPEG fallback")
@@ -801,7 +826,7 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "an actively-viewed conflicting capture must deny the offer")
@@ -876,14 +901,22 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig())
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
 
-	select {
-	case <-otherCS.Done():
-		// superseded — the fence stopped the viewerless leftover and moved on.
-	default:
-		t.Fatal("a viewerless conflicting capture must be superseded (stopped), not left to deny the offer")
-	}
+	// FIX WAVE A finding 3: otherCS.Stop() now runs off h.captureFenceMu
+	// (fired via `go otherCS.Stop()` so one agent's teardown can't block a
+	// DIFFERENT agent's fence acquisition) — so the supersede is no longer
+	// guaranteed to have completed the INSTANT handleWebRTCOffer returns.
+	// Poll instead of a bare non-blocking select.
+	require.Eventually(t, func() bool {
+		select {
+		case <-otherCS.Done():
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 5*time.Millisecond,
+		"a viewerless conflicting capture must be superseded (stopped), not left to deny the offer")
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "this chrome-less harness must then fail at launch (the fence itself passed)")
 	require.Equal(t, "error", got.Reason)
