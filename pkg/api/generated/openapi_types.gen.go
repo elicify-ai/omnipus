@@ -9514,7 +9514,7 @@ type PlanUpdateRequest struct {
 	//
 	// This is deliberately a merge and not a replacement. Under the previous replace semantics any client that sent a PARTIAL bounds object silently zeroed every field it did not know about — which the shipped SPA plan-edit form does on every save, because it renders inputs for only `plan_judge_max_rounds` and `idle_expiry_days`. Editing a plan's title therefore destroyed its supervision overrides. Replacement is defensible REST in the abstract; it is not defensible when a shipped client provably sends a partial object.
 	//
-	// Consequence to know: an individual override cannot be CLEARED through this endpoint, only overwritten with a new value >= 1. Clearing was never reliably reachable under the old semantics either (the SPA sends no `bounds` key at all once every input is empty, which was — and remains — a no-op), so no working client behaviour depends on it.
+	// Consequence to know: an individual override cannot be CLEARED AT ALL — not through this endpoint and not through any other, because there is no other. This is the ONLY route that writes plan bounds: there is no PATCH, and no agent tool sets them. Once set, an override can only be overwritten with a new value >= 1, never removed. Clearing was never reliably reachable under the old semantics either (the SPA sends no `bounds` key at all once every input is empty, which was — and remains — a no-op), so no working client behaviour depends on it. Restoring clearability requires a deliberate wire change — an explicit null-per-field or a `bounds: null` reset sentinel — not a second route.
 	Bounds *struct {
 		IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
 		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
