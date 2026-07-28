@@ -365,6 +365,36 @@ type DelegateTool struct {
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
 
+	// requireParentAgentID, when set via SetRequireParentAgentID, is the
+	// live-read reader for tools.delegate.require_parent_agent_id
+	// (R2-MAJ-015) — the operator kill switch for the FR-015 fail-closed
+	// parent-agent-id guard in Execute's lifecycle-mint block.
+	//
+	// It is a func() bool, NOT a captured bool, for two independent reasons:
+	//
+	//  1. Live reads. An operator flipping the key must take effect without a
+	//     restart, exactly like sessionMessagingEnabled above. That matters
+	//     more here than almost anywhere else: the guard's failure mode is
+	//     "every delegate call in the install errors", and needing a restart
+	//     to escape it defeats the point of shipping an escape hatch.
+	//  2. Late binding. Gateway boot assigns several of this tool's
+	//     dependencies AFTER the wiring pass that constructs it runs, so a
+	//     dependency read eagerly at wiring time can be nil (or stale)
+	//     forever while registration still looks perfectly correct. Resolving
+	//     through the closure on every call sidesteps the ordering question
+	//     entirely rather than depending on getting it right.
+	//
+	// UNWIRED (nil) resolves to TRUE — the fail-closed posture, matching
+	// config.DelegateToolConfig.EffectiveRequireParentAgentID's own default
+	// for an unset key. Deliberately NOT the sessionMessagingWired treatment:
+	// there, unwired and "wired to false" must be distinguishable because
+	// fail-closed is the SAFE end of that switch and an unwired tool must not
+	// be granted the plane. Here the safe end and the unwired default are the
+	// SAME value (true = keep refusing), so an extra wired flag would carry
+	// no information — any path that reaches this resolver without a wired
+	// closure gets the strict guard, which is the correct answer.
+	requireParentAgentID func() bool
+
 	snapshotMaxBytes int
 	snapshotMaxRefs  int
 
@@ -457,6 +487,34 @@ func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
 		return false
 	}
 	return t.sessionMessagingEnabled()
+}
+
+// SetRequireParentAgentID installs the live reader for
+// tools.delegate.require_parent_agent_id (R2-MAJ-015) — the operator kill
+// switch for the FR-015 fail-closed parent-agent-id guard. See the
+// requireParentAgentID field doc for why this is a closure and not a bool.
+//
+// The caller is expected to pass a closure that resolves the key through
+// config.DelegateToolConfig.EffectiveRequireParentAgentID, e.g.
+//
+//	tool.SetRequireParentAgentID(func() bool {
+//	    return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
+//	})
+//
+// Passing nil restores the unwired default (true / strict), so this is safe
+// to call unconditionally from a re-runnable wiring pass.
+func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
+	t.requireParentAgentID = fn
+}
+
+// parentAgentIDRequired resolves the FR-015 guard's strictness for this call.
+// An unwired tool resolves TRUE (strict) — see the requireParentAgentID field
+// doc for why this one does not need the sessionMessagingWired treatment.
+func (t *DelegateTool) parentAgentIDRequired() bool {
+	if t.requireParentAgentID == nil {
+		return true
+	}
+	return t.requireParentAgentID()
 }
 
 // isSessionMessagingAction reports whether a delegate action touches the
@@ -952,14 +1010,34 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		// delegation — rather than persist an orphan. Note the mint is
 		// deliberately still skipped entirely when no lifecycle store is
 		// configured: with no store there is no record to orphan.
+		//
+		// R2-MAJ-015 — tools.delegate.require_parent_agent_id is the operator
+		// kill switch for exactly that refusal. It exists because the guard's
+		// blast radius is the whole install: a wiring regression anywhere
+		// upstream of ToolAgentID turns EVERY delegate call into this error,
+		// and without a lever the only remedy is a code change. Resolving the
+		// key to false downgrades the refusal to a log-at-Error and mints
+		// with an empty ParentAgentID — knowingly degraded attribution, an
+		// explicit operator choice, never the default (unset resolves to
+		// true) and never silent: the Error line below fires on EVERY such
+		// mint, not once, so a forgotten kill switch keeps announcing the
+		// orphan records it is creating.
 		parentAgentID := strings.TrimSpace(ToolAgentID(ctx))
 		if parentAgentID == "" {
-			slog.Error("delegate: refusing to mint an unattributable lifecycle record — no parent agent id in context",
+			if t.parentAgentIDRequired() {
+				slog.Error("delegate: refusing to mint an unattributable lifecycle record — no parent agent id in context",
+					"delegate_session_id", delegateSessionID,
+					"target_agent_id", agentID,
+					"parent_durable_key", parentDurableKey)
+				return ErrorResult("delegate: cannot resolve the delegating agent's identity — " +
+					"refusing to start a delegated session that could never be traced back to its parent")
+			}
+			slog.Error("delegate: minting an unattributable lifecycle record with an empty parent agent id — "+
+				"the FR-015 guard is disabled by tools.delegate.require_parent_agent_id=false; "+
+				"this session cannot be traced back to its parent and will never be returned to it by list_jobs",
 				"delegate_session_id", delegateSessionID,
 				"target_agent_id", agentID,
 				"parent_durable_key", parentDurableKey)
-			return ErrorResult("delegate: cannot resolve the delegating agent's identity — " +
-				"refusing to start a delegated session that could never be traced back to its parent")
 		}
 		rec := &session.LifecycleRecord{
 			SessionID:        delegateSessionID,

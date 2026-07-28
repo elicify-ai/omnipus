@@ -7894,6 +7894,16 @@ export interface components {
                  * @example 7
                  */
                 idle_expiry_days?: number;
+                /**
+                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @example 600
+                 */
+                supervision_turn_timeout_seconds?: number;
+                /**
+                 * @description Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
+                 * @example 3
+                 */
+                supervision_max_attempts?: number;
             };
             /**
              * @description Plan-judge rounds consumed so far (ADR D4 MAJ-004, durable boot-reconciled counter).
@@ -8005,6 +8015,16 @@ export interface components {
                 plan_judge_max_rounds?: number;
                 /** @example 7 */
                 idle_expiry_days?: number;
+                /**
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @example 600
+                 */
+                supervision_turn_timeout_seconds?: number;
+                /**
+                 * @description Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
+                 * @example 3
+                 */
+                supervision_max_attempts?: number;
             };
         };
         /**
@@ -8040,12 +8060,28 @@ export interface components {
             owner_agent_id?: string;
             /** @description Replacement Definition of Done set (replaces the current `dod` atomically). */
             dod?: components["schemas"]["AcceptanceCriterion"][];
-            /** @description Replacement per-plan bounds overrides. */
+            /**
+             * @description Per-plan bounds overrides, MERGED field-by-field into the plan's stored bounds. A field present here is written; a field ABSENT here keeps its stored value, and omitting `bounds` entirely leaves all of them untouched.
+             *
+             *     This is deliberately a merge and not a replacement. Under the previous replace semantics any client that sent a PARTIAL bounds object silently zeroed every field it did not know about — which the shipped SPA plan-edit form does on every save, because it renders inputs for only `plan_judge_max_rounds` and `idle_expiry_days`. Editing a plan's title therefore destroyed its supervision overrides. Replacement is defensible REST in the abstract; it is not defensible when a shipped client provably sends a partial object.
+             *
+             *     Consequence to know: an individual override cannot be CLEARED through this endpoint, only overwritten with a new value >= 1. Clearing was never reliably reachable under the old semantics either (the SPA sends no `bounds` key at all once every input is empty, which was — and remains — a no-op), so no working client behaviour depends on it.
+             */
             bounds?: {
                 /** @example 20 */
                 plan_judge_max_rounds?: number;
                 /** @example 7 */
                 idle_expiry_days?: number;
+                /**
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @example 600
+                 */
+                supervision_turn_timeout_seconds?: number;
+                /**
+                 * @description Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
+                 * @example 3
+                 */
+                supervision_max_attempts?: number;
             };
         };
         /**

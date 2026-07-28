@@ -316,6 +316,24 @@ properties:
           Override of the global idle-expiry calendar brake (global default
           7 days).
         example: 7
+      supervision_turn_timeout_seconds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-021's supervision observation deadline — how long
+          the PlanSupervisor waits on an armed supervision wake before that
+          attempt counts as spent (global default
+          `planning.supervision_turn_timeout_seconds`, 600 s).
+        example: 600
+      supervision_max_attempts:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-022's ceiling on supervision wakes that produce no
+          valid correction; exhausting it terminates the plan
+          `failed(supervision_unavailable)` (global default
+          `planning.supervision_max_attempts`, 3).
+        example: 3
   judge_rounds:
     type: integer
     minimum: 0

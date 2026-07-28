@@ -1643,6 +1643,20 @@ func registerSharedTools(
 			// follow_up/peek — for every agent. The closure re-reads config per
 			// call, so a live kill-switch flip is still honored.
 			delegateTool.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
+			// R2-MAJ-015 — the operator kill switch for delegate's FR-015
+			// fail-closed parent-agent-id guard
+			// (tools.delegate.require_parent_agent_id). Same live-closure
+			// discipline as the FR-196 switch immediately above, and for a
+			// sharper reason: this guard's failure mode is "delegation stops
+			// entirely across the install", so the escape hatch is worthless
+			// if escaping it needs a restart. al.GetConfig() is re-read per
+			// call rather than captured here — an eagerly-read value would
+			// freeze at whatever this wiring pass saw, which for a dependency
+			// the gateway assigns AFTER tool wiring means frozen at nil while
+			// registration still looks correct.
+			delegateTool.SetRequireParentAgentID(func() bool {
+				return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
+			})
 			// W2: action:"status" live-progress snapshot for a running native
 			// task. sharedStore mirrors the exact store wiring
 			// NewHandoffTool already uses just above (line ~1469) — the same

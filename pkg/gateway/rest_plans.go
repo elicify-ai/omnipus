@@ -171,8 +171,10 @@ func (a *restAPI) toWirePlan(p plan.Plan) gen.Plan {
 	}
 	if p.Bounds != nil {
 		b := struct { // not-wire-format: intermediate value shaped to match gen.Plan.Bounds' oapi-codegen anonymous field type, not a parallel wire type
-			IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
-			PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+			IdleExpiryDays                *int `json:"idle_expiry_days,omitempty"`
+			PlanJudgeMaxRounds            *int `json:"plan_judge_max_rounds,omitempty"`
+			SupervisionMaxAttempts        *int `json:"supervision_max_attempts,omitempty"`
+			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		}{}
 		if p.Bounds.IdleExpiryDays != nil {
 			v := *p.Bounds.IdleExpiryDays
@@ -181,6 +183,14 @@ func (a *restAPI) toWirePlan(p plan.Plan) gen.Plan {
 		if p.Bounds.PlanJudgeMaxRounds != nil {
 			v := *p.Bounds.PlanJudgeMaxRounds
 			b.PlanJudgeMaxRounds = &v
+		}
+		if p.Bounds.SupervisionTurnTimeoutSeconds != nil {
+			v := *p.Bounds.SupervisionTurnTimeoutSeconds
+			b.SupervisionTurnTimeoutSeconds = &v
+		}
+		if p.Bounds.SupervisionMaxAttempts != nil {
+			v := *p.Bounds.SupervisionMaxAttempts
+			b.SupervisionMaxAttempts = &v
 		}
 		out.Bounds = &b
 	}
@@ -569,6 +579,14 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 			v := *req.Bounds.PlanJudgeMaxRounds
 			b.PlanJudgeMaxRounds = &v
 		}
+		if req.Bounds.SupervisionTurnTimeoutSeconds != nil {
+			v := *req.Bounds.SupervisionTurnTimeoutSeconds
+			b.SupervisionTurnTimeoutSeconds = &v
+		}
+		if req.Bounds.SupervisionMaxAttempts != nil {
+			v := *req.Bounds.SupervisionMaxAttempts
+			b.SupervisionMaxAttempts = &v
+		}
 		p.Bounds = b
 	}
 
@@ -714,8 +732,15 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 	// notifications away from whoever is actually watching this plan run.
 	// Bounds is deliberately NOT frozen here: an operator may legitimately
 	// want to extend a running plan's idle-expiry/judge-round budget.
-	if req.Dod != nil || req.OwnerAgentId != nil {
-		existing, gerr := a.planStore.Get(id)
+	//
+	// The stored plan is loaded once here and reused by BOTH the freeze check
+	// below and the bounds merge further down, so a PUT touching dod/owner and
+	// bounds together still costs a single read. Store.Get loads fresh from
+	// disk on every call, so nothing below aliases store-owned memory.
+	var existing *plan.Plan
+	if req.Dod != nil || req.OwnerAgentId != nil || req.Bounds != nil {
+		var gerr error
+		existing, gerr = a.planStore.Get(id)
 		if gerr != nil {
 			if errors.Is(gerr, plan.ErrNotFound) {
 				jsonErr(w, http.StatusNotFound, "plan not found")
@@ -725,6 +750,8 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 			jsonErr(w, http.StatusInternalServerError, "could not read plan")
 			return
 		}
+	}
+	if req.Dod != nil || req.OwnerAgentId != nil {
 		if existing.State != plan.StateDraft {
 			if req.Dod != nil {
 				jsonErr(w, http.StatusConflict, "dod cannot be changed once the plan has left draft state")
@@ -763,8 +790,50 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		dod := planDoDFromUpdateWire(*req.Dod)
 		patch.DoD = &dod
 	}
+	// Bounds MERGE, not replace (data-loss fix). plan.Patch.Bounds is applied
+	// wholesale by the store (updateLocked does `p.Bounds = newBounds`), so a
+	// handler that built the patch from the request alone silently zeroed every
+	// bounds field the request did not mention. That is not a theoretical
+	// partial-update purist objection: the shipped SPA plan-edit form
+	// (src/components/workspaces/CreatePlanSlideOver.tsx, buildBounds) renders
+	// inputs for plan_judge_max_rounds and idle_expiry_days ONLY and sends that
+	// object on every save, so editing a plan's TITLE destroyed its
+	// supervision_turn_timeout_seconds / supervision_max_attempts overrides.
+	// Seeding from the stored bounds and overlaying only the fields actually
+	// present in the request fixes it for every client, not just that form.
+	//
+	// Trade-off accepted (documented on PlanUpdateRequest.bounds): an
+	// individual override can no longer be CLEARED through PUT, only
+	// overwritten with a new value >= 1. Clearing was never reachable from the
+	// SPA anyway — it omits `bounds` entirely once every input is empty, which
+	// was and remains a no-op.
+	//
+	// KNOWN, ACCEPTED: this read-modify-write straddles the store lock (the
+	// Get above, the Update below), so two concurrent PUTs to the SAME plan
+	// can lose one side's bounds field. Closing it properly means merging
+	// inside updateLocked, which is pkg/plan's to make. The race needs two
+	// simultaneous bounds-writing PUTs to one plan; the replace semantics it
+	// replaces lost data on every single SPA save, with no concurrency at all.
 	if req.Bounds != nil {
 		b := &plan.PlanBounds{}
+		if existing.Bounds != nil {
+			if existing.Bounds.IdleExpiryDays != nil {
+				v := *existing.Bounds.IdleExpiryDays
+				b.IdleExpiryDays = &v
+			}
+			if existing.Bounds.PlanJudgeMaxRounds != nil {
+				v := *existing.Bounds.PlanJudgeMaxRounds
+				b.PlanJudgeMaxRounds = &v
+			}
+			if existing.Bounds.SupervisionTurnTimeoutSeconds != nil {
+				v := *existing.Bounds.SupervisionTurnTimeoutSeconds
+				b.SupervisionTurnTimeoutSeconds = &v
+			}
+			if existing.Bounds.SupervisionMaxAttempts != nil {
+				v := *existing.Bounds.SupervisionMaxAttempts
+				b.SupervisionMaxAttempts = &v
+			}
+		}
 		if req.Bounds.IdleExpiryDays != nil {
 			v := *req.Bounds.IdleExpiryDays
 			b.IdleExpiryDays = &v
@@ -772,6 +841,14 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		if req.Bounds.PlanJudgeMaxRounds != nil {
 			v := *req.Bounds.PlanJudgeMaxRounds
 			b.PlanJudgeMaxRounds = &v
+		}
+		if req.Bounds.SupervisionTurnTimeoutSeconds != nil {
+			v := *req.Bounds.SupervisionTurnTimeoutSeconds
+			b.SupervisionTurnTimeoutSeconds = &v
+		}
+		if req.Bounds.SupervisionMaxAttempts != nil {
+			v := *req.Bounds.SupervisionMaxAttempts
+			b.SupervisionMaxAttempts = &v
 		}
 		patch.Bounds = &b
 	}

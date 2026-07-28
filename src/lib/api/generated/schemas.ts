@@ -880,6 +880,8 @@ type Plan = {
     | Partial<{
         plan_judge_max_rounds: number;
         idle_expiry_days: number;
+        supervision_turn_timeout_seconds: number;
+        supervision_max_attempts: number;
       }>
     | undefined;
   judge_rounds?: number | undefined;
@@ -907,6 +909,8 @@ type PlanCreateRequest = {
     | Partial<{
         plan_judge_max_rounds: number;
         idle_expiry_days: number;
+        supervision_turn_timeout_seconds: number;
+        supervision_max_attempts: number;
       }>
     | undefined;
 };
@@ -920,6 +924,8 @@ type PlanUpdateRequest = Partial<{
   bounds: Partial<{
     plan_judge_max_rounds: number;
     idle_expiry_days: number;
+    supervision_turn_timeout_seconds: number;
+    supervision_max_attempts: number;
   }>;
 }>;
 type PlanListResponse = {
@@ -3000,6 +3006,8 @@ export const Plan: z.ZodType<Plan> = z.object({
     .object({
       plan_judge_max_rounds: z.number().int().gte(1),
       idle_expiry_days: z.number().int().gte(1),
+      supervision_turn_timeout_seconds: z.number().int().gte(1),
+      supervision_max_attempts: z.number().int().gte(1),
     })
     .partial()
     .optional(),
@@ -3032,6 +3040,8 @@ export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
     .object({
       plan_judge_max_rounds: z.number().int().gte(1),
       idle_expiry_days: z.number().int().gte(1),
+      supervision_turn_timeout_seconds: z.number().int().gte(1),
+      supervision_max_attempts: z.number().int().gte(1),
     })
     .partial()
     .optional(),
@@ -3048,6 +3058,8 @@ export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
       .object({
         plan_judge_max_rounds: z.number().int().gte(1),
         idle_expiry_days: z.number().int().gte(1),
+        supervision_turn_timeout_seconds: z.number().int().gte(1),
+        supervision_max_attempts: z.number().int().gte(1),
       })
       .partial(),
   })

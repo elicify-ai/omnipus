@@ -2198,8 +2198,10 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 			ActiveLoop *bool      `json:"active_loop,omitempty"`
 			ApprovedAt *time.Time `json:"approved_at,omitempty"`
 			Bounds     *struct {
-				IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
-				PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+				IdleExpiryDays                *int `json:"idle_expiry_days,omitempty"`
+				PlanJudgeMaxRounds            *int `json:"plan_judge_max_rounds,omitempty"`
+				SupervisionMaxAttempts        *int `json:"supervision_max_attempts,omitempty"`
+				SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 			} `json:"bounds,omitempty"`
 			CompletedAt *time.Time `json:"completed_at,omitempty"`
 			CreatedAt   time.Time  `json:"created_at"`

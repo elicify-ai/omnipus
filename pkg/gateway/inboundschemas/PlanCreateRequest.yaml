@@ -75,3 +75,17 @@ properties:
         type: integer
         minimum: 1
         example: 7
+      supervision_turn_timeout_seconds:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-021's supervision observation deadline (global
+          default `planning.supervision_turn_timeout_seconds`, 600 s).
+        example: 600
+      supervision_max_attempts:
+        type: integer
+        minimum: 1
+        description: >
+          Override of FR-022's no-correction supervision attempt ceiling
+          (global default `planning.supervision_max_attempts`, 3).
+        example: 3

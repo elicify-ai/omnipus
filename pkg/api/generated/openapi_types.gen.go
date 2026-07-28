@@ -8843,6 +8843,12 @@ type Plan struct {
 
 		// PlanJudgeMaxRounds Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
 		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+
+		// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
+		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
+
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
 	// CompletedAt RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
@@ -9029,6 +9035,12 @@ type PlanCreateRequest struct {
 	Bounds *struct {
 		IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
 		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+
+		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
+		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
+
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
 	// Description Optional free-form description.
@@ -9127,6 +9139,12 @@ type PlanListResponse struct {
 
 			// PlanJudgeMaxRounds Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
 			PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+
+			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
+			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
+
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
 		// CompletedAt RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
@@ -9318,6 +9336,12 @@ type PlanRestartResponse struct {
 
 			// PlanJudgeMaxRounds Override of the global plan-judge round ceiling (global default 20, symmetric with `/goal`).
 			PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+
+			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
+			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
+
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
 		// CompletedAt RFC 3339 timestamp when the plan reached `done` or `failed`. Absent until then.
@@ -9486,10 +9510,20 @@ type PlanRestartResponsePlanState string
 
 // PlanUpdateRequest Request body for PUT /plans/{id} (ADR-049 D1). All fields are optional; only provided fields are updated. `state` drives the canonical 5-value plan state machine (draft/approved/running/done/failed) — illegal transitions are rejected 400 (`ErrIllegalPlanTransition`); approving with no `dod` and no member-task criteria is rejected per the tiered DoD rule (ADR D5, Round-1 Grill Reconciliation R1).
 type PlanUpdateRequest struct {
-	// Bounds Replacement per-plan bounds overrides.
+	// Bounds Per-plan bounds overrides, MERGED field-by-field into the plan's stored bounds. A field present here is written; a field ABSENT here keeps its stored value, and omitting `bounds` entirely leaves all of them untouched.
+	//
+	// This is deliberately a merge and not a replacement. Under the previous replace semantics any client that sent a PARTIAL bounds object silently zeroed every field it did not know about — which the shipped SPA plan-edit form does on every save, because it renders inputs for only `plan_judge_max_rounds` and `idle_expiry_days`. Editing a plan's title therefore destroyed its supervision overrides. Replacement is defensible REST in the abstract; it is not defensible when a shipped client provably sends a partial object.
+	//
+	// Consequence to know: an individual override cannot be CLEARED through this endpoint, only overwritten with a new value >= 1. Clearing was never reliably reachable under the old semantics either (the SPA sends no `bounds` key at all once every input is empty, which was — and remains — a no-op), so no working client behaviour depends on it.
 	Bounds *struct {
 		IdleExpiryDays     *int `json:"idle_expiry_days,omitempty"`
 		PlanJudgeMaxRounds *int `json:"plan_judge_max_rounds,omitempty"`
+
+		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
+		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
+
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
 	// Description New free-form description.
