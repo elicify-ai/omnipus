@@ -150,7 +150,11 @@ func TestRestartedParkedPlan_GetsItsFullSupervisionBudget(t *testing.T) {
 		t.Fatalf("get admitted plan: %v", err)
 	}
 	h.pe.planDecisionMu.Lock()
-	sessionForThisRun := h.pe.ensureSupervisionSessionLocked(admitted)
+	// newPark=false on purpose: it is the WEAKEST caller signal, so the
+	// assertion below still rests entirely on the restart having cleared the
+	// previous life's receipt. Passing true would let the caller flag carry the
+	// test and make it vacuous.
+	sessionForThisRun := h.pe.ensureSupervisionSessionLocked(admitted, false)
 	h.pe.planDecisionMu.Unlock()
 	if sessionForThisRun == "sess-previous-life" {
 		t.Errorf("the restarted run was handed the PREVIOUS life's adjudication session %q", sessionForThisRun)

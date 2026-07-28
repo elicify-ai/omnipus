@@ -519,6 +519,23 @@ func (pe *PlanEngine) unmetTerminalSignatureUnchanged(planID, sig string) bool {
 	return ok && last == sig
 }
 
+// unmetTerminalSignatureRecorded reports whether ANY all-terminal signature has
+// ever been recorded as judged UNMET for planID — the "was this ever set"
+// question, as distinct from unmetTerminalSignatureUnchanged's "is it still
+// this value" (G3 fix wave, finding 4).
+//
+// They are different questions because the empty string is a LEGAL signature:
+// planTerminalSignature(nil) == "", so a plan with zero members records "" and
+// a bare `sig == ""` test cannot tell that plan apart from one that was never
+// judged at all. Every caller that would otherwise branch on emptiness must ask
+// this instead.
+func (pe *PlanEngine) unmetTerminalSignatureRecorded(planID string) bool {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	_, ok := pe.lastUnmetTerminalSignature[planID]
+	return ok
+}
+
 // recordUnmetTerminalSignature saves sig as the most recently judged-UNMET
 // all-terminal signature for planID. Lazily initializes the backing map
 // (same pattern as registry() above) so a bare struct-literal test engine,
@@ -1420,6 +1437,13 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 		return
 	}
 	stalled := plan.PhaseStalled
+	// Captured BEFORE the phase write: a plan stalling out of `dispatching`
+	// opens a new park; a plan ALREADY stalled whose stall reason merely
+	// changed shape (a different blocked/inbox member set) is the same park
+	// continuing, and must keep climbing its attempt ladder rather than reset
+	// it — otherwise a plan whose stall text churns every tick would re-arm attempt
+	// 1 forever and never reach the FR-022 ceiling.
+	newPark := !plan.IsSupervisionEligiblePhase(p.EffectivePlanPhase())
 	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
 		logger.WarnCF("plan_engine", "could not persist stall note",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
@@ -1429,7 +1453,7 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 	p.PlanPhase = stalled
 	// FR-012: the stall wake asks PlanSupervisor for a stall DIAGNOSIS, not a
 	// DoD verdict, and not the owner — the owner has no correction role.
-	pe.wakeSupervisor(p, buildStallWakeText(p, reason, tasks), "plan_stalled")
+	pe.wakeSupervisor(p, buildStallWakeText(p, reason, tasks), "plan_stalled", newPark)
 }
 
 // --- Plan-level judge round (SD-B8) ---------------------------------------
@@ -1703,6 +1727,13 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	// paused session from the failed(interrupted) sweep via OwnsPlanID ->
 	// plan.PlanPhase == awaiting_supervision (FR-118 exemption b).
 	awaiting := plan.PhaseAwaitingSupervision
+	// Captured BEFORE the phase write below: an UNMET verdict on a plan that
+	// was not already parked opens a new park, and the wake's attempt counter
+	// and adjudication session are scoped to that park (see wakeSupervisor's
+	// newPark parameter). Read generically rather than hardcoded true so a
+	// future call path that re-judges an already-parked plan cannot silently
+	// reset its ladder.
+	newPark := !plan.IsSupervisionEligiblePhase(current.EffectivePlanPhase())
 	sig := terminalSig
 	if _, uerr := pe.planStore.Update(current.ID, plan.Patch{
 		JudgeRounds:                &newRounds,
@@ -1738,7 +1769,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	// FR-012: the UNMET wake goes to the ADJUDICATOR, not the owner. The
 	// owner has no correction role, so the message no longer says "awaiting
 	// YOUR correction".
-	pe.wakeSupervisor(current, pe.buildDoDUnmetWakeText(current, newRounds, steering), "plan_judge_unmet")
+	pe.wakeSupervisor(current, pe.buildDoDUnmetWakeText(current, newRounds, steering), "plan_judge_unmet", newPark)
 }
 
 // synthesizeAndComplete records the PASS round (or, for completePlan's
@@ -1929,9 +1960,13 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	// The plan's OWNER session — the owner agent's continuous context for
 	// this plan (FR-016c). Stop cancels it like any session. Until ADR-055
 	// this leg was a production no-op: the id it cancelled ("plan:<id>") named
-	// a session nothing ever created, and because the fan-out discards
-	// RequestCancelForSession's "did it fire" result, a leg that cancelled
-	// nothing was indistinguishable from one that worked.
+	// a session nothing ever created. That half was fixed by minting a real
+	// session; the OTHER half named in the same sentence — "the fan-out
+	// discards RequestCancelForSession's 'did it fire' result, so a leg that
+	// cancelled nothing is indistinguishable from one that worked" — stayed
+	// live until the G3 fix wave and is now closed by cancelSessions'
+	// sessionCancelReport (see its doc comment for what each half of that
+	// result does and does NOT prove).
 	if p.OwnerSessionID != "" {
 		sessions = append(sessions, p.OwnerSessionID)
 	}
@@ -1943,7 +1978,7 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	if p.Supervision != nil && p.Supervision.SessionID != "" {
 		sessions = append(sessions, p.Supervision.SessionID)
 	}
-	pe.cancelSessions(ctx, sessions, userID, channel)
+	cancelReport := pe.cancelSessions(ctx, sessions, userID, channel)
 
 	// Item 5: aggregate (never silently discard) any per-member store-write
 	// failure while still completing the REST of the fan-out — a single
@@ -1973,7 +2008,7 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 		return nil, fmt.Errorf("plan_engine: StopPlan: transition plan %q to failed: %w", planID, err)
 	}
 	pe.wakeOwner(updated, handover, "plan_stopped_by_user")
-	return updated, aggregateMemberCancelErrors(planID, failedMemberIDs)
+	return updated, aggregateStopFanoutErrors(planID, failedMemberIDs, cancelReport.failed)
 }
 
 // aggregateMemberCancelErrors renders a partial-stop error listing every
@@ -1993,6 +2028,46 @@ func aggregateMemberCancelErrors(planID string, failedMemberIDs []string) error 
 		"plan_engine: StopPlan: plan %q was stopped, but %d member task(s) could not be marked "+
 			"cancelled (store write failed) and may remain in_progress: %s",
 		planID, len(failedMemberIDs), strings.Join(failedMemberIDs, ", "),
+	)
+}
+
+// aggregateSessionCancelErrors is aggregateMemberCancelErrors' sibling for the
+// OTHER half of the Stop fan-out: the session-level cancels. It lists every
+// session whose RequestCancelForSession call returned an ERROR — i.e. the
+// cancel request could not even be issued, so a live turn for that session may
+// still be running against a plan the caller has been told is stopped.
+//
+// ⚠ It deliberately does NOT list sessions whose cancel was issued cleanly and
+// reported was_fired=false. That result is genuinely ambiguous and is BENIGN in
+// several documented, routine cases — a supervision session whose adjudication
+// turn already finished (StopPlan's own fan-out comment says so explicitly), a
+// verifier session whose round returned while Stop held planDecisionMu, an
+// in_progress member sitting between its worker turn ending and its terminal
+// write, an idle owner session. Escalating those to an error would 500 the
+// overwhelmingly common "Stop a parked plan" case (handlePlanStop maps ANY
+// non-nil StopPlan error to HTTP 500), which is a worse lie than the one it
+// would be fixing. A non-fire is instead RECORDED — see cancelSessions.
+func aggregateSessionCancelErrors(planID string, failedSessionIDs []string) error {
+	if len(failedSessionIDs) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"plan_engine: StopPlan: plan %q was stopped, but %d session cancel(s) could not be issued "+
+			"and their turns may still be running: %s",
+		planID, len(failedSessionIDs), strings.Join(failedSessionIDs, ", "),
+	)
+}
+
+// aggregateStopFanoutErrors is StopPlan's single partial-stop verdict across
+// BOTH legs of the fan-out (member state writes + session cancels). nil means
+// every leg completed; anything else means the plan itself DID transition to
+// failed(stopped_by_user) but some part of the fan-out did not land, which the
+// caller must not read as an unqualified success (handlePlanStop maps it to a
+// 500 carrying this text, after recording that the stop happened).
+func aggregateStopFanoutErrors(planID string, failedMemberIDs, failedSessionIDs []string) error {
+	return errors.Join(
+		aggregateMemberCancelErrors(planID, failedMemberIDs),
+		aggregateSessionCancelErrors(planID, failedSessionIDs),
 	)
 }
 
@@ -2025,29 +2100,72 @@ func (pe *PlanEngine) StopTask(ctx context.Context, taskID, userID, channel stri
 		sessions = append(sessions, t.SessionID)
 	}
 	sessions = append(sessions, pe.registry().SessionsFor(verifierUnitForTask(taskID))...)
+	// Unlike StopPlan, a session-cancel failure is NOT folded into this
+	// function's returned error, and that is a deliberate boundary decision
+	// rather than an oversight: handleTaskStop (pkg/gateway/rest_tasks.go) has
+	// no partial-fan-out branch — it discards `updated` on any non-nil error
+	// and then re-reads the task, which by that point is `failed`, so it would
+	// answer a SUCCESSFUL stop with a 409 "only an in-progress task can be
+	// stopped". Reporting the failure that way would be less honest, not more.
+	// cancelSessions logs every failed leg at Warn with its session id, which
+	// is where a task-scope partial stop is observable until the REST layer
+	// grows the same partial-success shape handlePlanStop already has.
 	pe.cancelSessions(ctx, sessions, userID, channel)
 
 	return pe.cancelMemberLocked(taskID, userID)
+}
+
+// sessionCancelReport is what the session-level leg of a Stop fan-out actually
+// DID, as opposed to what it was asked to do. Before the G3 fix wave
+// cancelSessions returned nothing at all and dropped both halves of
+// RequestCancelForSession's result on the floor, so "the cancel errored",
+// "the cancel fired" and "the cancel found no live turn" were one
+// indistinguishable outcome to every caller — the exact property StopPlan's own
+// fan-out comment complains about, in the past tense, while doing it.
+//
+// The two halves are NOT interchangeable and are kept apart on purpose:
+//
+//   - failed: RequestCancelForSession returned an error. The cancel was never
+//     issued. Unambiguously a failure; StopPlan aggregates these into its
+//     returned error (aggregateSessionCancelErrors).
+//   - notFired: the call succeeded and reported that nothing was cancelled.
+//     Ambiguous by construction — see aggregateSessionCancelErrors for why this
+//     must not be escalated to an error — so it is recorded and logged, never
+//     returned as a failure.
+type sessionCancelReport struct {
+	// attempted counts distinct, non-empty session ids the fan-out reached.
+	attempted int
+	// fired counts cancels that actually interrupted a live turn.
+	fired int
+	// failed lists session ids whose cancel call returned an error.
+	failed []string
+	// notFired lists session ids whose cancel was issued but interrupted
+	// nothing. Advisory: consumed by the summary log, not by error reporting.
+	notFired []string
 }
 
 // cancelSessions issues RequestCancelForSession (the SAME chat cancel every
 // other surface uses, A2) for every session in sessions (deduped inline by
 // the caller's use of registry.SessionsFor + the direct worker-session
 // append, both of which already avoid duplicates in practice, but a
-// belt-and-suspenders local dedupe costs nothing). A single session's cancel
-// failure is logged, never escalated — the engine's OWN state transition
-// (member/plan -> failed) must still be attempted regardless (US-6
-// acceptance 1: the plan is marked `cancelled` even if one session's cancel
-// call errored — the session-level cancel and the state transition are
-// independent guarantees, not a single atomic unit).
-func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, userID, channel string) {
+// belt-and-suspenders local dedupe costs nothing) and returns what happened.
+//
+// A single session's cancel failure never aborts the fan-out — the engine's OWN
+// state transition (member/plan -> failed) must still be attempted regardless
+// (US-6 acceptance 1: the plan is marked `cancelled` even if one session's
+// cancel call errored — the session-level cancel and the state transition are
+// independent guarantees, not a single atomic unit). It is no longer SWALLOWED
+// either: it is both logged and returned in the report, which is how StopPlan
+// stops reporting a partly-failed stop as an unqualified success.
+func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, userID, channel string) sessionCancelReport {
+	var report sessionCancelReport
 	if pe.canceller == nil {
 		if len(sessions) > 0 {
 			logger.WarnCF("plan_engine",
 				"stop fan-out: no sessionCanceller configured; session-level cancel skipped",
 				map[string]any{"session_count": len(sessions)})
 		}
-		return
+		return report
 	}
 	seen := make(map[string]bool, len(sessions))
 	for _, sessionID := range sessions {
@@ -2055,11 +2173,34 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 			continue
 		}
 		seen[sessionID] = true
-		if _, err := pe.canceller.RequestCancelForSession(ctx, sessionID, userID, channel); err != nil {
+		report.attempted++
+		fired, err := pe.canceller.RequestCancelForSession(ctx, sessionID, userID, channel)
+		switch {
+		case err != nil:
+			report.failed = append(report.failed, sessionID)
 			logger.WarnCF("plan_engine", "stop fan-out: session cancel failed",
 				map[string]any{"session_id": sessionID, "error": err.Error()})
+		case fired:
+			report.fired++
+		default:
+			report.notFired = append(report.notFired, sessionID)
 		}
 	}
+	if report.attempted > 0 {
+		// The record that makes "this leg cancelled nothing" readable after the
+		// fact. Deliberately INFO on the whole fan-out rather than one line per
+		// session: a fan-out of ten sessions in which none fired is the shape
+		// worth seeing, and it is not per se an error.
+		logger.InfoCF("plan_engine", "stop fan-out: session cancel leg complete",
+			map[string]any{
+				"attempted":  report.attempted,
+				"fired":      report.fired,
+				"failed":     len(report.failed),
+				"not_fired":  report.notFired,
+				"all_missed": report.fired == 0,
+			})
+	}
+	return report
 }
 
 // cancelMemberLocked marks task taskID `failed` with the user-cancel marker
@@ -2398,9 +2539,43 @@ func originCanDeliver(sourceChannel, sourceChatID string) bool {
 // loud, false diagnosis. Instead the owner turn is dispatched DIRECTLY
 // (SendResponse=false): "no chat to deliver to" must never mean "no turn ran".
 //
+// A DELIVERY FAILURE IS NOT AN OUTCOME (G3 fix wave, finding 3). The chat leg
+// can fail two ways — no notifier wired, or Notify returning an error — and
+// both used to log and return. That silently produced the worst outcome the
+// wake path has: synthesizeAndComplete transitions the plan to `done`
+// unconditionally right after this call, so the closing synthesis was never
+// written, the human was never told, and the board read Done. It is the exact
+// inverse of the rule this function's own origin-handling doc states — "'no chat
+// to deliver to' must never mean 'no turn ran'" — since a FAILED delivery
+// does mean no turn ran. Both failures therefore fall through to the same
+// direct dispatch the origin-less case uses, on the SAME already-minted owner
+// session, so the synthesis at least lands durably in the plan's transcript.
+//
 // Caller must hold planDecisionMu (every call site already does).
 func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	sessionID := pe.ensureOwnerSessionLocked(p)
+
+	// G3 fix wave, finding 7: resolve the owner BEFORE choosing a delivery leg.
+	// The direct-dispatch leg already refuses to run a turn for an unresolvable
+	// agent (dispatchPlanTurn pre-resolves precisely so a wake is never
+	// silently run by whichever agent happens to be default), but the notifier
+	// leg had no such guard: processSystemMessage falls back to
+	// GetDefaultAgent() when the named AsyncOriginAgentID does not resolve
+	// (loop.go), so a plan whose owner agent was deleted got its closing
+	// synthesis authored by an unrelated roster member, in that member's own
+	// persona, and delivered to the requester as the plan's answer. Agent
+	// deletion is guarded for the owners of RUNNING plans, but failPlanLocked
+	// and StopPlan both move the plan to `failed` before waking, so that guard
+	// does not cover this call.
+	//
+	// Losing the wake entirely is the better failure: it is loud (ERROR), it is
+	// what the direct leg would do anyway, and a synthesis in the wrong voice is
+	// worse than no synthesis.
+	if !pe.ownerAgentResolves(p.OwnerAgentID) {
+		logger.ErrorCF("plan_engine", "plan owner agent does not resolve; wake not delivered",
+			map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "source_kind": sourceKind})
+		return
+	}
 
 	if !originCanDeliver(p.SourceChannel, p.SourceChatID) {
 		// FR-012d(5): a wake with no chat origin is NOT a failure. It is
@@ -2421,29 +2596,66 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 		return
 	}
 
-	if pe.notifier == nil {
-		logger.ErrorCF("plan_engine", "no async notifier configured; plan owner wake not delivered",
-			map[string]any{"plan_id": p.ID, "source_kind": sourceKind})
-		return
-	}
-	notifyCtx, cancel := context.WithTimeout(context.Background(), planWakeNotifyTimeout)
-	defer cancel()
-	if err := pe.notifier.Notify(notifyCtx, AsyncNotifyEvent{
-		Channel:             p.SourceChannel,
-		ChatID:              p.SourceChatID,
-		AgentID:             p.OwnerAgentID,
-		TranscriptSessionID: sessionID,
-		SourceKind:          sourceKind,
-		Content:             content,
-	}); err != nil {
-		logger.ErrorCF("plan_engine", "could not wake plan owner",
+	if pe.notifier != nil {
+		notifyCtx, cancel := context.WithTimeout(context.Background(), planWakeNotifyTimeout)
+		defer cancel()
+		err := pe.notifier.Notify(notifyCtx, AsyncNotifyEvent{
+			Channel:             p.SourceChannel,
+			ChatID:              p.SourceChatID,
+			AgentID:             p.OwnerAgentID,
+			TranscriptSessionID: sessionID,
+			SourceKind:          sourceKind,
+			Content:             content,
+		})
+		if err == nil {
+			return // delivered: the bus will route this into a real owner turn
+		}
+		logger.ErrorCF("plan_engine", "could not wake plan owner over its origin chat; dispatching the owner turn directly",
 			map[string]any{
 				"plan_id":     p.ID,
 				"channel":     p.SourceChannel,
 				"source_kind": sourceKind,
 				"error":       err.Error(),
 			})
+	} else {
+		logger.ErrorCF("plan_engine", "no async notifier configured; dispatching the plan owner turn directly",
+			map[string]any{"plan_id": p.ID, "source_kind": sourceKind})
 	}
+
+	// Finding 3's fallback: the chat leg did not deliver, so no turn ran. Run
+	// one on the plan's own owner session — the outcome is then durable even
+	// though the requester's conversation never received it, and the ERROR
+	// above is the record that the chat delivery itself was lost.
+	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p)); err != nil {
+		logger.ErrorCF("plan_engine", "plan owner wake could not be delivered OR dispatched directly",
+			map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "source_kind": sourceKind, "error": err.Error()})
+	}
+}
+
+// ownerAgentResolves reports whether agentID names an agent this process can
+// actually run a turn as — the guard wakeOwner applies before handing a wake to
+// EITHER delivery leg (finding 7).
+//
+// It answers "unknown" as TRUE, deliberately. A PlanEngine with no agent loop or
+// no registry cannot run any turn at all, so there is no wrong-persona risk to
+// prevent there; the two legs each fail on their own terms in that case (Notify
+// with whatever is wired, dispatchPlanTurn with an explicit error). Production
+// always has both, which is where the guard bites.
+func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
+	if agentID == "" {
+		// Nothing to resolve, and an empty AsyncOriginAgentID is exactly what
+		// sends processSystemMessage to GetDefaultAgent().
+		return false
+	}
+	if pe.agentLoop == nil {
+		return true
+	}
+	reg := pe.agentLoop.GetRegistry()
+	if reg == nil {
+		return true
+	}
+	_, ok := reg.GetAgent(agentID)
+	return ok
 }
 
 // wakeSupervisor issues a SUPERVISION wake (family A) for a plan sitting in
@@ -2455,19 +2667,47 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 // origin, not anywhere. That is a property of the seam (there is no publish to
 // suppress), not a send that happens to fail.
 //
+// newPark says whether this wake OPENS a new park or re-issues within the park
+// already in progress, and the caller computes it as "the plan was not already
+// in the supervision-eligible phase set before this transition". It is passed
+// explicitly rather than inferred from supervision.wake_at because the wake
+// receipt is cleared by a SEPARATE store write from the phase change that ends
+// a park (countCorrectionAndClearWake), and that write can fail: inferring the
+// park boundary from a stale receipt then charges a brand-new park's FIRST wake
+// as attempt N+1 and hands it the previous park's adjudication session,
+// shortening the escalation ladder by however many attempts the previous park
+// had already spent (G3 fix wave, finding 6 — the durable consequence
+// countCorrectionAndClearWake's own comment missed).
+//
 // Caller must hold planDecisionMu.
-func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string) {
-	sessionID := pe.ensureSupervisionSessionLocked(p)
+func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, newPark bool) {
+	// FR-046b-adjacent brake (G3 fix wave, finding 5). See
+	// correctionBudgetSpent: without this, the stall -> correct -> run -> stall
+	// cycle has NO terminal state at all.
+	if maxRounds, spent := pe.correctionBudgetSpent(p); spent {
+		logger.ErrorCF("plan_engine", "supervision correction budget spent; terminating the plan instead of waking again",
+			map[string]any{
+				"plan_id":           p.ID,
+				"plan_phase":        string(p.EffectivePlanPhase()),
+				"correction_rounds": p.Supervision.CorrectionRounds,
+				"max_rounds":        maxRounds,
+				"source_kind":       sourceKind,
+			})
+		pe.failPlanLocked(p.ID, plan.FailedReasonDoDUnreachable,
+			buildCorrectionBudgetHandover(p, maxRounds))
+		return
+	}
+
+	sessionID := pe.ensureSupervisionSessionLocked(p, newPark)
 
 	// ⚠ PERSIST THE HANDLE BEFORE DISPATCHING THE TURN. This is the same
 	// assign-before-dispatch rule the verifier registry already follows, and
 	// for the same reason: a Stop landing in the window between "the turn is
 	// running" and "the record names its session" would find nothing to
-	// cancel, and — because the cancel fan-out discards its own "did it fire"
-	// result — would report success. Ordering the other way round leaves an
-	// uncancellable turn for exactly as long as one store write takes.
+	// cancel. Ordering the other way round leaves an uncancellable turn for
+	// exactly as long as one store write takes.
 	attempts := 1
-	if p.Supervision != nil {
+	if !newPark && p.Supervision != nil {
 		attempts = p.Supervision.Attempts + 1
 	}
 	wakeAt := pe.clock.Now().UTC().Format(time.RFC3339)
@@ -2555,7 +2795,30 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 		return
 	}
 	if p.Supervision == nil || p.Supervision.WakeAt == "" {
-		return // no wake issued for this park yet; nothing to time out
+		// G3 fix wave, finding 2: this is NOT "nothing to time out yet" — by the
+		// time any tick observes a supervision-eligible plan, its park's wake was
+		// already issued synchronously inside the same locked section that parked
+		// it. A missing receipt therefore means wakeSupervisor's receipt WRITE
+		// failed and it returned without dispatching, and every wake entry point
+		// is once-per-park (the stall note de-dupes on its own persisted side
+		// effect; the DoD-unmet round de-dupes on the terminal signature), so
+		// nothing else ever re-arms it. Returning here is what parked such a plan
+		// FOREVER: no deadline, no retry, no ceiling, no supervision_unavailable,
+		// with only idle expiry (days, and not restartable) to end it. The field
+		// that would have recorded the fault, supervision.wake_error, was part of
+		// the write that failed.
+		//
+		// Re-arm instead. newPark=false: the ladder continues from whatever the
+		// record says (0 for a park that never got its first receipt written, so
+		// this lands as attempt 1 anyway), which means a store that stays broken
+		// still climbs to the FR-022 ceiling instead of looping unbounded.
+		logger.WarnCF("plan_engine", "supervision-eligible plan has no wake receipt; re-arming the wake",
+			map[string]any{
+				"plan_id":    p.ID,
+				"plan_phase": string(p.EffectivePlanPhase()),
+			})
+		pe.wakeSupervisor(p, pe.buildSupervisionRetryWakeText(p), "plan_supervision_rearm", false)
+		return
 	}
 	wakeAt, err := time.Parse(time.RFC3339, p.Supervision.WakeAt)
 	if err != nil {
@@ -2563,10 +2826,23 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 			map[string]any{"plan_id": p.ID, "wake_at": p.Supervision.WakeAt, "error": err.Error()})
 		return
 	}
-	if p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision && p.LastUnmetTerminalSignature == "" {
+	if p.EffectivePlanPhase() == plan.PhaseAwaitingSupervision &&
+		p.LastUnmetTerminalSignature == "" && !pe.unmetTerminalSignatureRecorded(p.ID) {
 		// The signature is written once on the UNMET verdict and cleared only
 		// by an applied correction, so "still set" IS "unchanged". Cleared
 		// means the record moved — the turn produced something.
+		//
+		// G3 fix wave, finding 4: "cleared" and "never set" are NOT the same
+		// state, and testing emptiness alone conflated them. A plan with ZERO
+		// members has planTerminalSignature(nil) == "", so its UNMET park
+		// records an EMPTY signature — legitimately, that is its signature —
+		// and this predicate then read it as "the record moved" on every tick.
+		// Such a plan parked, got exactly one wake, and then fell out of the
+		// escalation ladder entirely: no deadline, no retry, no terminal state.
+		// The companion "was a signature ever recorded for this plan" question
+		// is what actually distinguishes them, and only the recorded-ness map
+		// (mirrored durably by the plan field, rehydrated at boot for every
+		// parked plan — see bootReconcile) can answer it.
 		return
 	}
 	if !pe.clock.Now().UTC().After(wakeAt.Add(pe.supervisionTurnTimeout(p))) {
@@ -2585,7 +2861,7 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 				"attempts":     p.Supervision.Attempts,
 				"max_attempts": maxAttempts,
 			})
-		pe.wakeSupervisor(p, pe.buildSupervisionRetryWakeText(p), "plan_supervision_retry")
+		pe.wakeSupervisor(p, pe.buildSupervisionRetryWakeText(p), "plan_supervision_retry", false)
 		return
 	}
 
@@ -2618,6 +2894,78 @@ func (pe *PlanEngine) supervisionTurnTimeout(p *plan.Plan) time.Duration {
 	}
 	secs := pe.planningConfig().EffectiveSupervisionTurnTimeoutSeconds(override)
 	return time.Duration(secs) * time.Second
+}
+
+// correctionBudgetSpent reports whether p has consumed its plan-lifetime
+// adjudicator-correction budget, and the ceiling it was measured against
+// (G3 fix wave, finding 5).
+//
+// THE HOLE THIS CLOSES. Every other brake in this engine is defeated on the
+// stall -> correct -> stall cycle, individually and by design:
+//
+//   - JudgeRounds never advances, because a non-terminal DAG never reaches
+//     beginPlanJudgeRound — that is the ONLY writer of the rounds counter.
+//   - supervision.attempts is reset to 0 by every applied correction
+//     (clearSupervisionWakePatch), so the FR-022 ceiling never accumulates.
+//   - supervision.correction_rounds DOES advance and is never reset, but until
+//     this function nothing read it: it was documented as attribution-only.
+//   - idle expiry never fires, because a correction calls touchActivity.
+//
+// So an adjudicator that keeps appending tail work to a plan that keeps
+// re-stalling loops forever, with no terminal state except the adjudicator
+// voluntarily choosing `abandon`. correction_rounds is the one counter that
+// both survives the cycle and advances with it, which makes it the only honest
+// place to put the brake.
+//
+// The ceiling REUSES plan_judge_max_rounds rather than introducing a knob:
+// it is the same question ("how many adjudication cycles may this plan have")
+// measured on the other path, and reusing it means the DoD-UNMET path is
+// completely unaffected — there, every correction is preceded by a judge round,
+// so JudgeRounds >= CorrectionRounds always holds and the judge-rounds ceiling
+// (checked first, in beginPlanJudgeRound) always fires first. This brake bites
+// only on the path that had none.
+//
+// The terminal reason is dod_unreachable, not judge_rounds_exhausted: rounds
+// may well remain, and this is the involuntary half of the pair
+// plan.FailedReasonDoDUnreachable documents — "more corrections would not
+// help", established by evidence rather than adjudicated.
+func (pe *PlanEngine) correctionBudgetSpent(p *plan.Plan) (maxRounds int, spent bool) {
+	if p == nil || p.Supervision == nil {
+		return 0, false
+	}
+	var override *int
+	if p.Bounds != nil {
+		override = p.Bounds.PlanJudgeMaxRounds
+	}
+	maxRounds = pe.planningConfig().EffectivePlanJudgeMaxRounds(override)
+	if maxRounds <= 0 {
+		// A non-positive ceiling is not "no corrections allowed" — it is an
+		// unconfigured/degenerate bound, and beginPlanJudgeRound already fails
+		// such a plan on its first round. Never terminate a plan on it here.
+		return maxRounds, false
+	}
+	return maxRounds, p.Supervision.CorrectionRounds >= maxRounds
+}
+
+// buildCorrectionBudgetHandover renders the terminal handover for a plan that
+// spent its correction budget. It says what was tried and how often, because
+// "the adjudicator corrected this plan N times and it kept stalling" is the
+// operator-actionable fact — not the individual stall reason, which the plan
+// record already carries.
+func buildCorrectionBudgetHandover(p *plan.Plan, maxRounds int) string {
+	rounds := 0
+	if p.Supervision != nil {
+		rounds = p.Supervision.CorrectionRounds
+	}
+	return fmt.Sprintf(
+		"Plan %q has been stopped: the adjudicator applied %d correction(s) (max %d) and the plan "+
+			"still could not reach a terminal outcome — it returned for supervision again.\n\n"+
+			"This is not a verdict that the plan's work failed, and it is not an exhausted judge "+
+			"round budget: it is evidence that further corrections were not converging. The plan "+
+			"was last parked at %q with this diagnosis:\n\n%s\n\n"+
+			"Review the Definition of Done itself before re-authoring.",
+		p.Title, rounds, maxRounds, p.EffectivePlanPhase(), p.HandoverText,
+	)
 }
 
 // supervisionMaxAttempts resolves FR-022's no-correction attempt ceiling for
@@ -3333,17 +3681,23 @@ func (pe *PlanEngine) ensureOwnerSessionLocked(p *plan.Plan) string {
 // CURRENT park, minting one on the park's first wake (FR-016b).
 //
 // One session per park: re-wakes within the same park share it, so a Stop can
-// cancel whichever attempt is in flight; a new park mints a new one. The park
-// boundary is read off supervision.wake_at — the wake receipt, which is
-// cleared exactly when the plan leaves the supervision-eligible phase set —
-// rather than off session_id, which is deliberately NEVER cleared (an applied
+// cancel whichever attempt is in flight; a new park mints a new one.
+//
+// The park boundary comes from the CALLER (newPark), not from
+// supervision.wake_at. The receipt is still required to reuse a session — a
+// park with no armed wake has no in-flight attempt to share — but it is no
+// longer the sole authority, because the write that clears it at the end of a
+// park can fail (see wakeSupervisor's own newPark doc), and a stale receipt
+// then makes a NEW park silently inherit the previous park's adjudication
+// transcript. session_id itself is deliberately NEVER cleared (an applied
 // correction returns the plan to dispatching while the adjudication turn may
 // still be running, and blanking the handle in that window would leave a Stop
-// unable to name the turn it must cancel).
+// unable to name the turn it must cancel), so it cannot serve as the boundary
+// either.
 //
 // Caller must hold planDecisionMu.
-func (pe *PlanEngine) ensureSupervisionSessionLocked(p *plan.Plan) string {
-	if p.Supervision != nil && p.Supervision.WakeAt != "" && p.Supervision.SessionID != "" {
+func (pe *PlanEngine) ensureSupervisionSessionLocked(p *plan.Plan, newPark bool) string {
+	if !newPark && p.Supervision != nil && p.Supervision.WakeAt != "" && p.Supervision.SessionID != "" {
 		return p.Supervision.SessionID // same park, same session
 	}
 	sessionID, err := pe.mintPlanSession(planSupervisorAgentID, "Plan supervision: "+p.Title)
@@ -3676,6 +4030,26 @@ func (pe *PlanEngine) countCorrectionAndClearWake(planID string, p *plan.Plan, r
 		// only carries supervision bookkeeping. Surface it — a stuck wake
 		// receipt would let the next tick's deadline fire against a plan that
 		// has already moved.
+		//
+		// G3 fix wave, finding 6: that stuck receipt is the LESSER consequence,
+		// and naming only it is what made this look benign. The DURABLE one is
+		// that supervision.attempts stays at its pre-correction value: this is
+		// the only write that resets it, so without it the plan's NEXT park
+		// started its escalation ladder part-spent and reached the FR-022
+		// ceiling early — a correction that succeeded shortening the budget of
+		// a park that had not happened yet. That consequence is now neutralised
+		// at the other end: wakeSupervisor takes the park boundary from its
+		// caller instead of inferring it from this (possibly unwritten) state,
+		// so a new park's first wake is attempt 1 whether or not this write
+		// landed. The counter is still worth resetting here — it keeps the
+		// persisted record truthful for the UI and for the terminal handover —
+		// but nothing's correctness now depends on it.
+		//
+		// It is deliberately NOT promoted to a returned error: AppendCorrection's
+		// error return means "the correction did not happen", and the correction
+		// demonstrably DID happen (the caller committed it transactionally above).
+		// Returning one here would make pkg/tools report a committed correction
+		// as a failure, inviting the adjudicator to issue it a second time.
 		logger.ErrorCF("plan_engine", "AppendCorrection: could not reset supervision state after applying the correction",
 			map[string]any{"plan_id": planID, "revision_id": revID, "error": err.Error()})
 	}
@@ -4571,7 +4945,16 @@ func (pe *PlanEngine) bootReconcile(ctx context.Context) {
 		// unchanged all-terminal state is NOT re-judged on the first
 		// post-restart tick. Plans not in that phase have an empty persisted
 		// signature and skip this (their in-memory entry was never set).
-		if plans[i].LastUnmetTerminalSignature != "" {
+		//
+		// G3 fix wave, finding 4: the phase limb is not redundant with the
+		// non-empty limb. A plan with zero members has an EMPTY signature that
+		// is nonetheless its real, recorded one, so keying rehydration on
+		// non-emptiness alone dropped exactly those plans' gate at boot — and
+		// with it the "was a signature ever recorded" fact that
+		// evaluateSupervisionDeadlineLocked needs to keep such a plan on the
+		// escalation ladder across a restart.
+		if plans[i].LastUnmetTerminalSignature != "" ||
+			plans[i].EffectivePlanPhase() == plan.PhaseAwaitingSupervision {
 			pe.recordUnmetTerminalSignature(plans[i].ID, plans[i].LastUnmetTerminalSignature)
 			rehydrated++
 		}
