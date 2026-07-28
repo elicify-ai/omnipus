@@ -457,9 +457,20 @@ jobs:
         # a build tag), so pkg/gateway is now race-buildable. The old claim
         # that "race coverage for the gateway is provided by the CGO=0 test job"
         # was false — -race requires cgo, so a CGO_ENABLED=0 job runs no race
-        # detector at all. pkg/gateway is NOT yet added to the list below only
-        # because its full race run has not been timed on CI hardware; see the
-        # cgo1-gate job, which at minimum keeps the package race-BUILDABLE.
+        # detector at all. pkg/gateway is now INCLUDED below.
+        #
+        # It earned its place immediately: the first race run of that
+        # newly-unlocked surface found TWO real production races, both fixed —
+        # retentionToolResultSweepFn read by the boot sweep goroutine five lines
+        # before it was assigned (60bc0446), and Manager.StopAll closing worker
+        # queues while dispatchOutbound was still sending on them, which panics
+        # (f5cfa241). Neither was reachable by any gate that existed before.
+        #
+        # tests/integration is included for the same reason — it is where the
+        # second race actually surfaced, and it is the only suite that exercises
+        # a real gateway boot+shutdown cycle. Both were verified locally under
+        # -race (single run and -count=3, zero reports) before being added here;
+        # the timeout below is raised to accommodate them.
         #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but
@@ -476,7 +487,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 240s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 600s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./tests/integration/... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -514,7 +525,7 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 240s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            if go test -race -tags goolm,stdjson -count=1 -timeout 600s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
