@@ -138,7 +138,10 @@ func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
 
 func TestDelegateTool_Run_PersistsQueuedThenRunningLifecycleRecord(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	// FR-015: the lifecycle mint fails closed without a resolvable
+	// delegating agent, so a run context must carry one — the agent loop
+	// injects it unconditionally on the turn path (pkg/agent/loop.go).
+	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "parent-1"), "mia")
 
 	sessionID := runAndExtractSessionID(t, tool, ctx, "background task")
 	if sessionID == "" {

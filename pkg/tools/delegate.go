@@ -939,12 +939,35 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		ownerScopeID = parentDelegateID
 	}
 	if t.lifecycle != nil {
+		// FR-015 — fail closed on an unresolvable parent. ToolAgentID returns
+		// "" for BOTH a missing context key AND a wrong-typed value (it is a
+		// comma-ok type assertion with the error discarded), so an empty
+		// value here means the DELEGATING agent's identity could not be
+		// resolved at all. A record minted without it is permanently
+		// unattributable: ParentAgentID is the only parent linkage, and no
+		// other field can stand in for it (ParentDurableKey is shared
+		// parent↔child, OwnerScopeID is "" for a top-level delegation, and
+		// AgentID is the child's). Such a session could never be returned to
+		// its parent by list_jobs. Refuse the mint — and therefore the whole
+		// delegation — rather than persist an orphan. Note the mint is
+		// deliberately still skipped entirely when no lifecycle store is
+		// configured: with no store there is no record to orphan.
+		parentAgentID := strings.TrimSpace(ToolAgentID(ctx))
+		if parentAgentID == "" {
+			slog.Error("delegate: refusing to mint an unattributable lifecycle record — no parent agent id in context",
+				"delegate_session_id", delegateSessionID,
+				"target_agent_id", agentID,
+				"parent_durable_key", parentDurableKey)
+			return ErrorResult("delegate: cannot resolve the delegating agent's identity — " +
+				"refusing to start a delegated session that could never be traced back to its parent")
+		}
 		rec := &session.LifecycleRecord{
 			SessionID:        delegateSessionID,
 			Generation:       0,
 			State:            session.LifecycleQueued,
 			OwnerScopeKind:   ownerScopeKind,
 			OwnerScopeID:     ownerScopeID,
+			ParentAgentID:    parentAgentID,
 			ParentDurableKey: parentDurableKey,
 			OriginChannel:    ToolChannel(ctx),
 			OriginChatID:     ToolChatID(ctx),
@@ -2079,6 +2102,13 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	}
 	t.mu.Unlock()
 
+	// The whole-struct copy is load-bearing for FR-034: ParentAgentID (and
+	// ParentDurableKey/OriginChannel/OriginChatID with it) MUST be carried
+	// forward onto every generation mint. It is deliberately CARRIED FORWARD
+	// from the prior generation rather than re-sourced from ToolAgentID(ctx)
+	// — the follow_up caller is not necessarily the agent that originally
+	// spawned the session, and re-sourcing would silently re-parent it. Do
+	// not replace this copy with field-by-field construction.
 	newRec := *rec
 	newRec.SessionID = newSessionID
 	newRec.Generation = rec.Generation + 1

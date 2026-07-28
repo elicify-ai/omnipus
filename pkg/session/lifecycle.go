@@ -204,6 +204,33 @@ type LifecycleRecord struct {
 	Is3P          bool          `json:"is_3p"`
 	LaunchProfile LaunchProfile `json:"launch_profile"`
 
+	// ParentAgentID is the id of the agent that DELEGATED this session into
+	// existence — the CALLER of `delegate.run`, captured at mint time from
+	// tools.ToolAgentID(ctx) (FR-013). It is the ONLY parent linkage on this
+	// record, and therefore the sole legal predicate for "the subagents I
+	// started" (list_jobs). Not part of the generated wire shape: this is a
+	// disk-only internal scoping predicate with no SPA consumer, and
+	// contracts/components/schemas/SessionLifecycleRecord.yaml deliberately
+	// does NOT declare it.
+	//
+	// Declared WITHOUT `omitempty`, deliberately (FR-015). An empty value
+	// must serialise as a PRESENT-but-empty key so it is a visible,
+	// greppable bug on disk; with `omitempty` it would serialise to an
+	// absent key — byte-identical to a record written before this field
+	// existed — and such rows would be silently undroppable-yet-invisible
+	// with no counter anywhere. Do not add `omitempty` to this tag.
+	//
+	// MUST NOT be inferred from any other field, ever:
+	//   - ParentDurableKey is the TRANSCRIPT session id, which a parent
+	//     SHARES with its child and with every cousin in the subtree
+	//     (pkg/agent/subturn.go's childID reuse) — inferring from it returns
+	//     siblings, cousins and grandchildren, not "my children";
+	//   - OwnerScopeID is "" for a top-level delegation (OwnerScopeHuman);
+	//   - AgentID is the CHILD's id (the delegate target), not the parent's.
+	// The mint site fails closed on an empty value, so an empty
+	// ParentAgentID on disk is never expected on a greenfield install.
+	ParentAgentID string `json:"parent_agent_id"`
+
 	// ParentDurableKey is the durable chat/plan id (D16) this session's
 	// PARENT inbox is keyed to — ALWAYS populated at spawn time with the
 	// parent's own live transcript/chat session id, regardless of
@@ -211,8 +238,10 @@ type LifecycleRecord struct {
 	// empty when OwnerScopeKind==human — see that field's own doc comment).
 	// A durable inbox routing key must always resolve to something
 	// addressable even for a human-owned top-level parent, which is exactly
-	// the case OwnerScopeID cannot serve. Not part of the generated wire
-	// shape.
+	// the case OwnerScopeID cannot serve. NOTE: this is SHARED between a
+	// parent and its children — it is a routing key, NOT an ownership or
+	// parentage predicate (see ParentAgentID). Not part of the generated
+	// wire shape.
 	ParentDurableKey string `json:"parent_durable_key,omitempty"`
 
 	// OriginChannel/OriginChatID are the channel + chat_id the delegating
@@ -513,6 +542,16 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 type LifecycleFilter struct {
 	WorkspaceID string
 	AgentID     string
+	// ParentAgentID, when non-empty, restricts results to records whose
+	// ParentAgentID is exactly this agent — the "subagents I started"
+	// predicate (FR-013). Empty means "filter off", matching every other
+	// field on this struct; it NEVER means "match records with an empty
+	// parent" (the ADR-053 boot sweep's own queries leave it unset and must
+	// stay unfiltered). Note this is a DIFFERENT axis from AgentID, which
+	// matches the CHILD (the delegate target) — filtering by AgentID
+	// answers "sessions run BY x", filtering by ParentAgentID answers
+	// "sessions x STARTED".
+	ParentAgentID string
 	// States, when non-empty, restricts results to records whose State is
 	// in this set.
 	States map[LifecycleState]bool
@@ -527,6 +566,13 @@ func (f LifecycleFilter) matches(r *LifecycleRecord) bool {
 		return false
 	}
 	if f.AgentID != "" && r.AgentID != f.AgentID {
+		return false
+	}
+	// ParentAgentID is matched against the record's OWN ParentAgentID and
+	// nothing else — never against ParentDurableKey (shared parent↔child),
+	// OwnerScopeID ("" at top level) or AgentID (the child's id). Inferring
+	// from any of those re-opens the sibling/cousin/grandchild leak.
+	if f.ParentAgentID != "" && r.ParentAgentID != f.ParentAgentID {
 		return false
 	}
 	if len(f.States) > 0 && !f.States[r.State] {
