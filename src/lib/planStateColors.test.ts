@@ -188,3 +188,52 @@ describe('planPhaseExplanation — phase-specific warning-chip copy (swimlane-bo
     expect(planPhaseExplanation({ state: 'draft', plan_phase: 'awaiting_supervision' })).toBeNull()
   })
 })
+
+// The copy a reader actually sees, asserted as text rather than as a constant
+// reference — a test that only compares against the constant passes no matter
+// what the constant says, which is how the pre-supervisor wording ("there's no
+// in-app action for that yet — Stop this plan and create a new one with the fix
+// instead") stayed shipped after corrections became real.
+describe('planPhaseExplanation — the rendered copy is true of the current release', () => {
+  const parked = () =>
+    planPhaseExplanation({ state: 'running', plan_phase: 'awaiting_supervision' }) ?? ''
+  const stalled = () => planPhaseExplanation({ state: 'running', plan_phase: 'stalled' }) ?? ''
+
+  it('tells the parked-plan reader a supervisor is correcting it, and that Stop is the control', () => {
+    expect(parked()).toBe(
+      "This plan hit a dead end its own checks can't clear. A supervisor is reviewing it and will correct it automatically — no action needed. If you'd rather it stopped, Stop this plan (■); that halts the supervisor too.",
+    )
+  })
+
+  it('tells the stalled-plan reader the same, in its own distinct words', () => {
+    expect(stalled()).toBe(
+      "This plan has no members it can currently dispatch or that are in progress, so it can't make progress right now. A supervisor is reviewing why and will correct it automatically. If you'd rather it stopped, Stop this plan (■).",
+    )
+    expect(stalled()).not.toBe(parked())
+  })
+
+  it.each([
+    ['awaiting_supervision', parked],
+    ['stalled', stalled],
+  ])('neither phase (%s) still claims corrections are unavailable', (_phase, text) => {
+    expect(text()).not.toMatch(/no in-app action/i)
+    expect(text()).not.toMatch(/create a new (one|plan)/i)
+  })
+
+  it.each([
+    ['awaiting_supervision', parked],
+    ['stalled', stalled],
+  ])('%s names the supervisor and offers Stop as the one real control', (_phase, text) => {
+    expect(text()).toMatch(/supervisor/i)
+    expect(text()).toContain('Stop this plan (■)')
+  })
+
+  it('never names a corrective verb as something the reader can do — those are the supervisor’s', () => {
+    // append / supersede / targeted-retry / abandon are issued by
+    // PlanSupervisor; this release ships no human control for any of them, so
+    // the copy must not imply one (the honesty constraint in planStateColors.ts).
+    for (const text of [parked(), stalled()]) {
+      expect(text).not.toMatch(/supersede|targeted[- ]retry|append a tail/i)
+    }
+  })
+})

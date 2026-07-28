@@ -312,8 +312,50 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Result    string   `json:"result,omitempty"`
 	Artifacts []string `json:"artifacts,omitempty"`
 	// Owner / CreatedBy are server-set attribution (read-only on the wire).
+	//
+	// NAMESPACE WARNING: both are MIXED-NAMESPACE and MUST NEVER be used as an
+	// ownership or authorization predicate. The REST path writes a human
+	// username into both (pkg/gateway/rest_tasks.go, `c.Username`) while the
+	// agent/tool paths write an agent id (pkg/tools/task.go `callerID`,
+	// pkg/tools/todos.go `agentID`). A human whose username collides with a
+	// public agent id would otherwise have their task titles silently
+	// attributed to — and disclosed to — that agent. Use CreatedByAgentID (or
+	// AgentID) instead.
 	Owner     string `json:"owner,omitempty"`
 	CreatedBy string `json:"created_by,omitempty"`
+	// CreatedByAgentID is the agent id of the agent that created this task
+	// (list-jobs spec FR-037). It is the only attribution field on this struct
+	// that is safe to use as the "this agent dispatched it" predicate.
+	//
+	// THE CLASS RULE (list-jobs spec, R2-CRIT-005) —
+	//
+	//	Only agent-id-namespaced fields may be authorization predicates, and an
+	//	empty value never matches.
+	//
+	// It is stated here as a rule about the CLASS of field, not as a fix to one
+	// predicate, because an earlier spec revision fixed exactly this hazard for
+	// plans and then re-imported it for tasks one requirement later. The
+	// agent-id-namespaced fields are Task.AgentID, Task.CreatedByAgentID,
+	// plan.Plan.OwnerAgentID and session.LifecycleRecord.ParentAgentID.
+	// Task.Owner, Task.CreatedBy, plan.Plan.Owner and plan.Plan.CreatedBy are
+	// NOT — see the warning above.
+	//
+	// Written ONLY by the agent creation path (Store.CreateByAgent, sourced
+	// from tools.ToolAgentID) and left empty by every REST/human path — a
+	// username must never reach this field. It is creation-time attribution:
+	// there is deliberately no Patch field for it, so it cannot be reassigned
+	// after the fact.
+	//
+	// Greenfield (list-jobs A0): no migration, no backfill. Records written
+	// before this field existed carry "" and are therefore attributed to
+	// nobody, which is the fail-closed direction. Compare with
+	// Task.CreatedByAgent, which rejects an empty value on BOTH sides rather
+	// than treating "" as a wildcard.
+	//
+	// DISK-ONLY, mirroring Scratchpad / DelegationDepth / PendingJudgeClaim:
+	// the REST mapper (toWireTask) does NOT copy it to the wire type, and it
+	// MUST NOT be added to any schema in contracts/.
+	CreatedByAgentID string `json:"created_by_agent_id,omitempty"`
 	// Timestamps are RFC 3339 UTC strings.
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
@@ -344,6 +386,22 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// once adjudicated. DISK-ONLY (mirrors Scratchpad/DelegationDepth): the
 	// REST mapper (toWireTask) does NOT copy it to the wire type.
 	PendingJudgeClaim string `json:"pending_judge_claim,omitempty"`
+}
+
+// CreatedByAgent reports whether this task was created by the agent agentID.
+// It is THE comparison to use for the "dispatched" authorization predicate
+// (list-jobs FR-037/FR-010) — never a bare `t.CreatedByAgentID == agentID`,
+// and never anything derived from CreatedBy or Owner.
+//
+// It fails closed on BOTH sides: an empty agentID (an unauthenticated or
+// unresolved caller) matches nothing, and a task with an empty
+// CreatedByAgentID (every REST/human-created and every pre-FR-037 task) is
+// matched by nobody. "" is never a wildcard here, in either direction.
+func (t *Task) CreatedByAgent(agentID string) bool {
+	if agentID == "" || t.CreatedByAgentID == "" {
+		return false
+	}
+	return t.CreatedByAgentID == agentID
 }
 
 // EffectivePriority returns the task priority, defaulting an unset (0) value

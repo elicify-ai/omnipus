@@ -161,13 +161,26 @@ func (s *Store) Lock(id string) interface {
 
 // Filter narrows the result of List. All fields are optional (zero = skip).
 type Filter struct {
-	WorkspaceID  string
-	Status       Status
-	AgentID      string
-	CreatedBy    string
-	PlanID       string
-	Surface      Surface
-	ParentTaskID string
+	WorkspaceID string
+	Status      Status
+	AgentID     string
+	// CreatedBy filters on Task.CreatedBy, which is MIXED-NAMESPACE (a username
+	// on the REST path, an agent id on the tool path — see Task.CreatedBy's
+	// namespace warning). It MUST NOT be used as an ownership or authorization
+	// predicate; use CreatedByAgentID for that. This field survives only for
+	// display/diagnostic listings that are already scoped by something else.
+	CreatedBy string
+	// CreatedByAgentID filters on the agent-id-namespaced Task.CreatedByAgentID
+	// (FR-037). This is the filter an "agent-owned work" query must use. Like
+	// every other Filter field an empty value means "filter off" — so a caller
+	// resolving a caller identity MUST reject an empty agent id BEFORE building
+	// the Filter, or it silently asks for every task in the store. Tasks whose
+	// own CreatedByAgentID is empty never match a non-empty value here (see
+	// Task.CreatedByAgent, which fails closed on both sides).
+	CreatedByAgentID string
+	PlanID           string
+	Surface          Surface
+	ParentTaskID     string
 	// ParentTaskIDSet, when true, applies the ParentTaskID filter even when
 	// ParentTaskID is empty — i.e. "only top-level tasks" (no parent).
 	ParentTaskIDSet bool
@@ -191,6 +204,12 @@ func (f Filter) matches(t *Task) bool {
 		return false
 	}
 	if f.CreatedBy != "" && t.CreatedBy != f.CreatedBy {
+		return false
+	}
+	// FR-037: an empty Task.CreatedByAgentID is never attributed to anyone, so
+	// it can never satisfy a non-empty filter value — CreatedByAgent enforces
+	// that fail-closed on both sides rather than comparing "" == "".
+	if f.CreatedByAgentID != "" && !t.CreatedByAgent(f.CreatedByAgentID) {
 		return false
 	}
 	if f.PlanID != "" && t.PlanID != f.PlanID {
@@ -583,7 +602,35 @@ func (s *Store) Create(t *Task) error {
 	return s.write(t)
 }
 
+// CreateByAgent persists a new task created BY an agent, stamping the
+// agent-id-namespaced attribution field Task.CreatedByAgentID (FR-037) before
+// delegating to Create. It is the sanctioned agent creation path: the agent
+// tools (pkg/tools/task.go's create_task, pkg/tools/todos.go's set_todos, and
+// pkg/sysagent/tools/task.go) call this with tools.ToolAgentID(ctx) instead of
+// setting the field by hand, so the one field an ownership predicate is allowed
+// to read has exactly one writer.
+//
+// It fails closed on an empty agentID rather than writing an empty attribution
+// that no predicate could ever match — an unresolved caller identity is a bug
+// at the call site, not a task with anonymous provenance.
+//
+// Every other creation path (REST/human via Create, and the internal
+// clone/derive paths in pkg/agent) leaves CreatedByAgentID exactly as it found
+// it: empty for a human-created task, and carried over verbatim for a clone,
+// which keeps a cloned task attributed to the agent that authored the original.
+func (s *Store) CreateByAgent(t *Task, agentID string) error {
+	if agentID == "" {
+		return verr("created_by_agent_id: agent id is required on the agent creation path")
+	}
+	t.CreatedByAgentID = agentID
+	return s.Create(t)
+}
+
 // Patch is a partial update applied by Update. Only non-nil fields are written.
+//
+// There is deliberately no CreatedByAgentID field here: FR-037 attribution is
+// set once at creation and is not reassignable, so no update path can move a
+// task into another agent's roster.
 type Patch struct {
 	Title       *string
 	Description *string

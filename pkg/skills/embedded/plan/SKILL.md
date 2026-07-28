@@ -173,6 +173,9 @@ execution to meet them.
         Consider TARGETED-RETRY.
       - **Missing capability** — no existing member addresses this criterion.
         → Consider APPEND (add a new tail member).
+      - **Unreachable** — no correction can satisfy the criterion at all (what
+        it needs depends on a frozen outcome that cannot be produced, or the
+        assumption the criterion rests on is falsified). → Consider ABANDON.
 
 ### 2. Choose the correction verb
 
@@ -181,6 +184,7 @@ execution to meet them.
 | A done member's outcome is wrong | **SUPERSEDE** | Marks the done member's outcome ignored-by-Judge (record stays immutable). Optionally append a replacement tail member. |
 | A failed member should be retried individually | **TARGETED-RETRY** | Resets one specific failed member to `next` without a full Stop/Play. |
 | The plan is missing a step | **APPEND** | Adds new tail member(s) + their dependency edges to the DAG. |
+| No correction can reach the DoD | **ABANDON** | Ends the plan honestly: terminates it `failed` with reason `dod_unreachable`. Mutates no member, carries no member reference and no tail members, and REQUIRES a non-empty falsified assumption — an exit that records no reason is not an audit trail. |
 
 ### 3. Record the falsified assumption
 
@@ -202,6 +206,12 @@ path depends on a frozen outcome that cannot be produced), the engine takes the
 honest-exit path — it fails the plan with a descriptive handover rather than
 livelocking. Do not try to force a correction that cannot reach the DoD; let
 it exit and re-plan from scratch with a Play if the goal is still worth pursuing.
+
+When YOU can already see the DoD is unreachable, do not wait to be stopped and
+do not spend corrections on verbs that cannot apply — say so with ABANDON,
+naming the assumption the Judge falsified. An abandon with a stated reason is a
+result. Looping until the supervision ceiling cuts you off is not: it reports
+the plan as unsupervised when the truth is that its DoD was unreachable.
 
 ## Play (resume from last commit)
 
@@ -228,5 +238,9 @@ individual member retries — that is TARGETED-RETRY.
 - Do not plan prose criteria when a machine check is possible (gaming guard, N-2).
 - Do not change the DoD after creation — it is immutable. Correct the execution,
   not the criteria.
-- Do not create a forked "Planner" agent — this skill is the planning behavior.
-  Any `create_plan`-granted agent reuses it (BOM, FR-146).
+- Do not copy this planning behavior into a new agent — this skill IS the
+  behavior, and any `create_plan`-granted agent reuses it by being granted the
+  skill. PlanSupervisor, the built-in adjudicator woken for a parked plan, is
+  not an exception to that rule but the clearest case of it: it is granted this
+  same skill rather than carrying a duplicate of it (ADR-055, which overrides
+  BOM FR-146). Grant the skill; never clone it.

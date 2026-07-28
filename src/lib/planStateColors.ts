@@ -197,20 +197,23 @@ export function planPhaseChip(plan: {
 // ALWAYS-VISIBLE explanation both surfaces render as plain text — not a
 // tooltip — so a first-time user gets it without hovering or tapping anything.
 //
-// Honesty constraint (do not relax without re-checking the backend): the
-// three corrective verbs named in the plan's own phase semantics — append a
-// tail, supersede a done member, targeted-retry a frozen member — map to a
-// real backend mechanism, `PlanEngine.AppendCorrection`
-// (`pkg/agent/plan_engine.go`), but as of this fix it has NO exposed REST
-// route and NO SPA control anywhere (only called from Go tests). Do not word
-// this copy as if any of the three is reachable from the UI — that would
-// name controls the user cannot actually use, which is the exact complaint
-// this fix responds to. The one REAL, present alternative is Stop: the plan
-// stays in `state: 'running'` throughout this phase, so `PlanActionButton`
-// (ADR-052 §6.8) still renders the ■ Stop action right next to this chip —
-// point to that real control instead of inventing one.
+// Honesty constraint (do not relax without re-checking the backend): word this
+// ONLY for mechanisms that actually exist, and never as if the reader clicks
+// them. The corrective verbs the phase turns on — append a tail, supersede a
+// done member, targeted-retry a frozen member, or abandon — are issued by
+// PlanSupervisor, the built-in adjudicator woken for this phase (ADR-055).
+// They are the SUPERVISOR's actions, not user-facing controls, and this
+// release adds no human control for any of them; naming one as something the
+// reader can do would repeat the exact complaint this copy was written to fix,
+// just in the opposite direction. What genuinely changed is that an autonomous
+// supervisor is now working on the plan — worth saying, because it tells the
+// reader why waiting is the right move — and that Stop now halts the
+// supervisor along with the plan. Stop remains the one REAL control here: the
+// plan stays in `state: 'running'` throughout this phase, so
+// `PlanActionButton` (ADR-052 §6.8) renders the ■ Stop action right next to
+// this chip. Name that, and only that.
 export const AWAITING_SUPERVISION_EXPLANATION =
-  "This plan hit a dead end its own checks can't clear, and is on hold waiting for a correction. There's no in-app action for that yet — Stop this plan (■) and create a new one with the fix instead."
+  "This plan hit a dead end its own checks can't clear. A supervisor is reviewing it and will correct it automatically — no action needed. If you'd rather it stopped, Stop this plan (■); that halts the supervisor too."
 
 // ── Stalled plan-phase copy (swimlane-board fix) ────────────────────────────
 //
@@ -225,13 +228,16 @@ export const AWAITING_SUPERVISION_EXPLANATION =
 // explanations, mirrored via `tone: 'warning'` chips.
 //
 // Kept intentionally STATIC/generic — the backend's HandoverText reason
-// names internal task UUIDs for the OWNER AGENT to act on (surfaced via the
+// names internal task UUIDs for the SUPERVISOR to act on (surfaced via the
 // existing async-notifier wake), never meant for this chip: rendering those
 // IDs here would expose meaningless internal identifiers to a human reader.
-// The one real control available is the same as above: Stop (the plan stays
+// It carries the same honesty constraint as the constant above, and for the
+// same reason: a supervisor is reviewing this too, so the old "no in-app
+// action yet — create a new plan" wording is now simply wrong. The one real
+// control available is likewise the same: Stop (the plan stays
 // `state: 'running'` throughout, so `PlanActionButton` still renders ■).
 export const STALLED_EXPLANATION =
-  "This plan has no members it can currently dispatch or that are in progress, so it can't make progress right now. There's no in-app action for that yet — Stop this plan (■) and create a new one with the fix instead."
+  "This plan has no members it can currently dispatch or that are in progress, so it can't make progress right now. A supervisor is reviewing why and will correct it automatically. If you'd rather it stopped, Stop this plan (■)."
 
 /**
  * Plain-language explanation for a warning-tone `planPhaseChip` — PHASE-
