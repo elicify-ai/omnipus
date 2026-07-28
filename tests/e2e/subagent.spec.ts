@@ -399,7 +399,7 @@ test(
     await input.fill(
       [
         'Use the `delegate` tool exactly once to hand this to a subagent:',
-        '  task: "List the files in your current working directory (path \\".\\") and report back what you find."',
+        '  task: "List the files in your current working directory (path `.`) and report back what you find."',
         'Then summarise what the subagent reported.',
       ].join('\n'),
     );
