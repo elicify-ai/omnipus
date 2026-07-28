@@ -557,6 +557,7 @@ func TestCorrection_DoDStaysImmutable(t *testing.T) {
 		Reason: "test immutability",
 		TailMembers: []task.Task{{
 			ID: "m-tail-imm", Title: "tail", WorkspaceID: "ws", Status: task.StatusNext,
+			Criteria: []task.AcceptanceCriterion{planProseCriterion("the tail work is done")},
 		}},
 	})
 	if err != nil {
@@ -615,6 +616,7 @@ func TestAppendCorrection_NonAdjudicator_Rejected(t *testing.T) {
 			Reason:              "attempted correction",
 			TailMembers: []task.Task{{
 				ID: "m-tail-x", Title: "tail", WorkspaceID: "ws", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{planProseCriterion("the tail work is done")},
 			}},
 		}
 	}
@@ -883,8 +885,9 @@ func TestAppendCorrection_PayloadCapsAndEdgeIntegrity_EnforcedByEngine(t *testin
 			name: "an edge whose endpoint resolves to nothing",
 			req: CorrectionRequest{
 				Verb: CorrectionAppend, FalsifiedAssumption: "x",
-				TailMembers: []task.Task{{ID: "m-e1", Title: "e1", WorkspaceID: "ws", Status: task.StatusNext}},
-				TailEdges:   []plan.IntentEdge{{FromTaskID: "m-e1", ToTaskID: "m-ghost"}},
+				TailMembers: []task.Task{{ID: "m-e1", Title: "e1", WorkspaceID: "ws", Status: task.StatusNext,
+					Criteria: []task.AcceptanceCriterion{planProseCriterion("e1 is done")}}},
+				TailEdges: []plan.IntentEdge{{FromTaskID: "m-e1", ToTaskID: "m-ghost"}},
 			},
 			wantMsg: "neither an existing member",
 		},
@@ -892,8 +895,9 @@ func TestAppendCorrection_PayloadCapsAndEdgeIntegrity_EnforcedByEngine(t *testin
 			name: "a self-edge",
 			req: CorrectionRequest{
 				Verb: CorrectionAppend, FalsifiedAssumption: "x",
-				TailMembers: []task.Task{{ID: "m-e2", Title: "e2", WorkspaceID: "ws", Status: task.StatusNext}},
-				TailEdges:   []plan.IntentEdge{{FromTaskID: "m-e2", ToTaskID: "m-e2"}},
+				TailMembers: []task.Task{{ID: "m-e2", Title: "e2", WorkspaceID: "ws", Status: task.StatusNext,
+					Criteria: []task.AcceptanceCriterion{planProseCriterion("e2 is done")}}},
+				TailEdges: []plan.IntentEdge{{FromTaskID: "m-e2", ToTaskID: "m-e2"}},
 			},
 			wantMsg: "self-edge",
 		},
@@ -902,8 +906,10 @@ func TestAppendCorrection_PayloadCapsAndEdgeIntegrity_EnforcedByEngine(t *testin
 			req: CorrectionRequest{
 				Verb: CorrectionAppend, FalsifiedAssumption: "x",
 				TailMembers: []task.Task{
-					{ID: "m-c1", Title: "c1", WorkspaceID: "ws", Status: task.StatusNext},
-					{ID: "m-c2", Title: "c2", WorkspaceID: "ws", Status: task.StatusNext},
+					{ID: "m-c1", Title: "c1", WorkspaceID: "ws", Status: task.StatusNext,
+						Criteria: []task.AcceptanceCriterion{planProseCriterion("c1 is done")}},
+					{ID: "m-c2", Title: "c2", WorkspaceID: "ws", Status: task.StatusNext,
+						Criteria: []task.AcceptanceCriterion{planProseCriterion("c2 is done")}},
 				},
 				TailEdges: []plan.IntentEdge{
 					{FromTaskID: "m-c1", ToTaskID: "m-c2"},

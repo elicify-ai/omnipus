@@ -327,6 +327,14 @@ type PlanEngine struct {
 	// re-burn a round to relearn what the prior process already concluded).
 	lastUnmetTerminalSignature map[string]string
 
+	// unmetVerdictAt is lastUnmetTerminalSignature's timestamp companion:
+	// planID -> when THIS engine instance most recently recorded an UNMET
+	// plan-judge verdict. Written/cleared at exactly the same call sites and
+	// under the same mu; consumed only by postUnmetMemberIDs to decide which
+	// member artifacts are post-hoc for the N-2 gaming guard. Deliberately not
+	// persisted — see recordUnmetVerdictAt's doc comment.
+	unmetVerdictAt map[string]time.Time
+
 	// supersededMembers tracks done members whose outcomes have been marked
 	// ignored-by-Judge via a SUPERSEDE correction (FR-143/G-11). planID -> set
 	// of member task IDs. Same lazy-init + mu-guard pattern as
@@ -534,6 +542,67 @@ func (pe *PlanEngine) clearUnmetTerminalSignature(planID string) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	delete(pe.lastUnmetTerminalSignature, planID)
+	delete(pe.unmetVerdictAt, planID)
+}
+
+// recordUnmetVerdictAt stamps WHEN planID's most recent UNMET verdict landed.
+// It is written and cleared in lockstep with lastUnmetTerminalSignature above
+// (same call sites, same mu) because it answers the companion question: the
+// signature says WHICH evidence was judged unmet, this says WHEN — which is
+// what makes "this artifact was produced AFTER the plan was told it had
+// failed" decidable for the N-2 gaming guard (see gamingGuardEvidence).
+//
+// In-memory only, deliberately: the durable half of this pair
+// (Plan.LastUnmetTerminalSignature) exists because the round-burn GATE must
+// survive a restart or a round gets re-burned. Nothing is re-burned by losing
+// a post-hoc ADVISORY flag, so this does not justify a new persisted plan
+// field. After a restart the guard simply reports no post-unmet artifacts
+// until the next unmet verdict — a quieter guard, never a false claim.
+func (pe *PlanEngine) recordUnmetVerdictAt(planID string, at time.Time) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.unmetVerdictAt == nil {
+		pe.unmetVerdictAt = make(map[string]time.Time)
+	}
+	pe.unmetVerdictAt[planID] = at
+}
+
+// postUnmetMemberIDs returns the set of members whose artifacts were completed
+// AFTER planID's most recent UNMET verdict (gamingGuardEvidence's second
+// input). Empty when no unmet verdict has been observed by this process for
+// this plan — the pre-first-verdict case and the post-restart case both mean
+// "nothing is known to be post-hoc", never "nothing is post-hoc".
+//
+// A member with an unparseable or absent CompletedAt is NOT flagged: the guard
+// exists to weight suspicious evidence DOWN, and flagging on missing data
+// would weight ordinary evidence down instead.
+func (pe *PlanEngine) postUnmetMemberIDs(planID string, tasks []task.Task) map[string]bool {
+	pe.mu.Lock()
+	at, ok := pe.unmetVerdictAt[planID]
+	pe.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	var out map[string]bool
+	for i := range tasks {
+		t := &tasks[i]
+		if t.CompletedAt == "" {
+			continue
+		}
+		completed, err := time.Parse(time.RFC3339, t.CompletedAt)
+		if err != nil {
+			logger.DebugCF("plan_engine", "gaming guard: member completed_at is unparseable; not flagged post-hoc",
+				map[string]any{"plan_id": planID, "task_id": t.ID, "completed_at": t.CompletedAt})
+			continue
+		}
+		if completed.After(at) {
+			if out == nil {
+				out = make(map[string]bool)
+			}
+			out[t.ID] = true
+		}
+	}
+	return out
 }
 
 // planTerminalSignature builds a deterministic signature of tasks' terminal
@@ -1161,12 +1230,45 @@ func (pe *PlanEngine) dispatchReadyMembers(ctx context.Context, planID string, t
 			map[string]any{"plan_id": planID, "ready_members": len(tasks)})
 		return false
 	}
+	// ⚠ REGRESSION ANCHOR (ADR-055 fix wave, finding 1) — DO NOT pass `ctx`
+	// straight through to the dispatcher.
+	//
+	// A dispatched member runs on its OWN goroutine that must outlive this
+	// call. TaskExecutor.ExecuteTask derives the member's execution context
+	// with a plain context.WithCancel(ctx) and does NOT detach (unlike its
+	// sibling StartTaskNow, which detaches from context.Background() and says
+	// why: "The goroutine must outlive the request"). So whatever cancellation
+	// authority the CALLER's context carries silently becomes the member turn's
+	// kill switch.
+	//
+	// That was harmless only for as long as every caller happened to pass
+	// context.Background() (Tick, runEventLoop). AppendCorrection broke the
+	// coincidence: it is reached from the PlanSupervisor's own turn, so its ctx
+	// is a DESCENDANT of that turn's context — which dispatchPlanTurn cancels
+	// unconditionally at turn end (`defer cancel()`). A correction's tail
+	// member was therefore dispatched, then killed with context.Canceled
+	// seconds later when the supervisor emitted its closing message, failing as
+	// "execution error: context canceled". The plan went straight back to
+	// all-terminal → judge → UNMET → park → wake → correct, until the round
+	// budget ran out. No correction's work could ever complete.
+	//
+	// The guarantee belongs HERE, at the single chokepoint every plan-member
+	// dispatch funnels through, rather than at the one call site that happened
+	// to expose it: any FUTURE caller reached from a request/turn context has
+	// the same hazard and gets the same protection by construction.
+	//
+	// WithoutCancel (not Background) keeps the caller's context VALUES —
+	// request/trace identity used for logging and attribution downstream —
+	// while severing cancellation and deadline. The member's real cancellation
+	// authority is unchanged: the explicit cancel func TaskExecutor stores in
+	// te.running[taskID], which the plan-scoped Stop fan-out drives.
+	dispatchCtx := context.WithoutCancel(ctx)
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusNext {
 			continue
 		}
-		if err := pe.dispatcher.executeTaskPlanVerified(ctx, t.ID); err != nil {
+		if err := pe.dispatcher.executeTaskPlanVerified(dispatchCtx, t.ID); err != nil {
 			logger.WarnCF("plan_engine", "member task dispatch failed (will retry)",
 				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
 			continue
@@ -1327,12 +1429,7 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 	p.PlanPhase = stalled
 	// FR-012: the stall wake asks PlanSupervisor for a stall DIAGNOSIS, not a
 	// DoD verdict, and not the owner — the owner has no correction role.
-	pe.wakeSupervisor(p, fmt.Sprintf(
-		"Plan %q is stalled: it is running with real work remaining, but no member is "+
-			"dispatchable or in flight.\n\n%s\n\nDiagnose the stall and, if it is correctable, "+
-			"apply a correction. This is a stall diagnosis, not a Definition-of-Done verdict.",
-		p.Title, reason,
-	), "plan_stalled")
+	pe.wakeSupervisor(p, buildStallWakeText(p, reason, tasks), "plan_stalled")
 }
 
 // --- Plan-level judge round (SD-B8) ---------------------------------------
@@ -1478,14 +1575,24 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		return
 	}
 
+	// ADR-055 fix wave, finding 3: the correction state THIS round must be
+	// judged under. Both are read once, here, and threaded into the two halves
+	// of the Judge's input — the outcome list (which withholds a superseded
+	// member's claim) and the extra context (which names the withheld members
+	// and any post-hoc artifacts explicitly). Read before the judge call, not
+	// inside the builders, so a correction landing mid-round cannot make the
+	// claim text and the guard block disagree with each other.
+	superseded := pe.supersededMemberSet(planID)
+	postUnmet := pe.postUnmetMemberIDs(planID, tasks)
+
 	result := pe.judge.JudgeCriteria(ctx, JudgeCriteriaInput{
 		Scope:           task.VerdictScopePlan,
 		PlanID:          p.ID,
 		AssigneeAgentID: p.OwnerAgentID,
 		Criteria:        criteria,
 		Attempt:         p.JudgeRounds + 1,
-		ClaimText:       buildPlanClaimText(tasks),
-		ExtraContext:    buildPlanJudgeExtraContext(p),
+		ClaimText:       buildPlanClaimText(tasks, superseded),
+		ExtraContext:    buildPlanJudgeExtraContext(p) + gamingGuardEvidence(tasks, superseded, postUnmet),
 		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the plan's
 		// own workspace (plan.go:264) — same rationale as task_executor.go's
 		// task-scope call. See JudgeCriteriaInput.WorkspaceID.
@@ -1618,6 +1725,10 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	// across-restart authority (rehydrated by bootReconcile) — together they
 	// close the standalone-F2 restart gap (C1).
 	pe.recordUnmetTerminalSignature(current.ID, terminalSig)
+	// Stamp WHEN this verdict landed, in the same breath as WHICH evidence it
+	// judged: everything a member completes after this instant is post-hoc
+	// evidence for the N-2 gaming guard (see recordUnmetVerdictAt).
+	pe.recordUnmetVerdictAt(current.ID, pe.clock.Now().UTC())
 	// Keep the in-memory snapshot consistent with what was just persisted —
 	// wakeSupervisor below reads the phase through it.
 	current.JudgeRounds = newRounds
@@ -1627,13 +1738,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeLocked(planID string, result JudgeCr
 	// FR-012: the UNMET wake goes to the ADJUDICATOR, not the owner. The
 	// owner has no correction role, so the message no longer says "awaiting
 	// YOUR correction".
-	pe.wakeSupervisor(current, fmt.Sprintf(
-		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s"+
-			"\n\nThe plan is parked awaiting supervision. Adjudicate it: append tail "+
-			"members, SUPERSEDE a done member whose outcome is wrong, TARGETED-RETRY a "+
-			"failed member, or ABANDON the plan if its Definition of Done is unreachable.",
-		current.Title, newRounds, steering,
-	), "plan_judge_unmet")
+	pe.wakeSupervisor(current, pe.buildDoDUnmetWakeText(current, newRounds, steering), "plan_judge_unmet")
 }
 
 // synthesizeAndComplete records the PASS round (or, for completePlan's
@@ -1690,12 +1795,36 @@ func (pe *PlanEngine) completePlan(p *plan.Plan) {
 
 // failPlanLocked transitions planID to State=failed with reason and handover
 // (SD-B9), then wakes the owner. Caller must hold planDecisionMu.
+//
+// It ALSO returns plan_phase to idle, in the SAME patch (ADR-055 fix wave,
+// finding 4). plan_phase describes what a RUNNING plan is currently doing;
+// pkg/plan's own contract is that it reads idle whenever State != running. A
+// terminal plan left at awaiting_supervision is not merely cosmetic:
+//   - the boot sweep's FR-118 exemption (b) keys off
+//     plan.PlanPhase == awaiting_supervision to spare the owner session from
+//     the failed(interrupted) sweep, so a dead plan would keep exempting a
+//     session that will never be resumed;
+//   - IsSupervisionEligiblePhase would keep reporting the plan correctable,
+//     and AppendCorrection's own State != running gate is then the only thing
+//     standing between a terminated plan and a correction attempt.
+//
+// The `abandon` verb is the case that made this visible — it fails a plan
+// directly out of the parked phase — but every failure path routes through
+// here and every one of them wants the same thing.
+//
+// This is deliberately NOT symmetric with the SUCCESS path:
+// synthesizeAndComplete leaves plan_phase at "synthesizing" on purpose, as a
+// historical marker of how the plan finished (see its doc comment). Failure
+// records HOW it ended in FailedReason, which is a better marker than a stale
+// phase, so no information is lost here.
 func (pe *PlanEngine) failPlanLocked(planID string, reason plan.FailedReason, handover string) {
 	failed := plan.StateFailed
+	idle := plan.PhaseIdle
 	updated, err := pe.planStore.Update(planID, plan.Patch{
 		State:        &failed,
 		FailedReason: &reason,
 		HandoverText: &handover,
+		PlanPhase:    &idle,
 	})
 	if err != nil {
 		logger.ErrorCF("plan_engine", "could not transition plan to failed",
@@ -2456,7 +2585,7 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 				"attempts":     p.Supervision.Attempts,
 				"max_attempts": maxAttempts,
 			})
-		pe.wakeSupervisor(p, buildSupervisionRetryWakeText(p), "plan_supervision_retry")
+		pe.wakeSupervisor(p, pe.buildSupervisionRetryWakeText(p), "plan_supervision_retry")
 		return
 	}
 
@@ -2578,7 +2707,35 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 
 // --- Text builders ---------------------------------------------------------
 
-func buildPlanClaimText(tasks []task.Task) string {
+// buildPlanClaimText renders the member-outcome evidence the plan Judge
+// adjudicates the Definition of Done against.
+//
+// ⚠ REGRESSION ANCHOR (ADR-055 fix wave, finding 3) — the `superseded` set is
+// NOT optional decoration. This function is the ONLY place a member outcome
+// reaches the Judge, so it is the ONLY place SUPERSEDE can mean anything.
+//
+// Pre-fix, supersede was inert end to end: it recorded a map entry that
+// nothing on the judge path ever read. The adjudicator could supersede a done
+// member whose outcome was wrong, attach replacement work carrying its
+// criteria, pass both integrity rules, get a success result back — and the
+// next judge round still received that member's original claim verbatim, with
+// no annotation. The PlanSupervisor's own rubric and the plan_correct tool
+// description both promise the outcome is "ignored by the Judge"; that promise
+// was made good here and nowhere else.
+//
+// A superseded member's RESULT TEXT is replaced, not merely labelled: leaving
+// the wrong claim in the prompt next to a note asking the model to disregard
+// it is exactly the shape of instruction models are least reliable at
+// following, and the claim is precisely the evidence the correction exists to
+// discount. The member's LINE stays (with its id and immutable status) because
+// the Judge still needs to see the member exists — the replacement work
+// depends on it structurally, and a silently vanishing member reads as a plan
+// that lost work.
+//
+// The member ID is printed on every line, superseded or not: the gaming-guard
+// block (gamingGuardEvidence) names members BY ID, and a Judge that cannot map
+// those ids onto these outcome lines cannot act on either.
+func buildPlanClaimText(tasks []task.Task, superseded map[string]bool) string {
 	if len(tasks) == 0 {
 		return "(this plan has no member tasks)"
 	}
@@ -2586,7 +2743,14 @@ func buildPlanClaimText(tasks []task.Task) string {
 	sb.WriteString("Member task outcomes:\n")
 	for i := range tasks {
 		t := &tasks[i]
-		fmt.Fprintf(&sb, "- %s (%s): %s\n", t.Title, t.Status, truncateForClaim(t.Result))
+		if superseded[t.ID] {
+			fmt.Fprintf(&sb, "- %s [%s] (%s): SUPERSEDED by a plan correction — this member's "+
+				"outcome is WITHHELD and must not count as evidence for or against any criterion. "+
+				"Replacement work carrying its acceptance criteria appears elsewhere in this list; "+
+				"judge the criterion on that work.\n", t.Title, t.ID, t.Status)
+			continue
+		}
+		fmt.Fprintf(&sb, "- %s [%s] (%s): %s\n", t.Title, t.ID, t.Status, truncateForClaim(t.Result))
 	}
 	return sb.String()
 }
@@ -2623,21 +2787,145 @@ func buildPlanSteeringText(v *task.JudgeVerdict) string {
 	return sb.String()
 }
 
+// --- Supervision wake target block (ADR-055 fix wave, finding 2) -----------
+//
+// ⚠ REGRESSION ANCHOR. EVERY supervision wake MUST carry this block, because
+// the wake prompt is the adjudication turn's ONLY input and PlanSupervisor
+// cannot look ANY of it up.
+//
+// Pre-fix, all three wake texts (stall, DoD-unmet, retry) identified the plan
+// by TITLE. But plan_correct requires `plan_id` and rejects the call without
+// it, and supersede/targeted_retry additionally require a MEMBER id. The
+// PlanSupervisor is seeded exactly ONE tool — plan_correct: allow, every other
+// static tool deny (pkg/coreagent/core.go) — so it has no way to resolve a
+// title to an id; list_jobs would not help either, since it filters to rows
+// the principal OWNS and a System Agent can never own a plan. Every wake
+// therefore asked for a correction the agent was structurally incapable of
+// issuing, while each wake still stamped the attempt counter BEFORE dispatch
+// — so the plan burned its whole supervision budget and terminated
+// failed(supervision_unavailable).
+//
+// Compactness is a real constraint (this is a per-wake token cost on every
+// attempt), so the block is a header line plus one line per member: id,
+// status, truncated title. No descriptions, no results — the member OUTCOMES
+// are the Judge's evidence, not the adjudicator's target list; what the
+// adjudicator needs from this block is addressability.
+
+// supervisionTargetTitleLimit truncates a member title in the wake target
+// block. The title is a human hint for choosing between members; the id is the
+// load-bearing part and is never truncated.
+const supervisionTargetTitleLimit = 80
+
+// supervisionTargetsMaxMembers caps the target block at a plan size well above
+// anything the correction verbs can act on in one wake (plan.MaxTailMembers
+// bounds a single correction's ADDITIONS; this bounds what we ENUMERATE). A
+// plan larger than this gets a truncation notice rather than an unbounded
+// prompt.
+const supervisionTargetsMaxMembers = 50
+
+// buildSupervisionTargetsText renders the machine-actionable identity block
+// described above. planID is always emitted, even with no members, because
+// plan_id is required for EVERY verb — including abandon, which names no
+// member at all.
+func buildSupervisionTargetsText(planID string, tasks []task.Task) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "plan_id: %s\n", planID)
+	if len(tasks) == 0 {
+		sb.WriteString("Members: (none)\n")
+		return sb.String()
+	}
+	sb.WriteString("Members (member_id | status | title) — supersede names a `done` member_id, " +
+		"targeted_retry names a `failed` member_id:\n")
+	shown := tasks
+	if len(shown) > supervisionTargetsMaxMembers {
+		shown = shown[:supervisionTargetsMaxMembers]
+	}
+	for i := range shown {
+		t := &shown[i]
+		fmt.Fprintf(&sb, "- %s | %s | %s\n", t.ID, t.Status, truncateTargetTitle(t.Title))
+	}
+	if len(tasks) > len(shown) {
+		fmt.Fprintf(&sb, "(+%d more members not listed)\n", len(tasks)-len(shown))
+	}
+	return sb.String()
+}
+
+// truncateTargetTitle bounds a member title to supervisionTargetTitleLimit
+// RUNES (not bytes), so a multi-byte title is never cut mid-character into
+// invalid UTF-8 in a prompt. Distinct from this package's truncateRunes, whose
+// truncation note ("... (truncated, output continues)") is written for a
+// multi-line tool output, not for one field of a single-line table row.
+func truncateTargetTitle(s string) string {
+	r := []rune(s)
+	if len(r) <= supervisionTargetTitleLimit {
+		return s
+	}
+	return string(r[:supervisionTargetTitleLimit]) + "..."
+}
+
+// supervisionTargets is the store-reading wrapper for the block above, for the
+// wake sites that do not already hold a member snapshot. A list failure
+// DEGRADES to the id-only block rather than omitting the block: without the
+// member list the adjudicator can still append or abandon, but without the
+// plan id it can do nothing at all.
+func (pe *PlanEngine) supervisionTargets(planID string) string {
+	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err != nil {
+		logger.WarnCF("plan_engine", "could not list members for the supervision wake target block; waking with plan id only",
+			map[string]any{"plan_id": planID, "error": err.Error()})
+		return buildSupervisionTargetsText(planID, nil)
+	}
+	return buildSupervisionTargetsText(planID, tasks)
+}
+
+// buildStallWakeText is the text of a FIRST supervision wake on the STALL path
+// (FR-012). tasks is the caller's own member snapshot — the very one
+// planStallReason diagnosed — not a fresh store read: the wake must describe
+// the state it is reporting on.
+func buildStallWakeText(p *plan.Plan, reason string, tasks []task.Task) string {
+	return fmt.Sprintf(
+		"Plan %q is stalled: it is running with real work remaining, but no member is "+
+			"dispatchable or in flight.\n\n%s\n\n%s\nDiagnose the stall and, if it is correctable, "+
+			"apply a correction. This is a stall diagnosis, not a Definition-of-Done verdict.",
+		p.Title, reason, buildSupervisionTargetsText(p.ID, tasks),
+	)
+}
+
+// buildDoDUnmetWakeText is the text of a FIRST supervision wake on the
+// DoD-UNMET path (FR-012). Unlike the stall wake, its caller holds no member
+// snapshot (the round's snapshot lives in the judge goroutine that already
+// returned), so the target block is read fresh from the store.
+func (pe *PlanEngine) buildDoDUnmetWakeText(p *plan.Plan, rounds int, steering string) string {
+	return fmt.Sprintf(
+		"Plan %q round %d: the plan judge found the Definition of Done UNMET.\n\n%s"+
+			"\n%s"+
+			"\nThe plan is parked awaiting supervision. Adjudicate it: append tail "+
+			"members, SUPERSEDE a done member whose outcome is wrong, TARGETED-RETRY a "+
+			"failed member, or ABANDON the plan if its Definition of Done is unreachable.",
+		p.Title, rounds, steering, pe.supervisionTargets(p.ID),
+	)
+}
+
 // buildSupervisionRetryWakeText is the text of a RE-ISSUED supervision wake
 // (FR-022(a)). It names the attempt so the adjudicator can tell a retry from a
 // first wake, and re-states the plan's own diagnosis (the judge's steering, or
 // the stall note) because the previous turn left no artefact behind.
-func buildSupervisionRetryWakeText(p *plan.Plan) string {
+//
+// It is a METHOD, not a free function, solely so it can read the plan's live
+// member snapshot for the target block — see buildSupervisionTargetsText. A
+// retry wake needs that block at least as much as a first wake does: it exists
+// precisely because the previous attempt produced no correction.
+func (pe *PlanEngine) buildSupervisionRetryWakeText(p *plan.Plan) string {
 	attempt := 0
 	if p.Supervision != nil {
 		attempt = p.Supervision.Attempts
 	}
 	return fmt.Sprintf(
-		"Plan %q is still awaiting supervision after attempt %d produced no correction.\n\n%s\n\n"+
+		"Plan %q is still awaiting supervision after attempt %d produced no correction.\n\n%s\n\n%s\n"+
 			"Adjudicate it now: append tail members, SUPERSEDE a done member whose outcome is "+
 			"wrong, TARGETED-RETRY a failed member, or ABANDON the plan if its Definition of "+
 			"Done is unreachable.",
-		p.Title, attempt, p.HandoverText,
+		p.Title, attempt, p.HandoverText, pe.supervisionTargets(p.ID),
 	)
 }
 
@@ -3114,6 +3402,14 @@ func (pe *PlanEngine) markMemberSuperseded(planID, memberID string) {
 
 // isMemberSuperseded reports whether memberID's outcome has been marked
 // ignored-by-Judge via a SUPERSEDE correction.
+//
+// This is a single-member ASSERTION ACCESSOR over the same map
+// supersededMemberSet returns; production reads go through that one, because
+// the judge path needs the whole set at once. Asserting on this alone proves
+// only that a map entry was written — which is exactly the gap that let
+// SUPERSEDE ship inert. A test that uses it must ALSO assert the observable
+// property (the superseded outcome is withheld from the next judge round's
+// claim text); see TestSupersede_OutcomeWithheldFromJudgeClaimText.
 func (pe *PlanEngine) isMemberSuperseded(planID, memberID string) bool {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
@@ -3471,7 +3767,99 @@ func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req Correc
 	if err != nil {
 		return fmt.Errorf("plan_engine: could not list members of plan %q: %w", planID, err)
 	}
+	if err := pe.validateCorrectionTailMembers(members, req); err != nil {
+		return err
+	}
 	return validateCorrectionTailEdges(members, req)
+}
+
+// validateCorrectionTailMembers checks that every tail member is actually
+// CREATABLE. It runs only for append and supersede — the two verbs that accept
+// tail members at all (targeted_retry and abandon return before this point,
+// having already been rejected for carrying any).
+//
+// ADR-055 fix wave, finding 4: without this, a non-tool caller (the exact
+// caller class validateCorrection's own doc comment says it exists for) could
+// pass a tail member with an empty ID and buildCorrectionApplyFunc would
+// silently `continue` past it. For SUPERSEDE that is the precise outcome the
+// verb is guarded against: the pairing rule (requireSupersedePairing) and the
+// criteria-inheritance rule (RequireCriteriaInheritance) both pass, because
+// both inspect the REQUEST — the commit then creates nothing, the call reports
+// success, and the plan is left with a discounted done outcome and NO
+// replacement work. That is the bare discount both rules exist to make
+// impossible, reached through the one door neither rule watches. The shipped
+// tool mints UUIDs, so this is unreachable THROUGH THE TOOL; it is reachable
+// through the seam the engine's second line of defence is for.
+//
+// The ID rules are checked against real state, not just syntax: an id that
+// collides with an EXISTING task is equally fatal, because the apply func
+// treats "this task already exists" as a successful idempotent replay and
+// skips creation — so a colliding id produces the same silent no-creation as
+// an empty one, plus a false claim on somebody else's task.
+//
+// The title check is not cosmetic either: task.Store.Create rejects an empty
+// title, and the apply func runs INSIDE the intent-log commit, so an untitled
+// tail member aborts mid-commit with the intent record already committed and
+// flagged for boot replay. Rejecting it here turns a half-applied correction
+// into a clean refusal that leaves the plan exactly as the wake found it.
+//
+// The >= 1 acceptance criterion rule is enforced for BOTH verbs, matching the
+// plan_correct schema (which marks `criteria` required on every tail member
+// and says "REQUIRED, at least one"). Mirroring it here is the whole point of
+// this second line of defence: a rule the tool enforces but the engine does
+// not is not a rule, it is a bypass with extra steps.
+//
+// It also closes a gap RequireCriteriaInheritance leaves open. That check
+// returns nil early when the SUPERSEDED member itself has no criteria, so
+// superseding a criteria-less done member with a criteria-less replacement
+// satisfied both integrity rules and produced replacement work the Judge
+// cannot adjudicate at all — a bare discount wearing the shape of a paired
+// one. Requiring criteria on the replacement makes the pairing meaningful
+// whether or not the member being replaced had any.
+func (pe *PlanEngine) validateCorrectionTailMembers(members []task.Task, req CorrectionRequest) error {
+	if len(req.TailMembers) == 0 {
+		return nil
+	}
+	existing := make(map[string]bool, len(members))
+	for i := range members {
+		existing[members[i].ID] = true
+	}
+	seen := make(map[string]bool, len(req.TailMembers))
+	for i := range req.TailMembers {
+		m := &req.TailMembers[i]
+		if m.ID == "" {
+			return fmt.Errorf(
+				"plan_engine: tail_members[%d] has no id — a tail member with no id is silently skipped at "+
+					"commit time, which would apply the correction while creating none of its work", i)
+		}
+		if seen[m.ID] {
+			return fmt.Errorf("plan_engine: tail_members[%d]: id %q appears more than once in this correction", i, m.ID)
+		}
+		seen[m.ID] = true
+		if existing[m.ID] {
+			return fmt.Errorf(
+				"plan_engine: tail_members[%d]: id %q is already a member of this plan — commit treats an "+
+					"existing id as an idempotent replay and would create nothing", i, m.ID)
+		}
+		// Not just this plan's members: the task store is global, and the
+		// apply func's existence check is a bare Get.
+		if _, gerr := pe.taskStore.Get(m.ID); gerr == nil {
+			return fmt.Errorf(
+				"plan_engine: tail_members[%d]: id %q already names an existing task — commit treats an "+
+					"existing id as an idempotent replay and would create nothing", i, m.ID)
+		} else if !errors.Is(gerr, task.ErrNotFound) {
+			return fmt.Errorf("plan_engine: tail_members[%d]: could not check id %q against the task store: %w", i, m.ID, gerr)
+		}
+		if strings.TrimSpace(m.Title) == "" {
+			return fmt.Errorf("plan_engine: tail_members[%d] (%q) has an empty title", i, m.ID)
+		}
+		if len(m.Criteria) == 0 {
+			return fmt.Errorf(
+				"plan_engine: tail_members[%d] (%q) carries no acceptance criteria — work the Judge cannot "+
+					"adjudicate is not replacement work", i, m.ID)
+		}
+	}
+	return nil
 }
 
 // validateCorrectionPayloadCaps bounds every unbounded field on the request.
@@ -3740,9 +4128,6 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 			if m.PlanID == "" {
 				m.PlanID = planID
 			}
-			if m.WorkspaceID == "" {
-				m.WorkspaceID = ""
-			}
 			if err := pe.taskStore.Create(m); err != nil {
 				return fmt.Errorf("create tail member %q: %w", m.ID, err)
 			}
@@ -3785,19 +4170,25 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 // --- Auto-reset + honest exit (G-10) ---------------------------------------
 
 // autoResetLiveRoundFailedMembers resets every failed member back to `next`
-// (via RestartReset) EXCEPT done members (frozen — preserved) and members
-// explicitly superseded (handled by the correction verb). This gives the
-// failed members another chance after the owner's correction landed.
-// Caller must hold planDecisionMu.
+// (via RestartReset) EXCEPT done members, which are frozen and preserved. This
+// gives the failed members another chance after the adjudicator's correction
+// landed. Caller must hold planDecisionMu.
+//
+// There is deliberately NO superseded-member exclusion here, and this is not
+// an omission (ADR-055 fix wave, finding 3): supersede is only legal against a
+// member that is `done` (validateMemberRef(..., task.StatusDone, ...)), and a
+// superseded member's record is immutable, so a superseded member is never
+// `failed` and the loop's status filter already excludes it on every path. The
+// exclusion this function used to carry was therefore provably unreachable —
+// and, being the SOLE consumer of the superseded set at the time, it was also
+// the whole reason supersede looked wired when it was inert. Supersession's
+// real effect is on the Judge's evidence (buildPlanClaimText /
+// gamingGuardEvidence), not on member re-dispatch.
 func (pe *PlanEngine) autoResetLiveRoundFailedMembers(planID string, tasks []task.Task) {
-	superseeded := pe.supersededMemberSet(planID)
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusFailed {
 			continue // only reset failed members; done/next/blocked/in_progress untouched
-		}
-		if superseeded[t.ID] {
-			continue // superseded members are not auto-reset
 		}
 		if _, err := pe.taskStore.RestartReset(t.ID); err != nil {
 			logger.WarnCF("plan_engine", "auto-reset: could not reset failed member",
@@ -4019,34 +4410,62 @@ func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 //
 // postUnmetMemberIDs is the set of member IDs whose artifacts were produced
 // after the plan entered awaiting_supervision (detected by comparing the
-// member's CompletedAt against the plan's last unmet-verdict timestamp). The
-// guard flags them in the extra-context text the Judge receives.
+// member's CompletedAt against the plan's last unmet-verdict timestamp — see
+// PlanEngine.postUnmetMemberIDs). The guard flags them in the extra-context
+// text the Judge receives.
+//
+// ⚠ This function is CALLED FROM PRODUCTION (runPlanJudgeRound appends it to
+// the Judge's ExtraContext). It spent the whole of ADR-055's first pass with a
+// test as its only caller, which is the reason SUPERSEDE shipped inert — do
+// not let it drift back to test-only.
+//
+// tasks supplies the id -> title mapping (and the member ORDER), so the guard
+// block names members the same way buildPlanClaimText's outcome lines do
+// ("title [id]"). A flagged id with no matching member — possible only if the
+// two snapshots disagree — is still listed, by id alone, rather than dropped:
+// silently omitting a caveat is the one failure mode a guard must not have.
 func gamingGuardEvidence(tasks []task.Task, superseded map[string]bool, postUnmetMemberIDs map[string]bool) string {
 	if len(postUnmetMemberIDs) == 0 && len(superseded) == 0 {
 		return ""
 	}
+	label := make(map[string]string, len(tasks))
+	for i := range tasks {
+		label[tasks[i].ID] = fmt.Sprintf("%s [%s]", tasks[i].Title, tasks[i].ID)
+	}
+	// Member order first (matches the claim text), then any id not present in
+	// the snapshot, sorted for determinism.
+	render := func(set map[string]bool) string {
+		out := make([]string, 0, len(set))
+		seen := make(map[string]bool, len(set))
+		for i := range tasks {
+			if id := tasks[i].ID; set[id] {
+				out = append(out, label[id])
+				seen[id] = true
+			}
+		}
+		var orphans []string
+		for id := range set {
+			if !seen[id] {
+				orphans = append(orphans, id)
+			}
+		}
+		sort.Strings(orphans)
+		return strings.Join(append(out, orphans...), ", ")
+	}
+
 	var sb strings.Builder
 	sb.WriteString("\n\n## Gaming-guard (N-2)\n")
 	sb.WriteString("The evidence ladder weights deterministic rungs (machine checks, behavior ")
 	sb.WriteString("scans) over prose self-attestation. The following caveats apply:\n")
 	if len(superseded) > 0 {
 		sb.WriteString("- Superseded members (outcome ignored-by-Judge, record immutable): ")
-		var ids []string
-		for id := range superseded {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		sb.WriteString(strings.Join(ids, ", "))
-		sb.WriteString("\n")
+		sb.WriteString(render(superseded))
+		sb.WriteString("\n  Their outcomes are withheld from the member-outcome list above. Judge the ")
+		sb.WriteString("criteria they carried on their replacement work instead.\n")
 	}
 	if len(postUnmetMemberIDs) > 0 {
 		sb.WriteString("- Artifacts produced AFTER the unmet verdict (flagged post-hoc): ")
-		var ids []string
-		for id := range postUnmetMemberIDs {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		sb.WriteString(strings.Join(ids, ", "))
+		sb.WriteString(render(postUnmetMemberIDs))
 		sb.WriteString("\n")
 	}
 	return sb.String()

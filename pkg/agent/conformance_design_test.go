@@ -1051,10 +1051,15 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 		FalsifiedAssumption: "assumed the done member's outcome was correct",
 		Reason:              "supersede the done member — its result is wrong",
 		// FR-030: a supersede must be PAIRED with replacement work. Bare
-		// discounting is rejected by the engine.
+		// discounting is rejected by the engine. The replacement carries its
+		// own acceptance criteria for the same reason (ADR-055 fix wave,
+		// finding 4): t3-done has no criteria of its own, so
+		// RequireCriteriaInheritance is vacuous here, and replacement work the
+		// Judge cannot adjudicate would be a bare discount in all but name.
 		TailMembers: []task.Task{{
 			ID: "t3-done-replacement", Title: "redo the superseded work",
 			WorkspaceID: "ws", Status: task.StatusNext,
+			Criteria: []task.AcceptanceCriterion{planProseCriterion("the superseded work is redone correctly")},
 		}},
 	}); err != nil {
 		t.Fatalf("(2) AppendCorrection supersede: %v", err)

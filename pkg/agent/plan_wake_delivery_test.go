@@ -730,6 +730,7 @@ func TestAppendCorrection_AcceptsStalledPhase(t *testing.T) {
 			FalsifiedAssumption: "the blocker would resolve itself",
 			TailMembers: []task.Task{{
 				ID: "tail-1", Title: "unblock it", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{planProseCriterion("the blocker is resolved")},
 			}},
 		})
 	if err != nil {
@@ -896,6 +897,9 @@ func TestSupervisionState_CorrectionRoundsSurviveAParkCycle(t *testing.T) {
 					// `blocked` keeps the plan non-terminal so the correction
 					// does not immediately re-judge.
 					WorkspaceID: "ws", PlanID: "p1", Status: task.StatusNext,
+					Criteria: []task.AcceptanceCriterion{
+						planProseCriterion(fmt.Sprintf("tail %d is done", round)),
+					},
 				}},
 			}); err != nil {
 			t.Fatalf("correction %d: %v", round, err)
