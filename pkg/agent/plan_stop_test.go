@@ -545,6 +545,11 @@ func TestPlanEngine_StopPlan_SeamCrossing_ReachesRealVerifierSession(t *testing.
 	taskStore := task.New(filepath.Join(dir, "tasks"))
 	if err := planStore.Create(&plan.Plan{
 		ID: "p1", Title: "p1", WorkspaceID: "ws", OwnerAgentID: "native-agent", State: plan.StateRunning,
+		// A chat origin, so StopPlan's owner wake takes the notifier/bus leg
+		// rather than dispatching a real owner turn. This test is about the
+		// verifier fan-out key; the owner wake's own delivery has its own
+		// coverage in plan_wake_delivery_test.go.
+		SourceChannel: "telegram", SourceChatID: "chat-p1",
 	}); err != nil {
 		t.Fatalf("create plan: %v", err)
 	}

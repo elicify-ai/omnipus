@@ -196,10 +196,20 @@ func mustCreatePlan(t *testing.T, ps *plan.Store, p *plan.Plan) *plan.Plan {
 	return p
 }
 
+// mustCreateRunningPlan builds a running plan WITH a chat origin, which is the
+// ordinary case: a plan started from a conversation (create_plan records the
+// tool call's channel + chat id). Owner wakes for such a plan take the
+// notifier/bus leg, so tests that assert on delivered wake events keep
+// measuring the real path.
+//
+// The origin-LESS case — a plan created through the Plans UI, where both
+// fields are legitimately absent — is a first-class state with its own
+// delivery rules, covered in plan_wake_delivery_test.go.
 func mustCreateRunningPlan(t *testing.T, ps *plan.Store, id, owner string) *plan.Plan {
 	t.Helper()
 	return mustCreatePlan(t, ps, &plan.Plan{
 		ID: id, Title: id, WorkspaceID: "ws", OwnerAgentID: owner, State: plan.StateRunning,
+		SourceChannel: "telegram", SourceChatID: "chat-" + id,
 	})
 }
 
@@ -377,6 +387,7 @@ func TestPlanEngine_JudgeMet_TransitionsSynthesizingThenDone(t *testing.T) {
 	h := newTestPlanEngine(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "p1", Title: "Plan 1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
+		SourceChannel: "telegram", SourceChatID: "chat-p1",
 		DoD: []task.AcceptanceCriterion{planProseCriterion("The thing is done")},
 	})
 	mustCreateTask(t, h.tasks, &task.Task{
@@ -459,15 +470,24 @@ func TestPlanEngine_JudgeUnmet_StoresSteeringAndWakesOwnerWithoutTerminal(t *tes
 	if got.HandoverText == "" {
 		t.Fatal("expected steering text to be persisted in HandoverText")
 	}
-	events := h.notif.eventList()
-	found := false
-	for _, e := range events {
-		if e.SourceKind == "plan_judge_unmet" {
-			found = true
-		}
+	// ADR-055/FR-012: the UNMET wake is a SUPERVISION wake — it goes to the
+	// adjudicator by direct dispatch, so there is no notifier event to find
+	// and nothing is published to the plan's origin chat. What IS observable
+	// is the durable wake receipt the wake stamps, which arms FR-021's
+	// deadline; assert that instead of a delivery mechanism.
+	if got.Supervision == nil {
+		t.Fatal("an UNMET verdict must stamp a supervision wake receipt on the plan")
 	}
-	if !found {
-		t.Fatalf("expected a plan_judge_unmet wake event, got %+v", events)
+	if got.Supervision.WakeAt == "" {
+		t.Fatal("supervision.wake_at must be stamped by the UNMET wake (it arms the deadline)")
+	}
+	if got.Supervision.Attempts != 1 {
+		t.Fatalf("supervision.attempts = %d, want 1 after the first supervision wake", got.Supervision.Attempts)
+	}
+	for _, e := range h.notif.eventList() {
+		if e.SourceKind == "plan_judge_unmet" {
+			t.Fatalf("the UNMET wake must NOT be published to the plan's chat origin (H8/FR-016): %+v", e)
+		}
 	}
 }
 
@@ -476,6 +496,7 @@ func TestPlanEngine_JudgeRoundsExhausted_FailsPlan(t *testing.T) {
 	one := 1
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "p1", Title: "Plan 1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
+		SourceChannel: "telegram", SourceChatID: "chat-p1",
 		DoD:    []task.AcceptanceCriterion{planProseCriterion("The thing is done")},
 		Bounds: &plan.PlanBounds{PlanJudgeMaxRounds: &one},
 	})
@@ -1302,27 +1323,35 @@ func TestPlanEngine_StallSurfaced_WhenNoMemberIsDispatchableOrInFlight(t *testin
 	if got.PlanPhase != plan.PhaseStalled {
 		t.Fatalf("PlanPhase = %q, want %q", got.PlanPhase, plan.PhaseStalled)
 	}
-	events := h.notif.eventList()
-	stallWakes := 0
-	for _, e := range events {
-		if e.SourceKind == "plan_stalled" {
-			stallWakes++
-		}
+	// ADR-055/FR-012: the stall wake is a SUPERVISION wake — direct dispatch
+	// to the adjudicator, no notifier event and nothing published to the
+	// plan's origin chat. The durable wake receipt is the observable, and it
+	// is a strictly better dedup assertion than counting Notify calls: it is
+	// what FR-021's deadline is armed from.
+	if got.Supervision == nil || got.Supervision.WakeAt == "" {
+		t.Fatalf("a stall must stamp a supervision wake receipt, got %+v", got.Supervision)
 	}
-	if stallWakes != 1 {
-		t.Fatalf("expected exactly 1 plan_stalled wake event, got %d (events=%+v)", stallWakes, events)
+	if got.Supervision.Attempts != 1 {
+		t.Fatalf("supervision.attempts = %d, want 1 after the first stall wake", got.Supervision.Attempts)
 	}
-
-	// A second pass with UNCHANGED state must not re-wake the owner.
-	h.pe.processPlan(context.Background(), "p1")
-	stallWakes = 0
+	firstWakeAt := got.Supervision.WakeAt
 	for _, e := range h.notif.eventList() {
 		if e.SourceKind == "plan_stalled" {
-			stallWakes++
+			t.Fatalf("the stall wake must NOT be published to the plan's chat origin (H8/FR-016): %+v", e)
 		}
 	}
-	if stallWakes != 1 {
-		t.Fatalf("expected the stall wake to be deduped on an unchanged tick, got %d total", stallWakes)
+
+	// A second pass with UNCHANGED state must not re-wake: the deadline has
+	// not elapsed, so the attempt counter and the receipt stay put.
+	h.clock.Set(h.clock.Now().Add(time.Minute))
+	h.pe.processPlan(context.Background(), "p1")
+	got, err = h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Supervision.Attempts != 1 || got.Supervision.WakeAt != firstWakeAt {
+		t.Fatalf("expected the stall wake to be deduped on an unchanged tick within the deadline, got attempts=%d wake_at=%q (want 1/%q)",
+			got.Supervision.Attempts, got.Supervision.WakeAt, firstWakeAt)
 	}
 
 	// Once the plan can make progress again (the blocking dependency
@@ -1346,6 +1375,12 @@ func TestPlanEngine_StallSurfaced_WhenNoMemberIsDispatchableOrInFlight(t *testin
 	}
 	if got.PlanPhase != plan.PhaseDispatching {
 		t.Fatalf("PlanPhase = %q, want it reverted to %q once the plan is unstuck", got.PlanPhase, plan.PhaseDispatching)
+	}
+	// FR-050: leaving the supervision-eligible phase set disarms the deadline
+	// and resets the attempt counter, so a later re-stall genuinely re-wakes
+	// instead of inheriting a spent budget.
+	if got.Supervision.WakeAt != "" || got.Supervision.Attempts != 0 {
+		t.Fatalf("leaving the supervision-eligible phase set must clear wake_at and reset attempts, got %+v", got.Supervision)
 	}
 	dispatchedStuck := false
 	for _, id := range h.disp.callList() {
