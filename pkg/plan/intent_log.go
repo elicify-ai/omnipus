@@ -431,6 +431,16 @@ type ReplayResult struct {
 // MUST be idempotent — ReplayAtBoot may call it for an intent whose writes
 // partially landed before a crash. Return nil on success (or if the writes
 // were already applied — a no-op); ReplayAtBoot then marks the intent done.
+//
+// THE RETURN VALUE IS A DURABILITY DECISION, NOT A STATUS REPORT. nil means
+// "every write in this record has landed" and causes ReplayAtBoot to mark the
+// intent DONE — permanently, since a done intent is never replayed again. An
+// implementation that applies PART of a record and returns nil (skips the edge
+// list, skips a verb's terminal transition, logs a write failure and carries
+// on) does not merely lose that write: it stamps the durable record with
+// "fully applied" over a plan that is not, and no later boot will ever
+// reconcile it. Any write this function could not complete MUST come back as
+// an error, which leaves the intent `committed` for the next boot to finish.
 type ApplyFunc func(rec IntentRecord) error
 
 // ReplayAtBoot classifies and replays planID's intent log. Uncommitted

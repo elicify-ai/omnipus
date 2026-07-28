@@ -510,6 +510,78 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			// Store, only its types/Filter via the TaskLister interface).
 			p.FailedReason = ""
 			p.JudgeRounds = 0
+			// PlanPhase resets for exactly the JudgeRounds reason stated
+			// above, one level up: a plan restarted near a cap fails
+			// immediately, and a stale phase IS a spent cap.
+			//
+			// PlanPhase is the runtime sub-state of a State==running plan
+			// (see its type doc); a plan that has just re-entered the state
+			// machine at `approved` has not run yet, so the only honest value
+			// is the unset one (EffectivePlanPhase -> PhaseIdle). Carrying a
+			// phase over is not cosmetic:
+			//
+			//   - awaiting_supervision / stalled make the plan look, to every
+			//     phase-gated reader, like it is still parked mid-park.
+			//     pkg/agent's surfaceStallIfAny returns early on
+			//     awaiting_supervision (documented there as "structurally
+			//     unreachable in production" — a restart is exactly what makes
+			//     it reachable), so a plan Stopped while parked and then
+			//     Played would never surface a stall again for the whole
+			//     restarted run: no stall note, no supervision wake, no
+			//     adjudicator, until idle expiry terminates it as
+			//     failed(idle_expired) — which ValidateRestartTransition then
+			//     refuses to restart. Unrecoverable work.
+			//   - judging makes pkg/agent's processPlan take its
+			//     crash-resume branch and re-open a judge round on a plan that
+			//     has not dispatched a single member of its new life.
+			//
+			// The three supervision fields reset for the same reason and with
+			// the same per-field rule pkg/agent's clearSupervisionWakePatch
+			// applies when a plan LEAVES the supervision-eligible phase set
+			// (Supervision's own type doc is the authority): a restart leaves
+			// it too — more completely than a correction does.
+			//
+			//   wake_at   -> cleared. It ARMS the FR-021 supervision deadline
+			//                and is the once-per-park dedup key, so a carried
+			//                receipt both leaves a spent deadline armed and
+			//                makes ensureSupervisionSessionLocked hand the
+			//                next park the PREVIOUS LIFE's adjudication
+			//                session.
+			//   wake_error-> cleared. A wake failure from the prior life is
+			//                not evidence about this one.
+			//   attempts  -> 0. Carried over, the FR-022 ladder starts
+			//                pre-spent: a plan Stopped while parked at
+			//                attempts==3 re-parks at 4, fails the
+			//                `attempts < max` check on its FIRST re-park and
+			//                dies failed(supervision_unavailable) — a false
+			//                diagnosis of a healthy PlanSupervisor, and itself
+			//                not a restartable reason.
+			//
+			// correction_rounds and session_id deliberately survive: the first
+			// is cumulative for the life of the plan ID and is read to explain
+			// a terminal record; the second is never blanked anywhere (it is
+			// the handle a Stop cancels) and is overwritten by the next mint,
+			// which the wake_at reset above now guarantees happens.
+			//
+			// A nil Supervision is left nil rather than allocated: a plan that
+			// was never supervised must keep serialising with no `supervision`
+			// key at all (the property applySupervisionPatch's early return
+			// pins).
+			//
+			// All five of these are RESET rather than REJECTED when the same
+			// patch also carries them — unlike the FailedReason/JudgeRounds
+			// guard above. Both land in the same place (this block runs after
+			// every per-field application, including applySupervisionPatch, so
+			// a crafted value can never survive), but rejecting would 400 a
+			// caller that legitimately batches a phase write with the restart
+			// transition, and this reset needs no cooperation from any caller
+			// to be correct.
+			p.PlanPhase = ""
+			if p.Supervision != nil {
+				p.Supervision.WakeAt = ""
+				p.Supervision.WakeError = ""
+				p.Supervision.Attempts = 0
+			}
 		}
 	}
 	// ActiveLoop is applied AFTER the State-transition stamping above so an

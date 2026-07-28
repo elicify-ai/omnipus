@@ -413,16 +413,44 @@ func (pe *PlanEngine) replayIntentLogs() {
 }
 
 // applyIntentRecord applies ONE self-contained intent record's per-file writes
-// idempotently: creates each member task (skipping any that already exist —
-// the idempotency guard for a partial re-apply after a crash), and applies the
-// plan-record patch (clear the durable unmet signature so a fresh correction
-// gets a fresh round, set plan_phase). Member bodies carry their own
-// blocked_by edges (the intent's separate edge list is folded into member
-// bodies at write time by the Phase-2 owner loop), so task creation is the
-// single edge-wiring point. Satisfies the ApplyFunc contract IntentLog.
-// ReplayAtBoot expects (FR-148 idempotent replay-forward).
+// idempotently. It is the BOOT half of a correction's apply, and it must reach
+// the same durable end state as the LIVE half (PlanEngine.
+// buildCorrectionApplyFunc + the supervision bookkeeping AppendCorrection runs
+// in the same locked body), because ReplayAtBoot marks the intent DONE the
+// moment this returns nil — a record that says "applied" over a plan this
+// function only half-corrected is permanent. The four steps, in the live
+// path's order:
+//
+//  1. create each member task (skipping any that already exist — the
+//     idempotency guard for a partial re-apply after a crash);
+//  2. wire rec.Edges via AddDependency (idempotent: an existing edge returns
+//     added=false, nil);
+//  3. targeted_retry: reset the named member;
+//  4. abandon: terminate the plan (see completeAbandonAtBoot); every other
+//     verb: apply the plan-record patch — clear the durable unmet signature so
+//     a fresh correction gets a fresh round, set plan_phase, and disarm the
+//     supervision wake the plan is leaving behind.
+//
+// Step 2 exists because the edge list is NOT carried on the member bodies. An
+// earlier version of this function skipped it on the claim that "member bodies
+// carry their own blocked_by edges, folded in at write time" — pkg/tools/
+// plan_correct.go's parseTailMembers builds every tail member with an EMPTY
+// BlockedBy and returns the edges separately, so that claim was false and the
+// consequence was a replayed correction whose sequenced tail members all came
+// back `next`, running concurrently, while the intent log recorded the
+// correction as fully applied.
+//
+// The verb and the retried member id are read off rec.Revision (the intent
+// record is self-contained by FR-148 — it carries the whole revision entry),
+// which is what makes boot equivalence possible without the live
+// CorrectionRequest.
+//
+// Satisfies the ApplyFunc contract IntentLog.ReplayAtBoot expects (FR-148
+// idempotent replay-forward). Boot-only: replayIntentLogs is the sole caller
+// and holds no lock, which step 4's abandon branch relies on (it takes
+// planDecisionMu itself).
 func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
-	// Create each member task idempotently. A member that already exists
+	// (1) Create each member task idempotently. A member that already exists
 	// (Create returns its own error path) is treated as already-applied — the
 	// replay is a no-op for it, exactly the idempotency INV-6 requires.
 	for i := range rec.Members {
@@ -434,31 +462,159 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 			continue // already applied — idempotent no-op.
 		}
 		clone := m
+		if clone.PlanID == "" {
+			clone.PlanID = rec.PlanID
+		}
 		if err := pe.taskStore.Create(&clone); err != nil {
 			// A collision that isn't "exists" is a real error — surface it so
 			// ReplayAtBoot marks the intent not-done and retries next boot.
 			return err
 		}
 	}
-	// Apply the plan-record patch.
-	if rec.Patch.ClearLastUnmetTerminalSignature || rec.Patch.PlanPhase != "" {
-		patch := plan.Patch{}
-		if rec.Patch.ClearLastUnmetTerminalSignature {
-			empty := ""
-			patch.LastUnmetTerminalSignature = &empty
+
+	// (2) Wire the tail edges. A failure here is RETURNED, never logged and
+	// swallowed: an unwired edge means the tail runs unordered, and the whole
+	// point of returning is that ReplayAtBoot then leaves the intent
+	// `committed` (not `done`) so the next boot finishes it, instead of
+	// stamping "applied" over an unordered plan.
+	for _, e := range rec.Edges {
+		if e.FromTaskID == "" || e.ToTaskID == "" {
+			return fmt.Errorf("intent %q: tail edge with an empty endpoint (%q -> %q)",
+				rec.IntentID, e.FromTaskID, e.ToTaskID)
 		}
-		if rec.Patch.PlanPhase != "" {
-			ph := rec.Patch.PlanPhase
-			patch.PlanPhase = &ph
+		if _, _, err := pe.taskStore.AddDependency(e.ToTaskID, e.FromTaskID); err != nil {
+			return fmt.Errorf("intent %q: wire tail edge %s->%s: %w",
+				rec.IntentID, e.FromTaskID, e.ToTaskID, err)
 		}
-		if _, err := pe.planStore.Update(rec.PlanID, patch); err != nil {
-			// A missing plan (deleted between commit and replay) is not a
-			// replay-blocking error — the correction's target vanished, so the
-			// intent is effectively done. Anything else surfaces.
-			if !errors.Is(err, plan.ErrNotFound) {
-				return err
-			}
+	}
+
+	// (3) targeted_retry resets the specific failed member. Idempotent by way
+	// of RestartReset's own contract: it errors on a non-failed task, which on
+	// a re-apply is the correct no-op (the member is already `next`), so this
+	// is logged rather than returned — mirroring the live apply exactly.
+	if rec.Revision.Verb == plan.RevisionTargetedRetry && rec.Revision.RetriedMemberID != "" {
+		if _, err := pe.taskStore.RestartReset(rec.Revision.RetriedMemberID); err != nil {
+			logger.DebugCF("plan_engine", "intent replay: targeted-retry reset (may be an idempotent no-op)",
+				map[string]any{"plan_id": rec.PlanID, "task_id": rec.Revision.RetriedMemberID, "error": err.Error()})
 		}
+	}
+
+	// (4a) abandon adds no work and does not return the plan to dispatching —
+	// it terminates it. Its record carries no phase patch at all, so falling
+	// through to the patch below would make the replay a total no-op and leave
+	// a plan the durable record says was abandoned parked forever.
+	if rec.Revision.Verb == plan.RevisionAbandon {
+		return pe.completeAbandonAtBoot(rec)
+	}
+
+	// (4b) Apply the plan-record patch, plus the supervision disarm the live
+	// path performs immediately after the same commit (countCorrectionAndClear
+	// Wake). The plan is leaving the supervision-eligible phase set, so the
+	// wake receipt, the wake error and the attempt counter reset (FR-050);
+	// without this the replayed plan resumes dispatching with a spent deadline
+	// still armed, an attempt ladder already partly burned, and — because
+	// ensureSupervisionSessionLocked keys the park boundary off wake_at — a
+	// next park that reuses the PREVIOUS park's adjudication session.
+	//
+	// correction_rounds is deliberately NOT incremented here even though the
+	// live path increments it: an increment is not idempotent and this
+	// function has no per-revision applied-marker on the plan record to make
+	// it so, so a replay that succeeded and then failed to mark the intent
+	// done would double-count on the next boot. Nothing gates on the counter
+	// (it is attribution only, read to explain a terminal record), so
+	// under-counting by the corrections lost in a crash window is strictly
+	// safer than fabricating rounds that never happened.
+	patch := clearSupervisionWakePatch(plan.Patch{})
+	if rec.Patch.ClearLastUnmetTerminalSignature {
+		empty := ""
+		patch.LastUnmetTerminalSignature = &empty
+	}
+	if rec.Patch.PlanPhase != "" {
+		ph := rec.Patch.PlanPhase
+		patch.PlanPhase = &ph
+	}
+	if _, err := pe.planStore.Update(rec.PlanID, patch); err != nil {
+		// A missing plan (deleted between commit and replay) is not a
+		// replay-blocking error — the correction's target vanished, so the
+		// intent is effectively done. Anything else surfaces.
+		if !errors.Is(err, plan.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
+// completeAbandonAtBoot finishes a committed-but-not-done `abandon` correction
+// (ADR-055/FR-046b): the adjudicator judged the Definition of Done unreachable
+// and the revision is durably on the record, so the plan must end
+// failed(dod_unreachable) with the falsified assumption in its handover —
+// exactly what AppendCorrection does in the live path immediately after the
+// same commit. A crash in that window is the only way this record is reached,
+// and leaving it a no-op strands the plan parked forever with an abandonment
+// on its own record.
+//
+// Idempotent by state, not by marker: an already-terminal plan is left
+// UNTOUCHED. That guard is what stops a re-run from rewriting a plan that
+// reached `failed` some other way (a Stop, an idle expiry) into
+// dod_unreachable — failed->failed is a legal no-op transition in the plan
+// matrix, so the store would happily overwrite the reason and handover.
+//
+// It takes planDecisionMu because failPlanLocked requires it. That is safe
+// only because the sole caller chain (Start -> replayIntentLogs ->
+// applyIntentRecord) runs before the tick loop and the event loop are
+// launched and holds no plan lock of its own.
+func (pe *PlanEngine) completeAbandonAtBoot(rec plan.IntentRecord) error {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+
+	p, err := pe.planStore.Get(rec.PlanID)
+	if err != nil {
+		if errors.Is(err, plan.ErrNotFound) {
+			// The plan vanished between commit and replay — nothing left to
+			// abandon, so the intent is effectively done (same rule the
+			// plan-patch path applies).
+			return nil
+		}
+		return fmt.Errorf("intent %q: get plan %q for abandon replay: %w", rec.IntentID, rec.PlanID, err)
+	}
+	if p.State == plan.StateFailed || p.State == plan.StateDone {
+		// Already terminal: the live path completed before the crash (or the
+		// plan ended some other way). Never rewrite a terminal record.
+		logger.InfoCF("plan_engine", "intent replay: abandon target is already terminal; leaving the record untouched",
+			map[string]any{"plan_id": rec.PlanID, "intent_id": rec.IntentID, "state": string(p.State),
+				"failed_reason": string(p.FailedReason)})
+		return nil
+	}
+
+	// The correction is durable, so the F2 round-burn gate must not outlive
+	// it. bootReconcile rehydrates the in-memory gate from this same persisted
+	// field AFTER replay runs, so clearing the durable field below via
+	// failPlanLocked's own write is not enough on its own — clear the
+	// in-memory entry too, exactly as the live path does.
+	pe.clearUnmetTerminalSignature(rec.PlanID)
+	// The handover text comes from buildAbandonHandover — the SAME builder the
+	// live path uses — reconstructed from the revision entry rather than
+	// re-worded here, so a boot-completed abandon reads identically to a live
+	// one. CorrectionRequest is named unqualified deliberately: it is an alias
+	// for plan.CorrectionRequest today, and this compiles either way.
+	pe.failPlanLocked(rec.PlanID, plan.FailedReasonDoDUnreachable, buildAbandonHandover(p, CorrectionRequest{
+		Verb:                rec.Revision.Verb,
+		FalsifiedAssumption: rec.Revision.FalsifiedAssumption,
+		Reason:              rec.Revision.Reason,
+	}))
+
+	// failPlanLocked logs its own store failure and returns nothing, so the
+	// transition is VERIFIED rather than assumed: returning nil here is what
+	// marks the intent permanently done, and doing that over a plan still
+	// sitting at awaiting_supervision is the precise defect this function
+	// exists to close.
+	after, gerr := pe.planStore.Get(rec.PlanID)
+	if gerr != nil {
+		return fmt.Errorf("intent %q: verify abandon replay for plan %q: %w", rec.IntentID, rec.PlanID, gerr)
+	}
+	if after.State != plan.StateFailed {
+		return fmt.Errorf("intent %q: abandon replay did not terminate plan %q (state %q, phase %q)",
+			rec.IntentID, rec.PlanID, after.State, after.EffectivePlanPhase())
 	}
 	return nil
 }
