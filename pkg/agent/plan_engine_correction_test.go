@@ -107,6 +107,7 @@ func TestAutoReset_ExcludesFrozenDoneMembers(t *testing.T) {
 		FalsifiedAssumption: "assumed the failed member would succeed",
 		TailMembers: []task.Task{{
 			ID: "m-tail", Title: "m-tail", WorkspaceID: "ws", Status: task.StatusNext,
+			Criteria: []task.AcceptanceCriterion{planProseCriterion("m-tail work is done")},
 		}},
 		Reason: "add a tail member to address the unmet DoD",
 	})
