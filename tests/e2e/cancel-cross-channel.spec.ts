@@ -727,8 +727,7 @@ test(
     //
     // If audit isn't live, attempt the REST PUT so a future restart picks it up,
     // then fail loudly with an actionable message.
-    const auditPathPrecheck = path.join(OMNIPUS_HOME, 'system', 'audit.jsonl')
-    if (!fs.existsSync(auditPathPrecheck)) {
+    if (!fs.existsSync(auditPath)) {
       // Best-effort PUT to persist the flag for the next gateway restart. Ignore
       // result — endpoint may be 503-guarded in dev-mode-bypass.
       await page.request
