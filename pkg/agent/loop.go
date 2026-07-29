@@ -1232,7 +1232,13 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	if registry == nil {
 		return
 	}
-	cfg := al.cfg
+	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare. This helper runs
+	// inside UpsertAgentFast's and ReloadProviderAndConfig's wiring pass with
+	// NO al.mu held, so a bare `al.cfg` read races every pointer-swap publisher
+	// (SwapConfig, ReloadProviderAndConfig, and MutateConfig's copy-then-swap)
+	// writing the al.cfg slot under al.mu.Lock. The locked read establishes the
+	// happens-before edge the bare read lacked.
+	cfg := al.GetConfig()
 	if cfg == nil {
 		return
 	}
@@ -1341,7 +1347,11 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 	if registry == nil {
 		return
 	}
-	cfg := al.cfg
+	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare — see the matching
+	// comment in wireExecToolDepsOn: this helper likewise runs in the unlocked
+	// wiring pass of UpsertAgentFast/ReloadProviderAndConfig, and a bare al.cfg
+	// read races every pointer-swap publisher of al.cfg.
+	cfg := al.GetConfig()
 	if cfg == nil {
 		return
 	}
