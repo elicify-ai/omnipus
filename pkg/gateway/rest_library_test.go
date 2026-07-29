@@ -471,6 +471,98 @@ func TestLibraryUpload_MissingTargetDir_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
 }
 
+// --- POST /library/{id}/mkdir (UAT Issue 4) ---
+
+func TestLibraryMkdir_SingleLevel_Created(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"subfolder"}`)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	entry := decodeEntry(t, w.Body.Bytes())
+	assert.Equal(t, "subfolder", entry.Path)
+	assert.True(t, entry.IsDir)
+
+	// The directory is now listable.
+	lw := libGet(t, api, "/api/v1/library/"+id+"/entries")
+	require.Equal(t, http.StatusOK, lw.Code)
+	entries := decodeEntries(t, lw.Body.Bytes())
+	require.Len(t, entries, 1)
+	assert.Equal(t, "subfolder", entries[0].Name)
+}
+
+func TestLibraryMkdir_Nested_CreatesIntermediates(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"a/b/c"}`)
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+	lw := libGet(t, api, "/api/v1/library/"+id+"/entries?path=a/b")
+	require.Equal(t, http.StatusOK, lw.Code, "body: %s", lw.Body.String())
+	entries := decodeEntries(t, lw.Body.Bytes())
+	require.Len(t, entries, 1)
+	assert.Equal(t, "c", entries[0].Name)
+}
+
+func TestLibraryMkdir_Idempotent_ReturnsOK(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusCreated,
+		libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"again"}`).Code)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"again"}`)
+	assert.Equal(t, http.StatusOK, w.Code, "re-creating an existing directory must be idempotent, not an error")
+}
+
+func TestLibraryMkdir_AlreadyExistsAsFile_409(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"taken.txt","content":"x"}`).Code)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"taken.txt"}`)
+	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+}
+
+func TestLibraryMkdir_UnknownWorkspace_404(t *testing.T) {
+	api, _ := buildLibraryTestAPI(t)
+	w := libPostJSON(t, api, "/api/v1/library/ws-nope/mkdir", `{"path":"a"}`)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestLibraryMkdir_InvalidPath_400(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	for _, body := range []string{
+		`{"path":"../escape"}`,
+		`{"path":"/absolute"}`,
+		`{"path":""}`,
+	} {
+		w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+	}
+}
+
+// TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap reproduces the
+// exact UAT-4 scenario end to end at the REST layer: a nested Move
+// destination whose parent doesn't exist yet 404s with a message naming the
+// missing directory, then succeeds once that directory is created via the
+// new mkdir endpoint.
+func TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"test.txt","content":"x"}`).Code)
+
+	body := `{"from_workspace_id":"` + id + `","from_path":"test.txt","to_workspace_id":"` + id + `","to_path":"subfolder/test.txt"}`
+	failW := libPostJSON(t, api, "/api/v1/library/move", body)
+	require.Equal(t, http.StatusNotFound, failW.Code, "body: %s", failW.Body.String())
+	assert.Contains(t, failW.Body.String(), "subfolder",
+		"the 404 must name the specific missing directory, not a bare 'not found'")
+
+	require.Equal(t, http.StatusCreated,
+		libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"subfolder"}`).Code)
+
+	okW := libPostJSON(t, api, "/api/v1/library/move", body)
+	require.Equal(t, http.StatusOK, okW.Code, "body: %s", okW.Body.String())
+
+	dstW := libGet(t, api, "/api/v1/library/"+id+"/content?path=subfolder/test.txt")
+	assert.Equal(t, http.StatusOK, dstW.Code)
+}
+
 // --- GET /library/{id}/download ---
 
 func TestLibraryDownload_RoundTrip(t *testing.T) {
@@ -527,6 +619,44 @@ func TestLibraryRename_MissingFrom_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// TestLibraryRename_MissingDestinationParent_NamesDirectory is UAT Issue 4:
+// a bare 404 gave no clue which directory to create. The message must name
+// the specific missing directory rather than a generic "not found".
+func TestLibraryRename_MissingDestinationParent_NamesDirectory(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"a.txt","to":"newfolder/a.txt"}`)
+	require.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "newfolder")
+}
+
+// TestLibraryRename_DotDotPrefixedDestination_400 is UAT Issue 6: a rename
+// destination beginning with ".." (e.g. a URL-encoded-slash smuggling
+// attempt like "..%2fdana-pwned-encoded.txt", which arrives as a LITERAL
+// filename since it's a JSON body field, not a URL path segment) must be
+// rejected outright — not silently succeed and then vanish from the default
+// listing because the hidden heuristic also matches a ".."-prefixed name.
+func TestLibraryRename_DotDotPrefixedDestination_400(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+
+	for _, to := range []string{
+		"..dana-pwned-encoded.txt",
+		"..%2fdana-pwned-encoded.txt",
+	} {
+		w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"a.txt","to":"`+to+`"}`)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "to=%q body=%s", to, w.Body.String())
+	}
+
+	// The source must still exist — the rejected rename must not have
+	// partially applied.
+	gw := libGet(t, api, "/api/v1/library/"+id+"/content?path=a.txt")
+	assert.Equal(t, http.StatusOK, gw.Code)
+}
+
 // --- POST /library/move, POST /library/copy ---
 
 func TestLibraryCopy_CrossWorkspace_RoundTrip(t *testing.T) {
@@ -580,6 +710,22 @@ func TestLibraryTransfer_UnknownWorkspace_404(t *testing.T) {
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"a.txt","to_workspace_id":"ws-does-not-exist","to_path":"b.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/move", body)
 	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+}
+
+// TestLibraryCopy_MissingDestinationParent_NamesDirectory is UAT Issue 4's
+// cross-workspace counterpart to the rename case: Copy/Move deliberately do
+// NOT auto-create missing destination directories, but the 404 must name
+// the specific missing directory.
+func TestLibraryCopy_MissingDestinationParent_NamesDirectory(t *testing.T) {
+	api, fromID := buildLibraryTestAPI(t)
+	toID := seedLibraryWorkspace(t, api, "Dest WS 4")
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared"}`).Code)
+
+	body := `{"from_workspace_id":"` + fromID + `","from_path":"shared.txt","to_workspace_id":"` + toID + `","to_path":"deep/nested/copied.txt"}`
+	w := libPostJSON(t, api, "/api/v1/library/copy", body)
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "deep/nested")
 }
 
 func TestLibraryTransfer_DestinationExists_409(t *testing.T) {

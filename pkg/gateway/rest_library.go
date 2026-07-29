@@ -109,6 +109,12 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleLibraryUpload(w, r, workspaceID)
+	case "mkdir":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleLibraryMkdir(w, r, workspaceID)
 	case "rename":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -129,10 +135,16 @@ func (a *restAPI) HandleLibrary(w http.ResponseWriter, r *http.Request) {
 // mapLibraryErr writes the appropriate HTTP error response for an error
 // returned by pkg/library, per library-spec.md's per-operation status
 // table: ErrInvalidPath/ErrNotDir → 400, ErrOutsideRoot → 403,
-// ErrNotFound/ErrIsDir → 404 (the contract pairs "path does not exist" and
-// "path names a directory" under the same 404 for every file-scoped
-// operation), ErrAlreadyExists → 409, anything else → 500 (logged).
+// *DestinationParentNotFoundError → 404 with the missing directory named
+// (checked BEFORE the generic ErrNotFound case, since it wraps ErrNotFound
+// and would otherwise also match that arm — UAT Issue 4: a bare "not found"
+// gave no way to tell "source is missing" from "destination folder doesn't
+// exist yet", nor any path to success), ErrNotFound/ErrIsDir → 404 (the
+// contract pairs "path does not exist" and "path names a directory" under
+// the same 404 for every file-scoped operation), ErrAlreadyExists → 409,
+// anything else → 500 (logged).
 func mapLibraryErr(w http.ResponseWriter, op, workspaceID string, err error) {
+	var destErr *library.DestinationParentNotFoundError
 	switch {
 	case errors.Is(err, library.ErrInvalidPath):
 		jsonErr(w, http.StatusBadRequest, "invalid path")
@@ -140,6 +152,10 @@ func mapLibraryErr(w http.ResponseWriter, op, workspaceID string, err error) {
 		jsonErr(w, http.StatusBadRequest, "path is not a directory")
 	case errors.Is(err, library.ErrOutsideRoot):
 		jsonErr(w, http.StatusForbidden, "path resolves outside the workspace work tree")
+	case errors.As(err, &destErr):
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf(
+			"destination directory %q does not exist — create it first with POST /library/{workspace_id}/mkdir",
+			destErr.Parent))
 	case errors.Is(err, library.ErrNotFound), errors.Is(err, library.ErrIsDir):
 		jsonErr(w, http.StatusNotFound, "not found")
 	case errors.Is(err, library.ErrAlreadyExists):
@@ -480,6 +496,53 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 		"path": targetDir, "count": len(resp.Entries),
 	})
 	jsonCreated(w, resp)
+}
+
+// --- POST /library/{workspace_id}/mkdir ---
+
+// handleLibraryMkdir creates a directory in workspaceID's work tree,
+// creating any missing intermediate directories along the way (UAT Issue 4:
+// previously there was no way for a caller to create a folder at all, and a
+// clean, non-malicious nested Move/Copy destination like "subfolder/test.txt"
+// had no path to success because those operations deliberately do not
+// auto-create missing parents — see requireParentDir's doc). Idempotent:
+// creating a directory that already exists returns 200 with its existing
+// entry rather than an error; 409 if a regular FILE already occupies path.
+func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	var req gen.LibraryMkdirRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LibraryMkdirRequest", &req, validateEnabled) {
+		return
+	}
+	rel, err := library.CleanRelPath(req.Path)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	fi, created, err := root.Mkdir(rel)
+	if err != nil {
+		mapLibraryErr(w, "mkdir", workspaceID, err)
+		return
+	}
+	entry := library.EntryFromInfo(rel, fi)
+	a.logLibraryAudit(r, "library.mkdir", workspaceID, map[string]any{"path": rel, "created": created})
+	if created {
+		jsonCreated(w, entry)
+	} else {
+		jsonOK(w, entry)
+	}
 }
 
 // --- GET /library/{workspace_id}/download ---

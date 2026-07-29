@@ -863,7 +863,9 @@ func FixtureMessageFrame_Populated() MessageFrame {
 }
 
 // FixtureMessageFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="" and content="" (content has minLength:1).
+// Expected: FAIL — type="" fails the const:"message" check, and content=""
+// with no media satisfies neither anyOf branch (content minLength:1 OR
+// media minItems:1).
 func FixtureMessageFrame_ZeroValue() MessageFrame {
 	return MessageFrame{}
 }
@@ -874,6 +876,27 @@ func FixtureMessageFrame_Edge() MessageFrame {
 		Type:    "message",
 		Content: repeatStr("x", 5000), // well under maxLength:5242880
 		// no session_id — starts a new session
+	}
+}
+
+// FixtureMessageFrame_EmptyContentWithMedia — UAT Issue 5: an
+// attachment-only send legitimately has no caption. content="" is valid
+// ONLY because media is present and non-empty (the anyOf's second branch).
+func FixtureMessageFrame_EmptyContentWithMedia() MessageFrame {
+	return MessageFrame{
+		Type:    "message",
+		Content: "",
+		Media:   []string{"media://workspace/ws1/att1"},
+	}
+}
+
+// FixtureMessageFrame_EmptyContentNoMedia — content="" and no media at all
+// must still be rejected: the content-or-media invariant must not degrade
+// into "content is always optional".
+func FixtureMessageFrame_EmptyContentNoMedia() MessageFrame {
+	return MessageFrame{
+		Type:    "message",
+		Content: "",
 	}
 }
 

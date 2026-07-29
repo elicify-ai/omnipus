@@ -15,10 +15,10 @@ export const AuthFrame = z
   })
   .strict();
 
-export const MessageFrame = z
+export const MessageFrameBase = z
   .object({
     type: z.literal("message"),
-    content: z.string().min(1).max(5242880),
+    content: z.string().max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
@@ -31,6 +31,10 @@ export const MessageFrame = z
     .passthrough().optional(),
   })
   .strict();
+
+export const MessageFrame = MessageFrameBase.refine((v) => ((typeof v["content"] === "string" && v["content"].length >= 1)) || ((Array.isArray(v["media"]) && v["media"].length >= 1)), {
+  message: "does not satisfy the schema's anyOf constraint",
+});
 
 export const CancelFrame = z
   .object({
@@ -605,7 +609,7 @@ export const ReplayErrorPayload = z
 
 export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
-  MessageFrame,
+  MessageFrameBase,
   CancelFrame,
   PingFrame,
   PongFrame,

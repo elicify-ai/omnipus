@@ -5,20 +5,38 @@ description: >
     - With session_id: message is appended to the existing session.
   The discriminant is the PRESENCE of session_id, not a different type value.
   Both variants share type: "message".
+
+  content must always be present as a key, but MAY be an empty string when
+  media is also present and non-empty — an attachment-only send legitimately
+  has no caption (UAT Issue 5). The anyOf below enforces the actual
+  invariant: content has at least 1 character, OR media has at least 1
+  entry. A message with neither (empty content and no/empty media) is still
+  rejected — this is NOT "content is always optional".
 type: object
 required:
   - type
   - content
 additionalProperties: false
+anyOf:
+  - properties:
+      content:
+        minLength: 1
+  - required:
+      - media
+    properties:
+      media:
+        minItems: 1
 properties:
   type:
     type: string
     const: message
   content:
     type: string
-    minLength: 1
     maxLength: 5242880
-    description: User message text. Maximum 5 MiB enforced by the server.
+    description: >
+      User message text. Maximum 5 MiB enforced by the server. May be an
+      empty string ONLY when media is present and non-empty (an
+      attachment-only send with no caption) — see the schema-level anyOf.
   session_id:
     type: string
     minLength: 1

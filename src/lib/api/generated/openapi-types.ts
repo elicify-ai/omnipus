@@ -2444,7 +2444,7 @@ export interface paths {
         put?: never;
         /**
          * Move a file or directory, optionally across two workspaces
-         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
          */
         post: operations["moveLibraryEntry"];
         delete?: never;
@@ -2464,7 +2464,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a file or directory, optionally across two workspaces
-         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
          */
         post: operations["copyLibraryEntry"];
         delete?: never;
@@ -2541,6 +2541,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/mkdir": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a directory in a workspace's work tree
+         * @description Creates the directory at path, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Idempotent: returns 200 if a directory already exists at path; 201 if a new directory (or chain of directories) was created. Returns 403 if path resolves outside the workspace's work tree; 409 if a regular FILE already exists at path.
+         */
+        post: operations["createLibraryDirectory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/rename": {
         parameters: {
             query?: never;
@@ -2552,7 +2572,7 @@ export interface paths {
         put?: never;
         /**
          * Rename or move a file or directory within one workspace
-         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from"; 409 if an entry already exists at "to".
+         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to".
          */
         post: operations["renameLibraryEntry"];
         delete?: never;
@@ -3506,6 +3526,17 @@ export interface components {
              * @example reports/report.md
              */
             to_path: string;
+        };
+        /**
+         * LibraryMkdirRequest
+         * @description Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
+         */
+        LibraryMkdirRequest: {
+            /**
+             * @description Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
+             * @example projects/2026/reports
+             */
+            path: string;
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
@@ -13838,6 +13869,48 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    createLibraryDirectory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryMkdirRequest"];
+            };
+        };
+        responses: {
+            /** @description The directory already existed — no change made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            /** @description The directory (and any missing intermediate directories) was created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     renameLibraryEntry: {
         parameters: {
             query?: never;
@@ -14281,6 +14354,7 @@ export type LibraryContentRequest = components["schemas"]["LibraryContentRequest
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
 export type LibraryTransferRequest = components["schemas"]["LibraryTransferRequest"];
+export type LibraryMkdirRequest = components["schemas"]["LibraryMkdirRequest"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];

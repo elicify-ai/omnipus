@@ -1085,14 +1085,32 @@ func TestContract_MessageFrame_Populated(t *testing.T) {
 }
 
 func TestContract_MessageFrame_ZeroValue(t *testing.T) {
-	// type="" and content="" — both required; content has minLength:1
+	// type="" fails the const:"message" check; content="" with no media
+	// also fails the anyOf (content minLength:1 OR media minItems:1).
 	mustFailAsyncAPI(t, "MessageFrame", FixtureMessageFrame_ZeroValue(),
-		"zero value has empty required type and content fields (content has minLength:1)")
+		"zero value has empty required type field and satisfies neither anyOf branch")
 }
 
 func TestContract_MessageFrame_Edge(t *testing.T) {
 	// Large content without session_id (starts a new session) — valid
 	mustPassAsyncAPI(t, "MessageFrame", FixtureMessageFrame_Edge())
+}
+
+// TestContract_MessageFrame_EmptyContentWithMedia_Passes — UAT Issue 5: an
+// attachment-only chat send has legitimately empty content. This must pass
+// schema validation (previously it tripped outbound MessageFrame schema
+// validation with a ZodError on the SPA side, even though the send itself
+// worked).
+func TestContract_MessageFrame_EmptyContentWithMedia_Passes(t *testing.T) {
+	mustPassAsyncAPI(t, "MessageFrame", FixtureMessageFrame_EmptyContentWithMedia())
+}
+
+// TestContract_MessageFrame_EmptyContentNoMedia_Fails proves the fix did NOT
+// weaken content into "always optional" — empty content with no attachment
+// at all must still be rejected.
+func TestContract_MessageFrame_EmptyContentNoMedia_Fails(t *testing.T) {
+	mustFailAsyncAPI(t, "MessageFrame", FixtureMessageFrame_EmptyContentNoMedia(),
+		"empty content with no media satisfies neither anyOf branch")
 }
 
 // ── PingFrame ─────────────────────────────────────────────────────────────────

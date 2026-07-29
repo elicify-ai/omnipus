@@ -46,13 +46,15 @@ tags:
 - name: Library
   description: >
     File explorer over the FULL workspace work tree (library-spec.md D-2)
-    — list, read, write, rename/move, copy, delete, upload, and download
-    files by workspace-relative path. Entries are paths, not UUIDs,
-    distinct from the UUID-keyed Workspace Media library. Move and copy
-    additionally support transferring an entry across two DIFFERENT
-    workspaces (user-only, never agent-invoked). Dot-prefixed entries
-    (e.g. the reserved work/.library/ upload directory) are hidden from
-    directory listings by default.
+    — list, read, write, rename/move, copy, delete, upload, download, and
+    create-directory operations by workspace-relative path. Entries are
+    paths, not UUIDs, distinct from the UUID-keyed Workspace Media library.
+    Move and copy additionally support transferring an entry across two
+    DIFFERENT workspaces (user-only, never agent-invoked). Dot-prefixed
+    entries (e.g. the reserved work/.library/ upload directory) are hidden
+    from directory listings by default; a name beginning with a ".."
+    segment is rejected outright (not merely hidden) since that heuristic
+    would otherwise also match it.
 - name: Preview
   description: Agent-generated preview content served on the main gateway listener at /preview/ (token-authenticated, ADR-044)
 - name: Agents
@@ -135,6 +137,8 @@ components:
       $ref: ./components/schemas/LibraryUploadResponse.yaml
     LibraryTransferRequest:
       $ref: ./components/schemas/LibraryTransferRequest.yaml
+    LibraryMkdirRequest:
+      $ref: ./components/schemas/LibraryMkdirRequest.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
@@ -5775,8 +5779,13 @@ paths:
         stay confined to their own workspace's work tree (enforced
         server-side). Returns 403 if either path resolves outside its
         workspace's work tree; 404 if from_workspace_id/to_workspace_id
-        does not exist or nothing exists at from_path; 409 if an entry
-        already exists at to_path.
+        does not exist, nothing exists at from_path, OR to_path's parent
+        directory does not exist yet — this operation deliberately does NOT
+        auto-create missing destination directories (matching `mv`
+        semantics), but the 404 message names the specific missing
+        directory rather than a bare "not found"; create it first with
+        POST /library/{workspace_id}/mkdir. 409 if an entry already exists
+        at to_path.
       tags:
       - Library
       security:
@@ -5821,8 +5830,13 @@ paths:
         agents stay confined to their own workspace's work tree (enforced
         server-side). Returns 403 if either path resolves outside its
         workspace's work tree; 404 if from_workspace_id/to_workspace_id
-        does not exist or nothing exists at from_path; 409 if an entry
-        already exists at to_path.
+        does not exist, nothing exists at from_path, OR to_path's parent
+        directory does not exist yet — this operation deliberately does NOT
+        auto-create missing destination directories (matching `cp`
+        semantics), but the 404 message names the specific missing
+        directory rather than a bare "not found"; create it first with
+        POST /library/{workspace_id}/mkdir. 409 if an entry already exists
+        at to_path.
       tags:
       - Library
       security:
@@ -6114,6 +6128,61 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
+  /library/{workspace_id}/mkdir:
+    post:
+      operationId: createLibraryDirectory
+      summary: Create a directory in a workspace's work tree
+      description: >
+        Creates the directory at path, creating any missing intermediate
+        directories along the way (mkdir -p semantics) — the sole
+        directory-creation primitive the Library API exposes. Idempotent:
+        returns 200 if a directory already exists at path; 201 if a new
+        directory (or chain of directories) was created. Returns 403 if path
+        resolves outside the workspace's work tree; 409 if a regular FILE
+        already exists at path.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryMkdirRequest'
+      responses:
+        '200':
+          description: The directory already existed — no change made.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '201':
+          description: The directory (and any missing intermediate directories) was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
   /library/{workspace_id}/rename:
     post:
       operationId: renameLibraryEntry
@@ -6127,9 +6196,17 @@ paths:
         from_workspace_id == to_workspace_id == {workspace_id}) — kept as
         a dedicated operation, alongside /library/move, so a caller doing
         only in-workspace renames never needs to know its own workspace id
-        twice. Returns 403 if either path resolves outside the workspace's
-        work tree; 404 if nothing exists at "from"; 409 if an entry
-        already exists at "to".
+        twice. Returns 400 if "to" begins with a ".." segment anywhere in
+        the path (rejected outright as a sanity check — such a name isn't a
+        traversal, but this package's hidden-entry heuristic also matches
+        it, so it would otherwise succeed and immediately vanish from the
+        default listing); 403 if either path resolves outside the
+        workspace's work tree; 404 if nothing exists at "from" OR "to"'s
+        parent directory does not exist yet (this operation deliberately
+        does NOT auto-create missing destination directories — the message
+        names the specific missing directory; create it first with
+        POST /library/{workspace_id}/mkdir); 409 if an entry already exists
+        at "to".
       tags:
       - Library
       security:

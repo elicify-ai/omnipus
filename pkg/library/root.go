@@ -72,6 +72,34 @@ var (
 	ErrAlreadyExists = errors.New("library: destination already exists")
 )
 
+// DestinationParentNotFoundError marks a rename/move/copy/write destination
+// whose parent directory does not exist yet (UAT Issue 4: a bare 404 gave
+// the caller no way to tell "your source doesn't exist" from "your
+// destination's parent folder doesn't exist", and no path to success either
+// way since this package had no directory-creation primitive). Wraps
+// ErrNotFound — so `errors.Is(err, ErrNotFound)` and the existing 404
+// mapping keep working unchanged — but is also independently identifiable
+// via errors.As so the REST layer can name the specific missing directory
+// and point the caller at POST /library/{workspace_id}/mkdir instead of
+// returning a bare "not found". Move/Copy/Rename deliberately do NOT
+// auto-create missing parents (see Root.requireParentDir's doc for why);
+// Mkdir is the caller's explicit, deliberate way to create the folder first.
+type DestinationParentNotFoundError struct {
+	// Parent is the missing parent directory's workspace-relative path.
+	// Never "" — the work-tree root always exists (OpenRoot creates it),
+	// so a missing parent is always a real, nameable subdirectory.
+	Parent string
+}
+
+func (e *DestinationParentNotFoundError) Error() string {
+	return fmt.Sprintf("library: destination parent directory %q does not exist", e.Parent)
+}
+
+// Unwrap makes errors.Is(err, ErrNotFound) true for an
+// *DestinationParentNotFoundError, so any existing caller checking only for
+// the generic sentinel keeps working unchanged.
+func (e *DestinationParentNotFoundError) Unwrap() error { return ErrNotFound }
+
 // Root is a path-safe handle onto one workspace's work/ directory, backed by
 // an os.Root opened at that directory. Every method takes an
 // ALREADY-CLEANED relative path (see CleanRelPath) — Root does not
@@ -154,6 +182,27 @@ func CleanRelPath(raw string) (string, error) {
 	if !fs.ValidPath(cleaned) {
 		return "", ErrInvalidPath
 	}
+	// Reject any path element that STARTS WITH ".." but isn't exactly ".."
+	// (fs.ValidPath already rejected the exact-match case above) — e.g.
+	// "..%2fdana-pwned-encoded.txt" or "folder/..sneaky". UAT Issue 6: such
+	// a name is lexically safe (no real traversal — os.Root still confines
+	// it) but this package's "hidden" heuristic (entryFromParts:
+	// strings.HasPrefix(name, ".")) also matches it, so it silently
+	// vanishes from the default (non-hidden) listing the instant it's
+	// created — confusing, not a security hole, but avoidable. Rather than
+	// carve out a narrower "hidden" definition (D-8's contract is "name
+	// begins with a dot", defined once for client and server; a
+	// double-dot-prefixed name IS a dotfile by that same convention) this
+	// rejects the name outright at creation time, as a sanity check —
+	// simpler than teaching every caller a special case, and it matches how
+	// most real file managers refuse to create/rename to a name starting
+	// with "..". Applies to every path operation (read and write) so a
+	// name like this can never enter or be addressed through the Library.
+	for _, seg := range strings.Split(cleaned, "/") {
+		if strings.HasPrefix(seg, "..") {
+			return "", ErrInvalidPath
+		}
+	}
 	return cleaned, nil
 }
 
@@ -205,6 +254,17 @@ func translateErr(err error) error {
 	}
 	if strings.Contains(err.Error(), "escapes from parent") {
 		return ErrOutsideRoot
+	}
+	// os.Root.MkdirAll (and any other syscall that walks an intermediate
+	// path component) reports a component that exists but is a regular
+	// file — not a directory — as a *PathError wrapping syscall.ENOTDIR,
+	// whose message is "not a directory" on every platform Omnipus targets.
+	// No portable sentinel is exported for this (same reasoning translateErr
+	// already applies to "escapes from parent" above), so match by
+	// substring. Surfaces as ErrNotDir (400) — e.g. Root.Mkdir("a/b/c")
+	// when "a" already exists as a file.
+	if strings.Contains(err.Error(), "not a directory") {
+		return ErrNotDir
 	}
 	return err
 }

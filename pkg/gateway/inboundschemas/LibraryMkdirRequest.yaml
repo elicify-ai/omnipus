@@ -1,0 +1,30 @@
+title: LibraryMkdirRequest
+description: >
+  Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a
+  directory at path within the workspace's work tree, creating any missing
+  intermediate directories along the way (mkdir -p semantics) — the sole
+  directory-creation primitive the Library API exposes. Added to close a UAT
+  gap: without it, there was no way to create a folder at all, and a clean,
+  non-malicious nested Move/Copy destination whose parent didn't exist yet
+  (e.g. "subfolder/test.txt") had no path to success — see
+  POST /api/v1/library/move and POST /api/v1/library/copy, which
+  deliberately still require the destination's immediate parent directory
+  to already exist rather than auto-creating it (matching `mv`/`cp`
+  semantics — this endpoint is the explicit, deliberate way to create that
+  folder first). Idempotent: if a directory already exists at path, the
+  request succeeds (200) rather than erroring; rejected 409 if a regular
+  FILE already exists there.
+type: object
+additionalProperties: false
+required:
+  - path
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative directory path to create, forward-slash separated.
+      Never absolute and never containing a ".." segment (library-spec.md
+      Constraints). May name a nested path whose intermediate directories do
+      not exist yet — all of them are created, matching `mkdir -p`.
+    example: "projects/2026/reports"

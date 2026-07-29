@@ -2464,6 +2464,7 @@ export const uploadLibraryFiles_Body = z
 export const LibraryUploadResponse: z.ZodType<LibraryUploadResponse> = z.object(
   { entries: z.array(LibraryEntry) }
 );
+export const LibraryMkdirRequest = z.object({ path: z.string().min(1) });
 export const LibraryRenameRequest = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
@@ -4427,9 +4428,62 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/library/:workspace_id/mkdir",
+    alias: "createLibraryDirectory",
+    description: `Creates the directory at path, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Idempotent: returns 200 if a directory already exists at path; 201 if a new directory (or chain of directories) was created. Returns 403 if path resolves outside the workspace&#x27;s work tree; 409 if a regular FILE already exists at path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ path: z.string().min(1) }),
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/library/:workspace_id/rename",
     alias: "renameLibraryEntry",
-    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot;; 409 if an entry already exists at &quot;to&quot;.
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;.
 `,
     requestFormat: "json",
     parameters: [
@@ -4535,7 +4589,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/library/copy",
     alias: "copyLibraryEntry",
-    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
 `,
     requestFormat: "json",
     parameters: [
@@ -4583,7 +4637,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/library/move",
     alias: "moveLibraryEntry",
-    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
 `,
     requestFormat: "json",
     parameters: [
@@ -8105,10 +8159,10 @@ export const AuthFrame = z
   })
   .strict();
 
-export const MessageFrame = z
+export const MessageFrameBase = z
   .object({
     type: z.literal("message"),
-    content: z.string().min(1).max(5242880),
+    content: z.string().max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
@@ -8121,6 +8175,10 @@ export const MessageFrame = z
     .passthrough().optional(),
   })
   .strict();
+
+export const MessageFrame = MessageFrameBase.refine((v) => ((typeof v["content"] === "string" && v["content"].length >= 1)) || ((Array.isArray(v["media"]) && v["media"].length >= 1)), {
+  message: "does not satisfy the schema's anyOf constraint",
+});
 
 // ── Validation policy note (mirrors MessageFrame.yaml) ────────────────────────
 // Outer MessageFrame is .strict(): unknown top-level keys are rejected (a
@@ -8708,7 +8766,7 @@ export const ReplayErrorPayload = z
 
 export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
-  MessageFrame,
+  MessageFrameBase,
   CancelFrame,
   PingFrame,
   PongFrame,

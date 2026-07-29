@@ -141,8 +141,15 @@ const maxUploadFilenameRunes = 256
 // same "duplicate the check, do not trust the neighbor" posture
 // pkg/media/library/library.go's safeWorkspaceDir already uses for
 // pkg/workspace's safeID, for the identical import-cycle reason). Rejects
-// empty, over-long, path-separator-bearing, control-character-bearing, or
-// "."/".." names.
+// empty, over-long, path-separator-bearing, control-character-bearing,
+// "."/".." exact matches, or any name STARTING WITH ".." (UAT Issue 6: such
+// a name isn't a traversal — it is validated as a single component, never a
+// path — but pkg/library's "hidden" heuristic (name begins with a dot) also
+// matches it, so an upload named e.g. "..sneaky.pdf" would land, then
+// silently vanish from the default Library listing the instant it's
+// created. Rejecting it here closes the gap at both dual-write call sites
+// (pkg/gateway/rest.go's chat upload and rest_library.go's Library upload,
+// the two callers of this shared sanitizer) rather than only at rename.
 func SanitizeUploadFilename(name string) (string, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -154,7 +161,7 @@ func SanitizeUploadFilename(name string) (string, error) {
 	if strings.ContainsAny(trimmed, `/\`) {
 		return "", fmt.Errorf("upload filename must not contain a path separator")
 	}
-	if trimmed == "." || trimmed == ".." {
+	if trimmed == "." || strings.HasPrefix(trimmed, "..") {
 		return "", fmt.Errorf("invalid upload filename %q", trimmed)
 	}
 	for _, r := range trimmed {

@@ -5396,6 +5396,12 @@ type LibraryEntry struct {
 	Size int64 `json:"size"`
 }
 
+// LibraryMkdirRequest Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
+type LibraryMkdirRequest struct {
+	// Path Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
+	Path string `json:"path"`
+}
+
 // LibraryRenameRequest Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
 type LibraryRenameRequest struct {
 	// From Current workspace-relative path of the file or directory, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
@@ -8881,6 +8887,9 @@ type MoveLibraryEntryJSONRequestBody = LibraryTransferRequest
 
 // PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
 type PutLibraryContentJSONRequestBody = LibraryContentRequest
+
+// CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
+type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest
 
 // RenameLibraryEntryJSONRequestBody defines body for RenameLibraryEntry for application/json ContentType.
 type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest

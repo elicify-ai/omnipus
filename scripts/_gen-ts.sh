@@ -259,12 +259,16 @@ const POLICY_COMMENTS = {
 
 let out = src;
 for (const [name, comment] of Object.entries(POLICY_COMMENTS)) {
-  // Anchor: insert *after* the entire `export const <name> = z … ;` block
+  // Anchor: insert *after* the entire `export const <name> = … ;` block
   // ends. The codegen emits each definition as a chained expression ending
-  // with `;` — possibly with intermediate calls like `.passthrough().optional()`.
-  // Match the shortest span from `export const <name>` to the next `;\n` that
-  // sits on its own line.
-  const re = new RegExp(`(export const ${name} = z[\\s\\S]*?;\\n)`, "m");
+  // with `;` — possibly with intermediate calls like `.passthrough().optional()`,
+  // or (for a schema with a top-level anyOf, e.g. MessageFrame) a reference
+  // to a sibling `<Name>Base.refine(...)` rather than starting with a
+  // literal `z` — so the anchor does NOT require the right-hand side to
+  // start with `z`, only that it starts right after `=`. Match the
+  // shortest span from `export const <name>` to the next `;\n` that sits on
+  // its own line.
+  const re = new RegExp(`(export const ${name} = [\\s\\S]*?;\\n)`, "m");
   if (!re.test(out)) {
     console.warn(`  WARN: could not find ${name} definition to annotate`);
     continue;

@@ -309,7 +309,7 @@ type MediaPart struct {
 	Url         string  `json:"url"`
 }
 
-// MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one.
+// MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one. content must always be present as a key, but MAY be an empty string when media is also present and non-empty — an attachment-only send legitimately has no caption (UAT Issue 5). The anyOf below enforces the actual invariant: content has at least 1 character, OR media has at least 1 entry — a message with neither is still rejected.
 type MessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`

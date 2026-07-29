@@ -5,6 +5,7 @@
 package library
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path"
@@ -242,9 +243,18 @@ func dirParent(rel string) string {
 // putLibraryContent, uploadLibraryFiles, and rename/move/copy destinations
 // all share (library-spec.md; none of these operations auto-create
 // intermediate directories beyond the work-tree root itself, which OpenRoot
-// already guarantees).
+// already guarantees). A missing parent is reported as
+// *DestinationParentNotFoundError (not the bare ErrNotFound StatDir itself
+// would return) so the REST layer can name the missing directory instead of
+// a generic "not found" (UAT Issue 4) — Unwrap() still makes
+// errors.Is(err, ErrNotFound) true for it.
 func (r *Root) requireParentDir(rel string) error {
 	parent := dirParent(rel)
-	_, err := r.StatDir(parent)
-	return err
+	if _, err := r.StatDir(parent); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return &DestinationParentNotFoundError{Parent: parent}
+		}
+		return err
+	}
+	return nil
 }

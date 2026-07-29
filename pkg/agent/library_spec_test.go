@@ -224,6 +224,15 @@ func TestSanitizeUploadFilename(t *testing.T) {
 		{"dot dot", "..", true},
 		{"control character", "bad\nname.txt", true},
 		{"over-long", string(make([]byte, 300)), true},
+		// UAT Issue 6: a name starting with ".." isn't a traversal (it's
+		// validated as a single component) but pkg/library's hidden
+		// heuristic also matches it, so it must be rejected outright here
+		// rather than silently vanishing from the default Library listing.
+		{"leading dotdot with suffix", "..sneaky.pdf", true},
+		{"leading dotdot url-encoded slash", "..%2fdana-pwned-encoded.txt", true},
+		{"triple leading dot", "...triple-dot.txt", true},
+		// A conventional single-leading-dot dotfile must remain allowed.
+		{"legit single-dot dotfile", ".env", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
