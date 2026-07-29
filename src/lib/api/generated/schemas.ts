@@ -115,6 +115,7 @@ type LibraryEntry = {
   name: string;
   path: string;
   is_dir: boolean;
+  is_hidden: boolean;
   size: number;
   modified_at: string;
   mime?: string | undefined;
@@ -2428,10 +2429,17 @@ export const LibraryWorkspaceNode = z.object({
   name: z.string(),
   entry_count: z.number().int().gte(0),
 });
+export const LibraryTransferRequest = z.object({
+  from_workspace_id: z.string(),
+  from_path: z.string().min(1),
+  to_workspace_id: z.string(),
+  to_path: z.string().min(1),
+});
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
   is_dir: z.boolean(),
+  is_hidden: z.boolean(),
   size: z.number().int().gte(0),
   modified_at: z.string().datetime({ offset: true }),
   mime: z.string().optional(),
@@ -4320,7 +4328,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/library/:workspace_id/entries",
     alias: "listLibraryEntries",
-    description: `Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root. Returns 403 if path resolves outside the workspace&#x27;s work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
+    description: `Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root — the Library explorer shows the WHOLE work/ directory, not merely the reserved work/.library/ upload directory (that is just one entry inside it). By default, entries whose name begins with a dot (&quot;.&quot;) are omitted from the listing — see include_hidden to include them and LibraryEntry.is_hidden for the definition. Returns 403 if path resolves outside the workspace&#x27;s work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
 `,
     requestFormat: "json",
     parameters: [
@@ -4333,6 +4341,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         name: "path",
         type: "Query",
         schema: z.string().optional().default(""),
+      },
+      {
+        name: "include_hidden",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
       },
     ],
     response: z.array(LibraryEntry),
@@ -4416,7 +4429,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/library/:workspace_id/rename",
     alias: "renameLibraryEntry",
-    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as move. Returns 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot;; 409 if an entry already exists at &quot;to&quot;.
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot;; 409 if an entry already exists at &quot;to&quot;.
 `,
     requestFormat: "json",
     parameters: [
@@ -4509,6 +4522,102 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/copy",
+    alias: "copyLibraryEntry",
+    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryTransferRequest,
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/move",
+    alias: "moveLibraryEntry",
+    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryTransferRequest,
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
       {

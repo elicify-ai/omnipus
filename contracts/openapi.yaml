@@ -45,10 +45,14 @@ tags:
   description: Agent workspace file access
 - name: Library
   description: >
-    File explorer over workspace work trees (library-spec.md D-2) — list,
-    read, write, rename, delete, upload, and download files by
-    workspace-relative path. Entries are paths, not UUIDs, distinct from
-    the UUID-keyed Workspace Media library.
+    File explorer over the FULL workspace work tree (library-spec.md D-2)
+    — list, read, write, rename/move, copy, delete, upload, and download
+    files by workspace-relative path. Entries are paths, not UUIDs,
+    distinct from the UUID-keyed Workspace Media library. Move and copy
+    additionally support transferring an entry across two DIFFERENT
+    workspaces (user-only, never agent-invoked). Dot-prefixed entries
+    (e.g. the reserved work/.library/ upload directory) are hidden from
+    directory listings by default.
 - name: Preview
   description: Agent-generated preview content served on the main gateway listener at /preview/ (token-authenticated, ADR-044)
 - name: Agents
@@ -129,6 +133,8 @@ components:
       $ref: ./components/schemas/LibraryRenameRequest.yaml
     LibraryUploadResponse:
       $ref: ./components/schemas/LibraryUploadResponse.yaml
+    LibraryTransferRequest:
+      $ref: ./components/schemas/LibraryTransferRequest.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
@@ -5752,6 +5758,101 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
+  /library/move:
+    post:
+      operationId: moveLibraryEntry
+      summary: Move a file or directory, optionally across two workspaces
+      description: >
+        Moves the entry at from_path (inside from_workspace_id's work
+        tree) to to_path (inside to_workspace_id's work tree). Not scoped
+        under {workspace_id} like the other Library operations because
+        source and destination can be different workspaces — see
+        LibraryTransferRequest. A same-workspace move (from_workspace_id
+        == to_workspace_id) is exactly what
+        POST /library/{workspace_id}/rename does as same-workspace sugar
+        over this operation. Cross-workspace transfer is permitted for the
+        authenticated UI/CLI user only — never for an agent tool; agents
+        stay confined to their own workspace's work tree (enforced
+        server-side). Returns 403 if either path resolves outside its
+        workspace's work tree; 404 if from_workspace_id/to_workspace_id
+        does not exist or nothing exists at from_path; 409 if an entry
+        already exists at to_path.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryTransferRequest'
+      responses:
+        '200':
+          description: The moved entry, at its new workspace and path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/copy:
+    post:
+      operationId: copyLibraryEntry
+      summary: Copy a file or directory, optionally across two workspaces
+      description: >
+        Copies the entry at from_path (inside from_workspace_id's work
+        tree) to to_path (inside to_workspace_id's work tree), leaving the
+        source in place. Directory copies are recursive. Not scoped under
+        {workspace_id} for the same reason as /library/move — see
+        LibraryTransferRequest. Cross-workspace transfer is permitted for
+        the authenticated UI/CLI user only — never for an agent tool;
+        agents stay confined to their own workspace's work tree (enforced
+        server-side). Returns 403 if either path resolves outside its
+        workspace's work tree; 404 if from_workspace_id/to_workspace_id
+        does not exist or nothing exists at from_path; 409 if an entry
+        already exists at to_path.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryTransferRequest'
+      responses:
+        '201':
+          description: The new copy, at its destination workspace and path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
   /library/{workspace_id}/entries:
     get:
       operationId: listLibraryEntries
@@ -5760,9 +5861,14 @@ paths:
         Lists the entries directly inside the given workspace-relative
         directory path (library-spec.md D-2 — entries are paths, not
         UUIDs). Omit path or pass an empty string to list the work-tree
-        root. Returns 403 if path resolves outside the workspace's work
-        tree (traversal or an out-of-root symlink); 404 if the workspace or
-        the directory itself does not exist.
+        root — the Library explorer shows the WHOLE work/ directory, not
+        merely the reserved work/.library/ upload directory (that is just
+        one entry inside it). By default, entries whose name begins with a
+        dot (".") are omitted from the listing — see include_hidden to
+        include them and LibraryEntry.is_hidden for the definition. Returns
+        403 if path resolves outside the workspace's work tree (traversal
+        or an out-of-root symlink); 404 if the workspace or the directory
+        itself does not exist.
       tags:
       - Library
       security:
@@ -5783,7 +5889,19 @@ paths:
         description: >
           Workspace-relative directory path to list. Empty or absent lists
           the work-tree root.
-        example: "uploads"
+        example: "notes"
+      - name: include_hidden
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+        description: >
+          When true, also returns entries whose name begins with a dot
+          (".") — e.g. the reserved work/.library/ upload directory.
+          Defaults to false (hidden entries omitted) so the explorer's
+          default view matches a conventional file browser.
+        example: false
       responses:
         '200':
           description: Entries directly inside the requested directory.
@@ -5999,13 +6117,19 @@ paths:
   /library/{workspace_id}/rename:
     post:
       operationId: renameLibraryEntry
-      summary: Rename or move a file or directory in a workspace's work tree
+      summary: Rename or move a file or directory within one workspace
       description: >
-        Renames or moves the entry at "from" to "to" (library-spec.md D-2).
-        "to" may name a different parent directory than "from", so this
-        operation doubles as move. Returns 403 if either path resolves
-        outside the workspace's work tree; 404 if nothing exists at
-        "from"; 409 if an entry already exists at "to".
+        Renames or moves the entry at "from" to "to" within this single
+        workspace's work tree (library-spec.md D-2). "to" may name a
+        different parent directory than "from", so this operation doubles
+        as an in-workspace move. This is same-workspace sugar over
+        POST /library/move (equivalent to calling it with
+        from_workspace_id == to_workspace_id == {workspace_id}) — kept as
+        a dedicated operation, alongside /library/move, so a caller doing
+        only in-workspace renames never needs to know its own workspace id
+        twice. Returns 403 if either path resolves outside the workspace's
+        work tree; 404 if nothing exists at "from"; 409 if an entry
+        already exists at "to".
       tags:
       - Library
       security:

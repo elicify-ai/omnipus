@@ -2433,6 +2433,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move a file or directory, optionally across two workspaces
+         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+         */
+        post: operations["moveLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy a file or directory, optionally across two workspaces
+         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist or nothing exists at from_path; 409 if an entry already exists at to_path.
+         */
+        post: operations["copyLibraryEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/entries": {
         parameters: {
             query?: never;
@@ -2442,7 +2482,7 @@ export interface paths {
         };
         /**
          * List a directory inside a workspace's work tree
-         * @description Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root. Returns 403 if path resolves outside the workspace's work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
+         * @description Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root — the Library explorer shows the WHOLE work/ directory, not merely the reserved work/.library/ upload directory (that is just one entry inside it). By default, entries whose name begins with a dot (".") are omitted from the listing — see include_hidden to include them and LibraryEntry.is_hidden for the definition. Returns 403 if path resolves outside the workspace's work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
          */
         get: operations["listLibraryEntries"];
         put?: never;
@@ -2511,8 +2551,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Rename or move a file or directory in a workspace's work tree
-         * @description Renames or moves the entry at "from" to "to" (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as move. Returns 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from"; 409 if an entry already exists at "to".
+         * Rename or move a file or directory within one workspace
+         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from"; 409 if an entry already exists at "to".
          */
         post: operations["renameLibraryEntry"];
         delete?: never;
@@ -3306,7 +3346,7 @@ export interface components {
             name: string;
             /**
              * Format: int32
-             * @description Number of direct entries (files and directories) at the root of this workspace's work tree, counted non-recursively so this stays cheap across every workspace on one request. 0 when the work tree does not exist yet or is empty.
+             * @description Number of direct entries (files and directories) at the root of this workspace's work tree (workspaces/<id>/work/ — the same root GET .../entries lists), counted non-recursively so this stays cheap across every workspace on one request. Counts only non-hidden entries (see LibraryEntry.is_hidden), matching what the default (include_hidden=false) directory listing shows — the reserved work/.library/ upload directory is excluded from this count even though it exists. 0 when the work tree does not exist yet or has no visible entries.
              * @example 12
              */
             entry_count: number;
@@ -3322,8 +3362,8 @@ export interface components {
              */
             name: string;
             /**
-             * @description Workspace-relative path from the work-tree root, forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
-             * @example uploads/report.md
+             * @description Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+             * @example notes/report.md
              */
             path: string;
             /**
@@ -3331,6 +3371,11 @@ export interface components {
              * @example false
              */
             is_dir: boolean;
+            /**
+             * @description True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+             * @example false
+             */
+            is_hidden: boolean;
             /**
              * Format: int64
              * @description File size in bytes. Always 0 for directories.
@@ -3434,6 +3479,33 @@ export interface components {
         LibraryUploadResponse: {
             /** @description Entries created by this upload, in the order the multipart parts were received. */
             entries: components["schemas"]["LibraryEntry"][];
+        };
+        /**
+         * LibraryTransferRequest
+         * @description Request body shared by POST /api/v1/library/move and POST /api/v1/library/copy. Deliberately NOT scoped under {workspace_id} like the other Library operations — source and destination MAY be different workspaces, so both workspace ids are modelled explicitly here rather than one in the path and one in the body, making the two-workspace-capable shape obvious from the schema alone. A same-workspace move/copy is simply the case where from_workspace_id equals to_workspace_id (this is also what POST /api/v1/library/{workspace_id}/rename does under the hood — kept as same-workspace sugar over /move, see its own description).
+         *     Cross-workspace transfer is a USER-facing capability only: reachable exclusively from the authenticated UI/CLI caller's own request, never invoked by an agent tool — agents remain confined to their own workspace's work tree. This is enforced server-side; it is stated here so no future caller wires an agent-facing tool to this operation.
+         */
+        LibraryTransferRequest: {
+            /**
+             * @description Workspace ID that currently owns the file or directory.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            from_workspace_id: string;
+            /**
+             * @description Workspace-relative path of the file or directory within from_workspace_id's work tree (workspaces/<from_workspace_id>/work/), forward-slash separated. Never absolute and never containing a ".." segment.
+             * @example notes/draft.md
+             */
+            from_path: string;
+            /**
+             * @description Destination workspace ID. Equal to from_workspace_id for a same-workspace move/copy.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            to_workspace_id: string;
+            /**
+             * @description Destination workspace-relative path within to_workspace_id's work tree, same constraints as from_path. Rejected (409) if an entry already exists at this path.
+             * @example reports/report.md
+             */
+            to_path: string;
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
@@ -13528,14 +13600,79 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    moveLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description The moved entry, at its new workspace and path. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    copyLibraryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryTransferRequest"];
+            };
+        };
+        responses: {
+            /** @description The new copy, at its destination workspace and path. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     listLibraryEntries: {
         parameters: {
             query?: {
                 /**
                  * @description Workspace-relative directory path to list. Empty or absent lists the work-tree root.
-                 * @example uploads
+                 * @example notes
                  */
                 path?: string;
+                /**
+                 * @description When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
+                 * @example false
+                 */
+                include_hidden?: boolean;
             };
             header?: never;
             path: {
@@ -14143,6 +14280,7 @@ export type LibraryContentResponse = components["schemas"]["LibraryContentRespon
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];
+export type LibraryTransferRequest = components["schemas"]["LibraryTransferRequest"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];

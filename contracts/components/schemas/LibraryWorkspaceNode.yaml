@@ -26,7 +26,12 @@ properties:
     minimum: 0
     description: >
       Number of direct entries (files and directories) at the root of this
-      workspace's work tree, counted non-recursively so this stays cheap
-      across every workspace on one request. 0 when the work tree does not
-      exist yet or is empty.
+      workspace's work tree (workspaces/<id>/work/ — the same root
+      GET .../entries lists), counted non-recursively so this stays cheap
+      across every workspace on one request. Counts only non-hidden
+      entries (see LibraryEntry.is_hidden), matching what the default
+      (include_hidden=false) directory listing shows — the reserved
+      work/.library/ upload directory is excluded from this count even
+      though it exists. 0 when the work tree does not exist yet or has no
+      visible entries.
     example: 12

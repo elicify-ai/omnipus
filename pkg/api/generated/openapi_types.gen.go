@@ -5374,6 +5374,9 @@ type LibraryEntry struct {
 	// IsDir True when this entry is a directory.
 	IsDir bool `json:"is_dir"`
 
+	// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+	IsHidden bool `json:"is_hidden"`
+
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
 
@@ -5386,7 +5389,7 @@ type LibraryEntry struct {
 	// Name Base filename or directory name (final path segment).
 	Name string `json:"name"`
 
-	// Path Workspace-relative path from the work-tree root, forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+	// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
 	Path string `json:"path"`
 
 	// Size File size in bytes. Always 0 for directories.
@@ -5402,12 +5405,31 @@ type LibraryRenameRequest struct {
 	To string `json:"to"`
 }
 
+// LibraryTransferRequest Request body shared by POST /api/v1/library/move and POST /api/v1/library/copy. Deliberately NOT scoped under {workspace_id} like the other Library operations — source and destination MAY be different workspaces, so both workspace ids are modelled explicitly here rather than one in the path and one in the body, making the two-workspace-capable shape obvious from the schema alone. A same-workspace move/copy is simply the case where from_workspace_id equals to_workspace_id (this is also what POST /api/v1/library/{workspace_id}/rename does under the hood — kept as same-workspace sugar over /move, see its own description).
+// Cross-workspace transfer is a USER-facing capability only: reachable exclusively from the authenticated UI/CLI caller's own request, never invoked by an agent tool — agents remain confined to their own workspace's work tree. This is enforced server-side; it is stated here so no future caller wires an agent-facing tool to this operation.
+type LibraryTransferRequest struct {
+	// FromPath Workspace-relative path of the file or directory within from_workspace_id's work tree (workspaces/<from_workspace_id>/work/), forward-slash separated. Never absolute and never containing a ".." segment.
+	FromPath string `json:"from_path"`
+
+	// FromWorkspaceId Workspace ID that currently owns the file or directory.
+	FromWorkspaceId string `json:"from_workspace_id"`
+
+	// ToPath Destination workspace-relative path within to_workspace_id's work tree, same constraints as from_path. Rejected (409) if an entry already exists at this path.
+	ToPath string `json:"to_path"`
+
+	// ToWorkspaceId Destination workspace ID. Equal to from_workspace_id for a same-workspace move/copy.
+	ToWorkspaceId string `json:"to_workspace_id"`
+}
+
 // LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
 type LibraryUploadResponse struct {
 	// Entries Entries created by this upload, in the order the multipart parts were received.
 	Entries []struct {
 		// IsDir True when this entry is a directory.
 		IsDir bool `json:"is_dir"`
+
+		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+		IsHidden bool `json:"is_hidden"`
 
 		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 		IsTextEditable bool `json:"is_text_editable"`
@@ -5421,7 +5443,7 @@ type LibraryUploadResponse struct {
 		// Name Base filename or directory name (final path segment).
 		Name string `json:"name"`
 
-		// Path Workspace-relative path from the work-tree root, forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
 		Path string `json:"path"`
 
 		// Size File size in bytes. Always 0 for directories.
@@ -5431,7 +5453,7 @@ type LibraryUploadResponse struct {
 
 // LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
 type LibraryWorkspaceNode struct {
-	// EntryCount Number of direct entries (files and directories) at the root of this workspace's work tree, counted non-recursively so this stays cheap across every workspace on one request. 0 when the work tree does not exist yet or is empty.
+	// EntryCount Number of direct entries (files and directories) at the root of this workspace's work tree (workspaces/<id>/work/ — the same root GET .../entries lists), counted non-recursively so this stays cheap across every workspace on one request. Counts only non-hidden entries (see LibraryEntry.is_hidden), matching what the default (include_hidden=false) directory listing shows — the reserved work/.library/ upload directory is excluded from this count even though it exists. 0 when the work tree does not exist yet or has no visible entries.
 	EntryCount int32 `json:"entry_count"`
 
 	// Id Workspace identifier (matches Workspace.id).
@@ -8642,6 +8664,9 @@ type DeleteLibraryEntryParams struct {
 type ListLibraryEntriesParams struct {
 	// Path Workspace-relative directory path to list. Empty or absent lists the work-tree root.
 	Path *string `form:"path,omitempty" json:"path,omitempty"`
+
+	// IncludeHidden When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
+	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
 }
 
 // UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.
@@ -8847,6 +8872,12 @@ type SetGodModeJSONRequestBody = GodModeUpdateRequest
 
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
+
+// CopyLibraryEntryJSONRequestBody defines body for CopyLibraryEntry for application/json ContentType.
+type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
+
+// MoveLibraryEntryJSONRequestBody defines body for MoveLibraryEntry for application/json ContentType.
+type MoveLibraryEntryJSONRequestBody = LibraryTransferRequest
 
 // PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
 type PutLibraryContentJSONRequestBody = LibraryContentRequest

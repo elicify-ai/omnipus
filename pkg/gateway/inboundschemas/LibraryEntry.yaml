@@ -13,6 +13,7 @@ required:
   - name
   - path
   - is_dir
+  - is_hidden
   - size
   - modified_at
   - is_text_editable
@@ -26,15 +27,28 @@ properties:
     type: string
     minLength: 1
     description: >
-      Workspace-relative path from the work-tree root, forward-slash
-      separated. Never absolute and never containing a ".." segment — every
-      Library path operation resolves inside the target workspace's work
-      tree, with symlinks not followed out of the root (library-spec.md
-      Constraints).
-    example: "uploads/report.md"
+      Workspace-relative path from the work-tree root (workspaces/<id>/work/,
+      the root the Library explorer shows in full — not merely the reserved
+      work/.library/ upload directory), forward-slash separated. Never
+      absolute and never containing a ".." segment — every Library path
+      operation resolves inside the target workspace's work tree, with
+      symlinks not followed out of the root (library-spec.md Constraints).
+    example: "notes/report.md"
   is_dir:
     type: boolean
     description: True when this entry is a directory.
+    example: false
+  is_hidden:
+    type: boolean
+    description: >
+      True when this entry's name begins with a dot (".") — the sole,
+      explicit definition of "hidden" for the Library, so client and
+      server cannot drift on it. Excluded from
+      GET .../entries by default (see that operation's include_hidden
+      parameter); the reserved work-tree directory where uploads land,
+      work/.library/, is the prototypical hidden entry. Included and set
+      true here so the SPA can still style a hidden entry distinctly when
+      the caller explicitly asks to see it.
     example: false
   size:
     type: integer
