@@ -1121,14 +1121,37 @@ func isWithinWorkDir(path, dir string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// DetectFileClass is the exported wrapper around detectFileClass (D2,
-// library-spec): pkg/gateway's websocket handler uses it to classify a
-// resolved attachment's session.TranscriptEntry.Attachments[].Type as
-// "image", "document", or "file" — the SAME three-way classification the
-// step-5 offload guidance line already uses, so the persisted transcript
-// and the LLM-visible guidance never drift into two independent taxonomies.
+// DetectFileClass is the exported wrapper around detectFileClass: the
+// PRESENTATION-NOUN class ("image", "document", "file") used to phrase the
+// step-5 offload guidance line so a PDF reads "this document" and an AVIF
+// reads "this image".
+//
+// DO NOT use this for a wire-format field. It is a different taxonomy from
+// the Attachment/MediaPart contract enum — see DetectAttachmentType below,
+// which is what a persisted or transmitted attachment must use. Conflating
+// the two shipped a BLOCKER: "document" is not in the contract enum, the
+// SPA's strict Zod schema rejected the whole payload, and chat history
+// failed to load entirely with "Backend response failed validation" after
+// any document upload (found in live UAT, 2026-07-29).
 func DetectFileClass(mime, filename string) string {
 	return detectFileClass(mime, filename)
+}
+
+// DetectAttachmentType classifies a file into the MEDIA-CATEGORY taxonomy the
+// wire contract defines: exactly "image" | "audio" | "video" | "file" and
+// nothing else (contracts/components/schemas/Attachment.yaml, kept aligned
+// with MediaPart.yaml).
+//
+// This is the ONLY classifier valid for session.TranscriptEntry.Attachments[].Type
+// or any other field crossing the gateway/SPA boundary. It delegates to
+// inferMediaType, the same function the channel-message path already uses, so
+// there is one media-category implementation rather than two that can drift.
+//
+// The distinction from DetectFileClass above is deliberate and load-bearing:
+// a PDF is presentation-class "document" but media-category "file". Both are
+// correct in their own vocabulary; only one is legal on the wire.
+func DetectAttachmentType(mime, filename string) string {
+	return inferMediaType(filename, mime)
 }
 
 // detectFileClass returns the FR-021 presentation noun class for a file:

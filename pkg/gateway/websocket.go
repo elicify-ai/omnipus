@@ -1930,7 +1930,15 @@ func buildTranscriptAttachments(store media.MediaStore, refs []string, callerWor
 			}
 		}
 		out = append(out, session.Attachment{
-			Type:     agent.DetectFileClass(meta.ContentType, meta.Filename),
+			// DetectAttachmentType, NOT DetectFileClass. This value crosses
+			// the wire, so it must be the contract's media-category enum
+			// (image|audio|video|file). DetectFileClass returns the
+			// presentation-noun class (image|document|file) used to phrase
+			// the LLM guidance line — "document" is not a legal wire value.
+			// Using it here shipped a BLOCKER: the SPA's strict Zod schema
+			// rejected the whole messages payload, so chat history refused
+			// to load at all after any document upload (live UAT 2026-07-29).
+			Type:     agent.DetectAttachmentType(meta.ContentType, meta.Filename),
 			Path:     path,
 			Size:     size,
 			MIMEType: meta.ContentType,

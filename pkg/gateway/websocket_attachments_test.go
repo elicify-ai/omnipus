@@ -90,7 +90,20 @@ func TestBuildTranscriptAttachments_WorkspaceRef(t *testing.T) {
 			"a later turn, or a different agent after a handoff, must be able to act on this path directly")
 	assert.Equal(t, int64(len(fileContent)), got.Size)
 	assert.NotEmpty(t, got.MIMEType)
-	assert.Equal(t, "document", got.Type, "a .txt file is classified as a document by DetectFileClass")
+	// The persisted Type MUST be a member of the Attachment contract enum
+	// (image|audio|video|file) — this value crosses the wire and the SPA
+	// validates it with a strict Zod schema. An earlier revision asserted
+	// "document" here, matching an implementation that used DetectFileClass
+	// (the presentation-noun taxonomy used to phrase LLM guidance). That
+	// combination shipped a BLOCKER found in live UAT on 2026-07-29: the SPA
+	// rejected the entire messages payload and chat history refused to load
+	// with "Backend response failed validation" after any document upload.
+	// The test encoded the bug, so it could not catch it.
+	assert.Equal(t, "file", got.Type,
+		"a .txt must persist as the contract's media-category 'file', never the presentation-noun 'document'")
+	assert.Contains(t, []string{"image", "audio", "video", "file"}, got.Type,
+		"persisted attachment Type must be a member of the Attachment contract enum — anything else "+
+			"fails the SPA's strict schema validation and breaks history loading entirely")
 }
 
 // TestBuildTranscriptAttachments_UnresolvableRefSkippedNotFatal verifies a
