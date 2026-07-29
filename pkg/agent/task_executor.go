@@ -241,30 +241,24 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 }
 
 // transitionTaskLifecycle atomically transitions sessionID's durable S2
-// lifecycle record to state (+ failedReason when state==LifecycleFailed) AND
-// mirrors the transition onto UnifiedMeta for terminal states — via the single
-// session.TransitionSession mediator (Defect #28). The task path passes the
-// REAL UnifiedStore (resolved from the agent loop by session id) so the two
-// stores never diverge; the delegate path passes nil (delegate/subturn
-// sessions have no chat-transcript meta).
-//
-// The atomic-RMW rationale (Correctness-MAJOR-3/S4 INV-3: cancel-vs-complete
-// race — two concurrent transitions on the same session_id must serialize
-// through the store's own per-session lock) now lives inside the mediator's
-// LifecycleStore.Mutate call. Best-effort: an error (including the no-record-
-// yet case, when lifecycleStore is nil or the initial mint above failed/was
-// skipped) is logged at Warn and never propagated — a durable-record write
-// failure must never fail or mask the outcome of the underlying task run.
+// lifecycle record to state (+ failedReason when state==LifecycleFailed),
+// preserving every other field — mirrors
+// pkg/tools/delegate.go's DelegateTool.transitionLifecycle exactly (same
+// Mutate-based atomic RMW rationale: two concurrent transitions on the same
+// session_id must serialize through the store's own per-session lock,
+// rather than race a manual Load+Persist pair — Correctness-MAJOR-3/S4
+// INV-3). Best-effort: an error (including the no-record-yet case, when
+// lifecycleStore is nil or the initial mint above failed/was skipped) is
+// logged at Warn and never propagated — a durable-record write failure
+// must never fail or mask the outcome of the underlying task run.
 func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
 	ls := te.getLifecycleStore()
 	if ls == nil || sessionID == "" {
 		return
 	}
-	// Resolve the chat-transcript UnifiedStore owning this session so the
-	// mediator can mirror terminal transitions (completed→archived,
-	// failed→interrupted) onto it. Nil agentLoop (bare test harness) or an
-	// unresolvable session yields nil — the mediator then skips the mirror,
-	// exactly as the delegate path does.
+	// Resolve the chat-transcript UnifiedStore for the mediator's dual-store
+	// transition (Defect #28). Nil agentLoop (test harness) or unresolvable
+	// session yields nil — the mediator skips the mirror.
 	var us *session.UnifiedStore
 	if te.agentLoop != nil {
 		us = te.agentLoop.ResolveSessionStore(sessionID)
@@ -275,16 +269,13 @@ func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.
 	}
 }
 
-// finalizeTaskLifecycle transitions sessionID's durable lifecycle record AND
-// UnifiedMeta to the terminal state matching a task's own just-written
-// terminal status: session.LifecycleCompleted (→ UnifiedMeta archived) for
-// task.StatusDone, session.LifecycleFailed (→ UnifiedMeta interrupted, reason
-// "task_failed") for anything else (task.StatusFailed is the only other
-// terminal task status this function is ever called with). Both stores are
-// written jointly via transitionTaskLifecycle → session.TransitionSession (the
-// single mediator, Defect #28). Shared by completeTaskWithResult and
-// finishTaskRun's already-terminal branch so the status→lifecycle-state→
-// unified-status mapping lives in exactly one place.
+// finalizeTaskLifecycle transitions sessionID's durable lifecycle record to
+// the terminal state matching a task's own just-written terminal status:
+// session.LifecycleCompleted for task.StatusDone, session.LifecycleFailed
+// (reason "task_failed") for anything else (task.StatusFailed is the only
+// other terminal task status this function is ever called with). Shared by
+// completeTaskWithResult and finishTaskRun's already-terminal branch so the
+// status->lifecycle-state mapping lives in exactly one place.
 func (te *TaskExecutor) finalizeTaskLifecycle(sessionID string, status task.Status) {
 	if status == task.StatusDone {
 		te.transitionTaskLifecycle(sessionID, session.LifecycleCompleted, "")
@@ -419,6 +410,11 @@ func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVeri
 			return gateErr
 		}
 	}
+
+	// NOTE: the run_task auto-dispatch approval gate (requireRunTaskAutoDispatchApproved)
+	// was removed per operator instruction — there is no task-run approval gate; the
+	// tool-policy (allow/deny/ask) governs the tool call only, not auto-dispatch. The
+	// function definition is retained as dead code below for reference; it is never called.
 
 	// Guard: do not dispatch a task that still has unsatisfied dependencies.
 	if len(t.BlockedBy) > 0 {
@@ -591,7 +587,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isPlanGateRefusal(err) {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -698,6 +694,11 @@ func (te *TaskExecutor) finishTaskRun(
 				logger.WarnCF("task_executor", "Transcript write failed",
 					map[string]any{"task_id": t.ID, "error": appendErr.Error()})
 			}
+			status := session.StatusInterrupted
+			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
+				logger.WarnCF("task_executor", "Meta update failed",
+					map[string]any{"task_id": t.ID, "error": setErr.Error()})
+			}
 		}
 		// FR-118/G-13: a genuine run-time execution error (distinct from the
 		// boot sweep's own "interrupted" reason for a crash-stranded session —
@@ -740,13 +741,16 @@ func (te *TaskExecutor) finishTaskRun(
 		// claim never reaches this branch: TaskUpdateTool deliberately leaves
 		// Status non-terminal for that case (see the PendingJudgeClaim check
 		// below).
+		if taskSessionID != "" && sessStore != nil {
+			statusCompleted := session.StatusArchived
+			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); setErr != nil {
+				logger.WarnCF("task_executor", "Meta update failed",
+					map[string]any{"task_id": t.ID, "error": setErr.Error()})
+			}
+		}
 		// FR-118/G-13: an explicit update_task(done|failed) call already wrote
 		// the task terminal — mirror that outcome onto the durable lifecycle
-		// record AND UnifiedMeta via the single TransitionSession mediator
-		// (finalizeTaskLifecycle → transitionTaskLifecycle → TransitionSession;
-		// the paired SetMeta that used to sit here is now redundant — the
-		// mediator's canonical mapping owns completed→archived, failed→
-		// interrupted).
+		// record too (see finalizeTaskLifecycle's doc comment).
 		te.finalizeTaskLifecycle(taskSessionID, current.Status)
 		te.notifySourceChannel(current)
 		return ""
@@ -1331,6 +1335,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 	if !success {
 		status = task.StatusFailed
 	}
+	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
 		Status:      &status,
@@ -1358,10 +1363,18 @@ func (te *TaskExecutor) completeTaskWithResult(
 			map[string]any{"task_id": t.ID, "status": string(status), "error": uerr.Error()})
 		return false
 	}
+	if taskSessionID != "" && sessStore != nil {
+		statusArchived := session.StatusArchived
+		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusArchived}); setErr != nil {
+			logger.WarnCF("task_executor", "Meta update failed",
+				map[string]any{"task_id": t.ID, "error": setErr.Error()})
+		}
+	}
 	// FR-118/G-13: this is completeTaskWithResult's own terminal write —
-	// mirror it onto BOTH stores (durable lifecycle record + UnifiedMeta) via
-	// finalizeTaskLifecycle → TransitionSession. Placed AFTER the CAS write
-	// above lands (never on the dropped-conflict early returns).
+	// mirror it onto the durable lifecycle record (see finalizeTaskLifecycle's
+	// doc comment). Placed AFTER the CAS write above lands (never on the
+	// dropped-conflict early returns), exactly like the UnifiedMeta archive
+	// this line sits next to.
 	te.finalizeTaskLifecycle(taskSessionID, status)
 	te.recordEvidenceBoundary(final)
 	te.onTaskComplete(final)
@@ -1774,7 +1787,7 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		if err := te.ExecuteTask(ctx, taskID); err != nil {
-			if !isPlanGateRefusal(err) {
+			if !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
 					map[string]any{"task_id": taskID, "error": err.Error()})
 			}
@@ -2026,7 +2039,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isPlanGateRefusal(err) {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -2217,6 +2230,296 @@ func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
 	return te.planStore.Get(planID)
 }
 
+// ErrRunTaskApprovalRequired is returned by executeTask's automatic-dispatch
+// gate (requireRunTaskAutoDispatchApproved, below) when a STANDALONE task
+// (PlanID == "") is about to be cold-dispatched for an agent whose run_task
+// tool policy is "ask".
+//
+// Closes a real fail-open defect: a human DENYING an ask-gated run_task tool
+// call (pkg/tools/run_task.go's Execute, gated in pkg/agent/loop.go's runTurn
+// ask-policy branch) had NO durable effect on the underlying task at all —
+// Execute() is never even invoked on a denial (the loop `continue`s past it
+// after recording the transcript/audit entries), so the task simply stayed
+// `next`, and every UNATTENDED dispatch path (CheckQueuedTasks' ~60s
+// heartbeat drain, advanceBlockedTasks, SpawnTriggeredRun's cron fire) picked
+// it up and ran it anyway on its very next pass, because none of them ever
+// consulted the SAME tool-policy decision that gated the explicit call.
+//
+// The fix generalizes the existing S1 plan-state-gate pattern
+// (requirePlanExecuting, this file): the dispatch PRIMITIVE (executeTask)
+// itself now consults AgentLoop.ResolveApprovalToolPolicy(agentID,
+// "run_task") — the SAME authoritative resolver the gateway's own WS
+// approval hook and the runTurn ask-gate already resolve through (see that
+// method's own doc comment: "the SINGLE authority both the agent-loop tool
+// filter... and the gateway WS approval hook... resolve through, so the two
+// can never drift again") — for every cold, unattended dispatch of a
+// standalone task. This closes the loophole for EVERY future denial, not
+// merely a single recorded event: an agent whose run_task policy is "ask"
+// can never have a fresh standalone task auto-fire without a human
+// explicitly approving a run_task call.
+//
+// Deliberately scoped to policy=="ask" only, not "deny": (1) the reported
+// defect is specifically the ask-then-deny case — a "deny" policy never
+// produces a human "denial" event at all, since the tool call fails fast
+// with no approval prompt in the first place; (2) "deny" is genuinely
+// ambiguous at this call site — config.ValidateToolPolicyCoverage guarantees
+// every real production agent has an EXPLICIT allow/ask/deny entry for
+// every static builtin tool (CLAUDE.md hard constraint 6), but that
+// validation is boot-time-only and many lightweight test harnesses in this
+// package construct an AgentLoop with NO tool-policy configuration at all —
+// tools.EffectiveToolPolicy's own documented fail-closed default for that
+// gap is ALSO "deny" (logged at Error). Gating on bare policy!="allow" would
+// therefore misfire on every such harness (an artifact of incomplete test
+// fixtures, not an operator's real "deny" decision) and refuse dispatch for
+// unrelated tests across this package. "ask" has no such fallback anywhere
+// in the resolution chain — it can only ever be an explicit, deliberate
+// config.ToolPolicyAsk entry — so it is the one value this gate can act on
+// without a false-positive risk from missing test coverage.
+var ErrRunTaskApprovalRequired = errors.New(
+	"task_executor: standalone task's assigned agent requires an explicit run_task approval (ask policy); refusing unattended dispatch")
+
+// requireRunTaskAutoDispatchApproved is the run_task tool-policy gate, the
+// sibling of requirePlanExecuting: both are consulted from executeTask, the
+// ONE primitive shared by every automatic (unattended) dispatch path
+// (CheckQueuedTasks, advanceBlockedTasks, SpawnTriggeredRun, and the
+// goal-loop's own retry re-dispatch). See ErrRunTaskApprovalRequired's doc
+// comment for the full rationale.
+//
+// Returns nil (gate does not apply) when ANY of:
+//
+//   - t.PlanID != "" — a plan member's dispatch authority is the plan
+//     engine's own approval flow (requirePlanExecuting), entirely separate
+//     from run_task (which itself refuses any task naming a PlanID — see
+//     pkg/tools/run_task.go's G4/A3 check).
+//
+//     SECURITY (2026-07, closes the 4th bypass of this gate — code review
+//     finding, follows the StartedAt/SessionID pair and the CompletedAt
+//     fixes above): this exemption is sound ONLY because t.PlanID is no
+//     longer forgeable by an ordinary caller once it would actually matter.
+//     Before this fix, t.PlanID was a directly wire-settable field with NO
+//     relationship to plan membership whatsoever: any caller with ordinary
+//     task-write access (PATCH /api/v1/tasks/{id}, the create_task agent
+//     tool, or its create_task_in_workspace sysagent-tool sibling) could
+//     attach ANY standalone `next` task — assigned to ANY agent, including
+//     one whose run_task policy is "ask" — onto ANY already-Executing plan
+//     in the same workspace. requirePlanExecuting only ever checks the
+//     PLAN's own state (PermitsMemberDispatch), never whether THIS task was
+//     ever vetted as one of its members, so the very next unattended
+//     dispatch pass (CheckQueuedTasks' heartbeat, or the plan engine's own
+//     Tick — both funnel through this exact gate) would auto-dispatch the
+//     grafted task with no approval and no log trace, because this
+//     exemption never even consulted the policy.
+//
+//     A dispatch-primitive-level fix (e.g. distinguishing the trusted
+//     PlanEngine.dispatchReadyMembers/executeTaskPlanVerified bypass from
+//     the ordinary ExecuteTask path via planVerifiedUnderDecisionMu) was
+//     considered and REJECTED as both insufficient and unsafe: (1)
+//     insufficient — PlanEngine.Tick's own periodic pass re-lists every
+//     `next` task carrying a given PlanID (task.Filter{PlanID: ...}) and
+//     redispatches ready ones through the identical exempted bypass, so a
+//     grafted task reaches the SAME "trusted" call path on the plan's very
+//     next tick regardless of which mechanism first noticed it — the bypass
+//     flag does not correlate with membership legitimacy at all; (2) unsafe
+//     — advanceBlockedTasks (this file) dispatches a plan member whose
+//     BlockedBy dependency just completed via the ordinary, non-bypass
+//     ExecuteTask path, and that member may be entirely genuine (authored
+//     before Execute, ask-policy agent and all) — narrowing this exemption
+//     to the bypass-only path would wrongly re-gate that completely normal,
+//     already-authorized continuation of plan execution.
+//
+//     The actual fix therefore lives upstream, at the two places a task can
+//     ACQUIRE a PlanID through a generic (non-plan-engine) path:
+//     pkg/gateway/rest_tasks.go's validateTaskPlanID (REST create/PATCH) and
+//     pkg/tools/plan.go's validateTaskPlanLinkage (the create_task agent
+//     tool). Both now refuse to let a task acquire a PlanID naming a plan
+//     that has already left `draft` when doing so would produce exactly the
+//     exploitable shape (REST: the assigned agent's resolved run_task policy
+//     is "ask"; create_task: unconditionally, since that tool's plan_id
+//     linkage was never a supported non-draft feature to begin with). By the
+//     time a task carries a non-empty PlanID naming a plan that
+//     PermitsMemberDispatch(), it is therefore guaranteed to be either (a)
+//     linked while the plan was still draft (vetted, at minimum, by
+//     plan.Lint at approve time), (b) linked to a live plan via a REST/tool
+//     caller whose agent's run_task policy is not "ask", or (c) added by the
+//     plan's supervisor via plan_correct/AppendCorrection, which has its own
+//     caller-authority gate (requireCorrectionAuthority) — never a bare,
+//     unauthenticated claim planted by an arbitrary caller. See
+//     pkg/gateway/rest_tasks.go's validateTaskPlanID doc comment for the
+//     full writeup, and TestCheckQueuedTasks_AskPolicyPlanIDAttachedToRunning
+//     PlanStillGated (this package) /
+//     TestHandleTaskPatch_PlanAttach_AskPolicyAgent_RejectedOnLivePlan
+//     (pkg/gateway) for the paired proof: the forged attach is now rejected
+//     BEFORE the task ever acquires the exempting PlanID, and a genuine
+//     Approved-plan member (non-ask agent, or attached pre-draft-exit)
+//     still dispatches exactly as before.
+//
+//   - t.StartedAt != "" AND t.SessionID != "" — this task's CURRENT run has
+//     already been claimed AND dispatched at least once. ClaimForRun
+//     (pkg/task/claim.go) stamps StartedAt on every claim, and executeTask's
+//     own synchronous createTaskSessionSync call (M1/FR-029, right after the
+//     claim) stamps SessionID in the SAME dispatch cycle, before either
+//     field is ever exposed back to a caller of this gate. The goal loop's
+//     own retry-requeue writes (consumeAttemptOrExhaust, rejectBareEvidenceClaim
+//     — both flip Status back to `next` for one more attempt) never touch
+//     EITHER field, so a genuine continuation always carries both. A
+//     non-empty pair therefore means THIS dispatch is a CONTINUATION of an
+//     already-authorized run, not a fresh unattended one — the human/approval
+//     decision that authorized the original claim already covers its own
+//     retry budget (maxAttempts/hardCeiling already bounds how long that
+//     continuation can run); re-consulting policy on every retry would
+//     silently break any multi-attempt task for an ask-policy agent even
+//     though a human (or an approved run_task call) already authorized it to
+//     run at all. SpawnReset/RestartReset (pkg/task/store.go) — a cron
+//     trigger's new scheduled firing, or a manual restart of a failed task —
+//     deliberately clear BOTH StartedAt and SessionID back to "" for exactly
+//     this reason: a fresh firing/restart is a FRESH unattended dispatch of a
+//     task nobody has re-approved, and must be re-gated, never treated as a
+//     continuation of whatever the previous run did.
+//
+//     SECURITY: StartedAt ALONE used to be the whole discriminator, and that
+//     was a fail-open bug (found on code review of this gate's own initial
+//     landing): `started_at` is a directly wire-settable TaskUpdateRequest
+//     field (contracts/components/schemas/TaskUpdateRequest.yaml) applied
+//     UNCONDITIONALLY by handleTaskPatch (pkg/gateway/rest_tasks.go)
+//     regardless of whether `status` is also present in the same request —
+//     the in_progress-dispatch block there is gated on req.Status != nil,
+//     entirely independent of req.StartedAt. Any authenticated task-write
+//     caller could therefore PATCH a fresh standalone `next` task with only
+//     `{"started_at": "..."}`, leave it at `next`, and have the very next
+//     CheckQueuedTasks tick treat it as an already-approved continuation —
+//     dispatching it with NO human ever having approved a run_task call, and
+//     with NO trace (the gate's own Debug log never fires when it exempts).
+//     SessionID has NO corresponding field on TaskUpdateRequest at all (the
+//     schema has none, and handleTaskPatch never populates task.Patch.
+//     SessionID from any request field — grep confirms Patch.SessionID is
+//     written only from pkg/agent/task_executor.go's own internal claim path
+//     and from test harnesses), so it cannot be forged through the wire.
+//     Requiring it alongside StartedAt closes the hole: a bare started_at
+//     PATCH now leaves SessionID untouched (empty for a task that was never
+//     for-real dispatched), so it fails this AND clause and falls through to
+//     the policy check, exactly like a fresh task. See
+//     TestExecuteTask_AskPolicyRetryContinuesWithoutReapproval and
+//     TestCheckQueuedTasks_AskPolicyForgedStartedAtWithoutSessionStillGated
+//     (this package) plus TestHandleTaskPatch_BareStartedAtDoesNotBypassRunTaskAskGate
+//     (pkg/gateway) for the paired proof: the legitimate continuation still
+//     dispatches free, and the forged field alone does not.
+//
+//     SECURITY (2026-07, closes the last known bypass of this gate): the
+//     StartedAt+SessionID pair ALONE is still forgeable — not by writing
+//     either field directly (that hole is closed above), but by REVIVING a
+//     task that already carries a genuine pair from a CONCLUDED prior run.
+//     Only `done` is frozen against status edits (validateTransition,
+//     pkg/task/store.go) — a `failed` task (genuinely failed, or judge-
+//     exhausted, no cancel_reason gate applies outside the dedicated restart
+//     route) may legally be PATCHed straight back to `next` via a plain
+//     Update (handleTaskPatch, rest_tasks.go) OR via the task_update tool
+//     (pkg/tools/task.go, callable by the owning agent itself), and NEITHER
+//     path clears StartedAt/SessionID — updateLocked only ever touches those
+//     fields when the caller's patch explicitly sets them. A task that ran
+//     once, reached `failed` (StartedAt/SessionID/CompletedAt all genuinely
+//     stamped by that first run), and is then bare-PATCHed `status: next`
+//     therefore still carries a genuine-looking, non-empty pair — and the
+//     next CheckQueuedTasks tick would treat it as a continuation of the
+//     SAME run and dispatch with no fresh run_task approval, even though the
+//     run it was "continuing" already concluded.
+//
+//     The discriminator is CompletedAt: every terminal writer that ever
+//     moves a task to `done` or `failed` — completeTaskWithResult, failTask
+//     — stamps CompletedAt in the SAME write as the terminal status. The
+//     goal loop's own in-flight continuation writes (consumeAttemptOrExhaust,
+//     rejectBareEvidenceClaim) NEVER touch CompletedAt — the task is not yet
+//     terminal while they run, by construction — so a genuine continuation
+//     always has CompletedAt == "". A revived task, by contrast, carries
+//     the CompletedAt its concluded run stamped, because nothing on the
+//     revival path clears it (only RestartReset/SpawnReset do, and both
+//     already null out StartedAt/SessionID too, correctly falling through to
+//     a fresh policy check on their own). Requiring CompletedAt == ""
+//     alongside the existing pair closes this without re-gating any genuine
+//     retry: see TestExecuteTask_AskPolicyRetryContinuesWithoutReapproval
+//     (still green — an in-flight goal-loop continuation never has
+//     CompletedAt set) and TestCheckQueuedTasks_AskPolicyRevivedFailedTaskStillGated
+//     (this package) plus TestHandleTaskPatch_FailedToNextRevivalDoesNotBypassRunTaskAskGate
+//     (pkg/gateway) for the new paired proof.
+//
+//   - the resolved policy for (t.AgentID, "run_task") is not "ask" (the
+//     common "allow" case has nothing to gate — it matches exactly what an
+//     explicit run_task call would do: execute immediately, no prompt; see
+//     ErrRunTaskApprovalRequired's doc for why "deny" is deliberately not
+//     included here either).
+//
+// Otherwise returns ErrRunTaskApprovalRequired (fail-closed) and leaves the
+// task exactly as it is — still `next`, unchanged, still visible on the
+// board, still runnable the instant a human calls run_task and approves it
+// (or an operator relaxes the policy).
+//
+// OBSERVABILITY (code review finding, MEDIUM): failing closed here is
+// correct and is NOT relaxed by this note — but a refused task carries NO
+// durable marker distinguishing it from an ordinary queued `next` task. It
+// looks identical on the board to a task about to run; every automatic
+// dispatch path re-refuses it silently on every tick; and because there is
+// no in-flight turn to prompt from, NO approval prompt is ever generated —
+// the only escape is a human proactively invoking run_task or clicking Run
+// Now (StartTaskNow deliberately bypasses this gate). Left at Debug (as it
+// was before this note), the refusal is invisible at the production-default
+// INFO level (pkg/logger initializes to INFO) and the task can sit forever
+// with zero operator-visible trace.
+//
+// Decision: raise this to Warn rather than add a task-level marker field
+// (e.g. a `blocked_reason` so the board could render "awaiting approval").
+// A marker is the more complete fix, but it is out of scope for this pass:
+// task.Task lives in pkg/task (not owned by this change), and if the field
+// is to be rendered by the SPA it crosses the wire and must follow
+// CLAUDE.md Constraint #8 (schema in contracts/components/schemas/Task.yaml
+// first, scripts/gen-contracts.sh, regenerate pkg/api/generated and
+// src/lib/api/generated, then wire toWireTask in pkg/gateway/rest_tasks.go)
+// — plus a real frontend design decision on how the board renders it and
+// where the marker gets CLEARED (dispatch succeeds, a human runs it
+// manually, or the policy relaxes). That is genuinely a full-stack feature,
+// not a one-line fix, and belongs with frontend-lead input. Warn is the
+// honest interim: every refusal is now visible to an operator watching
+// logs at the default level, recurring on every ~60s heartbeat tick for as
+// long as the task remains unapproved — accepted noise in exchange for "no
+// longer silent forever", matching this file's existing WarnCF convention
+// for other anomalous-but-expected states (see requirePlanExecuting's own
+// I/O-error branch a few lines up).
+func (te *TaskExecutor) requireRunTaskAutoDispatchApproved(t *task.Task) error {
+	if t.PlanID != "" || (t.StartedAt != "" && t.SessionID != "" && t.CompletedAt == "") {
+		return nil
+	}
+	// An unwired executor cannot resolve a policy at all. This is NOT a
+	// fail-open hole: the sole production constructor (newTaskExecutor) always
+	// sets agentLoop, and dereferences al.cfg before it ever returns, so a nil
+	// loop cannot reach production — it only occurs in bespoke test harnesses
+	// that build a TaskExecutor literal. Gating those would change what they
+	// test (e.g. TestDispatchSema_* asserts semaphore rejection, not policy),
+	// so the gate stays inert exactly where it cannot be evaluated.
+	if te.agentLoop == nil {
+		return nil
+	}
+	policy := te.agentLoop.ResolveApprovalToolPolicy(t.AgentID, "run_task")
+	if policy != string(config.ToolPolicyAsk) {
+		return nil
+	}
+	logger.WarnCF("task_executor",
+		"run_task policy gate: refusing unattended dispatch of a standalone task pending an explicit "+
+			"run_task approval — the task remains queued at `next` with NO durable marker distinguishing "+
+			"it from an ordinary task and NO approval prompt generated; a human must invoke run_task or "+
+			"Run Now, or the task can sit indefinitely",
+		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "run_task_policy": policy})
+	return fmt.Errorf("%w: task %q (agent %q, run_task policy %q)", ErrRunTaskApprovalRequired, t.ID, t.AgentID, policy)
+}
+
+// isRoutineAutoDispatchRefusal reports whether err is one of executeTask's
+// own fail-closed automatic-dispatch sentinels — the plan-state gate
+// (isPlanGateRefusal) or the run_task tool-policy gate
+// (ErrRunTaskApprovalRequired). Both already log themselves at their own
+// correct level the instant they return, so callers that otherwise
+// blanket-Warn on "dispatch failed for ANY reason" check this first to avoid
+// a duplicate, mismatched-severity second log line for the identical event.
+func isRoutineAutoDispatchRefusal(err error) bool {
+	return isPlanGateRefusal(err) || errors.Is(err, ErrRunTaskApprovalRequired)
+}
+
 // CheckQueuedTasks picks the highest-priority *dispatchable* `next` task per
 // agent and starts it. Called by the heartbeat service (pkg/heartbeat's
 // TaskDrainService) on an unconditional ~1-minute ticker — this is the
@@ -2347,14 +2650,21 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 			continue
 		}
 
-		if err := te.ExecuteTask(ctx, t.ID); err != nil && !isPlanGateRefusal(err) {
+		if err := te.ExecuteTask(ctx, t.ID); err != nil && !isRoutineAutoDispatchRefusal(err) {
 			// A plan-gate refusal is already logged by requirePlanExecuting at
 			// its own correct level (see isPlanGateRefusal's doc) — this
-			// branch's own pre-filter above means that case should be
-			// unreachable in practice, but the check is kept so a future
+			// branch's own plan-gate pre-filter above means THAT case should
+			// be unreachable in practice, but the check is kept so a future
 			// change to the pre-filter fails safe (no duplicate/mismatched-
 			// severity log) rather than silently reintroducing the exact
 			// per-tick spam this function's log-level note warns against.
+			// A run_task-policy refusal (ErrRunTaskApprovalRequired) has NO
+			// such pre-filter here — this loop has no per-agent tool-policy
+			// cache to hang one on, unlike the per-tick plan cache above — so
+			// isRoutineAutoDispatchRefusal reaching that branch is the
+			// EXPECTED, routine path for an ask-policy agent's standalone
+			// task, already logged at Debug by
+			// requireRunTaskAutoDispatchApproved itself.
 			logger.WarnCF("task_executor", "Heartbeat: could not start task",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
 		}
