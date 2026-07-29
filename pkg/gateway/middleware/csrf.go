@@ -113,9 +113,27 @@ var defaultExemptPaths = []string{
 //     own dev server without knowing the gateway's CSRF token. This prefix
 //     deliberately does not overlap /api/v1/* — that surface keeps full CSRF
 //     enforcement (FR-012).
+//
+//   - /webhook/ — platform-originated webhook receivers (Google Chat
+//     /webhook/google-chat, LINE /webhook/line, and their /health
+//     sub-paths). Inbound webhook POSTs are sent BY the upstream platform,
+//     not by a browser holding a CSRF cookie, so they carry neither the
+//     __Host-csrf cookie nor the X-Csrf-Token header. Webhook handlers rely
+//     on their OWN signature verification (hmac.Equal — see
+//     webhook_signature_test.go's hygiene gate) rather than the double-submit
+//     CSRF check, so exempting this prefix does not weaken security: every
+//     WebhookPath()-bearing channel is statically required to implement
+//     verifySignature. Like /preview/, /webhook/ never overlaps /api/v1/*.
 var defaultExemptPrefixes = []string{
 	PreviewPathPrefix,
+	WebhookPathPrefix,
 }
+
+// WebhookPathPrefix is the path prefix under which platform-originated
+// webhook receivers are mounted (e.g. /webhook/google-chat, /webhook/line,
+// /webhook/google-chat/health). See defaultExemptPrefixes for why it is
+// CSRF-exempt.
+const WebhookPathPrefix = "/webhook/"
 
 // stateChangingMethods lists the HTTP verbs that trigger CSRF enforcement.
 // GET/HEAD/OPTIONS are RFC-safe methods and MUST NOT be gated — doing so

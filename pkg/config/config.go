@@ -331,8 +331,14 @@ type OmnipusChannelRoutingRule struct {
 // the clone and vice versa. Returns nil if marshaling or unmarshalling fails
 // (should never happen for a valid Config in practice).
 //
-// Clone does NOT copy the sensitiveCache or registeredSensitive fields — those
-// are runtime-only and must be re-registered on the clone if needed.
+// Clone carries the runtime-registered sensitive plaintexts (registeredSensitive,
+// populated by RegisterSensitiveValues) onto the clone — the JSON round-trip
+// below drops them because they are unexported, and a clone that loses them would
+// scrub nothing from LLM output/audit logs once published as the live config
+// (e.g. via AgentLoop.MutateConfig's copy-then-swap, or UpsertAgentFast's
+// rebase-then-publish). The compiled sensitiveCache is intentionally NOT shared:
+// it is invalidated on the clone so SensitiveDataReplacer rebuilds it lazily from
+// the carried set under the clone's own mutex.
 //
 // Agents.List is deliberately json:"-" on AgentsConfig (Bug 1 fix, see its
 // doc comment) so it never rides through Config's own JSON round-trip above
@@ -364,6 +370,17 @@ func (c *Config) Clone() (*Config, error) {
 			return nil, fmt.Errorf("clone: unmarshal agents.list: %w", err)
 		}
 		clone.Agents.List = listClone
+	}
+	// Carry the runtime-registered sensitive plaintexts onto the clone. Read
+	// under the source's sensitiveMu so this races no concurrent
+	// RegisterSensitiveValues on c; install under the clone's own (fresh, zero)
+	// mutex via the established setter, which also invalidates the clone's cache
+	// so the next SensitiveDataReplacer rebuilds from this carried set.
+	c.sensitiveMu.RLock()
+	registered := append([]string(nil), c.registeredSensitive...)
+	c.sensitiveMu.RUnlock()
+	if len(registered) > 0 {
+		clone.RegisterSensitiveValues(registered)
 	}
 	return clone, nil
 }

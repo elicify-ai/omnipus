@@ -14,6 +14,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -407,16 +408,33 @@ func (al *AgentLoop) RequestCancel(
 		hooks.SendStageFrame(sessionID, "graceful")
 	}
 
-	// --- Mark session as interrupted in meta (best-effort) ---
+	// --- Transition BOTH stores via the single mediator (Defect #28 fix) ---
+	//
+	// The cancel must transition the durable LifecycleRecord to
+	// LifecycleCancelled AND mirror onto UnifiedMeta (interrupted) — the same
+	// paired transition every task/delegate terminal write performs. Before
+	// this fix, this block wrote ONLY UnifiedMeta (via the hook or the default
+	// branch), orphaning the parent session's LifecycleRecord: it stayed
+	// running/queued on disk until a future boot sweep caught it. That is the
+	// SAME defect as a kill -9 crash, produced by NORMAL cancel operation, not
+	// just crashes. The mediator is now the single authority for the
+	// lifecycle-state → unified-status mapping (cancelled → interrupted).
+	//
+	// ErrLifecycleNotFound is expected and silenced here: a normal web CHAT
+	// session may have no LifecycleRecord at all (only task/delegate/plan
+	// sessions mint one), so the lifecycle half is a no-op for those and the
+	// UnifiedMeta mirror still proceeds inside the mediator.
+	lifecycleStore := al.GetSessionLifecycleStore()
+	if err := session.TransitionSession(lifecycleStore, store, sessionID, session.LifecycleCancelled, ""); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+		slog.Warn("agent: RequestCancel: could not transition session to cancelled",
+			"session_id", sessionID, "error", err)
+	}
+	// The hook (if supplied) fires for any additional transport-specific
+	// side-effects the WS layer needs beyond the UnifiedMeta mirror the
+	// mediator already performed (the WS hook itself also writes UnifiedMeta
+	// to interrupted — redundant with the mediator, but harmless: same value).
 	if hooks.SetSessionInterrupted != nil {
 		hooks.SetSessionInterrupted(sessionID)
-	} else if store != nil {
-		// Default implementation when no hook is supplied (CLI / Tier A / Tier B).
-		status := session.StatusInterrupted
-		if err := store.SetMeta(sessionID, session.MetaPatch{Status: &status}); err != nil {
-			slog.Warn("agent: RequestCancel: could not mark session interrupted",
-				"session_id", sessionID, "error", err)
-		}
 	}
 
 	// --- PHASE B: 3s timer → hard abort if ANY turn in the session cascade
@@ -581,13 +599,25 @@ func killBackgroundSessionsForCancelSurface(sessionID string) (killed, failed in
 // (channel, chatID) so Tier B text-parsing channels can fire the full cancel
 // state machine without knowing the session ID.
 //
-// Returns nil when no matching turn exists (no-op). Returns a non-nil error
-// only when channel or chatID is empty.
-func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName, chatID, userID string) error {
+// Returns (fired, armed, err):
+//   - fired is true when an active turn was claimed and the cancel cascade ran.
+//   - armed is true when fired is false BECAUSE no turn was registered yet for
+//     the resolved identity and a pre-registration cancel latch
+//     (cancel_prearm.go) was recorded in its place — see CancelOutcome.Armed's
+//     doc comment. Callers surfacing feedback to a user MUST distinguish this
+//     from a genuine no-op (neither fired nor armed).
+//   - err is non-nil only when channelName or chatID is empty.
+//
+// This widening mirrors RequestCancelForSession's own (fired, armed, err)
+// return at the same boundary — Defect #29: the prior bare-error return
+// discarded the entire CancelOutcome, so DispatchCancelIfRecognized could not
+// distinguish a real cancel from an armed latch from a genuine no-op, and
+// replied "Canceling..." unconditionally.
+func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName, chatID, userID string) (fired bool, armed bool, err error) {
 	if channelName == "" || chatID == "" {
-		return fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
+		return false, false, fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
 	}
-	_, err := al.RequestCancel(ctx,
+	outcome, err := al.RequestCancel(ctx,
 		CancelScope{Channel: channelName, ChatID: chatID},
 		CancelCanceller{UserID: userID, Channel: channelName},
 		CancelHooks{
@@ -597,5 +627,8 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
 		},
 	)
-	return err
+	if err != nil {
+		return false, false, err
+	}
+	return outcome.Fired, outcome.Armed, nil
 }

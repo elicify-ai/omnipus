@@ -1811,7 +1811,7 @@ func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
 	// Sub-turn: inherits transcriptSessionID but has no channel/chatID (depth=1).
 	subTS, subPC := makeTurn("sub-key", "", "", 1, sid)
 
-	if err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", ""); err != nil {
+	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", ""); err != nil {
 		t.Fatalf("RequestCancelByChannelChat returned unexpected error: %v", err)
 	}
 
@@ -1841,7 +1841,7 @@ func TestRequestCancelByChannelChat_NoMatchIsNoop(t *testing.T) {
 	defer cleanup()
 
 	// No turns registered — must return nil, not error.
-	if err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", ""); err != nil {
+	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", ""); err != nil {
 		t.Fatalf("expected nil for no-match, got: %v", err)
 	}
 }
@@ -1852,10 +1852,10 @@ func TestRequestCancelByChannelChat_EmptyArgsError(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
-	if err := al.RequestCancelByChannelChat(context.Background(), "", "123", ""); err == nil {
+	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "", "123", ""); err == nil {
 		t.Fatal("expected error for empty channel")
 	}
-	if err := al.RequestCancelByChannelChat(context.Background(), "telegram", "", ""); err == nil {
+	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "", ""); err == nil {
 		t.Fatal("expected error for empty chatID")
 	}
 }

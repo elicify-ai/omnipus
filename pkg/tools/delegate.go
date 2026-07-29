@@ -1133,38 +1133,34 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 // not propagated — a durable-record write failure must never fail (or mask
 // the outcome of) the underlying delegation itself.
 //
-// NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this routes the
-// whole transition through session.LifecycleStore.Mutate — the atomic RMW
-// primitive that holds the per-session striped lock across tail→fn→write.
-// The prior Load+Persist pair was a non-atomic RMW: two concurrent
-// transitions on the same session_id (the cancel-vs-complete race, S4 INV-3)
-// raced — the loser either overwrote the winner's terminal record or was
-// rejected by the immutable-terminal guard non-atomically. Under Mutate the
-// two serialize: the first writer lands its terminal state, the second sees
-// that terminal tail under the lock and persistLocked rejects its same-
-// generation write with ErrLifecycleTerminalImmutable (logged here, harmless
-// — the record is already terminally correct). Callers MUST NOT already
-// hold Lock(sessionID): sync.Mutex is not reentrant, and Mutate takes the
-// lock ONCE internally (which is why this helper does not call the public
-// Load/Persist under a manual Lock — that would self-deadlock). The sibling
-// comment in message_parent.go parkNeedsInput mirrors this one.
+// NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this delegates
+// to session.TransitionSession (the single dual-store mediator, Defect #28)
+// with a nil UnifiedStore — a delegate/subturn session has no chat-transcript
+// meta.json at all (UnifiedStore.NewSession is never called for a child turn
+// — see pkg/agent/subturn.go), so there is nothing to mirror onto. The
+// mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
+// per-session striped lock across tail→fn→write) replaces the hand-rolled
+// Mutate call this helper used to make directly. The prior Load+Persist pair
+// was a non-atomic RMW: two concurrent transitions on the same session_id
+// (the cancel-vs-complete race, S4 INV-3) raced — the loser either overwrote
+// the winner's terminal record or was rejected by the immutable-terminal
+// guard non-atomically. Under the mediator's Mutate the two serialize: the
+// first writer lands its terminal state, the second sees that terminal tail
+// under the lock and persistLocked rejects its same-generation write with
+// ErrLifecycleTerminalImmutable (logged here, harmless — the record is already
+// terminally correct). Callers MUST NOT already hold Lock(sessionID):
+// sync.Mutex is not reentrant, and Mutate takes the lock ONCE internally.
+// The sibling comment in message_parent.go parkNeedsInput mirrors this one.
 func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
-	err := t.lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
-		if rec == nil {
-			return session.ErrLifecycleNotFound
-		}
-		rec.State = state
-		rec.FailedReason = failedReason
-		if state != session.LifecycleNeedsInput {
-			rec.NeedsInput = nil
-		}
-		return nil
-	})
-	if err != nil {
-		slog.Warn("delegate: transitionLifecycle: atomic transition failed", "session_id", sessionID, "state", state, "error", err)
+	// nil UnifiedStore: delegate/subturn sessions have no chat-transcript meta
+	// (see the doc comment above) — the mediator skips the mirror. t.lifecycle
+	// (MessageParentLifecycleStore) satisfies session.LifecycleMutator, so no
+	// type assertion is needed.
+	if err := session.TransitionSession(t.lifecycle, nil, sessionID, state, failedReason); err != nil {
+		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
 }
 

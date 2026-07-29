@@ -4172,20 +4172,52 @@ func (al *AgentLoop) SwapConfig(newCfg *config.Config) {
 	al.mu.Unlock()
 }
 
-// MutateConfig acquires the agent loop write lock and calls fn with the
-// live *config.Config pointer. This serializes sysagent mutations with all
-// REST readers that go through GetConfig (which holds RLock). fn must not
-// call GetConfig or SwapConfig — deadlock would result.
+// MutateConfig acquires the agent loop write lock and calls fn with a PRIVATE
+// deep copy of the live *config.Config (via config.Clone, which also carries
+// the runtime-registered sensitive plaintexts). fn may freely mutate that copy
+// — fields, slices, maps — without racing the many UNLOCKED readers of the live
+// al.cfg, most importantly fastAgentUpsert/UpsertAgentFast, whose wiring pass
+// reads the exact *config.Config pointer GetConfig hands out here WITHOUT al.mu
+// (see UpsertAgentFast's doc comment and its "residual, narrower hazard" note
+// in registry.go — that residual is what this copy-then-swap closes).
 //
-// The caller (typically Deps.WithConfig) is responsible for snapshotting and
-// rolling back cfg fields if fn or the subsequent SaveConfig fails.
+// On a nil error from fn, the copy is PUBLISHED as the new al.cfg via the SAME
+// pointer-swap + configGen-bump idiom SwapConfig and ReloadProviderAndConfig
+// already use (under al.mu.Lock), so a concurrent UpsertAgentFast detects it
+// through its configGen CAS and rebases, instead of silently reverting it. On a
+// non-nil error the copy is discarded and the live al.cfg is left untouched —
+// equivalent to the rollback the two existing publishers' callers perform, but
+// built in: the live object was never mutated, so there is nothing to restore.
+//
+// fn must not call GetConfig or SwapConfig — deadlock would result (both take
+// al.mu, which this method holds for the entire call). fn receives a copy, not
+// the live pointer; callers that persist (e.g. systools.Deps.WithConfig)
+// continue to receive that same copy and SaveConfigLocked it directly, then
+// this method publishes it — persisted-disk and live-pointer stay consistent.
 func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 	if al.cfg == nil {
 		return fmt.Errorf("agent loop config is nil")
 	}
-	return fn(al.cfg)
+	// Deep copy so fn's mutations never touch the live object GetConfig handed
+	// out (and still hands out) to concurrent unlocked readers. config.Clone
+	// carries registeredSensitive so the credential-scrubbing invariant survives
+	// the swap below.
+	clone, err := al.cfg.Clone()
+	if err != nil {
+		return fmt.Errorf("agent loop: clone config for mutation: %w", err)
+	}
+	if err := fn(clone); err != nil {
+		return err
+	}
+	// Publish via pointer-swap + configGen bump — the SAME shape SwapConfig
+	// (al.cfg replace alone) and ReloadProviderAndConfig (al.cfg + al.registry)
+	// use — so a concurrent UpsertAgentFast sees this change via its configGen
+	// CAS and rebases rather than silently reverting it (DEFECT 2 family).
+	al.cfg = clone
+	al.configGen.Add(1)
+	return nil
 }
 
 // GetTaskStore returns the shared unified task Store (may be nil in tests).

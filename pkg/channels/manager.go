@@ -927,13 +927,39 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// Start the bus dispatchers (text + media) and the TTL janitor.
 	m.startDispatchers(dispatchCtx)
 
-	// Start shared HTTP server if configured
+	// Start shared HTTP server if configured.
+	//
+	// The listener is bound SYNCHRONOUSLY before StartAll returns: a
+	// startup-time bind failure (e.g. "bind: address already in use") is a
+	// HARD boot error. This server is the gateway's sole HTTP listener —
+	// every route (SPA, /api/v1/*, /preview/, chat, WS, webhooks, health)
+	// rides on m.mux, which is this server's Handler. Historically
+	// ListenAndServe ran inside the goroutine and only logged its error, so
+	// StartAll returned nil and the process stayed alive SERVING NOTHING — a
+	// silent running-dead state. Binding up front turns a port collision into
+	// an immediate, clear boot abort propagated through setupAndStartServices
+	// → Run.
+	//
+	// Serve itself still runs in a goroutine. Its error handling keeps
+	// swallowing http.ErrServerClosed / net.ErrClosed — those are EXPECTED
+	// during graceful shutdown (StopAll calls httpServer.Shutdown, which
+	// closes the listener mid-Accept) and MUST NOT be fatal. That is a
+	// different lifecycle point from the startup bind above. Any OTHER Serve
+	// error after a successful bind is unexpected (the listener was known-good
+	// a moment ago) and is logged at Error; it is not made fatal because the
+	// bind already succeeded and the common cause is a shutdown-time socket
+	// race, not a startup misconfiguration.
 	if m.httpServer != nil {
+		ln, err := net.Listen("tcp", m.httpServer.Addr)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("channels: bind shared HTTP server at %s: %w", m.httpServer.Addr, err)
+		}
 		go func() {
 			logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
 				"addr": m.httpServer.Addr,
 			})
-			if err := m.httpServer.ListenAndServe(); err != nil &&
+			if err := m.httpServer.Serve(ln); err != nil &&
 				!errors.Is(err, http.ErrServerClosed) &&
 				!errors.Is(err, net.ErrClosed) {
 				// Log at Error and return — do NOT call os.Exit here.

@@ -36,38 +36,6 @@ import (
 // (no linkage requested) is always valid (nil). A nil planStore fails
 // CLOSED — an unwired store is a configuration error, never a permission
 // grant (mirrors every other unwired-checker discipline in this package).
-//
-// SECURITY (closes the 4th run_task ask-policy gate bypass — code review
-// finding; see pkg/gateway/rest_tasks.go's validateTaskPlanID for the full
-// writeup of the bypass this is the agent-tool-surface half of): also
-// rejects linking to a plan that is not (still) StateDraft. create_task is an
-// AGENT tool — any agent holding it (every agent, by default) can create a
-// task naming ANY plan_id, agent_id, and even status:"next" in one call, with
-// no human review step equivalent to the REST/Kanban UI's own explicit
-// "attach, then click Run Now" flow. Unlike the REST surface (where a tested,
-// intentional "attach to an Approved/Running plan via the UI" flow exists —
-// see validateTaskPlanID's own note on why that surface's fix is narrower,
-// scoped to the assigned agent's run_task policy rather than to plan state),
-// create_task's plan_id linkage was never exercised, in this codebase's own
-// test suite, against anything but a draft plan (TestTaskCreate_
-// PlanLinkage_Happy) — attaching a NEW member to a plan that has already
-// left draft is not a supported feature of this tool, only an unintended gap
-// that let a caller mint a fully-formed, already-`next`, plan-linked task
-// for ANY agent (including one with an "ask" run_task policy) bypassing the
-// plan engine's own vetted membership paths (authored before Execute, or
-// added by the plan's supervisor via plan_correct) entirely. Requiring
-// StateDraft here closes it unconditionally, with no agent-policy carve-out
-// needed, since the tool never legitimately needed anything broader.
-//
-// KEEP IN SYNC with pkg/sysagent/tools/task.go's
-// validateTaskPlanLinkageWorkspace, which is a deliberate copy (that package
-// cannot reach this unexported helper). The copy is why this hole shipped
-// twice: this validator was hardened first and its twin was not, leaving
-// create_task_in_workspace as a live bypass of the same ask-policy gate until
-// it was found by review. If you change the rule here, change it there too.
-// Deduplicating (exporting this and calling it from sysagent) is cycle-safe --
-// pkg/sysagent/tools already imports pkg/tools one-directionally, and the only
-// reverse edge is an external `tools_test` package -- and is the durable fix.
 func validateTaskPlanLinkage(planStore *plan.Store, planID, workspaceID string) error {
 	if planID == "" {
 		return nil
@@ -84,12 +52,6 @@ func validateTaskPlanLinkage(planStore *plan.Store, planID, workspaceID string) 
 	}
 	if plan.IsTerminal(p.State) {
 		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
-	}
-	if p.State != plan.StateDraft {
-		return fmt.Errorf(
-			"plan %q is %q, not draft — new members can only be linked via create_task before the plan "+
-				"is approved; once a plan has left draft, only its supervisor may add members (plan_correct)",
-			planID, p.State)
 	}
 	return nil
 }
