@@ -99,40 +99,54 @@ func newCancelPreArm() *cancelPreArm {
 // short-lived, so a full sweep on every arm is cheap and keeps a pathological
 // case — e.g. a Tier B channel/chatID whose turn never registers at all —
 // from growing the map unbounded). Callers MUST hold p.mu.
-func (p *cancelPreArm) armLocked(key string, latch *cancelPreArmLatch) {
+//
+// Returns the latches this sweep evicted as expired (nil when none), so the
+// caller can notify each one's ORIGINAL requester — this is the ONLY
+// discovery point for a latch whose target turn never registers at all
+// (e.g. a dropped Tier B message); consume (below) only ever sees a latch
+// that a LATER turn's own registration attempt happens to check against.
+// Without surfacing this list, that case expired in total silence — no log,
+// no hook, nothing — even though a real Stop click was acknowledged
+// (CancelOutcome.Armed) and then simply never took effect.
+func (p *cancelPreArm) armLocked(key string, latch *cancelPreArmLatch) []*cancelPreArmLatch {
+	var expired []*cancelPreArmLatch
 	for k, l := range p.latches {
 		if l.expired(latch.armedAt) {
+			expired = append(expired, l)
 			delete(p.latches, k)
 		}
 	}
 	p.latches[key] = latch
+	return expired
 }
 
 // consume atomically removes and returns the latch filed under the first of
-// keys that has one armed, or (nil, false) when none is. A found-but-expired
-// latch is deleted and reported as not-found — this is what guarantees an
-// expired latch never cancels the turn that finds it (half (b) of the fix's
-// contract).
-func (p *cancelPreArm) consume(now time.Time, keys ...string) (*cancelPreArmLatch, bool) {
+// keys that has one armed, or (nil, false, nil) when none is. A
+// found-but-expired latch is deleted and reported as not-found via the first
+// two return values — this is what guarantees an expired latch never
+// cancels the turn that finds it (half (b) of the fix's contract) — and is
+// ALSO returned as the third value so the caller can notify its original
+// requester that the cancel it armed never landed (see notifyLatchExpired).
+func (p *cancelPreArm) consume(now time.Time, keys ...string) (latch *cancelPreArmLatch, ok bool, expiredLatch *cancelPreArmLatch) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, key := range keys {
 		if key == "" {
 			continue
 		}
-		latch, ok := p.latches[key]
-		if !ok {
+		l, exists := p.latches[key]
+		if !exists {
 			continue
 		}
 		delete(p.latches, key)
-		if latch.expired(now) {
+		if l.expired(now) {
 			slog.Debug("agent: cancelPreArm: latch expired before a turn consumed it",
-				"key", key, "armed_at", latch.armedAt, "ttl", cancelPreArmTTL)
-			return nil, false
+				"key", key, "armed_at", l.armedAt, "ttl", cancelPreArmTTL)
+			return nil, false, l
 		}
-		return latch, true
+		return l, true, nil
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 // preArmKeyForScope returns the identity key a pre-registration cancel latch
@@ -235,12 +249,19 @@ func (al *AgentLoop) armCancelOrFindActiveTurn(
 		return hook, false
 	}
 
-	al.cancelPreArm.armLocked(key, &cancelPreArmLatch{
+	expired := al.cancelPreArm.armLocked(key, &cancelPreArmLatch{
 		scope:     scope,
 		canceller: canceller,
 		hooks:     hooks,
 		armedAt:   time.Now(),
 	})
+	if len(expired) > 0 {
+		// Notify off this goroutine, and specifically BEFORE this method's own
+		// deferred mu.Unlock() has necessarily run — safe regardless, because
+		// notifyLatchExpired never touches al.cancelPreArm itself, only the
+		// ORIGINAL caller's own hooks captured on each expired latch.
+		go notifyLatchExpired(expired...)
+	}
 	return nil, true
 }
 
@@ -261,12 +282,73 @@ func (al *AgentLoop) consumePreArmedCancel(ts *turnState) {
 	if al.cancelPreArm == nil {
 		return
 	}
-	latch, ok := al.cancelPreArm.consume(time.Now(), preArmKeysForTurn(ts)...)
+	latch, ok, expired := al.cancelPreArm.consume(time.Now(), preArmKeysForTurn(ts)...)
+	if expired != nil {
+		// Same off-goroutine notification as armCancelOrFindActiveTurn's own
+		// sweep — this turn's registration is exactly the "later, unrelated
+		// check" discovery point (Path 1) rather than armLocked's
+		// opportunistic sweep (Path 2); both funnel into the same helper so
+		// the original requester learns their Stop never landed either way.
+		go notifyLatchExpired(expired)
+	}
 	if !ok {
 		return
 	}
 	if _, err := al.RequestCancel(context.Background(), latch.scope, latch.canceller, latch.hooks); err != nil {
 		slog.Warn("agent: consumePreArmedCancel: RequestCancel failed on latch consumption",
 			"turn_id", ts.turnID, "session_key", ts.sessionKey, "error", err)
+	}
+}
+
+// notifyLatchExpired informs each expired latch's ORIGINAL requester
+// (CancelHooks.OnLatchExpired, if the calling surface wired it) that the
+// cancel it armed — and that CancelOutcome.Armed already acknowledged as
+// "standing in for this cancel" — never actually reached a turn to cancel:
+// cancelPreArmTTL elapsed with nothing consuming it. Always logged at Warn
+// regardless of whether a hook is wired (this has a real, user-facing
+// consequence — a Stop click silently failing — unlike consume's own
+// Debug-level trace at the discovery site), so an operator has SOME signal
+// even when the calling surface never wires the hook.
+//
+// Deliberately not run under al.cancelPreArm.mu — both call sites
+// (armCancelOrFindActiveTurn's opportunistic sweep, consumePreArmedCancel's
+// own expiry branch) launch this on its own goroutine specifically so an
+// arbitrary caller-supplied hook is never invoked while that lock is held,
+// matching armCancelOrFindActiveTurn's existing "never run caller code
+// inside this critical section" discipline. A hook panic is recovered and
+// logged rather than crashing the process — the same defensiveness
+// RequestCancel's own escalation timers apply to their hook calls
+// (cancel.go).
+//
+// Deliberately does NOT widen cancelPreArmTTL or retry — the fix for
+// "the Stop I clicked never took effect" is telling the truth about it, not
+// making the window that produces it wider or quieter.
+func notifyLatchExpired(expired ...*cancelPreArmLatch) {
+	for _, latch := range expired {
+		if latch == nil {
+			continue
+		}
+		slog.Warn("agent: cancelPreArm: an armed cancel latch expired before any turn consumed it — "+
+			"the Stop this latch stood in for never actually landed",
+			"session_id", latch.scope.SessionID,
+			"channel", latch.scope.Channel,
+			"chat_id", latch.scope.ChatID,
+			"canceller_user", latch.canceller.UserID,
+			"canceller_channel", latch.canceller.Channel,
+			"armed_at", latch.armedAt,
+			"ttl", cancelPreArmTTL,
+		)
+		if latch.hooks.OnLatchExpired == nil {
+			continue
+		}
+		func(l *cancelPreArmLatch) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("agent: notifyLatchExpired: OnLatchExpired hook panicked",
+						"panic", r, "session_id", l.scope.SessionID)
+				}
+			}()
+			l.hooks.OnLatchExpired(l.scope, l.canceller)
+		}(latch)
 	}
 }

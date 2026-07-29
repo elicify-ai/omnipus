@@ -31,11 +31,11 @@ type fakeSessionCanceller struct {
 	calls []string
 }
 
-func (f *fakeSessionCanceller) RequestCancelForSession(_ context.Context, sessionID, _, _ string) (bool, error) {
+func (f *fakeSessionCanceller) RequestCancelForSession(_ context.Context, sessionID, _, _ string) (fired bool, armed bool, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, sessionID)
-	return true, nil
+	return true, false, nil
 }
 
 func (f *fakeSessionCanceller) callList() []string {

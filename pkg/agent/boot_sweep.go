@@ -36,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -283,10 +284,31 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 // Best-effort and expected to legitimately fail for a delegate/subturn
 // session: pkg/tools/delegate.go's spawnSubTurn path never calls
 // UnifiedStore.NewSession for a child turn at all, so rec.SessionID resolves
-// to no UnifiedMeta record for those (SetMeta returns a not-found error) —
-// logged at Debug, never escalated, and never blocking the sweep. A nil
-// agentLoop (a bare struct-literal test engine) or an unresolvable AgentID
-// is handled the same way.
+// to no UnifiedMeta record for those. That ONE case — SetMeta's read hitting
+// os.ReadFile's file-not-found error — is the only one logged at Debug,
+// never escalated, and never blocking the sweep. A nil agentLoop (a bare
+// struct-literal test engine) or an unresolvable AgentID is handled the same
+// silent way (there is no meta.json to reconcile either way).
+//
+// EVERY OTHER SetMeta failure (a corrupted meta.json, a permission error, a
+// disk-full atomic-write failure) is a REAL, actionable inconsistency on a
+// session that DOES have a UnifiedMeta record — most plausibly a real
+// chat/task session, exactly the kind this whole sweep exists to make
+// visible in GET /api/v1/sessions. Code review found the ORIGINAL version of
+// this function logged every case identically at Debug with reassuring
+// "expected" wording, and pkg/logger initializes to INFO by default
+// (logger.go's init()) — so a genuine failure (disk pressure during a boot
+// sweep, highly plausible right after a crash) produced NO output at all:
+// the durable LifecycleRecord correctly flips to failed(interrupted), but
+// UnifiedMeta.Status — what GET /api/v1/sessions actually reads — silently
+// never followed, and the session reports "active" forever. The fix
+// distinguishes the two with errors.Is(setErr, os.ErrNotExist): readUnifiedMeta
+// (pkg/session/unified.go) wraps os.ReadFile's error with %w, and
+// os.ReadFile's underlying *fs.PathError unwraps to a sentinel that
+// satisfies errors.Is(_, os.ErrNotExist) — the standard, idiomatic Go
+// file-not-found check, verified against this exact call chain rather than
+// assumed. Every non-not-exist error now logs at Warn with wording distinct
+// from the benign message, making clear the session was left inconsistent.
 func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 	if pe.agentLoop == nil || rec == nil || rec.AgentID == "" {
 		return
@@ -296,12 +318,24 @@ func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 		return
 	}
 	interrupted := session.StatusInterrupted
-	if setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &interrupted}); setErr != nil {
+	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &interrupted})
+	if setErr == nil {
+		return
+	}
+	if errors.Is(setErr, os.ErrNotExist) {
 		logger.DebugCF("plan_engine",
 			"boot sweep: could not reconcile UnifiedMeta status (expected for a delegate/subturn session, "+
 				"which has no chat-transcript meta.json at all)",
 			map[string]any{"session_id": rec.SessionID, "agent_id": rec.AgentID, "error": setErr.Error()})
+		return
 	}
+	logger.WarnCF("plan_engine",
+		"boot sweep: could not reconcile UnifiedMeta status — this session HAS a chat-transcript "+
+			"meta.json, so this is NOT the benign delegate/subturn case; the durable lifecycle record "+
+			"correctly transitioned to failed(interrupted), but GET /api/v1/sessions may keep reporting "+
+			"this session's PRIOR status (e.g. active) until the next successful boot sweep or manual fix "+
+			"(corrupted meta.json, a permission error, or a disk-full write are the likely causes)",
+		map[string]any{"session_id": rec.SessionID, "agent_id": rec.AgentID, "error": setErr.Error()})
 }
 
 // planIsAwaitingSupervision reports whether planID's durable plan record

@@ -8,11 +8,25 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// ErrNoActiveTurn is returned by CancelActiveTurn when InterruptSession reports
-// that no turn is currently running for the given session. Callers should reply
-// with an informational "Nothing to cancel" message rather than treating it as
-// a failure.
+// ErrNoActiveTurn is returned by CancelActiveTurn when the agent loop reports
+// that no turn is currently running for the given session AND no
+// pre-registration cancel latch was armed in its place (see ErrCancelArmed).
+// Callers should reply with an informational "Nothing to cancel" message
+// rather than treating it as a failure.
 var ErrNoActiveTurn = errors.New("no active turn")
+
+// ErrCancelArmed is returned by CancelActiveTurn when no turn was registered
+// yet for the session, but the agent loop armed a pre-registration cancel
+// latch (pkg/agent/cancel_prearm.go) in its place instead of silently
+// no-op'ing: the next turn to register for this session will be canceled the
+// instant it does (bounded by the loop's cancelPreArmTTL). This is NOT the
+// same outcome as ErrNoActiveTurn — reporting it that way is precisely the
+// bug this sentinel closes (a user told "nothing to cancel" moments before
+// the turn they meant to cancel registers and runs anyway). Callers MUST
+// treat it as a THIRD distinct outcome, separate from both a fired cancel
+// (nil) and a genuine no-op (ErrNoActiveTurn): acknowledged-and-pending, not
+// "canceled" and not "nothing to cancel".
+var ErrCancelArmed = errors.New("cancel acknowledged, pending turn registration")
 
 // AgentLoopInterface is a minimal interface for the agent-loop methods needed by
 // the commands runtime. Using an interface here avoids a hard import cycle
@@ -28,9 +42,19 @@ type AgentLoopInterface interface {
 	// All parameters are primitive types so this interface can be defined without
 	// importing pkg/agent (which would create a circular dependency).
 	//
-	// Returns (fired bool, err error): fired is true when an active turn was
-	// successfully claimed; err is non-nil only for validation failures.
-	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, err error)
+	// Returns (fired, armed, err):
+	//   - fired is true when an active turn was successfully claimed.
+	//   - armed is true when fired is false because no turn was registered yet
+	//     and a pre-registration cancel latch was recorded in its place instead
+	//     (see agent.CancelOutcome.Armed's doc comment for the full contract).
+	//     armed is never true when fired is true.
+	//   - err is non-nil only for validation failures.
+	//
+	// CancelActiveTurn depends on armed being carried all the way through —
+	// discarding it here (flattening back to a bare bool) reintroduces the
+	// exact bug this signature was widened to fix: an armed cancel silently
+	// reported as ErrNoActiveTurn.
+	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
 }
 
 // Canceller identifies who/what issued a cancel — populated for audit attribution.
@@ -68,22 +92,34 @@ type Runtime struct {
 // attribution.
 //
 // Return values:
-//   - nil           — cancel fired (or no active turn — informational).
-//   - ErrNoActiveTurn — no running turn found for sessionID.
-//   - other error   — a real failure that the caller must surface.
+//   - nil             — cancel fired.
+//   - ErrCancelArmed  — no turn was registered yet, but a pre-registration
+//     cancel latch now stands in for this cancel and will fire the instant
+//     one registers. NOT the same as "nothing to cancel" — see ErrCancelArmed.
+//   - ErrNoActiveTurn — genuinely nothing to cancel: no running turn, and no
+//     latch was armed either.
+//   - other error     — a real failure that the caller must surface.
 func (rt *Runtime) CancelActiveTurn(ctx context.Context, sessionID string, canceller Canceller) error {
 	if rt == nil || rt.agentLoop == nil {
 		// No agent loop wired — treat as "nothing to cancel".
 		return ErrNoActiveTurn
 	}
-	fired, err := rt.agentLoop.RequestCancelForSession(ctx, sessionID, canceller.UserID, canceller.Channel)
+	fired, armed, err := rt.agentLoop.RequestCancelForSession(ctx, sessionID, canceller.UserID, canceller.Channel)
 	if err != nil {
 		return fmt.Errorf("cancel: %w", err)
 	}
-	if !fired {
-		return ErrNoActiveTurn
+	if fired {
+		return nil
 	}
-	return nil
+	if armed {
+		// Do NOT collapse this into ErrNoActiveTurn: a latch now stands in for
+		// this cancel and WILL fire against the next turn to register for
+		// this session (bounded by the loop's cancelPreArmTTL) — reporting it
+		// as "nothing to cancel" is the exact bug CancelOutcome.Armed's doc
+		// comment warns every surfacing caller against.
+		return ErrCancelArmed
+	}
+	return ErrNoActiveTurn
 }
 
 // WithAgentLoop returns a shallow copy of rt with agentLoop set. Used by the

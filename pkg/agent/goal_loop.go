@@ -447,9 +447,22 @@ func (al *AgentLoop) cancelGoalVerifierIfAny(pe *PlanEngine, sessionID string) {
 	}
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := al.RequestCancelForSession(cancelCtx, verifierSessionID, "", ""); err != nil {
+	_, armed, err := al.RequestCancelForSession(cancelCtx, verifierSessionID, "", "")
+	switch {
+	case err != nil:
 		logger.WarnCF("agent", "goal: could not cancel in-flight goal verifier session",
 			map[string]any{"session_id": sessionID, "verifier_session_id": verifierSessionID, "error": err.Error()})
+	case armed:
+		// No turn was registered yet for the verifier session at the moment
+		// `/goal clear` ran — a pre-registration cancel latch
+		// (cancel_prearm.go) now stands in for this cancel and will fire the
+		// instant that turn registers (within cancelPreArmTTL). Not a
+		// failure, just deferred; Debug (not Warn) because
+		// RequestCancelForSession's own OnLatchExpired hook (cancel.go)
+		// already gives an operator-visible Warn if the latch itself later
+		// expires unconsumed.
+		logger.DebugCF("agent", "goal: clear armed a pre-registration cancel latch for the in-flight goal verifier session",
+			map[string]any{"session_id": sessionID, "verifier_session_id": verifierSessionID})
 	}
 	pe.VerifierRegistry().Unregister(unit)
 }

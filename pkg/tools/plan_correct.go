@@ -134,13 +134,15 @@ func (t *PlanCorrectTool) Category() ToolCategory { return CategoryTasks }
 func (t *PlanCorrectTool) Description() string {
 	return "Correct a running plan that has parked for adjudication (phase awaiting_supervision) or " +
 		"stalled with no dispatchable member. Four verbs: append (add tail work), supersede (mark a " +
-		"done member's outcome ignored by the judge — REQUIRES replacement tail work that carries " +
-		"every acceptance criterion of the superseded member), targeted_retry (reset one failed " +
-		"member), and abandon (the honest exit — the Definition of Done is unreachable from here; " +
-		"the plan terminates dod_unreachable with your falsified assumption on the record). " +
-		"The Definition of Done is immutable and cannot be edited by any verb. Member ids are minted " +
-		"by the system, never supplied by you. Corrections consume the plan's existing judge-round " +
-		"budget; they do not get a separate one."
+		"done member's outcome ignored by the judge — REQUIRES at least one replacement tail member; " +
+		"the system automatically carries every acceptance criterion of the superseded member onto " +
+		"your replacement work, so you do not need to know or restate its exact criteria — just " +
+		"describe the real replacement work, and add any further criteria you want it held to), " +
+		"targeted_retry (reset one failed member), and abandon (the honest exit — the Definition of " +
+		"Done is unreachable from here; the plan terminates dod_unreachable with your falsified " +
+		"assumption on the record). The Definition of Done is immutable and cannot be edited by any " +
+		"verb. Member ids are minted by the system, never supplied by you. Corrections consume the " +
+		"plan's existing judge-round budget; they do not get a separate one."
 }
 
 func (t *PlanCorrectTool) Parameters() map[string]any {
@@ -229,10 +231,11 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 								},
 								"required": []string{"kind", "text"},
 							},
-							"description": "REQUIRED, at least one: this member's acceptance criteria. For a " +
-								"supersede, the tail members together MUST carry EVERY acceptance criterion " +
-								"of the superseded member — replacement work means work that is held to the " +
-								"same standard.",
+							"description": "REQUIRED, at least one: this member's acceptance criteria describing " +
+								"the REPLACEMENT work itself. For a supersede, you do not need to know or " +
+								"restate the superseded member's own criteria — the system carries those onto " +
+								"the replacement automatically; add criteria here for whatever ADDITIONAL " +
+								"standard you want the real replacement work held to.",
 						},
 					},
 					"required": []string{"title", "criteria"},
@@ -521,7 +524,15 @@ func (t *PlanCorrectTool) buildCorrection(p *plan.Plan, callerID string, args ma
 	req.TailMembers = tailMembers
 
 	// --- FR-030b: the replacement inherits the superseded member's criteria
+	//
+	// Backfill first (InheritSupersededCriteria), THEN check
+	// (RequireCriteriaInheritance): the adjudicator is never shown the
+	// superseded member's criteria detail, so requiring it to submit them
+	// exactly was unsatisfiable — see InheritSupersededCriteria's doc. The
+	// check is kept as a belt-and-suspenders assertion that the backfill
+	// actually closed the gap; it must never fire in practice.
 	if verb == plan.RevisionSupersede {
+		InheritSupersededCriteria(supersededMember.Criteria, tailMembers)
 		if err := RequireCriteriaInheritance(supersededMember.Criteria, tailMembers); err != nil {
 			return req, err
 		}
@@ -693,21 +704,20 @@ func (t *PlanCorrectTool) parseTailMembers(
 //
 // EXPORTED for the same reason as RequireAcyclic below: the engine enforces
 // this rule too, on the typed request, and the two must be one function.
+//
+// In practice this check is now BACKED by InheritSupersededCriteria (called
+// first at both call sites — this tool's buildCorrection and the engine's
+// validateCorrection): a caller can no longer under-supply and get rejected
+// for it, because whatever it omits is backfilled before this runs. This
+// function is kept, unrelaxed, as the belt-and-suspenders assertion that the
+// backfill actually worked — see InheritSupersededCriteria's doc for why the
+// caller-must-reproduce-it-exactly design this function still encodes was
+// unsatisfiable in the first place.
 func RequireCriteriaInheritance(superseded []task.AcceptanceCriterion, replacements []task.Task) error {
 	if len(superseded) == 0 {
 		return nil
 	}
-	byID := make(map[string]bool)
-	byKey := make(map[string]bool)
-	for i := range replacements {
-		for j := range replacements[i].Criteria {
-			c := &replacements[i].Criteria[j]
-			if c.ID != "" {
-				byID[c.ID] = true
-			}
-			byKey[criterionKey(c)] = true
-		}
-	}
+	byID, byKey := criteriaPresenceSets(replacements)
 	var missing []string
 	for i := range superseded {
 		c := &superseded[i]
@@ -727,6 +737,120 @@ func RequireCriteriaInheritance(superseded []task.AcceptanceCriterion, replaceme
 			len(missing), strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// criteriaPresenceSets renders the identity sets RequireCriteriaInheritance
+// and InheritSupersededCriteria both need: every criterion id already present
+// (non-empty ids only) and every criterion's (kind, expression) key, across
+// the WHOLE replacement set (presence is a union property, not a per-member
+// one — FR-030b is satisfied by the tail members TOGETHER).
+func criteriaPresenceSets(replacements []task.Task) (byID, byKey map[string]bool) {
+	byID = make(map[string]bool)
+	byKey = make(map[string]bool)
+	for i := range replacements {
+		for j := range replacements[i].Criteria {
+			c := &replacements[i].Criteria[j]
+			if c.ID != "" {
+				byID[c.ID] = true
+			}
+			byKey[criterionKey(c)] = true
+		}
+	}
+	return byID, byKey
+}
+
+// InheritSupersededCriteria makes FR-030b's identity rule SATISFIABLE instead
+// of merely enforced. It backfills onto replacements[0] whatever acceptance
+// criterion of superseded is not already carried by the union of the
+// replacements' own criteria (same identity rule as RequireCriteriaInheritance:
+// by id when both sides have one, otherwise by exact (kind, expression)).
+//
+// Why this has to be automatic rather than left to the caller: the ONLY
+// caller of plan_correct's supersede verb is the PlanSupervisor System Agent,
+// and its supervision wake prompt deliberately omits criteria detail
+// (buildSupervisionTargetsText, pkg/agent/plan_engine.go, renders only
+// member id | status | title — "No descriptions, no results" by design).
+// The tail-member criteria schema also never accepts a caller-supplied id
+// (parseTailMembers mints every id server-side, matching FR-046's id-minting
+// rule generally). Put together: an LLM adjudicator has no way to learn a
+// check criterion's exact command and expected exit code, and no id-based
+// shortcut either — so requiring it to reproduce that check byte-for-byte
+// was, for the one caller that exists, unconditionally impossible, not
+// merely hard. Observed live: four varied supersede attempts against a
+// check-carrying member, every one rejected, including one that echoed the
+// exact criterion TEXT (learned from a prior rejection's error message) with
+// a plausible-but-wrong command ("true"/exit 0 for an original "exit 0"/exit
+// 0) — the model had no channel to learn the real command short of guessing.
+//
+// The engine already holds the real criteria (it just read them off the
+// superseded member to build the check this replaces); there is no reason to
+// make the caller echo them at all. This only ADDS what's missing — it never
+// removes or rewrites a criterion the caller wrote, including one that was a
+// near-miss attempt at the same criterion (a caller-authored prose criterion
+// with the SAME TEXT as a superseded check is a DIFFERENT (kind, expression)
+// key and is therefore not treated as covering it — both end up present,
+// which is what keeps a check from being quietly downgradable to prose by a
+// caller's guess). The replacement can still exceed the floor with its own,
+// stricter criteria; it can never fall short of it.
+//
+// Each backfilled criterion is a value copy with a FRESH identity: id cleared
+// (Store.Create mints one, same as any newly authored criterion) and status
+// reset to pending (it is a new, unjudged instance of the same
+// Definition-of-Done item on a new task — not the old judgement carried
+// forward), and Check/Behavior are deep-copied so the new task's criterion
+// never aliases the frozen, immutable superseded member's own criterion
+// pointer (D4: the superseded member's record must stay untouched).
+//
+// No-op when there is nothing to inherit (superseded carries no criteria) or
+// nowhere to put it (replacements is empty — FR-030's pairing rule rejects
+// that case before this ever runs).
+func InheritSupersededCriteria(superseded []task.AcceptanceCriterion, replacements []task.Task) {
+	if len(superseded) == 0 || len(replacements) == 0 {
+		return
+	}
+	byID, byKey := criteriaPresenceSets(replacements)
+	var missing []task.AcceptanceCriterion
+	for i := range superseded {
+		c := &superseded[i]
+		if c.ID != "" && byID[c.ID] {
+			continue
+		}
+		if byKey[criterionKey(c)] {
+			continue
+		}
+		missing = append(missing, cloneCriterionForInheritance(*c))
+	}
+	if len(missing) == 0 {
+		return
+	}
+	replacements[0].Criteria = append(replacements[0].Criteria, missing...)
+}
+
+// cloneCriterionForInheritance deep-copies c for InheritSupersededCriteria: id
+// cleared (server mints a fresh one at create time), status reset to pending,
+// and the Check/Behavior payloads copied rather than aliased so the new
+// task's criterion can never mutate the superseded (frozen, immutable)
+// member's own criterion through a shared pointer.
+func cloneCriterionForInheritance(c task.AcceptanceCriterion) task.AcceptanceCriterion {
+	c.ID = ""
+	c.Status = task.CritPending
+	if c.Check != nil {
+		chk := *c.Check
+		c.Check = &chk
+	}
+	if c.Behavior != nil {
+		b := *c.Behavior
+		if b.MinCount != nil {
+			mc := *b.MinCount
+			b.MinCount = &mc
+		}
+		if b.MaxCount != nil {
+			mc := *b.MaxCount
+			b.MaxCount = &mc
+		}
+		c.Behavior = &b
+	}
+	return c
 }
 
 // criterionKey renders the (kind, expression) identity of a criterion for

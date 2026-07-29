@@ -55,6 +55,7 @@ type stubAgentLoop struct {
 	callCount       int
 	returnErr       error // if non-nil, returned by InterruptSession and RequestCancelForSession
 	returnFired     *bool // if non-nil, overrides the fired return value from RequestCancelForSession
+	returnArmed     bool  // returned as the armed return value from RequestCancelForSession
 }
 
 func (s *stubAgentLoop) InterruptSession(sessionID, hint string) ([]string, error) {
@@ -64,18 +65,18 @@ func (s *stubAgentLoop) InterruptSession(sessionID, hint string) ([]string, erro
 	return nil, s.returnErr
 }
 
-func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, error) {
+func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, bool, error) {
 	// Delegate to InterruptSession for test coverage continuity.
 	// Include both userID and channel in the hint so tests can assert on both.
 	hint := "cancel from " + userID + " via " + channel
 	_, err := s.InterruptSession(sessionID, hint)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if s.returnFired != nil {
-		return *s.returnFired, nil
+		return *s.returnFired, s.returnArmed, nil
 	}
-	return s.callCount > 0, nil
+	return s.callCount > 0, s.returnArmed, nil
 }
 
 // TestCancelHandler_CallsInterruptSession verifies that the /cancel handler
@@ -235,6 +236,32 @@ func TestCancelActiveTurn_NoActiveTurnReturnsSentinel(t *testing.T) {
 	}
 }
 
+// TestCancelActiveTurn_ArmedReturnsErrCancelArmed is the structural-fix
+// regression test: when the agent loop reports (fired=false, armed=true) —
+// no turn was registered yet, but a pre-registration cancel latch now stands
+// in for the cancel — CancelActiveTurn MUST return ErrCancelArmed, distinct
+// from BOTH the success path (nil) and the genuine no-op path
+// (ErrNoActiveTurn). Before the widened RequestCancelForSession adapter, this
+// case was structurally unreachable: the adapter flattened CancelOutcome to
+// a bare (bool, error), discarding Armed, so CancelActiveTurn had no way to
+// tell "armed" apart from "genuinely nothing to cancel" and always returned
+// ErrNoActiveTurn for both — telling a user "nothing to cancel" for a Stop
+// that WOULD still fire moments later.
+func TestCancelActiveTurn_ArmedReturnsErrCancelArmed(t *testing.T) {
+	fired := false
+	stub := &stubAgentLoop{returnFired: &fired, returnArmed: true}
+	rt := &Runtime{SessionID: func() string { return "s" }}
+	rt = rt.WithAgentLoop(stub)
+
+	err := rt.CancelActiveTurn(context.Background(), "s", Canceller{UserID: "u", Channel: "c"})
+	if !errors.Is(err, ErrCancelArmed) {
+		t.Errorf("fired=false, armed=true must return ErrCancelArmed, got: %v", err)
+	}
+	if errors.Is(err, ErrNoActiveTurn) {
+		t.Error("an armed cancel must NOT also satisfy errors.Is(err, ErrNoActiveTurn) — the two outcomes must be distinguishable")
+	}
+}
+
 // TestCancelHandler_ReplyMatchesErrorState verifies that the /cancel handler
 // reply message matches the error state from CancelActiveTurn (C-3 fix).
 func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
@@ -246,6 +273,7 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 		name        string
 		loopErr     error
 		returnFired *bool
+		returnArmed bool
 		wantReply   string
 	}{
 		{
@@ -261,6 +289,16 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 			wantReply:   "Nothing to cancel",
 		},
 		{
+			// No active turn YET, but a pre-registration cancel latch armed:
+			// loop returns (fired=false, armed=true, nil). CancelActiveTurn
+			// returns ErrCancelArmed → handler must NOT reply "Nothing to
+			// cancel" (the exact bug this fix closes).
+			name:        "armed_latch",
+			returnFired: &fired,
+			returnArmed: true,
+			wantReply:   "⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts.",
+		},
+		{
 			name:      "real_failure",
 			loopErr:   errors.New("audit fsync failed: disk full"),
 			wantReply: "Cancel request failed: cancel: audit fsync failed: disk full",
@@ -269,7 +307,7 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubAgentLoop{returnErr: tc.loopErr, returnFired: tc.returnFired}
+			stub := &stubAgentLoop{returnErr: tc.loopErr, returnFired: tc.returnFired, returnArmed: tc.returnArmed}
 			rt := &Runtime{SessionID: func() string { return "sess-1" }}
 			rt = rt.WithAgentLoop(stub)
 

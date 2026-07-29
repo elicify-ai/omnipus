@@ -313,18 +313,25 @@ func TestRequestCancel_HooksCalled(t *testing.T) {
 func TestRequestCancelForSession_EmptySessionID_ReturnsError(t *testing.T) {
 	t.Parallel()
 	al := newCancelTestAgentLoop(t)
-	_, err := al.RequestCancelForSession(context.Background(), "", "alice", "web")
+	_, _, err := al.RequestCancelForSession(context.Background(), "", "alice", "web")
 	require.Error(t, err)
 }
 
-// TestRequestCancelForSession_NoActiveTurn_ReturnsFalseFired verifies the adapter
-// propagates the "no active turn" no-op correctly.
-func TestRequestCancelForSession_NoActiveTurn_ReturnsFalseFired(t *testing.T) {
+// TestRequestCancelForSession_NoActiveTurn_ArmsLatch verifies the adapter
+// surfaces Armed rather than discarding it: with no turn registered yet for
+// sessionID, RequestCancel arms a pre-registration cancel latch
+// (cancel_prearm.go) instead of silently no-op'ing, and this primitive
+// adapter must carry that signal all the way through to the caller — the
+// exact structural gap the widened (fired, armed, err) signature closes
+// (finding: RequestCancelForSession used to flatten CancelOutcome to a bare
+// bool, discarding Armed at this adapter boundary).
+func TestRequestCancelForSession_NoActiveTurn_ArmsLatch(t *testing.T) {
 	t.Parallel()
 	al := newCancelTestAgentLoop(t)
-	fired, err := al.RequestCancelForSession(context.Background(), "sess-empty", "alice", "web")
+	fired, armed, err := al.RequestCancelForSession(context.Background(), "sess-empty", "alice", "web")
 	require.NoError(t, err)
-	assert.False(t, fired)
+	assert.False(t, fired, "no active turn exists — fired must be false")
+	assert.True(t, armed, "no active turn for a resolvable session id must arm a pre-registration cancel latch, and the adapter must report it")
 }
 
 // ---------------------------------------------------------------------------

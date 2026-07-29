@@ -462,6 +462,11 @@ const maxFastUpsertAttempts = 50
 // (see UpsertAgentFast's own doc comment), and correctness comes first.
 var fastUpsertMu sync.Mutex
 
+// upsertAgentFastTestHook is a test-only synchronization seam (see its call
+// site inside UpsertAgentFast's retry loop). Always nil in production; never
+// set outside a _test.go file.
+var upsertAgentFastTestHook func(attempt int)
+
 // UpsertAgentFast is the read-path counterpart to a full config reload for a
 // SINGLE agent create/update (issue #571: "Agent create/update triggers a
 // full config reload — finish ADR-054's split on the read path"). ADR-054
@@ -530,16 +535,46 @@ var fastUpsertMu sync.Mutex
 // ReloadProviderAndConfig swap, which publishes through the exact same
 // al.registry pointer.
 //
-// KNOWN LIMITATION: this does not itself serialize against gateway.go's
+// FIXED (this change — "BUG 1: cfg never rebased across a lost publish
+// race"): earlier revisions refreshed `oldRegistry` on every retry attempt
+// but never touched the `cfg` parameter itself. A retry that lost the CAS
+// race to a concurrent ReloadProviderAndConfig kept building the new
+// instance, the RouteResolver, and the default-agent override from the
+// PRE-reload cfg snapshot, and the eventual successful publish's
+// `al.cfg = cfg` line silently reverted every change that reload had just
+// installed (routing table, default-agent override, everyone else's
+// settings) — while this function still reported success.
+//
+// Since fastUpsertMu (above) already serializes every UpsertAgentFast call
+// against every OTHER UpsertAgentFast call, the only thing that can ever win
+// this CAS race is a concurrent ReloadProviderAndConfig — and it publishes
+// al.cfg and al.registry TOGETHER, under the same al.mu.Lock (see its own
+// tail: `al.cfg = cfg; al.registry = registry`). So "al.registry changed
+// since my snapshot" and "al.cfg changed since my snapshot" are the same
+// event here. On a lost race, this loop now also captures the
+// freshly-published al.cfg (while still holding the lock) and rebases
+// `cfg`/`ac` onto it before retrying: via cfg.Clone() (the existing
+// clone-mutate-discard idiom used elsewhere, e.g. pkg/gateway/rest.go's
+// candidate-config validation — never mutating the live, shared al.cfg in
+// place, since GetConfig hands out that exact pointer to every other
+// concurrent reader) with THIS call's own requested AgentConfig (`wantAC`,
+// captured once up front, before the retry loop, so it survives untouched
+// across any number of rebases) spliced back into the clone's Agents.List
+// by ID. That guarantees two things at once: every retry publishes on top
+// of whatever the reload just installed (no more silent revert), AND the
+// caller's own upsert is never lost even if the reload's own disk read
+// raced the caller's entity write and doesn't yet reflect it.
+//
+// This does not itself serialize against gateway.go's
 // services.reloadCoalesceMu single-flight (the mechanism that already
-// prevents two full reloads from racing each other) — a fast upsert losing
-// a race against a concurrent full reload is detected and retried (above),
-// but a full reload that starts and finishes entirely BETWEEN this
-// function's snapshot and its publish attempt is not distinguished from any
-// other concurrent al.registry publisher. This is a narrower version of a
-// pre-existing hazard class (any two writers of al.registry), not a
-// regression this change introduces, and is out of scope for the
-// pkg/agent/pkg/gateway/rest.go surface this fix targets.
+// prevents two full reloads from racing each other) — a concurrent reload
+// can still start and finish at any point during this function's run. That
+// is fine now: every such interleaving is caught by the CAS check and
+// rebased as described above, however many times it happens (bounded by
+// maxFastUpsertAttempts). This is a narrower version of a pre-existing
+// hazard class (any two writers of al.registry/al.cfg), not a regression
+// this change introduces — closed here for the pkg/agent/pkg/gateway/rest.go
+// surface this fix targets.
 func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*AgentInstance, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("upsert agent fast: config is nil")
@@ -561,6 +596,12 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 	if ac == nil {
 		return nil, fmt.Errorf("upsert agent fast: agent %q not found in cfg.Agents.List", agentID)
 	}
+	// wantAC is a value copy of the AgentConfig this call was asked to
+	// apply, captured once from the caller's own snapshot. It survives
+	// untouched across any cfg rebase below (BUG 1 fix) so a retry can
+	// always re-splice the caller's actual request into a fresher config,
+	// rather than trusting that the fresher config already contains it.
+	wantAC := *ac
 
 	// See fastUpsertMu's doc comment: this closes a genuine data race on
 	// shared pre-existing agents' tool objects, not merely a lost-update risk.
@@ -573,6 +614,17 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		al.mu.RUnlock()
 		if oldRegistry == nil {
 			return nil, fmt.Errorf("upsert agent fast: registry not initialized")
+		}
+		// Test-only seam (always nil in production): fires right after this
+		// attempt's oldRegistry/cfg snapshot, before any of the (potentially
+		// slow) wiring work below — the exact window BUG 1 exploited, per its
+		// own doc comment's traced interleaving ("A snapshots oldRegistry = R0,
+		// then spends time in registerSharedTools/wireTier13DepsLocked").
+		// Lets registry_fast_upsert_race_test.go force a concurrent
+		// ReloadProviderAndConfig to land inside this window deterministically,
+		// instead of relying on real scheduling luck.
+		if upsertAgentFastTestHook != nil {
+			upsertAgentFastTestHook(attempt)
 		}
 		provider, ok := extractProvider(oldRegistry)
 		if !ok || provider == nil {
@@ -632,14 +684,61 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 
 		al.mu.Lock()
 		if al.registry != oldRegistry {
-			// Lost the race: another publisher (a concurrent UpsertAgentFast, or
-			// a full ReloadProviderAndConfig) swapped al.registry out from under
-			// this attempt's snapshot. Retry against the new baseline rather than
-			// clobbering whatever it just published.
+			// Lost the race: another publisher swapped al.registry out from
+			// under this attempt's snapshot. Since fastUpsertMu (held for this
+			// entire call) rules out a concurrent UpsertAgentFast, the only
+			// possible publisher is a full ReloadProviderAndConfig — and it
+			// swaps al.cfg and al.registry TOGETHER under this same lock. Grab
+			// that freshly-published al.cfg now, while still holding the lock,
+			// so the retry below can rebase onto it (BUG 1 fix) instead of
+			// continuing to build off our now-superseded snapshot.
+			liveCfg := al.cfg
 			al.mu.Unlock()
 			if closeErr := instance.Close(); closeErr != nil {
 				logger.WarnCF("agent", "upsert agent fast: failed to close discarded instance after a lost publish race",
 					map[string]any{"agent_id": id, "error": closeErr.Error()})
+			}
+
+			// Rebase cfg (and ac, which points into it) onto the live config
+			// instead of retrying with the pre-reload snapshot — otherwise the
+			// eventual successful publish's `al.cfg = cfg` below would revert
+			// everything the reload just installed. Clone rather than mutate
+			// liveCfg in place: al.cfg is shared with every other concurrent
+			// reader (GetConfig hands out this exact pointer, never a copy), so
+			// mutating its Agents.List in place would itself be a data race.
+			// Splice this call's own requested AgentConfig (wantAC) into the
+			// clone by ID so the upsert this caller asked for is never lost,
+			// whether or not liveCfg's own disk read happened to already
+			// include it.
+			if liveCfg != nil && liveCfg != cfg {
+				rebased, cloneErr := liveCfg.Clone()
+				if cloneErr != nil {
+					return nil, fmt.Errorf("upsert agent fast: rebase onto live config after lost publish race: %w", cloneErr)
+				}
+				replaced := false
+				for i := range rebased.Agents.List {
+					if routing.NormalizeAgentID(rebased.Agents.List[i].ID) == id {
+						rebased.Agents.List[i] = wantAC
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					rebased.Agents.List = append(rebased.Agents.List, wantAC)
+				}
+				cfg = rebased
+				ac = nil
+				for i := range cfg.Agents.List {
+					if routing.NormalizeAgentID(cfg.Agents.List[i].ID) == id {
+						ac = &cfg.Agents.List[i]
+						break
+					}
+				}
+				if ac == nil {
+					// Unreachable: wantAC was just appended-or-replaced above
+					// under this exact id.
+					return nil, fmt.Errorf("upsert agent fast: agent %q vanished from rebased config", agentID)
+				}
 			}
 			continue
 		}

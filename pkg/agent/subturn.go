@@ -1017,8 +1017,37 @@ func spawnSubTurn(
 
 	childTS.ctx = childCtx
 
-	// Register child turn state so GetAllActiveTurns/Subagents can find it
-	al.activeTurnStates.Store(childID, childTS)
+	// Register child turn state so GetAllActiveTurns/Subagents can find it.
+	//
+	// registerActiveTurn (turn.go), not a bare activeTurnStates.Store: a
+	// cancel that arrived for this session BEFORE the child existed at all
+	// (RequestCancel found nothing yet — e.g. the delegating parent's own
+	// turn already finished, the common case for `delegate async=true`,
+	// since DelegateTool.executeAsync dispatches this whole call on a fresh
+	// goroutine and returns an immediate ack) arms a pre-registration cancel
+	// latch (cancel_prearm.go) instead of silently no-op'ing. Only
+	// registerActiveTurn calls consumePreArmedCancel, so this MUST be the
+	// registration path — a bare Store here left that latch unconsumed at
+	// the earliest (and safest) possible moment, relying entirely on
+	// al.runTurn's OWN later internal registerActiveTurn call (loop.go) to
+	// pick it up instead. That still usually worked, but only by accident of
+	// timing: it pushed the latch's already-bounded 5s TTL window out across
+	// every step runTurn does first (workspace-dir resolution, citation
+	// tracker setup, ...) for no reason, and under real load (slow disk,
+	// contended CPU) that widened window is exactly what let a genuine Stop
+	// click's latch expire unconsumed — the turn then ran to completion with
+	// no cancellation and no turn_canceled transcript entry (e2e T24a
+	// regression, tests/e2e/cancel-cross-channel.spec.ts:665). Registering
+	// here consumes the latch (if any) the INSTANT the child becomes
+	// reachable, before any of that later setup work — see
+	// TestRepro_SpawnSubTurn_RawStoreBypassesPreArmedCancel for a
+	// deterministic proof this closes, and TestRepro_AsyncDelegateCancel_
+	// ArmsBeforeChildRegisters for the full end-to-end cascade.
+	//
+	// Safe to call unconditionally: consumePreArmedCancel is an exactly-once,
+	// map-delete-guarded no-op when no latch is armed, so a turn spawned with
+	// no pending cancel behaves identically to the old bare Store.
+	al.registerActiveTurn(childTS)
 	defer al.activeTurnStates.Delete(childID)
 
 	// 5. Establish parent-child relationship (thread-safe)

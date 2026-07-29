@@ -1968,6 +1968,61 @@ func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 				}
 			}
 		},
+		// OnLatchExpired closes the last gap in the chain: handleCancel below
+		// already tells the user "acknowledged" (cancel_stage "graceful") the
+		// instant CancelOutcome.Armed is true, but a latch that ages out
+		// (cancelPreArmTTL, pkg/agent/cancel_prearm.go) with no turn ever
+		// registering to consume it means that acknowledgement was never made
+		// good on — the turn runs to completion (or the background-only
+		// cancel this reap represents never lands at all) uncanceled. Without
+		// this, the user is told "stop requested" and then never told it
+		// didn't happen — the exact silent-success defect this whole chain
+		// exists to close, just moved one step later.
+		//
+		// Deliberately NOT a second cancel_stage frame: {graceful, hard,
+		// detached} (contracts/components/schemas/CancelStageFrame.yaml) is a
+		// closed, SPA-validated enum and none of its three members mean
+		// "requested but did not land" — graceful/hard/detached all describe
+		// a cancel that IS proceeding. Reusing "graceful" here (as the
+		// no-active-turn case just above does, deliberately, for the
+		// still-pending case) would claim progress that never happened —
+		// over-signaling in exactly the place this fix must not. ErrorFrame
+		// is the right existing wire type instead: it is documented as
+		// "session-scoped... SPA displays the message as a toast or inline
+		// error... does NOT terminate the WebSocket connection" — precisely
+		// "something the user asked for did not happen", with no enum to
+		// extend and no contract change required.
+		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
+			if wc == nil {
+				// No live connection to notify — the orphan-foreground-turn
+				// reap path (reapOrphanForegroundTurn below, via
+				// buildCancelHooks(nil)) fires precisely because nobody is
+				// watching this session anymore. notifyLatchExpired
+				// (cancel_prearm.go) already logged the base "latch expired"
+				// Warn unconditionally; add site-specific context here so an
+				// operator sees not just THAT it expired but that this was a
+				// no-connection (reap/background) case with no user to have
+				// told anyway.
+				slog.Warn("ws: cancel latch expired with no live connection to notify — the cancel it stood in for never took effect",
+					"session_id", scope.SessionID,
+					"channel", scope.Channel,
+					"chat_id", scope.ChatID,
+					"canceller_user", canceller.UserID,
+					"canceller_channel", canceller.Channel,
+				)
+				return
+			}
+			var sidPtr *string
+			if scope.SessionID != "" {
+				sidCopy := scope.SessionID
+				sidPtr = &sidCopy
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				SessionId: sidPtr,
+				Message:   "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
+			})
+		},
 	}
 }
 
@@ -2006,7 +2061,8 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 	if !outcome.Fired {
-		slog.Debug("ws: cancel — no active turn or already canceled", "session_id", sessionID)
+		slog.Debug("ws: cancel — no active turn or already canceled",
+			"session_id", sessionID, "armed", outcome.Armed)
 		// Observability fix: a cancel with no active turn is the COMMON case
 		// for a `bash run_in_background=true` job whose own turn already
 		// ended (see cancel.go's RequestCancel doc comment) — the background
@@ -2018,15 +2074,48 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		// ({graceful, hard, detached} — contracts/components/schemas/
 		// CancelStageFrame.yaml) and adding a value would require a
 		// contract + frontend change beyond this fix's scope; "graceful"'s
-		// documented meaning ("cancel request acknowledged") fits a
-		// background-only kill well enough to give the Stop button SOME
-		// visible response instead of silence.
+		// documented meaning ("cancel request acknowledged; agent is
+		// completing the current tool call and will stop at the next safe
+		// checkpoint") fits a background-only kill well enough to give the
+		// Stop button SOME visible response instead of silence.
+		//
+		// outcome.Armed closes a second, HIGH-severity gap in the same
+		// family (review finding on commit 99d4e729, CancelOutcome.Armed):
+		// its doc comment mandates "Callers surfacing Fired to a user MUST
+		// also check Armed before reporting a cancel as a no-op" — a contract
+		// every RequestCancel caller that surfaces Fired to a user or operator
+		// must honour, not one this edit closes everywhere in one pass. This
+		// fixes THIS caller (the web-SPA Stop button, handleCancel): a Stop
+		// click arriving before its turn has registered
+		// (pkg/agent/cancel_prearm.go) now correctly latches and WILL cancel
+		// that turn the instant it registers (within cancelPreArmTTL), and
+		// the click itself produces a frame here instead of the pre-fix zero
+		// frames. Other RequestCancel callers still need their own fix for
+		// the same contract — notably pkg/commands' RequestCancelForSession
+		// (flattens to a bare bool, dropping Armed, so cmd_cancel.go reports
+		// "Nothing to cancel" for an armed latch; owned by a separate agent
+		// via a widened adapter signature) and plan_engine.go's cancelSessions
+		// fan-out (buckets Armed as notFired; owned separately) — do not
+		// treat either as covered by this file. Reuse "graceful" for this
+		// case too, for the same reason as the background-kill case above:
+		// on the wire it means "acknowledged, pending", never "canceled" —
+		// nothing has actually stopped yet, so claiming more than that would
+		// just be the same under-signaling bug inverted into over-signaling
+		// (the trap this fix must not fall into).
 		if outcome.BackgroundSessionsKilled > 0 {
 			slog.Info("ws: cancel killed background session(s) with no active turn",
 				"session_id", sessionID,
 				"background_sessions_killed", outcome.BackgroundSessionsKilled,
 				"background_sessions_failed", outcome.BackgroundSessionsFailed,
+				"armed", outcome.Armed,
 			)
+		}
+		if outcome.Armed {
+			slog.Info("ws: cancel armed a pre-registration latch — no turn registered yet for this session; the next turn to register will be canceled the instant it does, unless the latch's TTL expires first",
+				"session_id", sessionID,
+			)
+		}
+		if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}
@@ -2061,8 +2150,16 @@ func (h *WSHandler) reapOrphanForegroundTurn(sessionID, reason string) {
 		return
 	}
 	if !outcome.Fired {
+		// armed distinguishes "genuinely nothing to do" from "a pre-
+		// registration cancel latch now stands in for this reap and will
+		// fire on the next turn to register under this session, within
+		// cancelPreArmTTL" (CancelOutcome.Armed doc comment, pkg/agent/
+		// cancel.go). No frame is sent either way — wc is nil here (see
+		// buildCancelHooks above), because a reap fires precisely when
+		// nobody is watching this session anymore, so there is no live
+		// connection to acknowledge to regardless of which case this is.
 		slog.Debug("ws: orphan watchdog: RequestCancel no-op (turn already finished or already canceled)",
-			"session_id", sessionID, "reason", reason)
+			"session_id", sessionID, "reason", reason, "armed", outcome.Armed)
 	}
 }
 

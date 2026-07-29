@@ -662,6 +662,18 @@ func (s *LifecycleStore) Exists(sessionID string) bool {
 // failure on a corrupt/torn record, a remove failure) are logged at Warn and
 // the sweep continues with the next id; an error is returned only if the
 // directory listing itself fails.
+//
+// FIXED (this change — BUG 2: check-then-act was not atomic): the previous
+// implementation called s.Load(id) — which internally takes AND RELEASES
+// the per-session striped lock — to decide eligibility, then separately
+// re-acquired the SAME lock just to os.Remove the file. Between those two
+// acquisitions no lock was held for that session_id at all: a follow_up/Play
+// legitimately minting a new, non-terminal generation onto a terminal tail
+// in that exact window (the package doc explicitly allows this) would have
+// its brand-new generation silently destroyed when this function then
+// deleted the whole .jsonl — violating this very function's own invariant
+// ("a NON-terminal record is NEVER pruned"). See pruneTerminalOne's doc
+// comment for how this is now closed.
 func (s *LifecycleStore) PruneTerminal(retentionDays int, now time.Time) (int, error) {
 	if retentionDays <= 0 {
 		return 0, nil
@@ -673,26 +685,70 @@ func (s *LifecycleStore) PruneTerminal(retentionDays int, now time.Time) (int, e
 	}
 	removed := 0
 	for _, id := range ids {
-		rec, err := s.Load(id)
-		if err != nil {
-			if err == ErrLifecycleNotFound {
-				continue
-			}
-			slog.Warn("session: lifecycle: prune_terminal: load failed, skipping", "session_id", id, "error", err)
-			continue
+		if s.pruneTerminalOne(id, cutoff) {
+			removed++
 		}
-		if !rec.Terminal() || rec.UpdatedAt.After(cutoff) {
-			continue
-		}
-		mu := s.Lock(id)
-		mu.Lock()
-		rmErr := os.Remove(s.path(id))
-		mu.Unlock()
-		if rmErr != nil {
-			slog.Warn("session: lifecycle: prune_terminal: remove failed", "session_id", id, "error", rmErr)
-			continue
-		}
-		removed++
 	}
 	return removed, nil
+}
+
+// pruneTerminalRaceHook is a test-only synchronization seam (always nil in
+// production, never set outside a _test.go file): when non-nil it is
+// invoked by pruneTerminalOne right after it decides a session_id is
+// eligible for removal (tail is terminal and past the cutoff) and
+// immediately before the file is actually removed. Where that call lands
+// relative to the per-session lock (inside vs. outside the single critical
+// section below) is exactly the fact BUG 2's regression test exercises.
+var pruneTerminalRaceHook func(sessionID string) //nolint:gochecknoglobals // test-only seam, see doc comment
+
+// pruneTerminalOne evaluates, and if eligible removes, a single session_id's
+// persisted file. BUG 2 fix: the tail read, the terminal/cutoff
+// re-validation, and the os.Remove all happen under ONE acquisition of the
+// per-session striped lock — the same lock Persist/Mutate take for every
+// OTHER writer of this session_id (see LifecycleStore's own doc comment).
+// That makes "decide to prune" and "actually prune" atomic with respect to
+// any concurrent follow_up/Play reopen of the SAME session: either the
+// reopen's Mutate call happens-before this function's lock acquisition (in
+// which case the tail read here observes the fresh, non-terminal
+// generation and correctly skips pruning), or it happens-after this
+// function releases the lock having already removed the file (in which
+// case the reopen's own Mutate observes "no tail" and is responsible for
+// treating that as "nothing to resume" rather than silent data loss) — the
+// old two-lock-acquisition shape allowed neither ordering to be guaranteed,
+// which is precisely how a freshly-reopened generation could be deleted out
+// from under it.
+//
+// Deliberately scoped to ONE session_id per call (not the whole sweep) so
+// the striped lock is never held across unrelated I/O for other sessions —
+// each iteration of PruneTerminal's loop acquires and releases its own id's
+// lock independently.
+func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
+	mu := s.Lock(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	rec, err := s.tail(id)
+	if err != nil {
+		slog.Warn("session: lifecycle: prune_terminal: load failed, skipping", "session_id", id, "error", err)
+		return false
+	}
+	if rec == nil {
+		// No record for this id (already removed, or never had one) —
+		// mirrors the ErrLifecycleNotFound "continue" the old Load-based
+		// code silently handled the same way.
+		return false
+	}
+	if !rec.Terminal() || rec.UpdatedAt.After(cutoff) {
+		return false
+	}
+
+	if pruneTerminalRaceHook != nil {
+		pruneTerminalRaceHook(id)
+	}
+
+	if rmErr := os.Remove(s.path(id)); rmErr != nil {
+		slog.Warn("session: lifecycle: prune_terminal: remove failed", "session_id", id, "error", rmErr)
+		return false
+	}
+	return true
 }

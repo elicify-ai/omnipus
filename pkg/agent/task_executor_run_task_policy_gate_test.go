@@ -34,11 +34,13 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -85,8 +87,15 @@ func newRunTaskPolicyGateTestLoop(t *testing.T, provider providers.LLMProvider, 
 // CURRENT run has already been claimed at least once (exactly what
 // consumeAttemptOrExhaust/rejectBareEvidenceClaim leave behind when they flip
 // a task back to `next` for one more goal-loop attempt — neither ever clears
-// StartedAt). planID empty means standalone.
-func newRunTaskGateTestTask(t *testing.T, al *AgentLoop, startedAt, planID string) *task.Task {
+// StartedAt or SessionID). sessionID seeds Task.SessionID directly: a
+// genuine claimed-and-dispatched run always has one (executeTask's
+// createTaskSessionSync stamps it synchronously in the SAME dispatch cycle
+// that ClaimForRun stamps StartedAt in), so a legitimate retry-continuation
+// test must seed BOTH non-empty; leaving it empty alongside a non-empty
+// startedAt simulates the forged bare `started_at`-only PATCH the SessionID
+// AND-clause exists to catch (see requireRunTaskAutoDispatchApproved's own
+// SECURITY doc). planID empty means standalone.
+func newRunTaskGateTestTask(t *testing.T, al *AgentLoop, startedAt, sessionID, planID string) *task.Task {
 	t.Helper()
 	tk := &task.Task{
 		Title:       "run_task policy gate test task",
@@ -97,6 +106,7 @@ func newRunTaskGateTestTask(t *testing.T, al *AgentLoop, startedAt, planID strin
 		WorkspaceID: "default",
 		Status:      task.StatusNext,
 		StartedAt:   startedAt,
+		SessionID:   sessionID,
 		PlanID:      planID,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
@@ -118,7 +128,7 @@ func newRunTaskGateTestTask(t *testing.T, al *AgentLoop, startedAt, planID strin
 func TestCheckQueuedTasks_AskPolicyStandaloneTaskNotAutoDispatched(t *testing.T) {
 	provider := &scriptedProvider{responseBody: successMarkerBody}
 	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAsk)
-	tk := newRunTaskGateTestTask(t, al, "" /* never claimed */, "" /* standalone */)
+	tk := newRunTaskGateTestTask(t, al, "" /* never claimed */, "" /* no session */, "" /* standalone */)
 
 	al.taskExecutor.CheckQueuedTasks(context.Background())
 
@@ -145,7 +155,7 @@ func TestCheckQueuedTasks_AskPolicyStandaloneTaskNotAutoDispatched(t *testing.T)
 func TestCheckQueuedTasks_AllowPolicyStandaloneTaskStillDispatched(t *testing.T) {
 	provider := &scriptedProvider{responseBody: successMarkerBody}
 	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAllow)
-	tk := newRunTaskGateTestTask(t, al, "", "")
+	tk := newRunTaskGateTestTask(t, al, "", "", "")
 
 	al.taskExecutor.CheckQueuedTasks(context.Background())
 
@@ -186,7 +196,7 @@ func TestCheckQueuedTasks_AllowPolicyStandaloneTaskStillDispatched(t *testing.T)
 func TestCheckQueuedTasks_DenyPolicyStandaloneTaskStillDispatched_KnownGap(t *testing.T) {
 	provider := &scriptedProvider{responseBody: successMarkerBody}
 	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyDeny)
-	tk := newRunTaskGateTestTask(t, al, "", "")
+	tk := newRunTaskGateTestTask(t, al, "", "", "")
 
 	al.taskExecutor.CheckQueuedTasks(context.Background())
 
@@ -204,20 +214,28 @@ func TestCheckQueuedTasks_DenyPolicyStandaloneTaskStillDispatched_KnownGap(t *te
 // --- 4. Continuation carve-out: an in-flight retry is not re-gated ---------
 
 // TestExecuteTask_AskPolicyRetryContinuesWithoutReapproval proves the
-// requireRunTaskAutoDispatchApproved carve-out (StartedAt != ""): a task
-// whose CURRENT run has already been claimed at least once (simulated here
-// by seeding StartedAt directly — exactly what
-// consumeAttemptOrExhaust/rejectBareEvidenceClaim leave behind when they
-// flip a task back to `next` for one more attempt; neither ever clears
-// StartedAt) must dispatch via ExecuteTask WITHOUT re-consulting the
-// run_task ask policy, even though the agent's policy is "ask". Re-gating
-// every retry would silently break any multi-attempt task for an ask-policy
-// agent even though a human (or an approved run_task call) already
-// authorized the run in the first place.
+// requireRunTaskAutoDispatchApproved carve-out (StartedAt != "" AND
+// SessionID != ""): a task whose CURRENT run has already been claimed AND
+// dispatched at least once (simulated here by seeding BOTH StartedAt and
+// SessionID directly — exactly what consumeAttemptOrExhaust/
+// rejectBareEvidenceClaim leave behind when they flip a task back to `next`
+// for one more attempt; neither ever clears StartedAt or SessionID) must
+// dispatch via ExecuteTask WITHOUT re-consulting the run_task ask policy,
+// even though the agent's policy is "ask". Re-gating every retry would
+// silently break any multi-attempt task for an ask-policy agent even though
+// a human (or an approved run_task call) already authorized the run in the
+// first place.
+//
+// SessionID is seeded here (not just StartedAt) because the gate now
+// requires both — see requireRunTaskAutoDispatchApproved's SECURITY doc
+// comment on why StartedAt alone was a fail-open bypass (a bare
+// PATCH {"started_at": ...} via TaskUpdateRequest stamps StartedAt with no
+// session ever created). This test proves the tightened AND-clause does NOT
+// regress the legitimate case it was already covering.
 func TestExecuteTask_AskPolicyRetryContinuesWithoutReapproval(t *testing.T) {
 	provider := &scriptedProvider{responseBody: successMarkerBody}
 	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAsk)
-	tk := newRunTaskGateTestTask(t, al, time.Now().UTC().Format(time.RFC3339), "")
+	tk := newRunTaskGateTestTask(t, al, time.Now().UTC().Format(time.RFC3339), "prior-claim-session", "")
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
 		t.Fatalf("ExecuteTask on an already-started (retry) task must succeed even under an ask "+
@@ -254,7 +272,7 @@ func TestExecuteTask_AskPolicyPlanMemberNotGatedByRunTaskPolicy(t *testing.T) {
 	if err := planStore.Create(p); err != nil {
 		t.Fatalf("create plan: %v", err)
 	}
-	tk := newRunTaskGateTestTask(t, al, "", p.ID)
+	tk := newRunTaskGateTestTask(t, al, "", "", p.ID)
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID); err != nil {
 		t.Fatalf("ExecuteTask on a RUNNING plan's member must succeed regardless of the agent's "+
@@ -280,7 +298,7 @@ func TestExecuteTask_AskPolicyPlanMemberNotGatedByRunTaskPolicy(t *testing.T) {
 func TestStartTaskNow_AskPolicyTaskDispatchesDirectly(t *testing.T) {
 	provider := &scriptedProvider{responseBody: successMarkerBody}
 	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAsk)
-	tk := newRunTaskGateTestTask(t, al, "", "")
+	tk := newRunTaskGateTestTask(t, al, "", "", "")
 
 	// StartTaskNow's contract: the caller has already transitioned the task
 	// to in_progress via a PATCH before calling it (mirrors the REST handler
@@ -320,7 +338,7 @@ func TestAdvanceBlockedTasks_AskPolicyStandaloneTaskNotDispatched(t *testing.T) 
 	provider := &scriptedProvider{responseBody: successMarkerBody}
 	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAsk)
 
-	dep := newRunTaskGateTestTask(t, al, "", "")
+	dep := newRunTaskGateTestTask(t, al, "", "", "")
 	now := time.Now().UTC().Format(time.RFC3339)
 	claimedDep, err := al.taskStore.Update(dep.ID, task.Patch{
 		Status: ptrStatus(task.StatusInProgress), StartedAt: &now,
@@ -329,7 +347,7 @@ func TestAdvanceBlockedTasks_AskPolicyStandaloneTaskNotDispatched(t *testing.T) 
 		t.Fatalf("claim dep in_progress: %v", err)
 	}
 
-	blocked := newRunTaskGateTestTask(t, al, "", "")
+	blocked := newRunTaskGateTestTask(t, al, "", "", "")
 	blockedByDep := []string{dep.ID}
 	if _, blockErr := al.taskStore.Update(blocked.ID, task.Patch{BlockedBy: &blockedByDep}); blockErr != nil {
 		t.Fatalf("set blocked_by: %v", blockErr)
@@ -368,5 +386,91 @@ func TestAdvanceBlockedTasks_AskPolicyStandaloneTaskNotDispatched(t *testing.T) 
 	if calls := scriptedProviderCallCount(provider); calls != 0 {
 		t.Fatalf("provider was called %d time(s) — the now-unblocked task must never reach the LLM "+
 			"without an explicit run_task approval", calls)
+	}
+}
+
+// --- 8. Security regression: a forged StartedAt alone must not bypass the gate --
+
+// TestCheckQueuedTasks_AskPolicyForgedStartedAtWithoutSessionStillGated is the
+// package-internal regression pin for a reviewer-confirmed fail-open bypass in
+// the original StartedAt-only carve-out: `started_at` is a directly
+// wire-settable TaskUpdateRequest field (contracts/components/schemas/
+// TaskUpdateRequest.yaml), and handleTaskPatch (pkg/gateway/rest_tasks.go)
+// applies it UNCONDITIONALLY regardless of whether `status` is present in the
+// same request — the in_progress-dispatch launch block is gated on
+// req.Status != nil alone. Any authenticated task-write caller could
+// therefore PATCH a standalone `next` task with only
+// {"started_at": "..."}, leaving it at `next` with no session ever created,
+// and the very next CheckQueuedTasks tick would treat that forged field as
+// proof of an already-approved continuation — dispatching the task to the
+// LLM with NO human ever approving a run_task call.
+//
+// This test seeds exactly that forged state directly (StartedAt non-empty,
+// SessionID empty — precisely what the bare PATCH produces, since
+// TaskUpdateRequest has no session_id field at all and handleTaskPatch never
+// derives task.Patch.SessionID from any request field) and proves
+// CheckQueuedTasks still refuses to dispatch. See
+// TestHandleTaskPatch_BareStartedAtDoesNotBypassRunTaskAskGate (pkg/gateway)
+// for the same proof driven through the REAL REST PATCH handler rather than
+// a harness-seeded field.
+func TestCheckQueuedTasks_AskPolicyForgedStartedAtWithoutSessionStillGated(t *testing.T) {
+	provider := &scriptedProvider{responseBody: successMarkerBody}
+	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAsk)
+	tk := newRunTaskGateTestTask(t, al,
+		time.Now().UTC().Format(time.RFC3339), // forged StartedAt
+		"",                                    // no session — never actually dispatched
+		"",                                    // standalone
+	)
+
+	al.taskExecutor.CheckQueuedTasks(context.Background())
+
+	got, err := al.taskStore.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != task.StatusNext {
+		t.Fatalf("status = %q after CheckQueuedTasks, want %q (unchanged) — a forged StartedAt with no "+
+			"real session must not be treated as an already-approved continuation and must not "+
+			"bypass the run_task ask-policy gate", got.Status, task.StatusNext)
+	}
+	if calls := scriptedProviderCallCount(provider); calls != 0 {
+		t.Fatalf("provider was called %d time(s) — a forged StartedAt-only task must never reach the "+
+			"LLM without an explicit run_task approval", calls)
+	}
+}
+
+// --- 9. Observability: the refusal is now visible at the default log level --
+
+// TestCheckQueuedTasks_AskPolicyRefusal_LoggedAtWarnAtDefaultLevel is the
+// regression pin for a MEDIUM code-review observability finding on
+// requireRunTaskAutoDispatchApproved: failing closed is correct (and
+// unchanged by this fix), but the refusal used to log at Debug — invisible
+// at the production-default INFO level (pkg/logger initializes to INFO,
+// logger.go's init()) — so an operator had NO trace that a task was stuck
+// awaiting an explicit run_task approval, indistinguishable on the board
+// from an ordinary queued task, with no approval prompt ever generated
+// (there is no in-flight turn to prompt from) since it can sit forever. The
+// refusal now logs at Warn instead (see requireRunTaskAutoDispatchApproved's
+// own OBSERVABILITY doc comment for the decision — a task-level board
+// marker is the more complete fix but is out of scope for this pass: it
+// touches pkg/task and, if rendered by the SPA, CLAUDE.md Constraint #8's
+// contracts-first pipeline).
+func TestCheckQueuedTasks_AskPolicyRefusal_LoggedAtWarnAtDefaultLevel(t *testing.T) {
+	provider := &scriptedProvider{responseBody: successMarkerBody}
+	al := newRunTaskPolicyGateTestLoop(t, provider, config.ToolPolicyAsk)
+	_ = newRunTaskGateTestTask(t, al, "", "", "")
+
+	readLog := captureLogFile(t, logger.INFO) // the production default level
+
+	al.taskExecutor.CheckQueuedTasks(context.Background())
+
+	logged := readLog()
+	if !strings.Contains(logged, "run_task policy gate: refusing unattended dispatch") {
+		t.Fatalf("the run_task ask-policy refusal must be visible at the production-default INFO "+
+			"level — got:\n%s", logged)
+	}
+	if !strings.Contains(logged, `"level":"warn"`) {
+		t.Fatalf("the refusal must log at WARN (not Debug) so a task stuck awaiting an explicit "+
+			"run_task approval is never silent — got:\n%s", logged)
 	}
 }

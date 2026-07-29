@@ -472,6 +472,18 @@ jobs:
         # -race (single run and -count=3, zero reports) before being added here;
         # the timeout below is raised to accommodate them.
         #
+        # pkg/logger is included (99d4e729's logMessage fix, guarded by
+        # logger_race_test.go): logMessage read the package-level
+        # `logger`/`fileLogger` globals with no RLock while four mutators wrote
+        # under Lock, on the path of every log call in the binary — reverting
+        # the fix would have kept CI green forever without this line, since the
+        # package's only other coverage is the plain (non-race) `go test` job
+        # above, which cannot detect a race by construction. Timeout left at
+        # 600s: verified locally, the package's whole race suite (a single
+        # 300ms-deadline goroutine-hammer test plus the ordinary unit tests)
+        # completes in ~1.3s under -race — negligible next to the headroom the
+        # 240s→600s raise already bought pkg/agent/pkg/gateway/tests/integration.
+        #
         # DATA RACE carve-out (never routed through the flake filter): a race
         # that manifests under the default parallel `-p` (NumCPU) run but
         # disappears when the same package is re-run isolated at -p 1 is the
@@ -487,7 +499,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 600s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./tests/integration/... 2>&1)
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 600s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/... ./pkg/entity/... ./pkg/agentstore/... ./pkg/agent/... ./pkg/gateway/... ./pkg/logger/... ./tests/integration/... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a

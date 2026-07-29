@@ -774,16 +774,24 @@ func TestAppendCorrection_BareSupersede_RejectedByEngine(t *testing.T) {
 	}
 }
 
-// TestAppendCorrection_SupersedeDroppingACriterion_RejectedByEngine covers the
-// half of the rule that the bare-supersede check alone does NOT cover
-// (FR-030b): replacement work held to a WEAKER standard.
+// TestAppendCorrection_SupersedeIncompleteCriteria_AutoInheritedByEngine
+// covers the half of the rule that the bare-supersede check alone does NOT
+// cover (FR-030b): replacement work must never end up held to a WEAKER
+// standard than what it replaces.
 //
-// "At least one tail member" costs an adjudicator exactly one throwaway
-// member to satisfy. Without criteria inheritance it could supersede the
-// member whose output failed a criterion and attach one trivial,
-// instantly-satisfiable replacement — the DoD is unchanged, but the evidence
-// set the judge weighs is, which is exactly the move supersede must not enable.
-func TestAppendCorrection_SupersedeDroppingACriterion_RejectedByEngine(t *testing.T) {
+// This used to be named …_RejectedByEngine and asserted that AppendCorrection
+// REJECTED a request whose tail member carried only one of the two
+// superseded criteria. That named the OLD, unsatisfiable mechanism: the ONLY
+// real caller of this path is PlanSupervisor via the plan_correct tool, and
+// its supervision wake never shows it a member's criteria detail
+// (buildSupervisionTargetsText renders id | status | title only) — so
+// requiring it to reproduce criteria it is never shown was impossible by
+// construction, not merely strict. tools.InheritSupersededCriteria (called
+// from validateCorrection, right before tools.RequireCriteriaInheritance)
+// backfills whatever is missing, so this now SUCCEEDS — and the property this
+// test exists to protect (a dropped criterion) is asserted directly against
+// the COMMITTED result, which is the stronger, real thing to check.
+func TestAppendCorrection_SupersedeIncompleteCriteria_AutoInheritedByEngine(t *testing.T) {
 	h := newCorrectionHarness(t)
 	ctx := context.Background()
 
@@ -800,18 +808,120 @@ func TestAppendCorrection_SupersedeDroppingACriterion_RejectedByEngine(t *testin
 		FalsifiedAssumption: "assumed the parser was correct",
 		TailMembers: []task.Task{{
 			ID: "m-weaker", Title: "redo it", WorkspaceID: "ws", Status: task.StatusNext,
-			// Carries only ONE of the two criteria: "floats parse" is dropped.
+			// Carries only ONE of the two criteria — "floats parse" is
+			// omitted, not authored by the caller at all.
 			Criteria: []task.AcceptanceCriterion{planProseCriterion("ints parse")},
 		}},
 	})
-	if err == nil {
-		t.Fatal("the engine accepted replacement work that drops an acceptance criterion")
+	if err != nil {
+		t.Fatalf("supersede with an incomplete tail member was rejected instead of backfilled: %v", err)
 	}
-	if !strings.Contains(err.Error(), "floats parse") {
-		t.Errorf("rejection does not name the dropped criterion: %v", err)
+	tail, gerr := h.tasks.Get("m-weaker")
+	if gerr != nil {
+		t.Fatalf("the replacement member was not created: %v", gerr)
 	}
-	if tail, _ := h.tasks.Get("m-weaker"); tail != nil {
-		t.Error("the weaker replacement member was created by a REJECTED correction")
+	if len(tail.Criteria) != 2 {
+		t.Fatalf("committed replacement carries %d criteria, want exactly 2 (1 caller-authored + 1 "+
+			"backfilled, no duplicate): %+v", len(tail.Criteria), tail.Criteria)
+	}
+	var sawInts, sawFloats bool
+	for _, c := range tail.Criteria {
+		switch c.Text {
+		case "ints parse":
+			sawInts = true
+		case "floats parse":
+			sawFloats = true
+		}
+	}
+	if !sawInts {
+		t.Error("the caller's own criterion (\"ints parse\") is missing from the committed replacement")
+	}
+	if !sawFloats {
+		t.Error("\"floats parse\" was DROPPED — the superseded criterion was not backfilled onto the committed replacement")
+	}
+}
+
+// TestAppendCorrection_SupersedeCheckCriterion_NeverDroppedByEngine is the
+// engine-level counterpart of the tool-level regression test for the live
+// G-11 defect: even against the exported AppendCorrection entrypoint directly
+// (bypassing the plan_correct tool's own pre-flight check entirely), a `kind:
+// check` superseded criterion can never be silently dropped OR downgraded to
+// whatever the caller's replacement guessed — it is backfilled alongside the
+// caller's own attempt, not merged into it by matching text alone.
+func TestAppendCorrection_SupersedeCheckCriterion_NeverDroppedByEngine(t *testing.T) {
+	h := newCorrectionHarness(t)
+	ctx := context.Background()
+
+	const critText = "m2 own criterion trivially passes (member reaches done)"
+	done := doneMember("m2")
+	done.Criteria = []task.AcceptanceCriterion{
+		{
+			Kind: task.KindCheck, Text: critText,
+			Check:  &task.CriterionCheck{Command: "exit 0", ExpectedExitCode: 0},
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "owner"},
+		},
+	}
+	mustSeedAwaitingCorrection(t, h, "p-check", done, failedMember("m-failed-p-check"))
+
+	_, err := h.pe.AppendCorrection(ctx, "p-check", supervisorCaller(), CorrectionRequest{
+		Verb:                CorrectionSupersede,
+		SupersededMemberID:  "m2",
+		FalsifiedAssumption: "m2's own criterion trivially passes regardless of real work done",
+		TailMembers: []task.Task{{
+			ID: "m2-redo", Title: "redo m2 for real", WorkspaceID: "ws", Status: task.StatusNext,
+			// Same text as the original (plausible guess), but a DIFFERENT
+			// command — the caller cannot know the real one.
+			Criteria: []task.AcceptanceCriterion{
+				{
+					Kind: task.KindCheck, Text: critText,
+					Check:  &task.CriterionCheck{Command: "true", ExpectedExitCode: 0},
+					Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "plansupervisor"},
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("supersede against a check-carrying member was rejected: %v", err)
+	}
+	tail, gerr := h.tasks.Get("m2-redo")
+	if gerr != nil {
+		t.Fatalf("the replacement member was not created: %v", gerr)
+	}
+	if len(tail.Criteria) != 2 {
+		t.Fatalf("committed replacement carries %d criteria, want exactly 2 (caller's own check + the "+
+			"backfilled original — never coalesced): %+v", len(tail.Criteria), tail.Criteria)
+	}
+	var sawCallerCheck, sawBackfilledCheck bool
+	for _, c := range tail.Criteria {
+		if c.Kind != task.KindCheck || c.Check == nil {
+			t.Fatalf("criterion %q is not a check: %+v", c.Text, c)
+		}
+		switch c.Check.Command {
+		case "true":
+			sawCallerCheck = true
+		case "exit 0":
+			sawBackfilledCheck = true
+		default:
+			t.Errorf("unexpected check command %q", c.Check.Command)
+		}
+	}
+	if !sawCallerCheck {
+		t.Error("the caller's own check criterion (command \"true\") is missing")
+	}
+	if !sawBackfilledCheck {
+		t.Error("the superseded member's real check criterion (command \"exit 0\") was DROPPED — a " +
+			"near-miss guess with matching text was allowed to stand in for it")
+	}
+	// The superseded member's own record must stay untouched (D4): the
+	// backfilled criterion must be an independent copy, never sharing the
+	// Check pointer with the frozen original.
+	original, gerr := h.tasks.Get("m2")
+	if gerr != nil {
+		t.Fatalf("get superseded member: %v", gerr)
+	}
+	if original.Criteria[0].Check.Command != "exit 0" {
+		t.Errorf("the superseded member's own criterion mutated: command = %q, want \"exit 0\" (record must stay immutable)",
+			original.Criteria[0].Check.Command)
 	}
 }
 

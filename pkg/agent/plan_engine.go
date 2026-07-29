@@ -113,8 +113,21 @@ type planTaskDispatcher interface {
 // field — lets tests inject a fake and assert the Stop fan-out's session set
 // deterministically (US-6/US-7, DS-4) without booting a real AgentLoop/
 // session store.
+//
+// Three return values, mirroring RequestCancelForSession's own widened
+// signature (cancel.go, widened so CancelOutcome.Armed is structurally
+// observable to callers instead of being discarded at this exact adapter
+// boundary): fired, armed, err. armed distinguishes "the cancel found no live
+// turn, and nothing is pending" from "the cancel found no live turn because
+// none was registered yet, and a pre-registration latch (cancel_prearm.go)
+// now stands in for it — the next turn to register under this session id
+// WILL still be cancelled, within cancelPreArmTTL." cancelSessions buckets
+// these separately (sessionCancelReport.armed vs. .notFired) rather than
+// folding armed into notFired, which is exactly the gap that let a Stop
+// report an unqualified success while a turn about to register kept running,
+// uncancelled, past the point the user was told the plan had stopped.
 type sessionCanceller interface {
-	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, error)
+	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
 }
 
 // ActiveCounterFunc reports the current count of active units of some
@@ -347,6 +360,22 @@ type PlanEngine struct {
 	// (FR-144/D13/G-12). Generation 0 is the initial run; each Play
 	// increments it. Reconstructed from the intent log at boot.
 	planGenerations map[string]int
+
+	// supervisionSuppressStreak counts CONSECUTIVE times wakeSupervisor's CAS
+	// claim (verifierRegistry.Register on supervisionUnitForPlan) was refused
+	// for a given plan ID — i.e. a supervision turn was ALREADY in flight for
+	// this plan (code review finding, LOW): without this, every suppression
+	// logs an identical line with no way to tell "routine overlap, the
+	// existing turn will settle shortly" from "this claim has been held
+	// through N consecutive wake attempts", which is exactly what a
+	// genuinely wedged claim looks like (and which would also block the
+	// plan's own stall-abandon path). In-memory only, deliberately, same
+	// posture as evidenceRejectStreak (task_executor.go): a soft diagnostic
+	// signal, not a durability contract — a process restart clears it, which
+	// is safe because the registry itself is process-local too (a restart
+	// cannot leave a stale claim behind to misreport). Same lazy-init + mu
+	// pattern as lastUnmetTerminalSignature above.
+	supervisionSuppressStreak map[string]int
 
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
@@ -613,6 +642,32 @@ func (pe *PlanEngine) recordUnmetVerdictAt(planID string, at time.Time) {
 		pe.unmetVerdictAt = make(map[string]time.Time)
 	}
 	pe.unmetVerdictAt[planID] = at
+}
+
+// bumpSupervisionSuppressStreak increments and returns the CONSECUTIVE count
+// of wakeSupervisor CAS-suppressions for planID (see supervisionSuppressStreak's
+// doc comment). Lazily initializes the backing map (same pattern as
+// recordUnmetTerminalSignature above) so a bare struct-literal test engine
+// never nil-map-panics on write.
+func (pe *PlanEngine) bumpSupervisionSuppressStreak(planID string) int {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.supervisionSuppressStreak == nil {
+		pe.supervisionSuppressStreak = make(map[string]int)
+	}
+	pe.supervisionSuppressStreak[planID]++
+	return pe.supervisionSuppressStreak[planID]
+}
+
+// clearSupervisionSuppressStreak drops planID's suppression streak. Called the
+// moment wakeSupervisor's CAS claim actually SUCCEEDS (a real turn is about to
+// be dispatched), so the counter always measures the CURRENT unbroken run of
+// suppressions since the last time this plan actually got a turn, never a
+// stale count left over from an earlier, already-resolved overlap.
+func (pe *PlanEngine) clearSupervisionSuppressStreak(planID string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	delete(pe.supervisionSuppressStreak, planID)
 }
 
 // postUnmetMemberIDs returns the set of members whose artifacts were completed
@@ -2106,15 +2161,20 @@ func aggregateMemberCancelErrors(planID string, failedMemberIDs []string) error 
 // still be running against a plan the caller has been told is stopped.
 //
 // ⚠ It deliberately does NOT list sessions whose cancel was issued cleanly and
-// reported was_fired=false. That result is genuinely ambiguous and is BENIGN in
-// several documented, routine cases — a supervision session whose adjudication
-// turn already finished (StopPlan's own fan-out comment says so explicitly), a
-// verifier session whose round returned while Stop held planDecisionMu, an
-// in_progress member sitting between its worker turn ending and its terminal
-// write, an idle owner session. Escalating those to an error would 500 the
-// overwhelmingly common "Stop a parked plan" case (handlePlanStop maps ANY
-// non-nil StopPlan error to HTTP 500), which is a worse lie than the one it
-// would be fixing. A non-fire is instead RECORDED — see cancelSessions.
+// reported fired=false — NEITHER of the two ways that can happen
+// (sessionCancelReport.notFired or .armed). notFired is genuinely ambiguous
+// and is BENIGN in several documented, routine cases — a supervision session
+// whose adjudication turn already finished (StopPlan's own fan-out comment
+// says so explicitly), a verifier session whose round returned while Stop
+// held planDecisionMu, an in_progress member sitting between its worker turn
+// ending and its terminal write, an idle owner session. armed is not merely
+// benign — per CancelOutcome.Armed's contract the cancel WILL still fire,
+// against the next turn to register for that session, so escalating it would
+// report an active, working control path as a failure. Escalating either to
+// an error would 500 the overwhelmingly common "Stop a parked plan" case
+// (handlePlanStop maps ANY non-nil StopPlan error to HTTP 500), which is a
+// worse lie than the one it would be fixing. Both are instead RECORDED, kept
+// apart from each other — see cancelSessions and sessionCancelReport.
 func aggregateSessionCancelErrors(planID string, failedSessionIDs []string) error {
 	if len(failedSessionIDs) == 0 {
 		return nil
@@ -2185,21 +2245,37 @@ func (pe *PlanEngine) StopTask(ctx context.Context, taskID, userID, channel stri
 
 // sessionCancelReport is what the session-level leg of a Stop fan-out actually
 // DID, as opposed to what it was asked to do. Before the G3 fix wave
-// cancelSessions returned nothing at all and dropped both halves of
+// cancelSessions returned nothing at all and dropped every part of
 // RequestCancelForSession's result on the floor, so "the cancel errored",
 // "the cancel fired" and "the cancel found no live turn" were one
 // indistinguishable outcome to every caller — the exact property StopPlan's own
 // fan-out comment complains about, in the past tense, while doing it.
 //
-// The two halves are NOT interchangeable and are kept apart on purpose:
+// The three buckets are NOT interchangeable and are kept apart on purpose:
 //
 //   - failed: RequestCancelForSession returned an error. The cancel was never
 //     issued. Unambiguously a failure; StopPlan aggregates these into its
 //     returned error (aggregateSessionCancelErrors).
-//   - notFired: the call succeeded and reported that nothing was cancelled.
-//     Ambiguous by construction — see aggregateSessionCancelErrors for why this
-//     must not be escalated to an error — so it is recorded and logged, never
-//     returned as a failure.
+//   - armed: the call succeeded, interrupted no LIVE turn, but armed a
+//     pre-registration cancel latch (CancelOutcome.Armed, cancel.go) in its
+//     place — the next turn to register under that session id WILL still be
+//     cancelled, within cancelPreArmTTL. Kept apart from notFired because it is
+//     a DEFERRED cancel, not a no-op one: before this bucket existed, an armed
+//     session was indistinguishable from a genuinely benign notFired, which is
+//     exactly what let a Stop report an unqualified success while a turn about
+//     to register kept running — uncancelled, past the point the user was
+//     told the plan had stopped — if the latch's TTL happened to expire before
+//     that turn registered.
+//   - notFired: the call succeeded, interrupted no live turn, AND armed no
+//     latch either. Ambiguous by construction — see aggregateSessionCancelErrors
+//     for why this must not be escalated to an error — so it is recorded and
+//     logged, never returned as a failure.
+//
+// Neither armed nor notFired is ever escalated to an error: per
+// CancelOutcome.Armed's own contract an armed latch WILL still fire, so it is,
+// if anything, a WEAKER signal than a failure — but it is a strictly more
+// informative signal than notFired, which is the whole reason it gets its own
+// field instead of being folded into it.
 type sessionCancelReport struct {
 	// attempted counts distinct, non-empty session ids the fan-out reached.
 	attempted int
@@ -2207,8 +2283,12 @@ type sessionCancelReport struct {
 	fired int
 	// failed lists session ids whose cancel call returned an error.
 	failed []string
-	// notFired lists session ids whose cancel was issued but interrupted
-	// nothing. Advisory: consumed by the summary log, not by error reporting.
+	// armed lists session ids whose cancel found no live turn but armed a
+	// pre-registration cancel latch in its place (see the struct doc above).
+	armed []string
+	// notFired lists session ids whose cancel was issued, interrupted
+	// nothing, and armed no latch either. Advisory: consumed by the summary
+	// log, not by error reporting.
 	notFired []string
 }
 
@@ -2225,6 +2305,28 @@ type sessionCancelReport struct {
 // independent guarantees, not a single atomic unit). It is no longer SWALLOWED
 // either: it is both logged and returned in the report, which is how StopPlan
 // stops reporting a partly-failed stop as an unqualified success.
+//
+// This fan-out does NOT inject its own CancelHooks.OnLatchExpired. It reaches
+// the canceller through the RequestCancelForSession PRIMITIVE adapter
+// (cancel.go), which has no per-call hook injection point of its own — it
+// wires one generic OnLatchExpired unconditionally, identically, for every
+// caller that reaches it (Tier A /cancel, goal_loop.go's `/goal clear`, and
+// this Stop fan-out alike): an unconditional slog.Warn logging the session id
+// the instant that session's armed latch ages out (cancelPreArmTTL) unconsumed.
+// That already closes the SILENT half of the failure the armed bucket above
+// exists for: an operator investigating a plan that kept running past its
+// reported Stop finds both this fan-out's own "armed" INFO log (session id,
+// below) and the adapter's later "latch expired" Warn (same session id) —
+// correlatable by session id, if not pre-joined into a single line. Giving
+// THIS caller its own richer OnLatchExpired (e.g. one that names the plan, not
+// just the session) would mean routing this leg through the fuller
+// RequestCancel(scope, canceller, hooks) entrypoint instead of the primitive
+// adapter (mirroring pkg/gateway/schedules.go's watchDeadline) — a separately
+// -scoped, larger change (it would also mean rebuilding CancelScope /
+// CancelCanceller / CancelHooks per session here instead of forwarding three
+// strings, and reproducing the KillBackgroundSessions cascade the adapter
+// currently provides for free), not what closes the reporting gap this fix is
+// for. Left as a candidate follow-up, not done here.
 func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, userID, channel string) sessionCancelReport {
 	var report sessionCancelReport
 	if pe.canceller == nil {
@@ -2242,7 +2344,7 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 		}
 		seen[sessionID] = true
 		report.attempted++
-		fired, err := pe.canceller.RequestCancelForSession(ctx, sessionID, userID, channel)
+		fired, armed, err := pe.canceller.RequestCancelForSession(ctx, sessionID, userID, channel)
 		switch {
 		case err != nil:
 			report.failed = append(report.failed, sessionID)
@@ -2250,6 +2352,16 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 				map[string]any{"session_id": sessionID, "error": err.Error()})
 		case fired:
 			report.fired++
+		case armed:
+			report.armed = append(report.armed, sessionID)
+			// Mirrors the WS handleCancel / cron watchDeadline callers' own
+			// per-session INFO log for this same signal (buildCancelHooks /
+			// watchDeadline): an armed latch is not a no-op, it is a
+			// cancellation deferred to the next turn to register for this
+			// session, bounded by cancelPreArmTTL.
+			logger.InfoCF("plan_engine",
+				"stop fan-out: session cancel armed a pre-registration latch — no turn had registered yet for this session; the next turn to register will be cancelled the instant it does, unless the latch's TTL expires first",
+				map[string]any{"session_id": sessionID})
 		default:
 			report.notFired = append(report.notFired, sessionID)
 		}
@@ -2264,6 +2376,7 @@ func (pe *PlanEngine) cancelSessions(ctx context.Context, sessions []string, use
 				"attempted":  report.attempted,
 				"fired":      report.fired,
 				"failed":     len(report.failed),
+				"armed":      report.armed,
 				"not_fired":  report.notFired,
 				"all_missed": report.fired == 0,
 			})
@@ -2844,11 +2957,26 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, n
 	// supervisionClaimSeq's doc comment for the full reasoning.
 	supervisionUnit := supervisionUnitForPlan(p.ID)
 	if regErr := pe.registry().Register(supervisionUnit, pe.nextSupervisionClaimToken()); regErr != nil {
+		// Code review finding (LOW): the attempt counter is what makes a
+		// genuinely wedged claim distinguishable from routine overlap in the
+		// logs — a count of 1-2 across a few ticks is an ordinary in-flight
+		// turn about to settle; a count climbing into the dozens/hundreds
+		// (the same claim held through that many consecutive wake attempts)
+		// is the operator-actionable signal that the holder may be wedged
+		// (which would also be blocking the plan's own stall-abandon path,
+		// since that path funnels through this same claim). See
+		// supervisionSuppressStreak's doc comment.
+		streak := pe.bumpSupervisionSuppressStreak(p.ID)
 		logger.InfoCF("plan_engine",
 			"supervision wake suppressed: a supervision turn is already in flight for this plan",
-			map[string]any{"plan_id": p.ID, "source_kind": sourceKind})
+			map[string]any{"plan_id": p.ID, "source_kind": sourceKind, "consecutive_suppressions": streak})
 		return
 	}
+	// The claim succeeded — a turn is actually about to run for this plan, so
+	// any consecutive-suppression streak accumulated while a PRIOR turn held
+	// the claim is now moot; start the next run of suppressions (if any) from
+	// zero rather than compounding across unrelated holders.
+	pe.clearSupervisionSuppressStreak(p.ID)
 	var released bool
 	var releaseMu sync.Mutex
 	releaseClaim := func() {
@@ -4330,7 +4458,19 @@ func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req Correc
 	// FR-030b: replacement work must be held to the SAME standard as the work
 	// it replaces. Checked before the edge graph because it is the rule the
 	// whole verb's safety rests on.
+	//
+	// Backfill first (InheritSupersededCriteria), THEN check
+	// (RequireCriteriaInheritance) — mirrors the tool's own buildCorrection.
+	// This is the second of two call sites (the tool's own pre-flight check is
+	// the first, for callers that go through it); a direct engine caller that
+	// bypasses the tool entirely still gets the same backfill, so the identity
+	// rule is enforceable REGARDLESS of caller. See
+	// tools.InheritSupersededCriteria's doc for why the caller-must-reproduce-
+	// it-exactly design this still checks was unsatisfiable for the one real
+	// caller (PlanSupervisor), whose supervision wake never shows it a
+	// member's criteria detail.
 	if req.Verb == CorrectionSupersede {
+		tools.InheritSupersededCriteria(supersededMember.Criteria, req.TailMembers)
 		if err := tools.RequireCriteriaInheritance(supersededMember.Criteria, req.TailMembers); err != nil {
 			return fmt.Errorf("plan_engine: %w", err)
 		}
@@ -4557,9 +4697,11 @@ func validateCorrectionVerbFields(req CorrectionRequest) error {
 // members verb-independently, so the discounting and the replacement land in
 // the same transactional intent-log commit or neither does.
 //
-// The complementary half (FR-030b, requireCriteriaInheritance) is what stops
-// the pairing being satisfied by one throwaway member: the replacement must
-// carry EVERY acceptance criterion of the member it replaces.
+// The complementary half (FR-030b, tools.RequireCriteriaInheritance, backed by
+// tools.InheritSupersededCriteria) is what stops the pairing being satisfied
+// by one throwaway member: the replacement must carry EVERY acceptance
+// criterion of the member it replaces — auto-backfilled onto it now, rather
+// than left to the caller to reproduce (see InheritSupersededCriteria's doc).
 func requireSupersedePairing(req CorrectionRequest) error {
 	if len(req.TailMembers) > 0 {
 		return nil

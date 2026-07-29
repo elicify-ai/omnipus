@@ -125,7 +125,7 @@ func TestRunVerifierAdjudication_RealCancelReachesInFlightVerifierTurn(t *testin
 	}
 	registeredSessionID := sessions[0]
 
-	fired, err := al.RequestCancelForSession(context.Background(), registeredSessionID, "tester", "test")
+	fired, _, err := al.RequestCancelForSession(context.Background(), registeredSessionID, "tester", "test")
 	if err != nil {
 		t.Fatalf("RequestCancelForSession: %v", err)
 	}

@@ -3031,6 +3031,21 @@ func setupAndStartServices(
 		// Boot-sweep + intent-log wiring (must precede Start so the first boot
 		// pass runs synchronously inside Start).
 		planEngine.SetLifecycleStore(lifecycleStore)
+		// FR-118/G-13: install the SAME lifecycleStore instance onto the
+		// TaskExecutor so it can mint/transition the durable S2 record for
+		// every task/plan-member dispatch session (mintTaskLifecycleRecord,
+		// transitionTaskLifecycle, finalizeTaskLifecycle — see
+		// TaskExecutor.lifecycleStore's doc comment). Without this call the
+		// producer side of the store was permanently nil in the real gateway
+		// (every one of those methods nil-guards and silently no-ops), so the
+		// boot sweep below could reconcile plan/OWNER sessions but never saw a
+		// task/plan-member dispatch session at all — the exact gap this line
+		// closes. Regression guard:
+		// TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring
+		// (lifecycle_store_wiring_test.go) dispatches a real task through this
+		// boot path and asserts the durable record was persisted; deleting
+		// this line makes that test fail.
+		tExecutor.SetLifecycleStore(lifecycleStore)
 		planEngine.SetIntentLog(intentLog)
 		// D13/G-12 Play-from-commit: install the gitevidence-backed resume
 		// resolver so Play resumes a failed/cancelled member from its last

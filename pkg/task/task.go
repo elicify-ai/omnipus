@@ -308,6 +308,14 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	SourceChannel string `json:"source_channel,omitempty"`
 	SourceChatID  string `json:"source_chat_id,omitempty"`
 	// SessionID links the run session created when the task executes.
+	//
+	// SECURITY: jointly with StartedAt (see that field's own note) and
+	// CompletedAt == "", a non-empty SessionID is read by the run_task
+	// ask-policy gate (requireRunTaskAutoDispatchApproved,
+	// pkg/agent/task_executor.go) as "this dispatch is an already-approved
+	// continuation, skip the approval prompt". Do not write this field for
+	// an unrelated bookkeeping purpose without checking that gate first —
+	// doing so can silently bypass a human's ask-policy approval.
 	SessionID string   `json:"session_id,omitempty"`
 	Result    string   `json:"result,omitempty"`
 	Artifacts []string `json:"artifacts,omitempty"`
@@ -357,8 +365,16 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// MUST NOT be added to any schema in contracts/.
 	CreatedByAgentID string `json:"created_by_agent_id,omitempty"`
 	// Timestamps are RFC 3339 UTC strings.
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	// StartedAt, jointly with SessionID (see that field's own note) and
+	// CompletedAt == "", is a security-relevant dispatch-authorization
+	// signal, not just bookkeeping: the run_task ask-policy gate
+	// (requireRunTaskAutoDispatchApproved, pkg/agent/task_executor.go) reads
+	// a non-empty (StartedAt, SessionID) pair with CompletedAt == "" as
+	// "already-approved continuation of an in-flight run" and skips the
+	// approval prompt. Writing StartedAt for an unrelated purpose can
+	// silently bypass that gate — check it first.
 	StartedAt   string `json:"started_at,omitempty"`
 	CompletedAt string `json:"completed_at,omitempty"`
 	// FollowedUp is set true once the parent follow-up notification has been

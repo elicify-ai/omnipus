@@ -2300,24 +2300,93 @@ var ErrRunTaskApprovalRequired = errors.New(
 //     from run_task (which itself refuses any task naming a PlanID — see
 //     pkg/tools/run_task.go's G4/A3 check).
 //
-//   - t.StartedAt != "" — this task's CURRENT run has already been claimed
-//     at least once. ClaimForRun (pkg/task/claim.go) stamps StartedAt on
-//     every claim, and the goal loop's own retry-requeue writes
-//     (consumeAttemptOrExhaust, rejectBareEvidenceClaim — both flip Status
-//     back to `next` for one more attempt) never touch StartedAt. A
-//     non-empty StartedAt therefore means THIS dispatch is a CONTINUATION of
-//     an already-authorized run, not a fresh unattended one — the
-//     human/approval decision that authorized the original claim already
-//     covers its own retry budget (maxAttempts/hardCeiling already bounds
-//     how long that continuation can run); re-consulting policy on every
-//     retry would silently break any multi-attempt task for an ask-policy
-//     agent even though a human (or an approved run_task call) already
-//     authorized it to run at all. SpawnReset (pkg/task/store.go) — a cron
-//     trigger's NEW scheduled firing — deliberately clears StartedAt back to
-//     "" for exactly this reason: a new scheduled firing is a FRESH
-//     unattended dispatch of a task nobody has re-approved, and must be
-//     re-gated, never treated as a continuation of whatever the previous
-//     firing did.
+//   - t.StartedAt != "" AND t.SessionID != "" — this task's CURRENT run has
+//     already been claimed AND dispatched at least once. ClaimForRun
+//     (pkg/task/claim.go) stamps StartedAt on every claim, and executeTask's
+//     own synchronous createTaskSessionSync call (M1/FR-029, right after the
+//     claim) stamps SessionID in the SAME dispatch cycle, before either
+//     field is ever exposed back to a caller of this gate. The goal loop's
+//     own retry-requeue writes (consumeAttemptOrExhaust, rejectBareEvidenceClaim
+//     — both flip Status back to `next` for one more attempt) never touch
+//     EITHER field, so a genuine continuation always carries both. A
+//     non-empty pair therefore means THIS dispatch is a CONTINUATION of an
+//     already-authorized run, not a fresh unattended one — the human/approval
+//     decision that authorized the original claim already covers its own
+//     retry budget (maxAttempts/hardCeiling already bounds how long that
+//     continuation can run); re-consulting policy on every retry would
+//     silently break any multi-attempt task for an ask-policy agent even
+//     though a human (or an approved run_task call) already authorized it to
+//     run at all. SpawnReset/RestartReset (pkg/task/store.go) — a cron
+//     trigger's new scheduled firing, or a manual restart of a failed task —
+//     deliberately clear BOTH StartedAt and SessionID back to "" for exactly
+//     this reason: a fresh firing/restart is a FRESH unattended dispatch of a
+//     task nobody has re-approved, and must be re-gated, never treated as a
+//     continuation of whatever the previous run did.
+//
+//     SECURITY: StartedAt ALONE used to be the whole discriminator, and that
+//     was a fail-open bug (found on code review of this gate's own initial
+//     landing): `started_at` is a directly wire-settable TaskUpdateRequest
+//     field (contracts/components/schemas/TaskUpdateRequest.yaml) applied
+//     UNCONDITIONALLY by handleTaskPatch (pkg/gateway/rest_tasks.go)
+//     regardless of whether `status` is also present in the same request —
+//     the in_progress-dispatch block there is gated on req.Status != nil,
+//     entirely independent of req.StartedAt. Any authenticated task-write
+//     caller could therefore PATCH a fresh standalone `next` task with only
+//     `{"started_at": "..."}`, leave it at `next`, and have the very next
+//     CheckQueuedTasks tick treat it as an already-approved continuation —
+//     dispatching it with NO human ever having approved a run_task call, and
+//     with NO trace (the gate's own Debug log never fires when it exempts).
+//     SessionID has NO corresponding field on TaskUpdateRequest at all (the
+//     schema has none, and handleTaskPatch never populates task.Patch.
+//     SessionID from any request field — grep confirms Patch.SessionID is
+//     written only from pkg/agent/task_executor.go's own internal claim path
+//     and from test harnesses), so it cannot be forged through the wire.
+//     Requiring it alongside StartedAt closes the hole: a bare started_at
+//     PATCH now leaves SessionID untouched (empty for a task that was never
+//     for-real dispatched), so it fails this AND clause and falls through to
+//     the policy check, exactly like a fresh task. See
+//     TestExecuteTask_AskPolicyRetryContinuesWithoutReapproval and
+//     TestCheckQueuedTasks_AskPolicyForgedStartedAtWithoutSessionStillGated
+//     (this package) plus TestHandleTaskPatch_BareStartedAtDoesNotBypassRunTaskAskGate
+//     (pkg/gateway) for the paired proof: the legitimate continuation still
+//     dispatches free, and the forged field alone does not.
+//
+//     SECURITY (2026-07, closes the last known bypass of this gate): the
+//     StartedAt+SessionID pair ALONE is still forgeable — not by writing
+//     either field directly (that hole is closed above), but by REVIVING a
+//     task that already carries a genuine pair from a CONCLUDED prior run.
+//     Only `done` is frozen against status edits (validateTransition,
+//     pkg/task/store.go) — a `failed` task (genuinely failed, or judge-
+//     exhausted, no cancel_reason gate applies outside the dedicated restart
+//     route) may legally be PATCHed straight back to `next` via a plain
+//     Update (handleTaskPatch, rest_tasks.go) OR via the task_update tool
+//     (pkg/tools/task.go, callable by the owning agent itself), and NEITHER
+//     path clears StartedAt/SessionID — updateLocked only ever touches those
+//     fields when the caller's patch explicitly sets them. A task that ran
+//     once, reached `failed` (StartedAt/SessionID/CompletedAt all genuinely
+//     stamped by that first run), and is then bare-PATCHed `status: next`
+//     therefore still carries a genuine-looking, non-empty pair — and the
+//     next CheckQueuedTasks tick would treat it as a continuation of the
+//     SAME run and dispatch with no fresh run_task approval, even though the
+//     run it was "continuing" already concluded.
+//
+//     The discriminator is CompletedAt: every terminal writer that ever
+//     moves a task to `done` or `failed` — completeTaskWithResult, failTask
+//     — stamps CompletedAt in the SAME write as the terminal status. The
+//     goal loop's own in-flight continuation writes (consumeAttemptOrExhaust,
+//     rejectBareEvidenceClaim) NEVER touch CompletedAt — the task is not yet
+//     terminal while they run, by construction — so a genuine continuation
+//     always has CompletedAt == "". A revived task, by contrast, carries
+//     the CompletedAt its concluded run stamped, because nothing on the
+//     revival path clears it (only RestartReset/SpawnReset do, and both
+//     already null out StartedAt/SessionID too, correctly falling through to
+//     a fresh policy check on their own). Requiring CompletedAt == ""
+//     alongside the existing pair closes this without re-gating any genuine
+//     retry: see TestExecuteTask_AskPolicyRetryContinuesWithoutReapproval
+//     (still green — an in-flight goal-loop continuation never has
+//     CompletedAt set) and TestCheckQueuedTasks_AskPolicyRevivedFailedTaskStillGated
+//     (this package) plus TestHandleTaskPatch_FailedToNextRevivalDoesNotBypassRunTaskAskGate
+//     (pkg/gateway) for the new paired proof.
 //
 //   - the resolved policy for (t.AgentID, "run_task") is not "ask" (the
 //     common "allow" case has nothing to gate — it matches exactly what an
@@ -2328,11 +2397,40 @@ var ErrRunTaskApprovalRequired = errors.New(
 // Otherwise returns ErrRunTaskApprovalRequired (fail-closed) and leaves the
 // task exactly as it is — still `next`, unchanged, still visible on the
 // board, still runnable the instant a human calls run_task and approves it
-// (or an operator relaxes the policy) — NOT silently retried forever with no
-// trace: the Debug log below (mirroring requirePlanExecuting's own
-// "routine, expected" logging convention) records every refusal.
+// (or an operator relaxes the policy).
+//
+// OBSERVABILITY (code review finding, MEDIUM): failing closed here is
+// correct and is NOT relaxed by this note — but a refused task carries NO
+// durable marker distinguishing it from an ordinary queued `next` task. It
+// looks identical on the board to a task about to run; every automatic
+// dispatch path re-refuses it silently on every tick; and because there is
+// no in-flight turn to prompt from, NO approval prompt is ever generated —
+// the only escape is a human proactively invoking run_task or clicking Run
+// Now (StartTaskNow deliberately bypasses this gate). Left at Debug (as it
+// was before this note), the refusal is invisible at the production-default
+// INFO level (pkg/logger initializes to INFO) and the task can sit forever
+// with zero operator-visible trace.
+//
+// Decision: raise this to Warn rather than add a task-level marker field
+// (e.g. a `blocked_reason` so the board could render "awaiting approval").
+// A marker is the more complete fix, but it is out of scope for this pass:
+// task.Task lives in pkg/task (not owned by this change), and if the field
+// is to be rendered by the SPA it crosses the wire and must follow
+// CLAUDE.md Constraint #8 (schema in contracts/components/schemas/Task.yaml
+// first, scripts/gen-contracts.sh, regenerate pkg/api/generated and
+// src/lib/api/generated, then wire toWireTask in pkg/gateway/rest_tasks.go)
+// — plus a real frontend design decision on how the board renders it and
+// where the marker gets CLEARED (dispatch succeeds, a human runs it
+// manually, or the policy relaxes). That is genuinely a full-stack feature,
+// not a one-line fix, and belongs with frontend-lead input. Warn is the
+// honest interim: every refusal is now visible to an operator watching
+// logs at the default level, recurring on every ~60s heartbeat tick for as
+// long as the task remains unapproved — accepted noise in exchange for "no
+// longer silent forever", matching this file's existing WarnCF convention
+// for other anomalous-but-expected states (see requirePlanExecuting's own
+// I/O-error branch a few lines up).
 func (te *TaskExecutor) requireRunTaskAutoDispatchApproved(t *task.Task) error {
-	if t.PlanID != "" || t.StartedAt != "" {
+	if t.PlanID != "" || (t.StartedAt != "" && t.SessionID != "" && t.CompletedAt == "") {
 		return nil
 	}
 	// An unwired executor cannot resolve a policy at all. This is NOT a
@@ -2349,8 +2447,11 @@ func (te *TaskExecutor) requireRunTaskAutoDispatchApproved(t *task.Task) error {
 	if policy != string(config.ToolPolicyAsk) {
 		return nil
 	}
-	logger.DebugCF("task_executor",
-		"run_task policy gate: refusing unattended dispatch of a standalone task pending an explicit run_task approval",
+	logger.WarnCF("task_executor",
+		"run_task policy gate: refusing unattended dispatch of a standalone task pending an explicit "+
+			"run_task approval — the task remains queued at `next` with NO durable marker distinguishing "+
+			"it from an ordinary task and NO approval prompt generated; a human must invoke run_task or "+
+			"Run Now, or the task can sit indefinitely",
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "run_task_policy": policy})
 	return fmt.Errorf("%w: task %q (agent %q, run_task policy %q)", ErrRunTaskApprovalRequired, t.ID, t.AgentID, policy)
 }

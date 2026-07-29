@@ -40,24 +40,37 @@ import (
 
 // scriptedCanceller is a sessionCanceller whose per-session answer the test
 // chooses. Unlike fakeSessionCanceller (plan_stop_test.go), which returns
-// (true, nil) for everything, it can express the two results that fan-out code
-// used to discard: an ERROR (the cancel was never issued) and a clean
-// was_fired=false (the cancel was issued and interrupted nothing).
+// (true, false, nil) for everything, it can express the results that fan-out
+// code used to discard: an ERROR (the cancel was never issued), a clean
+// fired=false/armed=false (the cancel was issued and interrupted nothing, and
+// nothing is pending), and fired=false/armed=true (a pre-registration cancel
+// latch now stands in for a turn that has not registered yet).
+//
+// fn's own return shape stays (bool, error) — armed is expressed by a
+// SEPARATE, optional armedFn so existing scripts (fn only) do not have to
+// grow a third return value they never asked to distinguish; a script that
+// wants to express armed sets armedFn explicitly.
 type scriptedCanceller struct {
-	mu    sync.Mutex
-	calls []string
-	fn    func(sessionID string) (bool, error)
+	mu      sync.Mutex
+	calls   []string
+	fn      func(sessionID string) (bool, error)
+	armedFn func(sessionID string) bool
 }
 
-func (c *scriptedCanceller) RequestCancelForSession(_ context.Context, sessionID, _, _ string) (bool, error) {
+func (c *scriptedCanceller) RequestCancelForSession(_ context.Context, sessionID, _, _ string) (fired bool, armed bool, err error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, sessionID)
 	fn := c.fn
+	armedFn := c.armedFn
 	c.mu.Unlock()
-	if fn != nil {
-		return fn(sessionID)
+	if armedFn != nil {
+		armed = armedFn(sessionID)
 	}
-	return true, nil
+	if fn != nil {
+		fired, err = fn(sessionID)
+		return fired, armed, err
+	}
+	return true, armed, nil
 }
 
 // failingPlanNotifier is an AsyncNotifier whose delivery always fails — a
@@ -253,6 +266,72 @@ func TestStopPlan_BenignNonFireIsNotAnError(t *testing.T) {
 	}
 	if updated.State != plan.StateFailed {
 		t.Fatalf("plan state = %q, want failed", updated.State)
+	}
+}
+
+// TestCancelSessions_ArmedIsBucketedSeparatelyFromNotFired is the direct-call
+// regression test for the sessionCanceller widening (RequestCancelForSession
+// (bool, error) -> (bool, bool, error)): before this fix, cancelSessions could
+// not even OBSERVE armed (the interface didn't carry it), so a session whose
+// cancel armed a pre-registration latch — CancelOutcome.Armed, cancel.go: the
+// NEXT turn to register for that session WILL still be cancelled, within
+// cancelPreArmTTL — was structurally indistinguishable from one that hit a
+// genuinely benign non-fire. That is the exact shape of the user-visible
+// failure this closes: a Stop that reports success while a turn about to
+// register for an "armed" session keeps running, uncancelled, if the caller
+// only ever checked "did anything fire".
+func TestCancelSessions_ArmedIsBucketedSeparatelyFromNotFired(t *testing.T) {
+	h := newTestPlanEngine(t)
+	h.pe.canceller = &scriptedCanceller{
+		fn: func(string) (bool, error) { return false, nil },
+		armedFn: func(sessionID string) bool {
+			return sessionID == "sess-armed"
+		},
+	}
+
+	report := h.pe.cancelSessions(context.Background(), []string{"sess-armed", "sess-benign"}, "tester", "system")
+
+	if report.fired != 0 {
+		t.Errorf("fired = %d, want 0 (neither session interrupted a live turn)", report.fired)
+	}
+	if len(report.failed) != 0 {
+		t.Errorf("failed = %v, want none (both calls succeeded)", report.failed)
+	}
+	if got := report.armed; len(got) != 1 || got[0] != "sess-armed" {
+		t.Fatalf("armed = %v, want exactly [\"sess-armed\"]", got)
+	}
+	if got := report.notFired; len(got) != 1 || got[0] != "sess-benign" {
+		t.Fatalf("notFired = %v, want exactly [\"sess-benign\"] — sess-armed must NOT also appear here "+
+			"(that is precisely the bucketing bug this fixes)", got)
+	}
+}
+
+// TestStopPlan_ArmedSessionDoesNotEscalateToAnError proves the OTHER half:
+// like a benign notFired, an armed session must never turn a Stop into a
+// reported failure — CancelOutcome.Armed's own contract is that the cancel
+// WILL still fire (deferred, not lost), so escalating it would report a
+// working control path as broken and 500 an ordinary Stop
+// (handlePlanStop maps any non-nil StopPlan error to HTTP 500).
+func TestStopPlan_ArmedSessionDoesNotEscalateToAnError(t *testing.T) {
+	h := newTestPlanEngine(t)
+	h.pe.canceller = &scriptedCanceller{
+		fn:      func(string) (bool, error) { return false, nil },
+		armedFn: func(string) bool { return true },
+	}
+
+	p := mustCreateRunningPlan(t, h.plans, "p1", "owner")
+	if _, err := h.plans.Update(p.ID, plan.Patch{
+		OwnerSessionID: strPtr("sess-owner"),
+	}); err != nil {
+		t.Fatalf("arm the plan's owner session: %v", err)
+	}
+
+	updated, err := h.pe.StopPlan(context.Background(), "p1", "tester", "system")
+	if err != nil {
+		t.Fatalf("an armed (deferred, not failed) session cancel must not turn Stop into an error, got: %v", err)
+	}
+	if updated.State != plan.StateFailed || updated.FailedReason != plan.FailedReasonStoppedByUser {
+		t.Fatalf("plan = %q(%s), want failed(stopped_by_user)", updated.State, updated.FailedReason)
 	}
 }
 

@@ -124,6 +124,38 @@ type CancelHooks struct {
 	// event a security reviewer would actually go looking at — contradicting
 	// this very event's own doc comment below.
 	KillBackgroundSessions func(sessionID string) (killed, failed int)
+
+	// OnLatchExpired is called when a pre-registration cancel latch
+	// (cancel_prearm.go) armed BY THIS SPECIFIC RequestCancel call ages out
+	// (cancelPreArmTTL, 5s) before any turn ever consumes it — i.e., this
+	// cancel was acknowledged via CancelOutcome.Armed as "standing in for a
+	// turn that hasn't registered yet", and no turn ever showed up in time to
+	// actually apply it. Receives the same scope/canceller this call itself
+	// passed to RequestCancel, so a caller that already told the user "stop
+	// requested" (Armed:true) can follow up HONESTLY — "the cancel you
+	// requested did not take effect" — rather than leaving the user believing
+	// Stop worked while the turn it targeted runs (or already ran) to
+	// completion uncanceled. This is NOT a second success signal: it fires
+	// only on the failure path.
+	//
+	// Optional; nil is a silent no-op like every other hook here, but the
+	// expiry itself is UNCONDITIONALLY logged at Warn (notifyLatchExpired,
+	// cancel_prearm.go) regardless of whether this is wired, so the failure
+	// is never fully silent even for a caller that hasn't wired it yet.
+	//
+	// Called on its own goroutine, asynchronously, well after this
+	// RequestCancel call has returned — expiry is discovered lazily, either
+	// by a LATER turn's own registration attempt finding its latch already
+	// stale (consumePreArmedCancel, turn.go) or by a completely unrelated
+	// cancel's opportunistic sweep evicting it because no turn ever
+	// registered for it at all (armLocked, cancel_prearm.go — the only
+	// discovery point for that case, e.g. a dropped Tier B message). Never
+	// invoked while AgentLoop.cancelPreArm's mutex is held.
+	//
+	// Do not "fix" a caller that ignores this by widening cancelPreArmTTL —
+	// see cancel_prearm.go's own doc comment for why a longer window is a
+	// worse bug than the one it would be hiding.
+	OnLatchExpired func(scope CancelScope, canceller CancelCanceller)
 }
 
 // RequestCancel is the canonical cancel entry point. All four cancel surfaces
@@ -462,15 +494,36 @@ func (al *AgentLoop) RequestCancel(
 }
 
 // RequestCancelForSession is a primitive-argument adapter for RequestCancel
-// used by the commands.AgentLoopInterface. It avoids importing pkg/agent types
-// in pkg/commands (which would create a circular dependency) by accepting only
-// primitive string arguments.
+// used by the commands.AgentLoopInterface (and, directly, by goal_loop.go's
+// `/goal clear` verifier-cancel and plan_engine.go's Stop session-cancel
+// fan-out). It avoids importing pkg/agent types in pkg/commands (which would
+// create a circular dependency) by accepting and returning only primitive
+// types.
 //
-// sessionID must be non-empty. Returns (fired, nil) on success; fired is true
-// when an active turn was claimed.
-func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, error) {
+// sessionID must be non-empty. Returns (fired, armed, nil) on success:
+//   - fired is true when an active turn was claimed.
+//   - armed is true when fired is false BECAUSE no turn was registered yet
+//     for sessionID and a pre-registration cancel latch (cancel_prearm.go)
+//     was recorded in its place — see CancelOutcome.Armed's doc comment for
+//     the full contract. armed is NEVER true when fired is true.
+//
+// Every caller that surfaces fired to a user or operator MUST also check
+// armed before reporting a cancel as a no-op: fired=false, armed=true means
+// the cancel WILL still fire — against the next turn to register for this
+// session, within cancelPreArmTTL — not that nothing happened.
+//
+// HISTORY: prior to this widening, this adapter flattened CancelOutcome down
+// to a bare (bool, error), unconditionally discarding Armed at this exact
+// boundary — the structural gap CancelOutcome.Armed's own doc comment warns
+// every RequestCancel caller against, and the one this widening closes at
+// the source rather than in each of the (several) call sites that go through
+// it. See pkg/commands/runtime.go's CancelActiveTurn for the Tier A /cancel
+// consumer this was fixed for; pkg/agent/plan_engine.go's cancelSessions
+// (Stop fan-out) is a further consumer of this same adapter that still needs
+// its own bucket for the armed case — tracked separately, not fixed here.
+func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error) {
 	if sessionID == "" {
-		return false, fmt.Errorf("RequestCancelForSession: sessionID must not be empty")
+		return false, false, fmt.Errorf("RequestCancelForSession: sessionID must not be empty")
 	}
 	outcome, err := al.RequestCancel(ctx,
 		CancelScope{SessionID: sessionID},
@@ -480,12 +533,31 @@ func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, use
 			// effects, but must still cascade to any background bash/exec
 			// sessions this chat session started (FR-B10/FR-B11).
 			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
+			// Mirror the WS handleCancel / cron watchDeadline callers (the two
+			// "fixed by hand" consumers of RequestCancel's own Armed field):
+			// give every caller of THIS adapter the same operator-visible
+			// signal when a latch it armed ages out (cancelPreArmTTL) before
+			// any turn consumes it — otherwise a caller that now honestly
+			// reports "acknowledged, pending" (via the armed return above)
+			// has nothing to fall back on if that promise silently expires.
+			// Generic and caller-agnostic by necessity: this primitive
+			// adapter has no per-call hook injection point of its own, so
+			// this fires identically for every caller that reaches it
+			// (Tier A /cancel, goal_loop.go's `/goal clear`, and
+			// plan_engine.go's Stop session-cancel fan-out alike).
+			OnLatchExpired: func(scope CancelScope, canceller CancelCanceller) {
+				slog.Warn("agent: RequestCancelForSession: pre-registration cancel latch expired unconsumed — the cancel this call acknowledged never actually took effect",
+					"session_id", sessionID,
+					"canceller_user", canceller.UserID,
+					"canceller_channel", canceller.Channel,
+				)
+			},
 		},
 	)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return outcome.Fired, nil
+	return outcome.Fired, outcome.Armed, nil
 }
 
 // killBackgroundSessionsForCancelSurface is the CancelHooks.KillBackgroundSessions

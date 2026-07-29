@@ -158,6 +158,36 @@ func tailMemberArg(title string, criteriaTexts ...string) map[string]any {
 	return map[string]any{"title": title, "criteria": crit}
 }
 
+// checkCriterionDone builds a `kind: check` AcceptanceCriterion for a DONE
+// (superseded) member fixture, mirroring proseCriterion's fixed-id style.
+func checkCriterionDone(text, command string, expectedExitCode int) task.AcceptanceCriterion {
+	return task.AcceptanceCriterion{
+		ID: "crit-" + text, Kind: task.KindCheck, Text: text,
+		Check:  &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode},
+		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "jim"},
+	}
+}
+
+// checkCriterionArg builds the raw tool-call argument for a `kind: check`
+// criterion on a tail member (criterionArg's check-kind counterpart).
+func checkCriterionArg(text, command string, expectedExitCode int) map[string]any {
+	return map[string]any{
+		"kind": "check", "text": text,
+		"check": map[string]any{"command": command, "expected_exit_code": expectedExitCode},
+	}
+}
+
+// tailMemberWithCriteriaArgs builds a tail-member arg from already-built
+// criterion args — unlike tailMemberArg, which only builds bare-text prose
+// criteria, this accepts any criterionArg/checkCriterionArg mix.
+func tailMemberWithCriteriaArgs(title string, criteria ...map[string]any) map[string]any {
+	crit := make([]any, 0, len(criteria))
+	for _, c := range criteria {
+		crit = append(crit, c)
+	}
+	return map[string]any{"title": title, "criteria": crit}
+}
+
 // --- FR-009/FR-010: authority ---------------------------------------------
 
 // TestPlanCorrect_DeniesEveryNonSupervisorCaller proves the OUTCOME: a caller
@@ -293,11 +323,19 @@ func TestPlanCorrect_SupersedeCannotDiscountEvidenceAlone(t *testing.T) {
 		proseCriterion("rejects malformed input"),
 	}
 
+	// Only the PAIRING rule (FR-030 — at least one tail member) is exercised
+	// here now. FR-030b (every criterion must be carried) used to be exercised
+	// by this same table via "throwaway member" / "partial member" cases that
+	// expected REJECTION — that expectation named the OLD, unsatisfiable
+	// mechanism (the caller had to reproduce the superseded criteria itself).
+	// Those cases moved to TestPlanCorrect_SupersedeAutoInheritsMissingCriteria,
+	// which proves the stronger, currently-true property: whatever the caller
+	// omits is backfilled, so the correction is ACCEPTED and the criterion is
+	// never actually dropped — see InheritSupersededCriteria.
 	cases := []struct {
 		name        string
 		tailMembers []any
 		wantReject  bool
-		wantNames   []string // substrings the rejection must name
 	}{
 		{
 			name:        "bare supersede — discount with no replacement work at all",
@@ -308,22 +346,6 @@ func TestPlanCorrect_SupersedeCannotDiscountEvidenceAlone(t *testing.T) {
 			name:        "supersede paired with an empty tail-member array",
 			tailMembers: []any{},
 			wantReject:  true,
-		},
-		{
-			name: "supersede paired with a throwaway member carrying none of the criteria",
-			tailMembers: []any{
-				tailMemberArg("touch a file", "a file exists"),
-			},
-			wantReject: true,
-			wantNames:  []string{"parses ints", "parses floats", "rejects malformed input"},
-		},
-		{
-			name: "supersede paired with a replacement carrying only 1 of the 3 criteria",
-			tailMembers: []any{
-				tailMemberArg("redo the parser", "parses ints"),
-			},
-			wantReject: true,
-			wantNames:  []string{"parses floats", "rejects malformed input"},
 		},
 		{
 			name: "supersede paired with replacement work carrying every criterion",
@@ -392,12 +414,193 @@ func TestPlanCorrect_SupersedeCannotDiscountEvidenceAlone(t *testing.T) {
 			if after := f.snapshot(t); after != before {
 				t.Fatalf("a rejected supersede mutated the plan:\n before %s\n after  %s", before, after)
 			}
-			for _, name := range tc.wantNames {
-				if !strings.Contains(res.ForLLM, name) {
-					t.Errorf("rejection does not name the missing criterion %q: %s", name, res.ForLLM)
-				}
-			}
 		})
+	}
+}
+
+// TestPlanCorrect_SupersedeAutoInheritsMissingCriteria proves the G-11 fix:
+// FR-030b's identity rule is now SATISFIABLE for the one real caller
+// (PlanSupervisor), because the tool backfills whatever the caller's tail
+// members don't already carry (InheritSupersededCriteria) BEFORE checking
+// (RequireCriteriaInheritance) — rather than rejecting a submission the
+// caller structurally cannot complete (the supervision wake never shows it a
+// member's criteria detail).
+//
+// This replaces two sub-cases that used to live in
+// TestPlanCorrect_SupersedeCannotDiscountEvidenceAlone and asserted
+// REJECTION for exactly these inputs — that assertion named the OLD,
+// unsatisfiable mechanism. The property that matters (nothing the superseded
+// member required is ever actually missing from the committed replacement) is
+// asserted here directly against what reaches the engine, which is strictly
+// stronger than asserting the caller's raw input already contained it.
+func TestPlanCorrect_SupersedeAutoInheritsMissingCriteria(t *testing.T) {
+	t.Parallel()
+	criteria := []task.AcceptanceCriterion{
+		proseCriterion("parses ints"),
+		proseCriterion("parses floats"),
+		proseCriterion("rejects malformed input"),
+	}
+
+	// unionTexts collects every criterion Text across every tail member the
+	// engine actually received.
+	unionTexts := func(members []task.Task) map[string]bool {
+		out := make(map[string]bool)
+		for i := range members {
+			for _, c := range members[i].Criteria {
+				out[c.Text] = true
+			}
+		}
+		return out
+	}
+
+	t.Run("throwaway member carrying none of the superseded criteria is now accepted, and the criteria are backfilled", func(t *testing.T) {
+		t.Parallel()
+		f := newParkedPlan(t)
+		f.addMember(t, "m-parser", task.StatusDone, criteria)
+		spy := &correctionSpy{}
+		res := f.tool(spy).Execute(supervisorCtx(), map[string]any{
+			"plan_id":              f.planID,
+			"verb":                 "supersede",
+			"superseded_member_id": "m-parser",
+			"falsified_assumption": "we assumed the parser handled every fixture",
+			"tail_members":         []any{tailMemberArg("touch a file", "a file exists")},
+		})
+		if res.IsError {
+			t.Fatalf("supersede with an incomplete tail member was rejected instead of backfilled: %s", res.ForLLM)
+		}
+		if len(spy.calls) != 1 {
+			t.Fatalf("engine reached %d time(s), want 1", len(spy.calls))
+		}
+		got := unionTexts(spy.calls[0].TailMembers)
+		for _, want := range []string{"parses ints", "parses floats", "rejects malformed input"} {
+			if !got[want] {
+				t.Errorf("committed tail members are missing superseded criterion %q — it was DROPPED, not backfilled", want)
+			}
+		}
+		// The caller's own (unrelated) criterion is preserved, not overwritten.
+		if !got["a file exists"] {
+			t.Error("the caller's own tail-member criterion was discarded by the backfill")
+		}
+	})
+
+	t.Run("partial member carrying 1 of 3 criteria is accepted, and only the missing 2 are backfilled (no duplicate of the one already present)", func(t *testing.T) {
+		t.Parallel()
+		f := newParkedPlan(t)
+		f.addMember(t, "m-parser", task.StatusDone, criteria)
+		spy := &correctionSpy{}
+		res := f.tool(spy).Execute(supervisorCtx(), map[string]any{
+			"plan_id":              f.planID,
+			"verb":                 "supersede",
+			"superseded_member_id": "m-parser",
+			"falsified_assumption": "we assumed the parser handled every fixture",
+			"tail_members":         []any{tailMemberArg("redo the parser", "parses ints")},
+		})
+		if res.IsError {
+			t.Fatalf("supersede with a partial tail member was rejected instead of backfilled: %s", res.ForLLM)
+		}
+		if len(spy.calls) != 1 {
+			t.Fatalf("engine reached %d time(s), want 1", len(spy.calls))
+		}
+		members := spy.calls[0].TailMembers
+		if len(members) != 1 {
+			t.Fatalf("tail members reaching the engine = %d, want 1 (backfill augments the existing member, adds none)", len(members))
+		}
+		got := unionTexts(members)
+		for _, want := range []string{"parses ints", "parses floats", "rejects malformed input"} {
+			if !got[want] {
+				t.Errorf("committed tail member is missing superseded criterion %q", want)
+			}
+		}
+		// Exactly 3 criteria total: the caller's 1 plus the 2 backfilled — no
+		// duplicate of "parses ints" (already present, so not re-added).
+		if n := len(members[0].Criteria); n != 3 {
+			t.Errorf("tail member carries %d criteria, want exactly 3 (1 caller-authored + 2 backfilled, no duplicate)", n)
+		}
+	})
+}
+
+// TestPlanCorrect_SupersedeCheckCriterionAutoInherited_NeverDowngraded
+// reproduces the exact live G-11 defect (observed via a real LLM,
+// Conformance_t3_PlanningReplanningE2E): the superseded member carries a
+// `kind: check` criterion, and PlanSupervisor — never shown the member's
+// criteria detail by its supervision wake (buildSupervisionTargetsText,
+// pkg/agent/plan_engine.go, renders id | status | title only) — cannot know
+// the check's exact command. It authors a plausible but DIFFERENT command for
+// what it believes is "the same" criterion: same text (learned from a prior
+// rejection's error message, which echoes .Text), command "true" against the
+// real original's "exit 0", both expecting exit 0.
+//
+// This proves two things at once:
+//  1. The correction is now ACCEPTED — before this fix, every such attempt
+//     was rejected (verified live: 4 varied attempts, all rejected).
+//  2. The fix did NOT weaken the guard into a text-based comparison (the
+//     rejected alternative (b)): the caller's own check and the backfilled
+//     original check are BOTH present as distinct criteria. A criterion with
+//     matching TEXT but a different command is never treated as "covering"
+//     the original — so a real check can never be silently downgraded to
+//     whatever command the caller guessed.
+func TestPlanCorrect_SupersedeCheckCriterionAutoInherited_NeverDowngraded(t *testing.T) {
+	t.Parallel()
+	const critText = "m2 own criterion trivially passes (member reaches done)"
+	criteria := []task.AcceptanceCriterion{
+		checkCriterionDone(critText, "exit 0", 0),
+	}
+	f := newParkedPlan(t)
+	f.addMember(t, "m2", task.StatusDone, criteria)
+	spy := &correctionSpy{}
+	res := f.tool(spy).Execute(supervisorCtx(), map[string]any{
+		"plan_id":              f.planID,
+		"verb":                 "supersede",
+		"superseded_member_id": "m2",
+		"falsified_assumption": "m2's own criterion trivially passes regardless of real work done",
+		"tail_members": []any{
+			tailMemberWithCriteriaArgs("redo m2 for real",
+				checkCriterionArg(critText, "true", 0)),
+		},
+	})
+	if res.IsError {
+		t.Fatalf("supersede against a check-carrying member, with the same criterion text but a "+
+			"different command, was rejected: %s", res.ForLLM)
+	}
+	if len(spy.calls) != 1 {
+		t.Fatalf("engine reached %d time(s), want 1", len(spy.calls))
+	}
+	members := spy.calls[0].TailMembers
+	if len(members) != 1 {
+		t.Fatalf("tail members reaching the engine = %d, want 1", len(members))
+	}
+	crits := members[0].Criteria
+	if len(crits) != 2 {
+		t.Fatalf("tail member carries %d criteria, want exactly 2 (caller's own check + the backfilled "+
+			"original — never coalesced): %+v", len(crits), crits)
+	}
+	var sawCallerCheck, sawBackfilledCheck bool
+	for _, c := range crits {
+		if c.Kind != task.KindCheck || c.Check == nil {
+			t.Fatalf("criterion %q is not a check: %+v", c.Text, c)
+		}
+		switch c.Check.Command {
+		case "true":
+			sawCallerCheck = true
+		case "exit 0":
+			sawBackfilledCheck = true
+			if c.ID != "" {
+				t.Errorf("backfilled criterion carries id %q — it must be cleared so the store mints a "+
+					"fresh one at create time, never aliasing the superseded member's own criterion", c.ID)
+			}
+			if c.Status != task.CritPending {
+				t.Errorf("backfilled criterion status = %q, want pending (a fresh, unjudged instance)", c.Status)
+			}
+		default:
+			t.Errorf("unexpected check command %q", c.Check.Command)
+		}
+	}
+	if !sawCallerCheck {
+		t.Error("the caller's own check criterion (command \"true\") is missing — it must never be discarded")
+	}
+	if !sawBackfilledCheck {
+		t.Error("the superseded member's real check criterion (command \"exit 0\") was not backfilled — " +
+			"the caller's near-miss guess was allowed to stand in for it, which is exactly the downgrade the fix must prevent")
 	}
 }
 

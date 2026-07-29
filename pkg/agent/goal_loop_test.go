@@ -320,7 +320,7 @@ func TestGoalClear_CancelsInFlightGoalVerifierSession(t *testing.T) {
 	// window, cancel.go) — asserting on ctx.Err() immediately would be
 	// timing-dependent/flaky; Fired is the deterministic, already-proven
 	// signal this codebase uses to verify "a cancel was actually claimed".
-	fired, err := al.RequestCancelForSession(context.Background(), verifierSessionID, "", "")
+	fired, _, err := al.RequestCancelForSession(context.Background(), verifierSessionID, "", "")
 	if err != nil {
 		t.Fatalf("RequestCancelForSession (verification probe): %v", err)
 	}
