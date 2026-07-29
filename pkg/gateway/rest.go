@@ -4842,6 +4842,14 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
 	cm.RegisterHTTPHandler("/api/v1/workspaces/", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
+	// Library file explorer (rest_library.go). withUploadAuth, not plain
+	// withAuth: /library/{id}/upload streams multipart straight through this
+	// dispatcher, and withAuth's body limit would truncate it. Every JSON
+	// route behind this dispatcher is still independently capped at 1MB by
+	// decodeAndValidate, so relaxing the outer limit does not widen the
+	// attack surface for the non-upload operations.
+	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
