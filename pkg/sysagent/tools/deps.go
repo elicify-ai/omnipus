@@ -101,7 +101,38 @@ type Deps struct {
 	CredStore *credentials.Store
 	// ReloadFunc triggers a hot-reload of the agent loop so newly created agents
 	// become available immediately. Nil in tests or when not wired.
+	//
+	// AgentCreateTool/AgentUpdateTool prefer UpsertAgentFastFunc below when it
+	// is wired (issue #571, sysagent half) and fall back to this full reload
+	// only when UpsertAgentFastFunc is nil. AgentDeleteTool always uses this
+	// field — see UpsertAgentFastFunc's own doc comment for why delete is
+	// deliberately NOT fast-pathed.
 	ReloadFunc func() error
+	// UpsertAgentFastFunc publishes a single agent create/update into the
+	// live AgentRegistry without restarting channels/cron/schedulers/the plan
+	// engine (issue #571's sysagent-facing half — the agent-facing
+	// counterpart of pkg/gateway/rest.go's fastAgentUpsert, which already
+	// does this for the REST create/update handlers). Given the just-
+	// created/updated agent's ID, the wired implementation must swap ONLY
+	// that agent's *AgentInstance into the live registry
+	// (AgentLoop.UpsertAgentFast) and rebuild the resolver/default-agent
+	// override so the agent is immediately resolvable via
+	// GetAgent/ResolveRoute/GetDefaultAgent — not merely present in a map
+	// (see pkg/agent/registry.go's UpsertAgentFast doc comment for the two
+	// traps that requires closing).
+	//
+	// Returns nil on success. The wired implementation is expected to fall
+	// back to the full reload path itself on failure (including when a full
+	// reload is already in flight and must be waited out rather than raced)
+	// and return that fallback's error, if any — so AgentCreateTool/
+	// AgentUpdateTool have a single hot-reload call site instead of
+	// duplicating the "try fast, fall back to full" decision here.
+	//
+	// Nil in tests or when not wired: AgentCreateTool/AgentUpdateTool fall
+	// back to ReloadFunc (the pre-existing full-reload behavior) in that
+	// case, never a silent no-op. The production gateway wires this next to
+	// ReloadFunc; see gateway.go where sysAgentDeps is constructed.
+	UpsertAgentFastFunc func(agentID string) error
 	// SkillsLoader provides access to the locally installed skills tree
 	// (workspace, global, and builtin skill directories). Nil in tests or when
 	// not wired — callers must nil-check before use.

@@ -341,6 +341,13 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 
 func (al *AgentLoop) registerActiveTurn(ts *turnState) {
 	al.activeTurnStates.Store(ts.sessionKey, ts)
+	// Cancel-prearm race fix (pkg/agent/cancel_prearm.go): a cancel that
+	// arrived for this turn's identity BEFORE this Store ran (RequestCancel
+	// found no active turn and armed a latch instead of silently no-op'ing)
+	// must be applied now, at the earliest possible moment the turn is
+	// reachable, rather than being lost. Synchronous and unconditional —
+	// consumePreArmedCancel is a fast no-op when no latch is armed.
+	al.consumePreArmedCancel(ts)
 }
 
 func (al *AgentLoop) clearActiveTurn(ts *turnState) {
@@ -476,6 +483,47 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 		return anyMatch
 	}
 	return nil
+}
+
+// resolveSessionIDByChannelChat walks activeTurnStates for the turnState
+// matching (channel, chatID) — preferring the root turn (depth==0 /
+// parentTurnID=="") exactly like GetActiveTurnHookForSession — and returns
+// its transcriptSessionID, or "" when no active turn currently matches.
+//
+// Shared by RequestCancel's Tier B resolution (cancel.go, a channel carrying
+// no SessionID of its own) and armCancelOrFindActiveTurn's re-check
+// (cancel_prearm.go) so both use the identical predicate. This is precisely
+// the lookup that fails — returns "" — in the pre-registration cancel race:
+// a Tier B cancel arriving before any turn exists has no active turnState to
+// walk yet, which is why cancel_prearm.go's fallback latch key is
+// (channel, chatID) rather than a session id in that case.
+func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) string {
+	var rootTS *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		ts.mu.RLock()
+		ch := ts.channel
+		cid := ts.chatID
+		sid := ts.transcriptSessionID
+		depth := ts.depth
+		parentID := ts.parentTurnID
+		ts.mu.RUnlock()
+		if ch == channel && cid == chatID && sid != "" {
+			// Prefer the root turn (depth==0 / parentTurnID=="").
+			if depth == 0 || parentID == "" {
+				rootTS = ts
+				return false // stop
+			}
+			if rootTS == nil {
+				rootTS = ts
+			}
+		}
+		return true
+	})
+	if rootTS != nil {
+		return rootTS.transcriptSessionID
+	}
+	return ""
 }
 
 // getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /

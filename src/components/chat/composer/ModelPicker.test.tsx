@@ -29,6 +29,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useChatStore, type ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useConnectionStore } from '@/store/connection'
 
 // ── API mocks ─────────────────────────────────────────────────────────────────
 
@@ -278,6 +279,134 @@ describe('ModelPicker — transcriptLastModel/lastSeedKey re-seed effect', () =>
       expect(useSessionStore.getState().activeSessionId).toBe('sess_materialized')
     })
     // The user's model pick must survive the '' → '__pending' → realId transition.
+    expect(useChatStore.getState().nextModel).toBe('openai/gpt-4o')
+  })
+})
+
+// ── modelSelectionSource — activeAgentId-only change (same session) ─────────────
+//
+// The twin of the AGENT PRECEDENCE RULE fixed for agents in 5157e378
+// ("session attach clobbering the picked agent"). Here the bug is on the
+// MODEL side: activeSessionId stays the SAME (no navigation to a different
+// conversation) but activeAgentId changes — e.g. the user picks a different
+// agent from AgentPicker or the "@" mention menu mid-conversation. Before the
+// fix, the re-seed effect treated this identically to a genuine navigation
+// and silently reset nextModel to the new agent's default, discarding
+// whatever model the user had just explicitly picked — and THAT overwritten
+// value is what went out on the wire (metadata.model_name).
+//
+// Both halves of the contract are asserted, and the wire frame — not just
+// component state — is checked in each: an explicit pick must survive, and a
+// user who never picked must still get the new agent's default (a frozen
+// picker would be just as wrong as a clobbered one).
+describe('ModelPicker — activeAgentId-only change (same session, mid-conversation agent switch)', () => {
+  function fakeConnection(sentFrames: unknown[]) {
+    return {
+      send: (frame: unknown) => {
+        sentFrames.push(frame)
+        return true
+      },
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      isConnected: true,
+    }
+  }
+
+  it('an explicit user pick SURVIVES an activeAgentId change within the same session, and the WIRE frame carries the picked model', async () => {
+    renderPicker()
+    await waitForLoadedTrigger()
+
+    // Real user pick, through the actual dropdown (exercises the production
+    // onPickerChange handler, not a mocked one).
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    const item = await vi.waitFor(() => screen.getByText('z-ai/glm-5-turbo'))
+    fireEvent.click(item)
+    await vi.waitFor(() => expect(useChatStore.getState().nextModel).toBe('z-ai/glm-5-turbo'))
+
+    // Agent switches mid-conversation (AgentPicker/"@" mention) — SAME
+    // session, to 'jim' whose mock has NO configured model. Without the fix
+    // this re-seeds nextModel to null (jim's absent default).
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_1', activeAgentId: 'jim' })
+    })
+
+    // Component state: the explicit pick must survive.
+    expect(useChatStore.getState().nextModel).toBe('z-ai/glm-5-turbo')
+    // And the rendered trigger must show it too (not just the store).
+    expect(screen.getByTestId('composer-model-selector').getAttribute('aria-label')).toBe(
+      'Model selector, currently z-ai/glm-5-turbo',
+    )
+
+    // WIRE PROOF: what the picker shows is what actually gets sent.
+    const sentFrames: unknown[] = []
+    act(() => {
+      useConnectionStore.setState({ connection: fakeConnection(sentFrames) as never, isConnected: true })
+    })
+    act(() => {
+      const nm = useChatStore.getState().nextModel
+      useChatStore.getState().sendMessage('hello', nm ? { model_name: nm } : undefined)
+    })
+    const last = sentFrames.at(-1) as { type?: string; metadata?: { model_name?: string } }
+    expect(last?.type).toBe('message')
+    expect(last?.metadata?.model_name).toBe('z-ai/glm-5-turbo')
+  })
+
+  it('with NO explicit pick, an activeAgentId change within the same session DOES re-seed to the new agent\'s default — the clobber must not be "fixed" by freezing the picker', async () => {
+    renderPicker()
+    await waitForLoadedTrigger()
+
+    // Simulate whatever value the auto-seed had previously produced, WITHOUT
+    // going through the picker's onChange (no explicit user pick was made —
+    // this mirrors the store-level seeding the effect itself performs).
+    act(() => {
+      useChatStore.getState().setNextModel('z-ai/glm-5.2')
+    })
+
+    // Agent switches mid-conversation, same session, no explicit pick in force.
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_1', activeAgentId: 'jim' })
+    })
+
+    // jim has no configured model and there is no transcript — nextModel
+    // must follow the new agent's (absent) default, not stay pinned.
+    await vi.waitFor(() => expect(useChatStore.getState().nextModel).toBeNull())
+    expect(screen.getByTestId('composer-model-selector').textContent).toMatch(/select a model/i)
+
+    // WIRE PROOF: no override reaches the wire either — the server falls
+    // back to jim's own configured model, matching what the UI shows.
+    const sentFrames: unknown[] = []
+    act(() => {
+      useConnectionStore.setState({ connection: fakeConnection(sentFrames) as never, isConnected: true })
+    })
+    act(() => {
+      const nm = useChatStore.getState().nextModel
+      useChatStore.getState().sendMessage('hello', nm ? { model_name: nm } : undefined)
+    })
+    const last = sentFrames.at(-1) as { type?: string; metadata?: unknown }
+    expect(last?.type).toBe('message')
+    expect(last?.metadata).toBeUndefined()
+  })
+
+  it('an explicit pick made for one agent, after a no-pick agent switch, still re-arms and survives the NEXT agent switch', async () => {
+    renderPicker()
+    await waitForLoadedTrigger()
+
+    // No explicit pick yet; agent switches once (auto re-seed, per the test above).
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_1', activeAgentId: 'jim' })
+    })
+    await vi.waitFor(() => expect(useChatStore.getState().nextModel).toBeNull())
+
+    // NOW the user explicitly picks a model for jim's turn.
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    const item = await vi.waitFor(() => screen.getByText('openai/gpt-4o'))
+    fireEvent.click(item)
+    await vi.waitFor(() => expect(useChatStore.getState().nextModel).toBe('openai/gpt-4o'))
+
+    // Switch agents again, same session — the fresh pick must survive too.
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_1', activeAgentId: 'mia' })
+    })
     expect(useChatStore.getState().nextModel).toBe('openai/gpt-4o')
   })
 })

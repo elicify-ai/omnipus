@@ -45,6 +45,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -376,6 +377,31 @@ type PlanEngine struct {
 	// production value — NewPlanEngine never sets it) means
 	// planEngineStopDrainTimeout. Read through stopDrainBudget().
 	stopDrainTimeout time.Duration
+
+	// supervisionClaimSeq mints a unique, non-empty discriminator for
+	// wakeSupervisor's "at most one live PlanSupervisor turn per plan" CAS
+	// claim (see supervisionUnitForPlan). This is NOT cosmetic: the shared
+	// VerifierSessionRegistry's CAS treats an EMPTY registered value as an
+	// unclaimed PLACEHOLDER (by design, for the judge round's own
+	// register-empty-then-upgrade-to-the-real-session-id pattern — see
+	// verifier_registry.go's Register doc) — so two Register(unit, "") calls
+	// for the SAME unit never conflict with each other; the second silently
+	// "succeeds" as if it were the legitimate placeholder-upgrade case. A
+	// wakeSupervisor claim has no real session id to upgrade to at
+	// registration time (ensureSupervisionSessionLocked hasn't run yet), so
+	// without a unique token every second concurrent claim attempt would pass
+	// this gate — reopening the exact race it exists to close. Read/written
+	// only via atomic ops (nextSupervisionClaimToken); needs no mutex, and a
+	// zero value is a valid starting point for a bare struct-literal test
+	// engine.
+	supervisionClaimSeq uint64
+}
+
+// nextSupervisionClaimToken returns a fresh, process-unique, non-empty string
+// for wakeSupervisor's CAS claim (see supervisionClaimSeq's doc comment for
+// why non-empty and unique-per-attempt both matter). Safe for concurrent use.
+func (pe *PlanEngine) nextSupervisionClaimToken() string {
+	return fmt.Sprintf("wake-%d", atomic.AddUint64(&pe.supervisionClaimSeq, 1))
 }
 
 // NewPlanEngine constructs the production PlanEngine. al must be non-nil in
@@ -2631,7 +2657,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 				"source_kind":    sourceKind,
 				"reason":         "no_chat_origin",
 			})
-		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p)); err != nil {
+		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), nil); err != nil {
 			logger.ErrorCF("plan_engine", "could not dispatch origin-less plan owner turn",
 				map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "error": err.Error()})
 		}
@@ -2668,7 +2694,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	// one on the plan's own owner session — the outcome is then durable even
 	// though the requester's conversation never received it, and the ERROR
 	// above is the record that the chat delivery itself was lost.
-	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p)); err != nil {
+	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), nil); err != nil {
 		logger.ErrorCF("plan_engine", "plan owner wake could not be delivered OR dispatched directly",
 			map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "source_kind": sourceKind, "error": err.Error()})
 	}
@@ -2700,6 +2726,25 @@ func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 	return ok
 }
 
+// supervisionUnitForPlan is the mutual-exclusion key for the "at most one
+// PlanSupervisor turn in flight per plan" invariant wakeSupervisor's CAS gate
+// enforces (see that function's doc comment for the full race this closes).
+//
+// Deliberately a DIFFERENT key namespace from verifierUnitForPlan
+// (verifier_registry.go): that key marks the plan-level JUDGE round in
+// flight, a different activity that legitimately overlaps in time with a
+// PRIOR supervision turn still concluding (the plan transitions through
+// PhaseJudging — not itself supervision-eligible — while an earlier
+// supervision turn's goroutine is still running). Only two SUPERVISION turns
+// for the SAME plan must never overlap; reusing verifierUnitForPlan's own key
+// here would conflate the two and either deadlock the judge round against a
+// slow supervision turn or vice versa. Both keys share the SAME underlying
+// VerifierSessionRegistry (pe.registry()) — a plain unit->string map keyed by
+// prefixed strings — so a new prefix is all a new mutual-exclusion domain
+// needs; no new primitive is introduced (ADR-053's claim/marker family is
+// reused, not reinvented).
+func supervisionUnitForPlan(planID string) string { return "supervision:" + planID }
+
 // wakeSupervisor issues a SUPERVISION wake (family A) for a plan sitting in
 // the supervision-eligible phase set: it mints (or reuses) the park's
 // adjudication session, stamps the durable wake receipt + attempt counter that
@@ -2721,6 +2766,55 @@ func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 // had already spent (G3 fix wave, finding 6 — the durable consequence
 // countCorrectionAndClearWake's own comment missed).
 //
+// ⚠ CONCURRENCY FIX (production race, confirmed live): a plan-level judge
+// round completing UNMET transitions the plan THROUGH plan.PhaseJudging —
+// which is NOT in the supervision-eligible phase set — on its way to
+// awaiting_supervision. That makes applyJudgeRoundOutcomeLocked's newPark
+// computation (!IsSupervisionEligiblePhase(current-phase-at-reload)) come out
+// true even when a PRIOR supervision wake (e.g. a stall diagnosis) is STILL
+// being reasoned about by a turn that has not yet completed: the plan's
+// PERSISTED phase at the moment of reload is transiently Judging, not Stalled,
+// so the DoD-unmet wake reads as "a brand-new park" and would otherwise mint
+// and dispatch a SECOND, independent PlanSupervisor session while the first is
+// still live. Two adjudicators then race plan_correct against the same plan —
+// observed live as multiple supervision sessions minted seconds apart, with
+// every attempt after the first failing "the plan is already in a failed
+// state". This is a TIMING/mutual-exclusion defect, not a shape defect (both
+// wakes named the real plan/member ids correctly).
+//
+// The fix does NOT try to correct newPark's phase-transition classification
+// (that would still leave the underlying "is a turn already running" question
+// unasked for every other call path — the retry/rearm wakes below share this
+// function too). Instead it gates ALL FOUR callers uniformly on a single,
+// explicit invariant: at most one live PlanSupervisor turn per plan, enforced
+// by a CAS claim on the SAME VerifierSessionRegistry primitive ADR-053 already
+// uses for the judge round's own in-flight marker (verifier_registry.go),
+// keyed by supervisionUnitForPlan (a distinct namespace — see its own doc
+// comment for why). Register("") claims the plan as a placeholder BEFORE any
+// state is touched (mirrors the registry's own "assign before dispatch"
+// convention); ErrVerifierSessionHeld means a turn is already in flight for
+// this plan, REGARDLESS of which reason (stall vs DoD-unmet vs retry vs
+// rearm) triggered either call, and this wake attempt is suppressed
+// (back off, per the registry's own documented CAS contract) rather than
+// racing a second turn — the plan's existing park record is left completely
+// untouched, so whatever condition prompted this call remains recorded
+// (HandoverText / LastUnmetTerminalSignature) and is re-evaluated the next
+// time this plan is observed as supervision-eligible.
+//
+// The claim is released when the dispatched turn actually SETTLES — turn
+// completion (success, error, or panic-recovered), not merely "dispatch was
+// attempted" — via the onTurnSettled callback threaded through
+// dispatchPlanTurn, so a suppressed wake is never permanent: once the holder
+// finishes (or, on a synchronous dispatch failure, immediately), the claim is
+// free again and the NEXT tick's/event's call to this function can dispatch a
+// genuinely fresh turn. A holder that crashes mid-turn releases nothing
+// explicitly, but the registry is process-local (verifier_registry.go's own
+// documented contract) — a restart rebuilds it empty, so a crashed holder
+// cannot wedge a plan past that restart, and short of a restart the existing
+// FR-021 observation deadline (supervisionTurnTimeout) already bounds the
+// turn's own context, so a genuinely wedged turn still exits (context
+// deadline) and releases its claim within that same bound.
+//
 // Caller must hold planDecisionMu.
 func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, newPark bool) {
 	// FR-046b-adjacent brake (G3 fix wave, finding 5). See
@@ -2738,6 +2832,33 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, n
 		pe.failPlanLocked(p.ID, plan.FailedReasonDoDUnreachable,
 			buildCorrectionBudgetHandover(p, maxRounds))
 		return
+	}
+
+	// CAS claim: at most one live PlanSupervisor turn per plan (see the doc
+	// comment above). Taken BEFORE anything else — no session is minted, no
+	// receipt is stamped, nothing is dispatched — so a suppressed wake has
+	// zero side effects on the plan record. The registered value MUST be
+	// non-empty and unique to THIS attempt (nextSupervisionClaimToken) — the
+	// registry's CAS treats an empty value as an unclaimed placeholder, so
+	// two Register(unit, "") calls would never conflict with each other; see
+	// supervisionClaimSeq's doc comment for the full reasoning.
+	supervisionUnit := supervisionUnitForPlan(p.ID)
+	if regErr := pe.registry().Register(supervisionUnit, pe.nextSupervisionClaimToken()); regErr != nil {
+		logger.InfoCF("plan_engine",
+			"supervision wake suppressed: a supervision turn is already in flight for this plan",
+			map[string]any{"plan_id": p.ID, "source_kind": sourceKind})
+		return
+	}
+	var released bool
+	var releaseMu sync.Mutex
+	releaseClaim := func() {
+		releaseMu.Lock()
+		defer releaseMu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		pe.registry().Unregister(supervisionUnit)
 	}
 
 	sessionID := pe.ensureSupervisionSessionLocked(p, newPark)
@@ -2766,13 +2887,22 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, n
 	if err != nil {
 		logger.ErrorCF("plan_engine", "could not persist supervision wake receipt; wake not dispatched",
 			map[string]any{"plan_id": p.ID, "error": err.Error()})
+		// The turn was never dispatched — release the claim now, or this plan
+		// would be permanently locked out of every future supervision wake by
+		// a claim nothing will ever clear.
+		releaseClaim()
 		return
 	}
 	// Keep the caller's snapshot current: several call sites read
 	// p.Supervision again in the same locked body.
 	p.Supervision = updated.Supervision
 
-	if dispatchErr := pe.dispatchPlanTurn(p.ID, planSupervisorAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p)); dispatchErr != nil {
+	// releaseClaim is threaded through as onTurnSettled: dispatchPlanTurn calls
+	// it itself, exactly once, either synchronously (a dispatch failure below —
+	// no goroutine ever ran) or from the dispatched goroutine's own defer chain
+	// once the turn truly settles (success, error, or panic-recovered). Do NOT
+	// also call it here on the error branch — dispatchPlanTurn already did.
+	if dispatchErr := pe.dispatchPlanTurn(p.ID, planSupervisorAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), releaseClaim); dispatchErr != nil {
 		// FR-024 / §20: an undelivered supervision wake is RECORDED on the
 		// plan, not WARNed away — "parked" and "silently stuck" must be
 		// distinguishable from the record alone. Unlike a missing chat origin
@@ -3043,14 +3173,34 @@ func (pe *PlanEngine) supervisionMaxAttempts(p *plan.Plan) int {
 // otherwise a per-plan bounds override moves the deadline the engine watches
 // while leaving the turn itself running against the package default, and the
 // override silently does not apply to the thing it names.
-func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, turnTimeout time.Duration) error {
+//
+// onTurnSettled, when non-nil, is called EXACTLY ONCE — either synchronously,
+// before this function returns, on every DISPATCH-failure path below (no
+// goroutine ever ran, so nothing else would ever call it), or from the
+// dispatched goroutine's own defer chain once the turn truly settles
+// (success, error, or panic-recovered). This is wakeSupervisor's
+// supervision-turn-in-flight CAS claim release (see its own doc comment) —
+// releasing it at DISPATCH rather than at SETTLEMENT would reopen the exact
+// race this exists to close, since a second wake could then claim and
+// dispatch a concurrent turn while the first is still running. wakeOwner's two
+// call sites below pass nil: owner (outcome) wakes are not part of that
+// invariant.
+func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, turnTimeout time.Duration, onTurnSettled func()) error {
+	settled := func() {
+		if onTurnSettled != nil {
+			onTurnSettled()
+		}
+	}
 	if pe.agentLoop == nil {
+		settled()
 		return fmt.Errorf("plan_engine: no agent loop wired; cannot dispatch a plan turn for %q", planID)
 	}
 	if agentID == "" {
+		settled()
 		return fmt.Errorf("plan_engine: plan %q names no agent to wake", planID)
 	}
 	if sessionID == "" {
+		settled()
 		return fmt.Errorf("plan_engine: no transcript session for plan %q; refusing to dispatch an unpersisted turn", planID)
 	}
 	// Resolve the agent HERE rather than letting processTaskDirect fall back
@@ -3059,9 +3209,11 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 	// unrelated roster member and report success.
 	reg := pe.agentLoop.GetRegistry()
 	if reg == nil {
+		settled()
 		return fmt.Errorf("plan_engine: no agent registry; plan %q wake not dispatched", planID)
 	}
 	if _, ok := reg.GetAgent(agentID); !ok {
+		settled()
 		return fmt.Errorf("plan_engine: agent %q does not resolve; plan %q wake not dispatched", agentID, planID)
 	}
 
@@ -3070,6 +3222,11 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 	pe.wakeWG.Add(1)
 	go func() {
 		defer pe.wakeWG.Done()
+		// Released once the turn SETTLES (this goroutine's own end), not at
+		// dispatch — see this function's doc comment on onTurnSettled. Ordered
+		// so it still runs on the panic-recovered path (a panicking turn must
+		// not leave wakeSupervisor's CAS claim held forever).
+		defer settled()
 		defer func() {
 			if r := recover(); r != nil {
 				logger.ErrorCF("plan_engine", "panic in plan wake turn (recovered)",

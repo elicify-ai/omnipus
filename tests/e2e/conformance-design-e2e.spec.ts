@@ -41,6 +41,7 @@ import * as path from 'path'
 import { expect, type Page, type APIRequestContext, request } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors'
+import { GatewayProcess } from './fixtures/gateway-process.js'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -146,6 +147,12 @@ interface Criterion {
   text: string
   author: { kind: 'user' | 'agent'; id: string }
   status: 'pending' | 'met' | 'unmet'
+  /** Present iff kind === 'check' (AcceptanceCriterion.yaml). Machine-checked
+   * via the assignee agent's own bash tool — no LLM judgment involved, which
+   * is what makes it useful for forcing a DETERMINISTIC met/unmet verdict
+   * (E.2's F2 hold proof needs a round-1 unmet verdict that does not depend
+   * on subjective LLM judging to be reliably reproducible). */
+  check?: { command: string; expected_exit_code: number }
 }
 
 interface MemberSpec {
@@ -174,6 +181,30 @@ function proseCriterion(text: string): Criterion {
 }
 
 /**
+ * A machine-checked criterion (AcceptanceCriterion.yaml `kind: check`):
+ * dispatched through the assignee agent's own `bash` tool, exit-code
+ * compared, resolved WITHOUT the LLM verifier. Used to force deterministic
+ * met/unmet outcomes (round-1 DoD-unmet for E.2's F2 proof; a genuinely
+ * WRONG-but-`done` outcome for E.3's supersede nudge) instead of relying on
+ * subjective LLM judgment for the part of the scenario that must be
+ * reproducible. The assignee agent MUST have been created with `bash: allow`
+ * (see createMainAgent's `builtinPolicies` param) — a fresh custom agent is
+ * seeded fully deny-by-default (coreagent.NewCustomAgentToolsCfg,
+ * AgentToolsCfg.yaml), and a denied `bash` fails every check closed
+ * regardless of the command, which would make BOTH the "pass" and "fail"
+ * recipes below collapse to the same (fail) outcome.
+ */
+function checkCriterion(text: string, command: string, expectedExitCode = 0): Criterion {
+  return {
+    kind: 'check',
+    text,
+    author: { kind: 'user', id: 'admin' },
+    status: 'pending',
+    check: { command, expected_exit_code: expectedExitCode },
+  }
+}
+
+/**
  * Create a fresh native Main agent (chat-target) for one conformance test.
  *
  * WHY a per-test agent instead of the seeded core "jim": the conformance
@@ -198,13 +229,29 @@ function proseCriterion(text: string): Criterion {
  * the gateway's default model (agents.defaults.model_name) and inherits
  * the seeded default tool-policy set; the conformance member tasks only
  * need a textual LLM reply, so no special tools are required.
+ *
+ * `builtinPolicies`, when provided, is merged (server-side, sparse-over-
+ * complete — see pkg/gateway/rest.go's createAgent) onto the fully-enumerated
+ * deny-by-default seed via `tools_cfg.builtin.policies`. Used by tests that
+ * need this agent to execute a `kind: check` criterion for real (e.g.
+ * `{ bash: 'allow' }`) — verified empirically: a fresh custom agent with no
+ * override gets `bash: "deny"`, which fails every check criterion closed
+ * regardless of command (AgentToolsCfg.yaml's documented deny-by-default).
  */
-async function createMainAgent(page: Page, name: string): Promise<string> {
-  const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
+async function createMainAgent(
+  page: Page,
+  name: string,
+  builtinPolicies?: Record<string, 'allow' | 'ask' | 'deny'>,
+): Promise<string> {
+  const body: Record<string, unknown> = {
     type: 'Main',
     name,
     soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
-  })
+  }
+  if (builtinPolicies !== undefined) {
+    body.tools_cfg = { builtin: { policies: builtinPolicies } }
+  }
+  const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', body)
   if (!res.ok) {
     throw new Error(`createMainAgent: POST /agents failed ${res.status}: ${res.raw}`)
   }
@@ -330,6 +377,91 @@ async function createPlanWithMembers(
     })
   }
   return { planId, memberIds }
+}
+
+/**
+ * List a plan's member tasks. GET /api/v1/tasks has no `plan_id` query filter
+ * (rest_tasks.go's handleTaskList only accepts workspace_id/status/agent_id/
+ * surface/parent_task_id), so this lists by workspace_id and filters
+ * client-side on the `plan_id` field every Task wire response already
+ * carries — no new REST surface needed.
+ */
+async function listPlanMemberTasks(
+  page: Page,
+  workspaceId: string,
+  planId: string,
+): Promise<Array<{ id: string; status: string; plan_id?: string }>> {
+  const res = await apiFetch<Array<{ id: string; status: string; plan_id?: string }>>(
+    page,
+    'GET',
+    `/api/v1/tasks?workspace_id=${workspaceId}&limit=1000`,
+  )
+  if (!res.ok) {
+    throw new Error(`listPlanMemberTasks: GET /tasks failed ${res.status}: ${res.raw}`)
+  }
+  return res.body.filter((t) => t.plan_id === planId)
+}
+
+/**
+ * A stable, order-independent snapshot of a plan's member set for the F2
+ * round-burn proof (E.2): two snapshots are "the same terminal signature" iff
+ * this string is identical. Deliberately just (id,status) pairs, sorted by
+ * id — the exact granularity `planTerminalSignature` (pkg/agent/plan_engine.go)
+ * itself keys on: a NEW member appearing, or an existing member's status
+ * changing, is a genuine change; anything else (timestamps, result text) is
+ * not part of the terminal-state signature and must not make two otherwise-
+ * identical samples look different.
+ */
+function memberSignature(members: Array<{ id: string; status: string }>): string {
+  return members
+    .map((m) => `${m.id}:${m.status}`)
+    .sort()
+    .join('|')
+}
+
+/**
+ * Fetch a session's message transcript (GET /api/v1/sessions/{id}). Used to
+ * inspect PlanSupervisor's adjudication session for the `plan_correct` tool
+ * calls it actually committed (E.3) — the only way to observe WHICH verb and
+ * WHICH real member id a correction used, since the wire contract has no
+ * revision-history read endpoint on the Plan resource itself (RevisionEntry
+ * is emitted as a SessionMessage, `kind: revision_entry`/tool_call, not
+ * persisted as a queryable Plan field).
+ */
+async function getSessionMessages(page: Page, sessionId: string): Promise<Array<Record<string, unknown>>> {
+  const res = await apiFetch<{ messages: Array<Record<string, unknown>> }>(
+    page,
+    'GET',
+    `/api/v1/sessions/${sessionId}`,
+  )
+  if (!res.ok) {
+    throw new Error(`getSessionMessages: GET /sessions/${sessionId} failed ${res.status}: ${res.raw}`)
+  }
+  return res.body.messages ?? []
+}
+
+/**
+ * Extract every `plan_correct` tool_call entry from a session transcript,
+ * flattened to {status, parameters}. A message's `tool_calls` array can carry
+ * more than one call; only `plan_correct` calls are kept.
+ */
+function extractPlanCorrectCalls(
+  messages: Array<Record<string, unknown>>,
+): Array<{ status: string; parameters: Record<string, unknown> }> {
+  const out: Array<{ status: string; parameters: Record<string, unknown> }> = []
+  for (const msg of messages) {
+    const calls = msg.tool_calls as Array<Record<string, unknown>> | undefined
+    if (!Array.isArray(calls)) continue
+    for (const c of calls) {
+      if (c.tool === 'plan_correct') {
+        out.push({
+          status: String(c.status ?? ''),
+          parameters: (c.parameters as Record<string, unknown>) ?? {},
+        })
+      }
+    }
+  }
+  return out
 }
 
 /**
@@ -634,19 +766,48 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
 // Traces to:
 //   - §9.1 t2 "plan lifecycle walks the drawn path" (line ~1174)
 //   - TDD Plan row 43 `Conformance_t2_PlanLifecycleE2E`
+//   - adr-053-DEFERRED-ISSUES.md E.2 (this test used to pass the instant the
+//     plan reached done OR failed — it never forced a deterministic
+//     round-1 unmet verdict, and the F2 "hold burns no JudgeRounds" claim
+//     was asserted only conditionally, `if (sawHold)`, so a run that never
+//     held at all silently passed without proving anything about F2.)
+//
+// FIX: the plan's DoD is a `kind: check` criterion whose command (`exit 1`)
+// can NEVER return the expected exit code — a deterministic, LLM-judgment-
+// free unmet verdict every single round, empirically verified against a
+// live gateway before writing this test (see the qa-lead report for the
+// trace). This makes "the plan reaches awaiting_supervision" a MANDATORY
+// assertion, not a conditional one. The F2 property itself — "an idle tick
+// with an UNCHANGED member terminal signature must not burn a JudgeRounds
+// increment" — is then proven by SAMPLING (plan_phase, judge_rounds, member
+// signature) at fine granularity across the hold and asserting the causal
+// implication directly: judge_rounds may only advance between two samples
+// whose member signature also changed. This is the actual F2 invariant
+// (pkg/agent/plan_engine.go's `planTerminalSignature`/"a later unchanged
+// idle tick's processPlan skips re-judging it") — proven directly rather
+// than by hoping for a multi-tick silent gap from a live, actively-
+// correcting adjudicator (which, empirically, keeps working the plan every
+// ~30s once parked — see the report for why an artificially long idle
+// window is not how this system actually behaves, and why sampling the
+// causal condition is the honest way to test the guarantee).
 
-test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet → awaiting-supervision holds', async ({
+test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deterministic unmet → F2 hold proven → no wedge', async ({
   page,
 }) => {
   requireApiKey()
 
-  test.setTimeout(480_000)
+  test.setTimeout(600_000)
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target plan owner + member assignee)
   // in its own workspace core_team. A fresh agent per test avoids the
   // multi-workspace find_for_agent ambiguity that cancels member turns.
-  const ownerId = await createMainAgent(page, `conformance-t2-owner-${Date.now()}`)
+  // `bash: allow` is required for the `check` criteria below — a fresh
+  // custom agent is seeded fully deny-by-default (verified empirically:
+  // omitting this override makes every check fail closed regardless of
+  // command, which would make the "definitely met" and "definitely unmet"
+  // recipes indistinguishable).
+  const ownerId = await createMainAgent(page, `conformance-t2-owner-${Date.now()}`, { bash: 'allow' })
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t2',
     core_team: [ownerId],
@@ -654,11 +815,12 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
   if (!wsRes.ok) throw new Error(`t2: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
 
-  // Create a plan with TWO members. The plan-lint gate (G-16) requires
-  // disjoint write_sets per parallel member; we comply here. Members are
-  // created as separate tasks (POST /tasks with plan_id) in dependency
-  // order — blocked_by references real task IDs, resolved by
-  // createPlanWithMembers from the label map.
+  // Create a plan with TWO members (each a deterministic, machine-checked
+  // `exit 0` — fast and judgment-free, so "all members terminal" is reached
+  // quickly and reliably) and a plan-level DoD that can NEVER be satisfied
+  // (`exit 1`, expected 0) — forcing a deterministic round-1 UNMET verdict.
+  // The plan-lint gate (G-16) requires disjoint write_sets per parallel
+  // member; we comply here.
   const { planId } = await createPlanWithMembers(
     page,
     workspaceId,
@@ -666,7 +828,8 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
     {
       title: 't2 conformance plan',
       goal: 'produce a verdict of met or unmet for both members',
-      description: 'two serial members, each with a verifiable criterion',
+      description: 'two serial members, each with a machine-checked criterion',
+      dod: [checkCriterion('deterministic unmet DoD — forces round-1 unmet for the F2 proof', 'exit 1', 0)],
       bounds: { plan_judge_max_rounds: 5 },
     },
     [
@@ -675,7 +838,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
         title: 'member one',
         prompt: 'reply with the literal word alpha',
         write_set: ['out/m1.txt'],
-        criteria: [proseCriterion('the reply contains the word "alpha"')],
+        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
       },
       {
         label: 'm2',
@@ -683,7 +846,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
         prompt: 'reply with the literal word beta',
         blocked_by_labels: ['m1'],
         write_set: ['out/m2.txt'],
-        criteria: [proseCriterion('the reply contains the word "beta"')],
+        criteria: [checkCriterion('m2 trivially passes', 'exit 0', 0)],
       },
     ],
   )
@@ -701,69 +864,143 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
     `t2: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`,
   ).toBe(true)
 
-  // Wait for the plan to reach an awaiting_supervision / done / failed
-  // state. We poll GET /plans/{id} which is the deterministic contract check.
-  //
   // IMPORTANT: the plan's hold ("awaiting_supervision") is a SUB-PHASE
   // of State=running, NOT a top-level state. The 5-value state machine is
   // draft/approved/running/done/failed; an unmet plan stays State=running
   // with plan_phase="awaiting_supervision" (Plan.yaml:80, plan.go:190).
-  // The Go integration conformance (#541, TestConformance_t2_PlanLifecycle_Design
-  // line 891) checks EffectivePlanPhase() — the e2e poll must check BOTH
-  // state (for done/failed) AND plan_phase (for awaiting_supervision).
   const HOLD_PHASE = 'awaiting_supervision'
-  const deadline = Date.now() + 420_000
+
+  // --- Step 1: MANDATORY — the plan MUST reach the hold ------------------
+  // Not conditional. With an immutable, deterministically-unmet DoD this is
+  // guaranteed once both members are terminal (empirically verified) — if it
+  // is not observed, the F2 hold itself is broken, not merely "not proven".
+  const holdDeadline = Date.now() + 120_000
+  let reachedHold = false
+  while (Date.now() < holdDeadline) {
+    const poll = await apiFetch<{ plan_phase?: string; judge_rounds?: number }>(page, 'GET', `/api/v1/plans/${planId}`)
+    if (!poll.ok) throw new Error(`t2: GET /plans/{id} poll (hold wait) failed ${poll.status}: ${poll.raw}`)
+    if (poll.body.plan_phase === HOLD_PHASE) {
+      reachedHold = true
+      break
+    }
+    await page.waitForTimeout(1_500)
+  }
+  expect(
+    reachedHold,
+    `t2: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — the DoD check ` +
+      '("exit 1", expected 0) can never be satisfied, so a round-1 unmet verdict (and the F2 hold it triggers) ' +
+      'is deterministic. Not observing it means either the DoD check never ran, or the F2 hold path is broken.',
+  ).toBe(true)
+
+  // --- Step 2: the F2 round-burn proof itself -----------------------------
+  // Sample (judge_rounds, member terminal signature, plan_phase) at fine
+  // granularity while the plan sits at the hold. The F2 invariant, stated
+  // causally: judge_rounds may only advance between two samples whose
+  // member signature ALSO changed (a real correction landed and changed
+  // the DAG) — an increment between two samples with an IDENTICAL member
+  // signature is exactly the bug F2 exists to prevent (re-judging an
+  // unchanged terminal state on every idle tick). The sampling window ends
+  // either at its own deadline or as soon as the plan leaves the hold
+  // (whichever first — sampling past that point is not testing F2 anymore).
+  interface Sample {
+    tMs: number
+    phase: string
+    judgeRounds: number
+    signature: string
+  }
+  const samples: Sample[] = []
+  const sampleWindowDeadline = Date.now() + 150_000
+  const sampleIntervalMs = 4_000
+  const t0 = Date.now()
+  while (Date.now() < sampleWindowDeadline) {
+    const [planPoll, members] = await Promise.all([
+      apiFetch<{ plan_phase?: string; judge_rounds?: number }>(page, 'GET', `/api/v1/plans/${planId}`),
+      listPlanMemberTasks(page, workspaceId, planId),
+    ])
+    if (!planPoll.ok) throw new Error(`t2: GET /plans/{id} poll (F2 sampling) failed ${planPoll.status}: ${planPoll.raw}`)
+    samples.push({
+      tMs: Date.now() - t0,
+      phase: planPoll.body.plan_phase ?? '',
+      judgeRounds: planPoll.body.judge_rounds ?? 0,
+      signature: memberSignature(members),
+    })
+    if (planPoll.body.plan_phase !== HOLD_PHASE) break
+    await page.waitForTimeout(sampleIntervalMs)
+  }
+
+  // Causal invariant: for every consecutive pair, judge_rounds may only
+  // increase alongside a member-signature change.
+  const violations: string[] = []
+  let sawHeldUnchangedPair = false
+  for (let i = 1; i < samples.length; i++) {
+    const prev = samples[i - 1]
+    const cur = samples[i]
+    const roundsAdvanced = cur.judgeRounds > prev.judgeRounds
+    const signatureChanged = cur.signature !== prev.signature
+    if (prev.phase === HOLD_PHASE && !signatureChanged) {
+      sawHeldUnchangedPair = true
+      if (roundsAdvanced) {
+        violations.push(
+          `t=${prev.tMs}ms→${cur.tMs}ms: judge_rounds ${prev.judgeRounds}→${cur.judgeRounds} advanced while the ` +
+            `member terminal signature stayed IDENTICAL ("${prev.signature}") and phase stayed ` +
+            'awaiting_supervision — this is exactly the F2 round-burn bug (re-judging an unchanged idle hold).',
+        )
+      }
+    }
+  }
+  expect(
+    violations,
+    `F2 violation(s) detected — an unchanged idle hold burned a JudgeRounds increment:\n${violations.join('\n')}\n` +
+      `Full sample trace: ${JSON.stringify(samples)}`,
+  ).toEqual([])
+  // The invariant above is only a meaningful proof if we actually observed
+  // at least one held, signature-unchanged consecutive pair to test it
+  // against — otherwise it holds vacuously (every sample happened to land
+  // on a round transition). Require genuine coverage of the idle case.
+  expect(
+    sawHeldUnchangedPair,
+    'F2 sampling window never observed two consecutive samples that were BOTH held at awaiting_supervision ' +
+      `with an unchanged member signature — the invariant above was not genuinely exercised. Sample trace: ${JSON.stringify(samples)}`,
+  ).toBe(true)
+  // judge_rounds must never have been observed to REGRESS either (a
+  // completely different failure mode from round-burn, but still a broken
+  // invariant worth catching for free from the same trace).
+  for (let i = 1; i < samples.length; i++) {
+    expect(
+      samples[i].judgeRounds,
+      `t2: judge_rounds must be monotonically non-decreasing — observed a regression at sample ${i} ` +
+        `(${samples[i - 1].judgeRounds} → ${samples[i].judgeRounds}). Trace: ${JSON.stringify(samples)}`,
+    ).toBeGreaterThanOrEqual(samples[i - 1].judgeRounds)
+  }
+
+  // --- Step 3: no wedge — the plan keeps moving after the sampling window -
+  // Whatever the sampling window observed, the plan must eventually reach a
+  // documented terminus: done (full correction-append→re-judge→done cycle
+  // completed — the drawn t2 happy path), failed (e.g. round-budget
+  // exhausted honestly), or still legitimately parked at awaiting_supervision
+  // (a fresh, real correction landed since the sampling window ended and the
+  // engine is actively re-judging it). What we must NOT see is the plan
+  // wedged in running/dispatching with no supervision activity at all.
+  const finalDeadline = Date.now() + 180_000
   let planState = ''
   let planPhase = ''
-  let sawHold = false
   let reachedTerminalOrHold = false
-  while (Date.now() < deadline) {
-    const poll = await apiFetch<{ state: string; plan_phase?: string }>(
-      page,
-      'GET',
-      `/api/v1/plans/${planId}`,
-    )
-    if (!poll.ok) {
-      throw new Error(`t2: GET /plans/{id} poll failed ${poll.status}: ${poll.raw}`)
-    }
+  while (Date.now() < finalDeadline) {
+    const poll = await apiFetch<{ state: string; plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
+    if (!poll.ok) throw new Error(`t2: GET /plans/{id} poll (final) failed ${poll.status}: ${poll.raw}`)
     planState = poll.body.state
     planPhase = poll.body.plan_phase ?? ''
-    if (planPhase === HOLD_PHASE) sawHold = true
     if (planState === 'done' || planState === 'failed' || planPhase === HOLD_PHASE) {
       reachedTerminalOrHold = true
       break
     }
     await page.waitForTimeout(3_000)
   }
-
-  // Drawn-path assertion: the plan reached a terminal-or-hold condition.
-  // A t2 plan that wedges in "approved"/"running"+non-hold past the budget
-  // means the plan-engine loop is broken.
   expect(
     reachedTerminalOrHold,
-    `Plan ${planId} must reach state=done/failed or plan_phase=awaiting_supervision within 420s — observed state="${planState}" phase="${planPhase}".`,
-  ).toBe(true)
-
-  // Differentiation test: if a hold was reached, it must be the
-  // awaiting_supervision phase (State stays "running"), NOT a "failed"
-  // cliff. The F2 proof is exactly this: an unmet plan should HOLD, not
-  // silently re-judge.
-  if (sawHold) {
-    expect(
-      planPhase === HOLD_PHASE,
-      `A t2 plan that reached awaiting_supervision must NOT have been silently ` +
-        `re-judged past the hold (F2 proof). Observed final state="${planState}" phase="${planPhase}".`,
-    ).toBe(true)
-  }
-
-  // Either the plan reached done (full ladder success) OR it reached the
-  // awaiting-supervision hold (the F2 fix path) OR it failed. All three
-  // are valid drawn-path outcomes for t2; what we MUST NOT see is a wedge.
-  expect(
-    planState === 'done' ||
-      planState === 'failed' ||
-      planPhase === HOLD_PHASE,
-    `t2 plan must terminate to a documented state/phase — got state="${planState}" phase="${planPhase}".`,
+    `t2: plan ${planId} must be at a documented terminus (done/failed) or still legitimately held ` +
+      `(awaiting_supervision) — observed state="${planState}" phase="${planPhase}". A wedge here means the ` +
+      'correction-append → re-judge cycle stalled after the sampling window.',
   ).toBe(true)
 })
 
@@ -776,18 +1013,63 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → unmet
 // Traces to:
 //   - §9.1 t3 "planning & re-planning walks the drawn path" (line ~1181)
 //   - TDD Plan row 44 `Conformance_t3_PlanningReplanningE2E`
+//   - adr-053-DEFERRED-ISSUES.md E.3 (this test used to send
+//     `target_member_id: 'm3'` — a LABEL STRING, never a real task id — via
+//     `PUT /plans/{id}` with a `revision_entry` body. Two things were wrong
+//     with that: (1) it never sent SUPERSEDE at all, only targeted_retry;
+//     (2) `revision_entry` is NOT a field of `PlanUpdateRequest` — verified
+//     directly against `contracts/components/schemas/PlanUpdateRequest.yaml`
+//     (fields: title/goal/description/state/owner_agent_id/dod/bounds,
+//     `additionalProperties: false`) and `pkg/gateway/rest.go`'s
+//     `handlePlanPut` (no revision_entry handling anywhere). `RevisionEntry`
+//     IS a real generated type, but it is used exactly once on the wire: as
+//     the payload of the `SessionMessageRevisionEntry` — an ENGINE-EMITTED,
+//     read-only SessionMessage variant (`kind: revision_entry`,
+//     `direction: engine`) that reports a correction that already happened.
+//     There never was a client-writable PUT surface for this — the original
+//     test was written against a wire contract that was never designed to
+//     exist, not a partially-wired one.
+//
+// THE REAL PATH (verified empirically against a live gateway before writing
+// this test): a plan correction is issued exclusively by the `plansupervisor`
+// System Agent's `plan_correct` tool (pkg/tools/plan_correct.go — identity
+// gate: `callerID != PlanSupervisorAgentID` is denied outright, including the
+// plan's own owner, ADR-055 D3), invoked automatically by the engine's own
+// `wakeSupervisor` (pkg/agent/plan_engine.go) the instant a plan parks at
+// `awaiting_supervision` — no REST call, no chat UI (PlanSupervisor is a
+// System Agent, `IsChatTarget()==false`, never a selectable chat persona).
+// There is nothing for an e2e test to POST/PUT to trigger a correction; the
+// only thing to do is let the real automatic wake fire (a REAL LLM call,
+// same "at least one real-LLM run" requirement every other test in this file
+// satisfies) and observe what it actually did.
+//
+// Observed via GET /api/v1/sessions/{plan.supervision.session_id} — the
+// adjudication session's transcript. A committed correction shows up there
+// as a `plan_correct` tool_call (status: "success") whose `parameters`
+// carry the REAL verb and REAL member id(s) it used — verified empirically:
+// a done-but-wrong member reliably drove the real PlanSupervisor LLM to
+// choose SUPERSEDE with `superseded_member_id` set to the member's actual
+// task id (never a label). This test engineers TWO independent, unambiguous
+// problems into one plan — m2 (done, but its outcome is wrong per the DoD)
+// and m3 (failed for a framed-as-transient reason) — so the "one correction
+// per wake" adjudicator has a clean, well-motivated reason to eventually
+// apply both SUPERSEDE (to m2) and TARGETED-RETRY (to m3) across successive
+// wakes, and asserts on the REAL member ids used by whichever corrections it
+// actually commits — never a label string.
 
-test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, retries frozen', async ({
+test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED-RETRY with real member ids', async ({
   page,
 }) => {
   requireApiKey()
 
-  test.setTimeout(480_000)
+  test.setTimeout(600_000)
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target owner + member assignee) in
   // its own workspace core_team (avoids multi-workspace ambiguity).
-  const ownerId = await createMainAgent(page, `conformance-t3-owner-${Date.now()}`)
+  // `bash: allow` is required for the `check` criteria below (see t2's
+  // createMainAgent comment — a fresh custom agent is deny-by-default).
+  const ownerId = await createMainAgent(page, `conformance-t3-owner-${Date.now()}`, { bash: 'allow' })
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t3',
     core_team: [ownerId],
@@ -795,10 +1077,21 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
   if (!wsRes.ok) throw new Error(`t3: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
 
-  // Create a plan with three members; m1 trivial criterion, m2 trivial
-  // criterion, m3 explicitly UNMET (impossible criterion) so the plan
-  // engine reaches unmet-all-done and the owner must re-plan.
-  const { planId } = await createPlanWithMembers(
+  // Three independent (disjoint write_set, no blocked_by — they dispatch in
+  // parallel) members:
+  //   m1 — trivial filler, own check trivially passes.
+  //   m2 — the SUPERSEDE target: own check trivially passes (member ends
+  //        `done`), but the plan's DoD (below) explicitly says its recorded
+  //        outcome is wrong — "member finished but result incorrect" is
+  //        PlanSupervisor's own rubric language for SUPERSEDE.
+  //   m3 — the TARGETED-RETRY target: max_attempts=1 with a check that
+  //        deterministically fails (`exit 1`), so it ends `failed` after
+  //        exactly one attempt. Its title frames the failure as transient —
+  //        PlanSupervisor's member-list wake data is exactly
+  //        "member_id | status | title", so the title is real, load-bearing
+  //        signal it reads (the same idiom this file already uses for
+  //        g7's exact-tool-call prompt engineering).
+  const { planId, memberIds } = await createPlanWithMembers(
     page,
     workspaceId,
     ownerId,
@@ -806,162 +1099,187 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan supersedes a done member, re
       title: 't3 conformance plan',
       goal: 'exercise the supersede + targeted-retry correction paths',
       description: 'owner re-plans after an unmet DoD adjudication',
-      bounds: { plan_judge_max_rounds: 5 },
+      // A single prose DoD (real Judge LLM call, not a machine check) that
+      // unambiguously names BOTH problems by each member's own title, so
+      // the Judge's per-criterion reasoning — which is the ONLY diagnostic
+      // text PlanSupervisor's wake carries — can correctly attribute each
+      // problem to the right member.
+      dod: [
+        proseCriterion(
+          'Member "m2-supersede-target" completed (status done) but its recorded outcome is ' +
+            'factually WRONG and must be redone, not merely accepted as-is. Separately, member ' +
+            '"m3-retry-target" must have SUCCEEDED at its check — if it is currently `failed`, that ' +
+            'failure was for a transient, recoverable reason and the member should be retried, not ' +
+            'abandoned or replaced. The plan is only met once BOTH conditions hold.',
+        ),
+      ],
+      bounds: { plan_judge_max_rounds: 4 },
     },
     [
       {
         label: 'm1',
-        title: 'trivial one',
+        title: 'm1-filler',
         prompt: 'reply with alpha',
         write_set: ['out/t3/m1.txt'],
-        criteria: [proseCriterion('reply contains "alpha"')],
+        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
       },
       {
         label: 'm2',
-        title: 'trivial two',
+        title: 'm2-supersede-target: work is done but its recorded result is wrong',
         prompt: 'reply with beta',
-        blocked_by_labels: ['m1'],
         write_set: ['out/t3/m2.txt'],
-        criteria: [proseCriterion('reply contains "beta"')],
+        criteria: [checkCriterion('m2 own criterion trivially passes (member reaches done)', 'exit 0', 0)],
       },
       {
         label: 'm3',
-        title: 'impossible criterion',
-        prompt: 'try to satisfy a literal impossible criterion',
-        blocked_by_labels: ['m2'],
+        title: 'm3-retry-target: transient/flaky failure, safe and expected to succeed if retried',
+        prompt: 'reply with gamma',
         write_set: ['out/t3/m3.txt'],
-        criteria: [
-          {
-            kind: 'prose',
-            // Intentionally not satisfiable: the worker cannot output the
-            // sha512 of a value it cannot read. After attempts exhaust
-            // this member freezes; targeted-retry is the recovery path.
-            text: 'the reply contains the exact SHA-512 hash of the literal string "UNREADABLE_SENTINEL_X9K2"',
-            author: { kind: 'user', id: 'admin' },
-            status: 'pending',
-          },
-        ],
+        max_attempts: 1,
+        criteria: [checkCriterion('m3 deterministically fails its one attempt', 'exit 1', 0)],
       },
     ],
   )
 
-  // Approve + run. We don't poll for completion here — we exercise the
-  // re-plan path while the plan is still running or just-reached
-  // awaiting_supervision.
-  const approveRes = await apiFetch<{ status: string }>(
-    page,
-    'POST',
-    `/api/v1/plans/${planId}/approve`,
-    {},
-  )
+  // Approve + run.
+  const approveRes = await apiFetch<{ status: string }>(page, 'POST', `/api/v1/plans/${planId}/approve`, {})
+  expect(approveRes.ok, `t3: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(true)
+
+  const HOLD_PHASE = 'awaiting_supervision'
+
+  // --- Step 1: MANDATORY — reach the hold at least once -------------------
+  // Not conditional (the original escape hatch this section replaces): with
+  // m2 done-but-DoD-wrong and m3 deterministically failed, a round-1 unmet
+  // verdict (and the awaiting_supervision hold it triggers) is expected
+  // reliably, not merely hoped for.
+  let reachedHoldOnce = false
+  const firstHoldDeadline = Date.now() + 120_000
+  while (Date.now() < firstHoldDeadline) {
+    const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
+    if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
+    if (poll.body.plan_phase === HOLD_PHASE) {
+      reachedHoldOnce = true
+      break
+    }
+    await page.waitForTimeout(1_500)
+  }
   expect(
-    approveRes.ok,
-    `t3: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`,
+    reachedHoldOnce,
+    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — m2 (done, ` +
+      'DoD-flagged wrong) + m3 (deterministically failed) make a round-1 unmet verdict expected reliably.',
   ).toBe(true)
 
-  // Wait for the plan to reach awaiting_supervision (the gate the
-  // owner appends from — G-9, F2 proof). The bounded wait is intentional;
-  // we need a deterministic stop point to assert on.
-  //
-  // The hold is plan_phase="awaiting_supervision" (a SUB-PHASE of
-  // State=running), not a top-level state — see the t2 poll comment. We
-  // break on state=done/failed OR plan_phase=awaiting_supervision.
-  const HOLD_PHASE = 'awaiting_supervision'
-  const HOLD_DEADLINE = Date.now() + 420_000
-  let planState = ''
-  let planPhase = ''
-  let reachedHold = false
-  while (Date.now() < HOLD_DEADLINE) {
-    const poll = await apiFetch<{ state: string; plan_phase?: string }>(
+  // --- Step 2: observe the REAL correction mechanism over the plan's full
+  // round budget. Every distinct plan_correct call is discoverable via the
+  // adjudication session(s) the plan's `supervision.session_id` names — a
+  // NEW session may be minted each time the plan opens a fresh park
+  // (pkg/agent/plan_engine.go's `ensureSupervisionSessionLocked`), so we
+  // track every session id ever observed and inspect all of them at the end,
+  // not just the most recent one.
+  const seenSessionIds = new Set<string>()
+  let finalPlanState = ''
+  let finalPlanPhase = ''
+  const observeDeadline = Date.now() + 420_000
+  while (Date.now() < observeDeadline) {
+    const poll = await apiFetch<{ state: string; plan_phase?: string; supervision?: { session_id?: string } }>(
       page,
       'GET',
       `/api/v1/plans/${planId}`,
     )
-    if (!poll.ok) {
-      throw new Error(`t3: GET /plans/{id} poll failed ${poll.status}: ${poll.raw}`)
-    }
-    planState = poll.body.state
-    planPhase = poll.body.plan_phase ?? ''
-    if (planState === 'done' || planState === 'failed' || planPhase === HOLD_PHASE) {
-      reachedHold = true
-      break
-    }
-    await page.waitForTimeout(3_000)
+    if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
+    finalPlanState = poll.body.state
+    finalPlanPhase = poll.body.plan_phase ?? ''
+    const sid = poll.body.supervision?.session_id
+    if (sid) seenSessionIds.add(sid)
+    if (finalPlanState === 'done' || finalPlanState === 'failed') break
+    await page.waitForTimeout(4_000)
   }
 
-  // Drawn-path assertion 1: the plan reached an owner-actionable condition.
+  // Collect every plan_correct call (any status) across every adjudication
+  // session this plan ever used.
+  const allCalls: Array<{ status: string; parameters: Record<string, unknown> }> = []
+  for (const sid of seenSessionIds) {
+    const messages = await getSessionMessages(page, sid)
+    allCalls.push(...extractPlanCorrectCalls(messages))
+  }
+  const committed = allCalls.filter((c) => c.status === 'success')
+
+  const diagnostic =
+    `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
+    `all plan_correct calls: ${JSON.stringify(allCalls)}`
+
+  // MANDATORY: the mechanism actually committed at least one correction.
+  // Zero committed corrections after a full round budget with two
+  // unambiguous, well-motivated problems means plan_correct is not
+  // genuinely wired end-to-end — a CRITICAL finding, not a soft skip.
   expect(
-    reachedHold,
-    `t3 plan must reach state=done/failed or plan_phase=awaiting_supervision — observed state="${planState}" phase="${planPhase}".`,
+    committed.length,
+    `t3: zero plan_correct calls committed (status=success) across the plan's full round budget. ${diagnostic}`,
+  ).toBeGreaterThan(0)
+
+  // Real member ids — the E.3 defect this test exists to catch: never a
+  // label string ('m1'/'m2'/'m3'), always a real task id from memberIds.
+  const realMemberIds = new Set(Object.values(memberIds))
+  const labelStrings = new Set(Object.keys(memberIds))
+  for (const call of committed) {
+    const supersededId = call.parameters.superseded_member_id as string | undefined
+    const retriedId = call.parameters.retried_member_id as string | undefined
+    const targetId = supersededId ?? retriedId
+    if (targetId === undefined) continue // append/abandon name no existing member
+    expect(
+      labelStrings.has(targetId),
+      `t3: a committed correction named a LABEL STRING ("${targetId}") instead of a real task id — ` +
+        `exactly the E.3 defect this test exists to catch. ${diagnostic}`,
+    ).toBe(false)
+    expect(
+      realMemberIds.has(targetId),
+      `t3: a committed correction's target id ("${targetId}") does not match any real member task id ` +
+        `(${[...realMemberIds].join(', ')}). ${diagnostic}`,
+    ).toBe(true)
+  }
+
+  // THE core E.3 ask: both SUPERSEDE and TARGETED-RETRY were actually
+  // applied, each against a real member id (verified above). This is a hard
+  // requirement, not a best-effort one — if the real adjudicator only ever
+  // reaches for one of the two verbs, that is real, reportable information
+  // about the correction path, not something to downgrade to a soft pass.
+  const verbsSeen = new Set(committed.map((c) => c.parameters.verb as string))
+  expect(
+    verbsSeen.has('supersede'),
+    `t3: no committed correction used verb="supersede" against m2 (the done-but-wrong target). ` +
+      `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
+  ).toBe(true)
+  expect(
+    verbsSeen.has('targeted_retry'),
+    `t3: no committed correction used verb="targeted_retry" against m3 (the failed-transient target). ` +
+      `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
   ).toBe(true)
 
-  // If the plan is in awaiting_supervision, exercise the
-  // SUPERSEDE / TARGETED-RETRY correction verbs by re-issuing a PUT
-  // /plans/{id} with a new revision entry. The wire contract for
-  // revision_entry is the three verbs: append / supersede / targeted_retry
-  // (G-11, R-ThreeVerbs unit test).
-  if (planPhase === HOLD_PHASE) {
-    const correctionRes = await apiFetch<{ status: string }>(
-      page,
-      'PUT',
-      `/api/v1/plans/${planId}`,
-      {
-        revision_entry: {
-          verb: 'targeted_retry',
-          target_member_id: 'm3',
-          rationale: 'm3 criterion was unjudgeable; retry with relaxed criterion',
-          // Mutation: rewrite m3's criterion to something the worker can
-          // satisfy (drop the literal sha512 impossibility). This is the
-          // transactional append (G-11 / INV-6 / M4 intent-log) surface.
-          member_patch: {
-            id: 'm3',
-            criteria: [
-              {
-                kind: 'prose',
-                text: 'reply contains the word "gamma"',
-                author: { kind: 'user', id: 'admin' },
-                status: 'pending',
-              },
-            ],
-          },
-        },
-      },
-    )
-    // The PUT may legitimately fail with 400 (e.g., if the wire schema
-    // for revision_entry is not yet a public field on PUT /plans/{id}).
-    // We surface the failure loud and clear — but DO NOT mark the test
-    // a pass if the server rejects it; we mark it BLOCKED.
-    if (!correctionRes.ok) {
-      throw new Error(
-        `BLOCKED on t3 correction path: PUT /plans/{id} with revision_entry failed ` +
-          `${correctionRes.status}: ${correctionRes.raw}. The drawn supersede/targeted_retry ` +
-          'verb requires revision_entry to be a public field on PUT /plans/{id} (G-11).',
-      )
-    }
-    // After a successful correction append, poll for the plan to move
-    // out of plan_phase=awaiting_supervision. A 120s budget is plenty
-    // for a single member retry. (The hold is a plan_phase, not a state —
-    // see the t3 poll comment above.)
-    const RETRY_DEADLINE = Date.now() + 120_000
-    while (Date.now() < RETRY_DEADLINE) {
-      const poll = await apiFetch<{ state: string; plan_phase?: string }>(
-        page,
-        'GET',
-        `/api/v1/plans/${planId}`,
-      )
-      if (!poll.ok) {
-        throw new Error(`t3: post-correction poll failed ${poll.status}: ${poll.raw}`)
-      }
-      if ((poll.body.plan_phase ?? '') !== HOLD_PHASE) break
-      await page.waitForTimeout(2_000)
-    }
-  }
+  // Cross-check the SPECIFIC members: at least one supersede named m2's
+  // real id, and at least one targeted_retry named m3's real id (not just
+  // "both verbs occurred somewhere, against arbitrary targets").
+  const supersededM2 = committed.some(
+    (c) => c.parameters.verb === 'supersede' && c.parameters.superseded_member_id === memberIds.m2,
+  )
+  const retriedM3 = committed.some(
+    (c) => c.parameters.verb === 'targeted_retry' && c.parameters.retried_member_id === memberIds.m3,
+  )
+  expect(
+    supersededM2,
+    `t3: no committed supersede named m2's real id (${memberIds.m2}) as superseded_member_id. ${diagnostic}`,
+  ).toBe(true)
+  expect(
+    retriedM3,
+    `t3: no committed targeted_retry named m3's real id (${memberIds.m3}) as retried_member_id. ${diagnostic}`,
+  ).toBe(true)
 
-  // The t3 conformance ends here: the drawn path is "execute → unmet →
-  // awaiting_supervision → re-plan append → done". If we reached
-  // done naturally (m3 satisfied by luck), the test still passes —
-  // what matters is that the drawn verbs are wired (PUT /plans/{id}
-  // with revision_entry is accepted by the server).
+  // No-wedge sanity: the plan must not still be stuck neither terminal nor
+  // held after the full observation window.
+  expect(
+    finalPlanState === 'done' || finalPlanState === 'failed' || finalPlanPhase === HOLD_PHASE,
+    `t3: plan ${planId} must be at a documented terminus or still legitimately held after the observation ` +
+      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}".`,
+  ).toBe(true)
 })
 
 // ── Conformance_g4_ParallelLintE2E ───────────────────────────────────────────
@@ -1406,104 +1724,211 @@ test('Conformance_g7_RoundTripE2E: blocking question + respond routes warm, hand
 //   - §9.1 §5 "boot sweep walks the drawn path" (line ~1216)
 //   - TDD Plan row 49 `Conformance_bootsweep_E2E`
 //   - TestBootSweep_NonTerminalToFailedInterrupted (G-13 / #541)
+//   - adr-053-DEFERRED-ISSUES.md E.1 (this test used to only check Session
+//     enum membership on the SHARED gateway — it never forked/killed/
+//     restarted a real process, so the §5 diagram was never actually
+//     exercised. Fixed by driving a dedicated, isolated GatewayProcess
+//     (tests/e2e/fixtures/gateway-process.ts) this test owns exclusively:
+//     own port, own OMNIPUS_HOME, own credentials.json/master.key, real
+//     SIGKILL + real restart.)
 //
-// SCOPE NOTE: this test does NOT actually kill -9 the gateway mid-plan
-// (that requires a process kill the Playwright harness doesn't control).
-// Instead it observes the OBSERVABLE consequence: a restart of the
-// gateway with an in-flight plan that was interrupted, and asserts the
-// boot sweep reconciled it. The kill is exercised by the gateway's own
-// test harness (pkg/agent/boot_sweep_test.go) at the integration level.
+// This test does NOT touch the shared conformance-suite gateway (OMNIPUS_URL)
+// at all — killing that would take down every other Conformance_* spec in
+// this file. It boots its own throwaway gateway, drives a real plan member
+// task to `in_progress` (a real dispatched turn, session_id present), sends
+// it a REAL SIGKILL, restarts the SAME binary against the SAME
+// OMNIPUS_HOME/port, and asserts BOTH reconciliation surfaces the design
+// names: the task-level hard reset (`reconcileStuckTasks`,
+// pkg/gateway/rest_tasks.go) to failed(interrupted), and the session-level
+// lifecycle sweep (`runBootSweep`, pkg/agent/boot_sweep.go) to
+// status=interrupted — then polls the plan itself to prove the engine
+// noticed and kept moving (re-judged/re-dispatched), not wedged (CRIT-1).
 
-test('Conformance_bootsweep_E2E: post-restart boot sweep reconciles the active session set', async ({
-  page,
-  context,
-}) => {
+test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep reconciles it, plan recovers', async () => {
   requireApiKey()
 
-  test.setTimeout(240_000)
-  await startFreshChatWithJim(page)
+  test.setTimeout(300_000)
 
-  // The boot sweep's observable surface is the session list. After a
-  // gateway restart, GET /api/v1/sessions must NOT include any session
-  // left in an in_progress / running / active state — they must have
-  // been swept to failed(interrupted) or to a valid terminal state.
-  //
-  // The simplest observable check: enumerate sessions, assert none are
-  // wedged in a non-terminal "active" state beyond the booted session.
-  const sessionsRes = await apiFetch<Array<{ id: string; status: string }>>(
-    page,
-    'GET',
-    '/api/v1/sessions',
-  )
-  expect(
-    sessionsRes.ok,
-    `bootsweep: GET /api/v1/sessions failed ${sessionsRes.status}: ${sessionsRes.raw}`,
-  ).toBe(true)
+  let gw: GatewayProcess | null = null
+  try {
+    gw = await GatewayProcess.start()
 
-  // Drawn-path assertion 1: the session list endpoint itself is
-  // responsive after the gateway is up — i.e., the boot sweep did not
-  // wedge the gateway itself (the CRIT-1 "no wedge" proof at the
-  // session-list surface).
-  expect(
-    Array.isArray(sessionsRes.body),
-    `bootsweep: /api/v1/sessions must return an array — got ${typeof sessionsRes.body}.`,
-  ).toBe(true)
-
-  // Differentiation test: the session list must be CONSISTENT with the
-  // boot sweep's reconcile pass — every session is in a state from the
-  // Session wire enum (contracts/components/schemas/Session.yaml):
-  //   active | archived | interrupted
-  // The boot sweep's job is to reconcile non-terminal (active, left over
-  // from a killed-mid-run gateway) sessions to `interrupted` at boot.
-  // No session is left in a phantom state outside that enum — those would
-  // mean the sweep missed a row (a CRIT-1 wedge signal).
-  //
-  // (The prior KNOWN_STATES set here used TASK/PLAN statuses — running /
-  // idle / completed / failed / failed_interrupted / etc. — which are NOT
-  // the Session wire enum and so every `active` session failed the
-  // membership check. The real enum is the three values below.)
-  const KNOWN_STATES = new Set(['active', 'archived', 'interrupted'])
-  const observed = new Set<string>()
-  for (const s of sessionsRes.body) observed.add(s.status)
-  for (const s of observed) {
+    // Setup: a Main agent (chat-target, plan owner + member assignee) in its
+    // own workspace core_team — same rationale as createMainAgent's doc
+    // comment on the shared gateway (unambiguous single-workspace resolution).
+    const agentRes = await gw.apiFetch<{ id: string; warning?: string }>('POST', '/api/v1/agents', {
+      type: 'Main',
+      name: 'bootsweep-worker',
+      soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+    })
+    expect(agentRes.ok, `bootsweep: POST /agents failed ${agentRes.status}: ${agentRes.raw}`).toBe(true)
     expect(
-      KNOWN_STATES.has(s),
-      `bootsweep: observed session status "${s}" outside the Session wire enum ` +
-        '{active, archived, interrupted} — a wedge signal: the boot sweep did ' +
-        'not reconcile this session.',
+      agentRes.body.warning,
+      `bootsweep: POST /agents returned a reload warning — agent may not be registered: ${agentRes.body.warning}`,
+    ).toBeUndefined()
+    const workerId = agentRes.body.id
+
+    const wsRes = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
+      name: 'bootsweep-ws',
+      core_team: [workerId],
+    })
+    expect(wsRes.ok, `bootsweep: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`).toBe(true)
+    const workspaceId = wsRes.body.id
+
+    // A one-member plan so we can prove BOTH the task-level reconciliation
+    // AND that the owning PLAN notices the reconciled failure and keeps
+    // moving (re-judges/re-dispatches) instead of wedging forever at
+    // state=running with a permanently-stuck member.
+    const planRes = await gw.apiFetch<{ id: string }>('POST', `/api/v1/workspaces/${workspaceId}/plans`, {
+      workspace_id: workspaceId,
+      title: 'bootsweep conformance plan',
+      owner_agent_id: workerId,
+      goal: 'reply with the literal word done',
+      bounds: { plan_judge_max_rounds: 5 },
+    })
+    expect(planRes.ok, `bootsweep: POST /plans failed ${planRes.status}: ${planRes.raw}`).toBe(true)
+    const planId = planRes.body.id
+
+    const memberRes = await gw.apiFetch<{ id: string }>('POST', '/api/v1/tasks', {
+      title: 'bootsweep member',
+      prompt:
+        'Write a detailed, at least 150-word explanation of how a distributed task queue ' +
+        'reconciles crashed workers, then end your reply with the literal word done.',
+      action: 'llm',
+      workspace_id: workspaceId,
+      agent_id: workerId,
+      plan_id: planId,
+      max_attempts: 3,
+      criteria: [
+        {
+          kind: 'prose',
+          text: 'the reply contains the word "done"',
+          author: { kind: 'user', id: 'admin' },
+          status: 'pending',
+        },
+      ],
+    })
+    expect(memberRes.ok, `bootsweep: POST /tasks (member) failed ${memberRes.status}: ${memberRes.raw}`).toBe(true)
+    const memberId = memberRes.body.id
+
+    // Triage to `next` (same landing rule as createPlanMember on the shared
+    // gateway — POST /tasks always lands in `inbox`).
+    const triageRes = await gw.apiFetch('PATCH', `/api/v1/tasks/${memberId}`, { status: 'next' })
+    expect(triageRes.ok, `bootsweep: PATCH member->next failed`).toBe(true)
+
+    const approveRes = await gw.apiFetch('POST', `/api/v1/plans/${planId}/approve`, {})
+    expect(approveRes.ok, `bootsweep: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(
+      true,
+    )
+
+    // Poll for the member to actually be DISPATCHED — status=in_progress
+    // AND a session_id present (proof a real turn is genuinely in flight,
+    // not merely that we intend to kill "soon" and hope we win a race).
+    let preKillSessionId = ''
+    const dispatchDeadline = Date.now() + 30_000
+    while (Date.now() < dispatchDeadline) {
+      const poll = await gw.apiFetch<{ status: string; session_id?: string }>('GET', `/api/v1/tasks/${memberId}`)
+      expect(poll.ok, `bootsweep: GET member poll failed ${poll.status}: ${poll.raw}`).toBe(true)
+      if (poll.body.status === 'in_progress' && poll.body.session_id) {
+        preKillSessionId = poll.body.session_id
+        break
+      }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    expect(
+      preKillSessionId,
+      'bootsweep: member never reached status=in_progress with a session_id within 30s — ' +
+        'cannot prove a real in-flight turn was interrupted if dispatch itself never happened.',
+    ).not.toBe('')
+
+    // THE KILL. Real SIGKILL against a real OS process, mid-turn — the
+    // whole reason this file needed its own isolated GatewayProcess.
+    await gw.kill9()
+
+    // THE RESTART. Same binary, same OMNIPUS_HOME, same port.
+    await gw.restart()
+
+    // --- Assertion 1 (task-level): reconcileStuckTasks -----------------
+    // pkg/gateway/rest_tasks.go's boot reconciliation hard-resets any task
+    // left `in_progress` by a crashed process to failed, with a specific,
+    // literal result string. Assert the EXACT observable content, not just
+    // "no longer in_progress" — a hardcoded/no-op reconciliation would also
+    // produce "not in_progress" for the wrong reason (e.g. silently stuck
+    // in some other state), so the literal message is the real proof.
+    const memberAfter = await gw.apiFetch<{ status: string; result?: string }>('GET', `/api/v1/tasks/${memberId}`)
+    expect(memberAfter.ok, `bootsweep: GET member post-restart failed ${memberAfter.status}: ${memberAfter.raw}`).toBe(
+      true,
+    )
+    expect(
+      memberAfter.body.status,
+      `bootsweep: member must be reconciled to "failed" post-restart — observed "${memberAfter.body.status}". ` +
+        'A member still "in_progress" after a real process restart means reconcileStuckTasks did not run.',
+    ).toBe('failed')
+    expect(
+      memberAfter.body.result ?? '',
+      'bootsweep: reconciled member.result must contain the literal boot-reconciliation message ' +
+        '("interrupted: gateway restarted while task was running") — asserting exact content (not ' +
+        'just status) so a differently-worded or coincidental failure cannot be mistaken for the sweep.',
+    ).toContain('interrupted: gateway restarted while task was running')
+
+    // --- Assertion 2 (session-level): runBootSweep ----------------------
+    // The session this member's turn was running under must have been
+    // reconciled from its non-terminal state to `interrupted` — the
+    // Session wire enum's crash-recovery terminus (contracts/components/
+    // schemas/Session.yaml: active | archived | interrupted).
+    const sessionsAfter = await gw.apiFetch<Array<{ id: string; status: string }>>('GET', '/api/v1/sessions')
+    expect(sessionsAfter.ok, `bootsweep: GET /sessions post-restart failed ${sessionsAfter.status}`).toBe(true)
+    const preKillSession = sessionsAfter.body.find((s) => s.id === preKillSessionId)
+    expect(
+      preKillSession,
+      `bootsweep: the pre-kill session ${preKillSessionId} must still be present in the session list post-restart ` +
+        `(observed ids: ${sessionsAfter.body.map((s) => s.id).join(', ')})`,
+    ).toBeDefined()
+    expect(
+      preKillSession?.status,
+      `bootsweep: the interrupted session must be reconciled to status="interrupted" — observed "${preKillSession?.status}". ` +
+        'A session left "active" post-restart with no live turn behind it is exactly the wedge the boot sweep exists to close.',
+    ).toBe('interrupted')
+
+    // Differentiation/no-wedge check across every OTHER session too — none
+    // may sit outside the wire enum (a phantom status the sweep missed).
+    const KNOWN_STATES = new Set(['active', 'archived', 'interrupted'])
+    for (const s of new Set(sessionsAfter.body.map((s) => s.status))) {
+      expect(
+        KNOWN_STATES.has(s),
+        `bootsweep: observed session status "${s}" outside the Session wire enum {active, archived, interrupted}.`,
+      ).toBe(true)
+    }
+
+    // --- Assertion 3 (plan-level): CRIT-1 "no wedge", the plan recovers -
+    // The plan must notice the reconciled member failure and keep moving —
+    // re-judge and either terminate (done/failed) or hold at
+    // awaiting_supervision for adjudication — NOT sit wedged in
+    // state=running/plan_phase=dispatching with a permanently-stuck member
+    // and zero further engine activity.
+    const HOLD_PHASE = 'awaiting_supervision'
+    const recoveryDeadline = Date.now() + 180_000
+    let planState = ''
+    let planPhase = ''
+    let recovered = false
+    while (Date.now() < recoveryDeadline) {
+      const poll = await gw.apiFetch<{ state: string; plan_phase?: string }>('GET', `/api/v1/plans/${planId}`)
+      expect(poll.ok, `bootsweep: GET plan poll failed ${poll.status}: ${poll.raw}`).toBe(true)
+      planState = poll.body.state
+      planPhase = poll.body.plan_phase ?? ''
+      if (planState === 'done' || planState === 'failed' || planPhase === HOLD_PHASE) {
+        recovered = true
+        break
+      }
+      await new Promise((r) => setTimeout(r, 3_000))
+    }
+    expect(
+      recovered,
+      `bootsweep: plan ${planId} must reach state=done/failed or plan_phase=awaiting_supervision within 180s ` +
+        `post-restart — observed state="${planState}" phase="${planPhase}". A plan stuck in running/dispatching ` +
+        'this long after its only member was reconciled means the engine wedged (CRIT-1 violation).',
     ).toBe(true)
+  } finally {
+    await gw?.stop()
   }
-
-  // Drawn-path assertion 2: a fresh chat session created by this test
-  // appears in the session list and is in the `active` post-bootstrap
-  // state, NOT a phantom. We send a benign chat message and read the
-  // resulting session list back. The fresh session was already created
-  // by startFreshChatWithJim's `/new` above, so the count is at minimum
-  // stable (and grows if the chat creates an additional session row).
-  const input = chatInput(page)
-  await expect(input).toBeVisible({ timeout: 15_000 })
-  await input.fill('hi')
-  await input.press('Enter')
-  await page.waitForTimeout(2_000)
-
-  const afterRes = await apiFetch<Array<{ id: string; status: string }>>(
-    page,
-    'GET',
-    '/api/v1/sessions',
-  )
-  expect(afterRes.ok).toBe(true)
-  expect(
-    afterRes.body.length >= sessionsRes.body.length,
-    `bootsweep: session list must not shrink after the test's chat message — ` +
-      `before=${sessionsRes.body.length} after=${afterRes.body.length}.`,
-  ).toBe(true)
-  // At least one session must be `active` (the fresh chat this test
-  // opened) — the post-bootstrap live state, not a phantom.
-  expect(
-    afterRes.body.some((s) => s.status === 'active'),
-    `bootsweep: at least one session must be active after the fresh chat — ` +
-      `observed statuses: ${[...new Set(afterRes.body.map((s) => s.status))].join(', ')}.`,
-  ).toBe(true)
-
-  void context
 })

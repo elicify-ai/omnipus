@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -641,4 +642,57 @@ func (s *LifecycleStore) Exists(sessionID string) bool {
 	}
 	_, err := os.Stat(s.path(sessionID))
 	return err == nil
+}
+
+// PruneTerminal deletes the persisted .jsonl file for every session_id whose
+// TAIL record is terminal (completed/failed/cancelled/timed_out) and whose
+// UpdatedAt is older than retentionDays*24h — explicit retention for what
+// would otherwise be an unbounded, append-only-per-session-id store with no
+// prune path at all (mirrors UnifiedStore.RetentionSweep's own contract and
+// "retentionDays<=0 is a no-op" convention; see the caller in
+// pkg/agent/boot_sweep.go for why this store specifically needed one).
+//
+// A NON-terminal record is NEVER pruned regardless of age, full stop: an old
+// but still non-terminal record is exactly what the boot sweep exists to
+// reconcile to failed(interrupted), and deleting it out from under that
+// reconciliation would silently drop a stranded session instead of failing
+// it closed — the one outcome this whole package exists to prevent.
+//
+// Returns the count of session files removed. Per-file errors (a load
+// failure on a corrupt/torn record, a remove failure) are logged at Warn and
+// the sweep continues with the next id; an error is returned only if the
+// directory listing itself fails.
+func (s *LifecycleStore) PruneTerminal(retentionDays int, now time.Time) (int, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	ids, err := s.scanSessionIDs()
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, id := range ids {
+		rec, err := s.Load(id)
+		if err != nil {
+			if err == ErrLifecycleNotFound {
+				continue
+			}
+			slog.Warn("session: lifecycle: prune_terminal: load failed, skipping", "session_id", id, "error", err)
+			continue
+		}
+		if !rec.Terminal() || rec.UpdatedAt.After(cutoff) {
+			continue
+		}
+		mu := s.Lock(id)
+		mu.Lock()
+		rmErr := os.Remove(s.path(id))
+		mu.Unlock()
+		if rmErr != nil {
+			slog.Warn("session: lifecycle: prune_terminal: remove failed", "session_id", id, "error", rmErr)
+			continue
+		}
+		removed++
+	}
+	return removed, nil
 }

@@ -375,30 +375,20 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 // observe a create/update at zero extra disk I/O, without a full registry
 // rebuild).
 //
-// HONEST STATUS as of this commit: no production code calls this. The
-// concrete adapter that would have wired it (agent.RegistryNotifier,
-// implementing pkg/agentstore.Notifier) was found with zero callers and zero
-// test coverage of its own and was deleted; nothing in pkg/gateway ever calls
-// agentstore.Store.SetNotifier. system.agent.create/update/delete
-// (pkg/sysagent/tools/agent.go) instead each trigger a full
-// AgentLoop.ReloadProviderAndConfig via deps.ReloadFunc, which rebuilds the
-// ENTIRE registry AND re-applies every piece of shared-tool wiring
-// (registerSharedTools, tier1/3 deps, sysagent deps, the audit-logger/
-// rate-limiter re-wiring, delegation/working-dir injectors) — this method's
-// caller-supplied instance gets none of that re-wiring for free (see the next
-// paragraph), so full reload is the strictly safer default and is what every
-// real call site uses today.
+// STATUS (issue #571): this is now called in production, by
+// AgentLoop.UpsertAgentFast — but never against the LIVE, published
+// registry. UpsertAgentFast calls it against a private cloneAgents() copy
+// that is fully wired (registerSharedTools, tier1/3 deps, sysagent deps,
+// audit-logger/rate-limiter re-wiring, delegation/working-dir injectors —
+// the exact list this comment used to warn a bare caller into replicating by
+// hand) and only THEN published via an atomic pointer swap. This method
+// itself still performs only the bare map swap under the registry's own
+// write lock, exactly as before — instance must already be fully
+// constructed (NewAgentInstance plus any required wiring) — UpsertAgentFast
+// is what supplies that discipline, not this method.
 //
-// This method remains directly tested (TestAgentRegistry_UpsertAgent /
-// _ReplacesExisting below) and available as a narrower, zero-rebuild
-// alternative for a FUTURE caller that wants to avoid the cost of a full
-// reload for a single agent's create/update — e.g. by reviving a
-// pkg/agentstore.Notifier adapter. Any such caller MUST keep shared-tool
-// wiring (registerSharedTools, tier1/3 deps, sysagent deps, delegation
-// injectors, etc.) consistent for the upserted instance itself, since this
-// method only performs the map swap under the registry's own write lock —
-// instance must already be fully constructed (NewAgentInstance plus any of
-// that wiring the caller's environment requires).
+// Directly tested (TestAgentRegistry_UpsertAgent / _ReplacesExisting below)
+// independent of UpsertAgentFast's own wiring/atomicity behavior.
 func (r *AgentRegistry) UpsertAgent(instance *AgentInstance) {
 	if instance == nil || instance.ID == "" {
 		return
@@ -407,6 +397,262 @@ func (r *AgentRegistry) UpsertAgent(instance *AgentInstance) {
 	defer r.mu.Unlock()
 	id := routing.NormalizeAgentID(instance.ID)
 	r.agents[id] = instance
+}
+
+// cloneAgents returns a new, unpublished *AgentRegistry that shares every
+// existing agent instance pointer with r (no AgentInstance rebuild — the
+// whole point of UpsertAgentFast) but owns its own map. resolver and
+// defaultAgentOverride are deliberately left at their zero values: callers
+// (UpsertAgentFast — see TRAP 1 in its doc comment) must always rebuild both
+// fresh from the same cfg the upserted instance itself was built from, never
+// inherit a stale snapshot from r. degraded/degradedReason ARE copied so a
+// pre-existing default-agent health signal survives the swap; the caller
+// should still call EvaluateDefaultAgentHealth afterward so a
+// since-repaired record can clear it.
+func (r *AgentRegistry) cloneAgents() *AgentRegistry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	agents := make(map[string]*AgentInstance, len(r.agents)+1)
+	for k, v := range r.agents {
+		agents[k] = v
+	}
+	return &AgentRegistry{
+		agents:         agents,
+		degraded:       r.degraded,
+		degradedReason: r.degradedReason,
+	}
+}
+
+// maxFastUpsertAttempts bounds UpsertAgentFast's optimistic-concurrency
+// retry loop (TRAP 2 below). A genuine livelock would require another
+// al.registry publisher (a concurrent UpsertAgentFast, or a full
+// ReloadProviderAndConfig) to win the race on every single attempt — real
+// request rates never sustain that. The cap exists purely so a pathological
+// case fails loudly instead of spinning forever.
+const maxFastUpsertAttempts = 50
+
+// fastUpsertMu serializes the ENTIRE clone+wire+publish pipeline inside
+// UpsertAgentFast across every call, process-wide. This is NOT redundant
+// with the CAS publish loop below (TRAP 2's "lost update" concern) — it
+// closes a DIFFERENT, race-detector-confirmed bug: registerSharedTools and
+// the wiring passes after it mutate the Tools registry of EVERY agent
+// already present in the clone, including pre-existing agents whose
+// *AgentInstance pointer is SHARED across two concurrent calls' otherwise-
+// independent clones (cloneAgents reuses existing instances verbatim — the
+// whole point of the fast path). Some of that wiring is a bare,
+// unsynchronized struct-field write on a shared tool object (e.g.
+// tools.DelegateTool.SetSteeringSink via wireSessionMessagingForAgent) —
+// two concurrent UpsertAgentFast calls (e.g. Ava creating several team
+// members in parallel) each re-wiring the SAME pre-existing "main"/other
+// agent's delegate tool at the same time is a genuine data race, verified
+// under `go test -race` on TestUpsertAgentFast_ConcurrentDifferentAgents_
+// NoLostUpdate before this mutex was added (2 goroutines writing
+// DelegateTool.steering with no synchronization between them).
+//
+// A single package-level sync.Mutex — not a field on *AgentLoop — because a
+// production process runs exactly one AgentLoop, so global and per-instance
+// serialization are equivalent there; it only over-serializes in a test
+// that deliberately runs TRUE concurrent fast-upserts across two SEPARATE
+// AgentLoop instances at once, which merely queues rather than races.
+// Holding it for the whole pipeline (not just the final publish) does give
+// up SOME of the "Ava building a team" parallelism the CAS loop was written
+// to allow — concurrent fast-upserts now queue instead of running their
+// wiring passes in parallel — but each call is still a fast, in-memory
+// operation, nowhere near the cost of the full reload this feature replaces
+// (see UpsertAgentFast's own doc comment), and correctness comes first.
+var fastUpsertMu sync.Mutex
+
+// UpsertAgentFast is the read-path counterpart to a full config reload for a
+// SINGLE agent create/update (issue #571: "Agent create/update triggers a
+// full config reload — finish ADR-054's split on the read path"). ADR-054
+// already split agents into per-entity files, fixing *parallel* agent
+// creation on the WRITE side; this closes the matching gap on the READ
+// side — AgentRegistry, which actually serves GetAgent/ResolveRoute/
+// GetDefaultAgent, was still rebuilt from scratch (NewAgentRegistry) for a
+// one-agent change, which is what forced a full handleConfigReload
+// (channels/cron/schedulers/the plan engine all restart, up to ~60s under
+// load — 30s service drain + 30s provider rebuild, worst case).
+//
+// cfg must already reflect the agent identified by agentID in
+// cfg.Agents.List — callers pass the AgentLoop's own already-refreshed
+// config (a.agentLoop.GetConfig() after the entity write, which
+// updateConfigJSONLocked's refreshConfigAndRewireServices call has already
+// repopulated from the entity store and, for a default-agent-ID change,
+// from the just-written config.json) rather than doing any disk I/O here —
+// see pkg/gateway/rest.go's fastAgentUpsert. Several of the wiring passes
+// below (e.g. wireExecToolDepsOn's per-agent ShellPolicy lookup) read the
+// agent's config back OUT of cfg.Agents.List by ID, not from a
+// caller-supplied *config.AgentConfig, which is why this looks the agent up
+// itself instead of accepting one.
+//
+// Design, per the issue's own investigation comment: reuse NewAgentInstance
+// (the SAME constructor NewAgentRegistry itself calls per agent) plus the
+// SAME wiring functions ReloadProviderAndConfig runs against a freshly-built
+// registry — registerSharedTools and every pass after it — so the new/
+// updated instance's tool set, security wiring (bash god-mode/policy-
+// auditor/deny patterns, web_serve, system.* tools, delegation/working-dir
+// injectors) and resolved tool policy cannot silently drift from what a full
+// reload would have produced. That is parity BY CONSTRUCTION, not a
+// hand-kept checklist — the exact risk UpsertAgent's own doc comment used to
+// warn a bare caller into.
+//
+// TRAP 1 (routing/default-agent staleness): AgentRegistry.resolver is built
+// once, at construction, with no setter, and defaultAgentOverride is
+// likewise sticky. A bare map swap would leave the new/updated agent visible
+// to GetAgent but invisible to ResolveRoute and GetDefaultAgent — exactly
+// the ADR-037 "reports success, changes nothing" anti-pattern this project
+// bans. Closed by rebuilding both, fresh, from cfg (the SAME cfg the
+// instance itself was built from) on every call — see cloneAgents' doc
+// comment for why they are deliberately excluded from the clone.
+//
+// TRAP 2 (atomicity + lost updates): wiring never runs against the live,
+// published al.registry. A private clone is built first (existing
+// AgentInstance pointers reused verbatim, so the other N-1 agents are never
+// rebuilt), wired completely off to the side, and ONLY THEN published —
+// mirroring ReloadProviderAndConfig's own top-level discipline one layer
+// down (it, too, builds and wires a whole new registry before ever taking
+// al.mu; wireDelegationInjectors' own doc comment spells out why that is
+// safe: "no other goroutine holds a reference to registry yet"). A
+// concurrent GetAgent/ResolveRoute/GetDefaultAgent therefore always
+// observes either the fully-wired OLD registry or the fully-wired NEW one —
+// never an agent that is in the map but not yet wired.
+//
+// The publish itself is an optimistic-concurrency compare-and-swap, not a
+// bare write: two concurrent callers (e.g. Ava creating several team
+// members in parallel — the exact scenario ADR-054 fixed on the write side)
+// each start from the SAME al.registry snapshot, and a bare "read, clone,
+// wire, write" would let the second publisher silently overwrite the
+// first's agent with a clone that never saw it (registerSharedTools et al.
+// only re-wire whatever the clone's OWN map already contains — they never
+// merge two independently-built clones). Detecting "al.registry changed
+// since my snapshot" and retrying against the new baseline instead closes
+// that gap — including the narrower case of racing a concurrent full
+// ReloadProviderAndConfig swap, which publishes through the exact same
+// al.registry pointer.
+//
+// KNOWN LIMITATION: this does not itself serialize against gateway.go's
+// services.reloadCoalesceMu single-flight (the mechanism that already
+// prevents two full reloads from racing each other) — a fast upsert losing
+// a race against a concurrent full reload is detected and retried (above),
+// but a full reload that starts and finishes entirely BETWEEN this
+// function's snapshot and its publish attempt is not distinguished from any
+// other concurrent al.registry publisher. This is a narrower version of a
+// pre-existing hazard class (any two writers of al.registry), not a
+// regression this change introduces, and is out of scope for the
+// pkg/agent/pkg/gateway/rest.go surface this fix targets.
+func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*AgentInstance, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("upsert agent fast: config is nil")
+	}
+	id := routing.NormalizeAgentID(agentID)
+	if id == "" {
+		return nil, fmt.Errorf("upsert agent fast: agent id is empty")
+	}
+	if id == DefaultAgentID {
+		return nil, fmt.Errorf("upsert agent fast: agent id %q is reserved", DefaultAgentID)
+	}
+	var ac *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if routing.NormalizeAgentID(cfg.Agents.List[i].ID) == id {
+			ac = &cfg.Agents.List[i]
+			break
+		}
+	}
+	if ac == nil {
+		return nil, fmt.Errorf("upsert agent fast: agent %q not found in cfg.Agents.List", agentID)
+	}
+
+	// See fastUpsertMu's doc comment: this closes a genuine data race on
+	// shared pre-existing agents' tool objects, not merely a lost-update risk.
+	fastUpsertMu.Lock()
+	defer fastUpsertMu.Unlock()
+
+	for attempt := 0; attempt < maxFastUpsertAttempts; attempt++ {
+		al.mu.RLock()
+		oldRegistry := al.registry
+		al.mu.RUnlock()
+		if oldRegistry == nil {
+			return nil, fmt.Errorf("upsert agent fast: registry not initialized")
+		}
+		provider, ok := extractProvider(oldRegistry)
+		if !ok || provider == nil {
+			return nil, fmt.Errorf("upsert agent fast: no provider available on current registry")
+		}
+
+		// Same constructor NewAgentRegistry itself uses per agent.
+		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+		if instance.AgentType == "custom" && coreagent.IsCoreAgent(id) {
+			instance.SetAgentType("core")
+		}
+
+		newRegistry := oldRegistry.cloneAgents()
+		newRegistry.UpsertAgent(instance)
+		// TRAP 1: fresh resolver + default-agent override, from the SAME cfg.
+		newRegistry.resolver = routing.NewRouteResolver(cfg)
+		if cfg.Agents.Defaults.DefaultAgentID != "" {
+			newRegistry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
+		}
+		newRegistry.EvaluateDefaultAgentHealth(cfg.Agents.Defaults.DefaultAgentID, cfg.SkippedAgentIDs)
+
+		// Re-run the SAME wiring ReloadProviderAndConfig runs against a
+		// freshly-built registry, against this one instead. registerSharedTools
+		// et al. iterate registry.ListAgentIDs()/GetAgent() themselves, so this
+		// re-touches the other N-1 agents' tool registrations too (idempotent —
+		// same config, same singleton deps, so "cheap" per the issue's own
+		// design note) while giving the one new/updated instance full parity.
+		registerSharedTools(al, cfg, al.bus, newRegistry, provider)
+		if al.tier13Deps != nil {
+			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps)
+		}
+		al.wireExecToolDepsOn(newRegistry)
+		if al.sysagentDeps != nil {
+			al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
+		}
+		if al.auditLogger != nil {
+			al.wireMemoryAuditLoggerOn(newRegistry, al.auditLogger)
+		}
+		if al.memoryRateLimiter != nil {
+			al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
+		}
+		wireDelegationInjectors(al, newRegistry)
+		wireWorkingDirInjectors(al, newRegistry)
+		// MediaStore is deliberately left nil by registerSharedTools' send_file
+		// wiring (see its own doc comment) because it may not exist yet on the
+		// very first wiring pass inside NewAgentLoop; every real reload
+		// re-applies it afterward via SetMediaStore. Mirror that here so every
+		// agent touched by the re-wiring above doesn't transiently lose media
+		// capability relative to a full reload's end state.
+		if ms := al.GetMediaStore(); ms != nil {
+			for _, aid := range newRegistry.ListAgentIDs() {
+				if inst, ok := newRegistry.GetAgent(aid); ok {
+					inst.Tools.SetMediaStore(ms)
+				}
+			}
+		}
+
+		al.mu.Lock()
+		if al.registry != oldRegistry {
+			// Lost the race: another publisher (a concurrent UpsertAgentFast, or
+			// a full ReloadProviderAndConfig) swapped al.registry out from under
+			// this attempt's snapshot. Retry against the new baseline rather than
+			// clobbering whatever it just published.
+			al.mu.Unlock()
+			if closeErr := instance.Close(); closeErr != nil {
+				logger.WarnCF("agent", "upsert agent fast: failed to close discarded instance after a lost publish race",
+					map[string]any{"agent_id": id, "error": closeErr.Error()})
+			}
+			continue
+		}
+		al.cfg = cfg
+		al.registry = newRegistry
+		al.mu.Unlock()
+		return instance, nil
+	}
+
+	return nil, fmt.Errorf(
+		"upsert agent fast: gave up after %d attempts racing concurrent registry publishers",
+		maxFastUpsertAttempts,
+	)
 }
 
 // RemoveAgent deletes a single agent instance from the registry (post

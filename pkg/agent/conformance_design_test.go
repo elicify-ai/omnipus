@@ -77,6 +77,40 @@ func markMemberDone(t *testing.T, ts *task.Store, id string) {
 	}
 }
 
+// mustFindRevisionRecord looks up revisionID in planID's write-ahead intent
+// log and returns its record — the DURABLE proof that AppendCorrection's
+// revision entry was actually committed (G-11: "append + SUPERSEDE +
+// TARGETED-RETRY each record a revision entry"; INV-6/N-8: all-or-nothing),
+// not merely echoed back in the in-memory CorrectionResult. Requires a
+// harness built via newCorrectionHarness (intent log wired). Fails the test
+// if the record is missing or stuck short of IntentDone — a record that
+// never reached "done" means the per-file apply never finished, which is
+// exactly the half-applied state the transactional commit (CommitCorrection:
+// AppendIntent -> MarkCommitted -> apply -> MarkDone) exists to prevent.
+func mustFindRevisionRecord(t *testing.T, h *planEngineHarness, planID, revisionID string) plan.IntentRecord {
+	t.Helper()
+	if h.pe.intentLog == nil {
+		t.Fatal("mustFindRevisionRecord: no intent log wired on this harness (use newCorrectionHarness)")
+	}
+	records, err := h.pe.intentLog.List(planID)
+	if err != nil {
+		t.Fatalf("mustFindRevisionRecord: intentLog.List(%q): %v", planID, err)
+	}
+	for _, rec := range records {
+		if rec.IntentID != revisionID {
+			continue
+		}
+		if rec.Status != plan.IntentDone {
+			t.Fatalf("mustFindRevisionRecord: revision %q for plan %q is %q, want done "+
+				"(all-or-nothing, INV-6/N-8)", revisionID, planID, rec.Status)
+		}
+		return rec
+	}
+	t.Fatalf("mustFindRevisionRecord: no committed revision entry %q found for plan %q — "+
+		"the correction verb did not durably record (G-11)", revisionID, planID)
+	return plan.IntentRecord{}
+}
+
 // TestConformance_g5_ShardAssembleTopology_DAGExecution proves the g5
 // "report-with-workbook" worked topology EXECUTES as drawn, not just that it
 // passes lint. The lint (g4) only validates the plan STRUCTURE; g5's drawn path
@@ -928,6 +962,18 @@ func TestConformance_t2_PlanLifecycle_Design(t *testing.T) {
 	if corrRes.HonestExit {
 		t.Fatal("(6) the correction must make progress (a new ready member), not honest-exit")
 	}
+	// G-11: append records a revision entry — durable proof via the intent
+	// log, not merely the in-memory CorrectionResult echo.
+	t2Rec := mustFindRevisionRecord(t, h, "plan-t2", corrRes.RevisionID)
+	if t2Rec.Revision.Verb != CorrectionAppend {
+		t.Fatalf("(6) G-11: recorded revision verb = %q, want append", t2Rec.Revision.Verb)
+	}
+	if t2Rec.Revision.PlanID != "plan-t2" {
+		t.Fatalf("(6) G-11: recorded revision plan_id = %q, want plan-t2", t2Rec.Revision.PlanID)
+	}
+	if corrRes.RevisionEntry.Verb != CorrectionAppend {
+		t.Fatalf("(6) CorrectionResult.RevisionEntry.Verb = %q, want append", corrRes.RevisionEntry.Verb)
+	}
 	// AppendCorrection dispatched the ready tail member (next→in_progress);
 	// complete it so the DAG is all-terminal again with a CHANGED signature.
 	markMemberDone(t, h.tasks, "t2-tail")
@@ -1031,8 +1077,15 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	//     (unmet-all-done). Two awaiting plans are seeded — one for the
 	//     SUPERSEDE verb, one for the TARGETED-RETRY verb — because each
 	//     AppendCorrection resets the phase to dispatching.
+	// t3-done carries a distinctive (deliberately WRONG) claim so the
+	// supersede step below can prove its outcome is withheld from the Judge's
+	// evidence — the actual observable property — rather than merely
+	// flagged in an in-memory map (see buildPlanClaimText).
+	const t3WrongClaim = "WRONG-CLAIM-T3-DONE-OUTCOME"
+	t3Done := doneMember("t3-done")
+	t3Done.Result = t3WrongClaim
 	mustSeedAwaitingCorrection(t, h, "plan-t3-sup",
-		doneMember("t3-done"), failedMember("t3-other-failed"))
+		t3Done, failedMember("t3-other-failed"))
 	mustSeedAwaitingCorrection(t, h, "plan-t3-retry",
 		doneMember("t3-done-r"), failedMember("t3-frozen"))
 	for _, pid := range []string{"plan-t3-sup", "plan-t3-retry"} {
@@ -1046,7 +1099,7 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	// (2) owner re-plans via SUPERSEDE: the done member is ignored-by-Judge
 	//     (record stays immutable/done), and the auto-reset resets the other
 	//     failed member t3-other-failed (supersede triggers auto-reset).
-	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-sup", supervisorCaller(), CorrectionRequest{
+	supCorrRes, err := h.pe.AppendCorrection(ctx, "plan-t3-sup", supervisorCaller(), CorrectionRequest{
 		Verb: CorrectionSupersede, SupersededMemberID: "t3-done",
 		FalsifiedAssumption: "assumed the done member's outcome was correct",
 		Reason:              "supersede the done member — its result is wrong",
@@ -1061,7 +1114,8 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 			WorkspaceID: "ws", Status: task.StatusNext,
 			Criteria: []task.AcceptanceCriterion{planProseCriterion("the superseded work is redone correctly")},
 		}},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("(2) AppendCorrection supersede: %v", err)
 	}
 	superRecord, _ := h.tasks.Get("t3-done")
@@ -1075,15 +1129,45 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	if autoReset.Status == task.StatusFailed {
 		t.Errorf("(2) supersede's auto-reset must reset the other failed member, still failed")
 	}
+	// G-11: supersede records a revision entry (durable — the intent log, not
+	// just the in-memory map isMemberSuperseded checks above).
+	supRec := mustFindRevisionRecord(t, h, "plan-t3-sup", supCorrRes.RevisionID)
+	if supRec.Revision.Verb != CorrectionSupersede {
+		t.Fatalf("(2) G-11: recorded revision verb = %q, want supersede", supRec.Revision.Verb)
+	}
+	if supRec.Revision.SupersededMemberID != "t3-done" {
+		t.Fatalf("(2) G-11: recorded revision superseded_member_id = %q, want t3-done", supRec.Revision.SupersededMemberID)
+	}
+	// D4 / "reaches the judge as such": isMemberSuperseded above only proves a
+	// map entry was written — ADR-055 fix-wave finding 3 documents that this
+	// exact shape (asserting the map, not the evidence) is what let supersede
+	// ship inert end to end. Prove the OBSERVABLE property instead by calling
+	// the REAL production function the next judge round actually feeds
+	// (runPlanJudgeRound: ClaimText = buildPlanClaimText(tasks, superseded))
+	// with the real post-correction task list and the real superseded set.
+	supTasks, lerr := h.tasks.List(task.Filter{PlanID: "plan-t3-sup"})
+	if lerr != nil {
+		t.Fatalf("(2) list plan-t3-sup tasks: %v", lerr)
+	}
+	claimText := buildPlanClaimText(supTasks, h.pe.supersededMemberSet("plan-t3-sup"))
+	if strings.Contains(claimText, t3WrongClaim) {
+		t.Fatalf("(2) the superseded member's WRONG outcome reached the Judge's claim text verbatim — "+
+			"supersede changed nothing the Judge sees.\nClaimText was:\n%s", claimText)
+	}
+	if !strings.Contains(claimText, "SUPERSEDED") || !strings.Contains(claimText, "t3-done") {
+		t.Fatalf("(2) the superseded member is not marked withheld in the claim text the Judge would "+
+			"receive.\nClaimText was:\n%s", claimText)
+	}
 
 	// (3) TARGETED-RETRY (on the second awaiting plan): reset the frozen-
 	//     transient failed member ALONE — the done member stays frozen/done and
 	//     targeted-retry does NOT auto-reset other failed members (D4).
-	if _, err := h.pe.AppendCorrection(ctx, "plan-t3-retry", supervisorCaller(), CorrectionRequest{
+	retryCorrRes, err := h.pe.AppendCorrection(ctx, "plan-t3-retry", supervisorCaller(), CorrectionRequest{
 		Verb: CorrectionTargetedRetry, RetriedMemberID: "t3-frozen",
 		FalsifiedAssumption: "assumed the transient failure was permanent",
 		Reason:              "targeted-retry the frozen-transient member",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("(3) AppendCorrection targeted_retry: %v", err)
 	}
 	retried, _ := h.tasks.Get("t3-frozen")
@@ -1094,6 +1178,14 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 	stillDone, _ := h.tasks.Get("t3-done-r")
 	if stillDone.Status != task.StatusDone {
 		t.Errorf("(3) D4 targeted-retry: the done member must stay frozen (done), got %q", stillDone.Status)
+	}
+	// G-11: targeted-retry records a revision entry.
+	retryRec := mustFindRevisionRecord(t, h, "plan-t3-retry", retryCorrRes.RevisionID)
+	if retryRec.Revision.Verb != CorrectionTargetedRetry {
+		t.Fatalf("(3) G-11: recorded revision verb = %q, want targeted_retry", retryRec.Revision.Verb)
+	}
+	if retryRec.Revision.RetriedMemberID != "t3-frozen" {
+		t.Fatalf("(3) G-11: recorded revision retried_member_id = %q, want t3-frozen", retryRec.Revision.RetriedMemberID)
 	}
 
 	// (4) transactional append: kill mid-append → pre-append DAG. An

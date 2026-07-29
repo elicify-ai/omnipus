@@ -283,8 +283,10 @@ type OmnipusSandboxConfig struct {
 	// results before they enter the LLM's context.
 	PromptInjectionLevel PromptInjectionLevel `json:"prompt_injection_level,omitempty"`
 
-	// RateLimits configures per-agent LLM/tool call limits and the global
-	// daily cost cap (SEC-26). All fields default to 0 (no limit).
+	// RateLimits configures per-agent LLM/tool call limits (SEC-26). All
+	// fields default to 0 (no limit). The global daily USD cost cap that used
+	// to live here (DailyCostCapUSD) was retired by ADR-053 D12 — the only
+	// app-level spend brake is now pkg/agent.TokenBudget (PlanningConfig.TokenBudget).
 	RateLimits OmnipusRateLimitsConfig `json:"rate_limits,omitempty"`
 
 	// ToolPolicies holds global per-tool access policies. Keys are tool names;

@@ -106,8 +106,39 @@ func (pe *PlanEngine) runBootSweep(ctx context.Context) BootSweepResult {
 			"preserved_needs_input": len(result.PreservedNeedsInput),
 			"preserved_awaiting":    len(result.PreservedAwaitingCorrection),
 			"rebaselined_goals":     len(result.RebaselinedGoals)})
+
+	// Explicit retention (ADR-053 "nothing grows unbounded by omission",
+	// applied to the S2 lifecycle store — the same posture DoD-10 requires of
+	// the message inbox): the store is append-only, one .jsonl per session_id,
+	// with no prior prune path at all. Wiring a task-dispatch producer this
+	// wave (mintTaskLifecycleRecord, task_executor.go) meaningfully raises the
+	// mint rate over delegate-only sessions (a redispatched goal-loop attempt
+	// mints a fresh session per attempt, mirroring delegate's own
+	// per-call mint), so this prune runs in the SAME boot pass rather than
+	// being deferred. Deliberately independent of the sweep's own err/budget
+	// above: pruning old TERMINAL records is unrelated to reconciling
+	// non-terminal ones, and a prune failure must not be conflated with a
+	// sweep failure in the log line above.
+	if pruned, perr := ls.PruneTerminal(DefaultLifecycleRetentionDays, time.Now()); perr != nil {
+		logger.WarnCF("plan_engine", "boot sweep: lifecycle retention prune failed",
+			map[string]any{"error": perr.Error()})
+	} else if pruned > 0 {
+		logger.InfoCF("plan_engine", "boot sweep: pruned terminal lifecycle records past retention",
+			map[string]any{"pruned": pruned, "retention_days": DefaultLifecycleRetentionDays})
+	}
+
 	return result
 }
+
+// DefaultLifecycleRetentionDays bounds how long a TERMINAL S2 lifecycle
+// record (pkg/session/lifecycle.go) is retained on disk before runBootSweep
+// prunes it (LifecycleStore.PruneTerminal). Mirrors the 90-day default this
+// codebase already uses for day-partitioned session retention (CLAUDE.md
+// "Storage" section) — a non-terminal record is NEVER pruned regardless of
+// age (see PruneTerminal's own doc comment), so this bound only ever affects
+// records the boot sweep (or a normal task/delegate completion) has already
+// resolved.
+const DefaultLifecycleRetentionDays = 90
 
 // bootSweep is the testable core of the boot sweep. It is a method on
 // PlanEngine (not a free function) because exemption (b) requires resolving a
@@ -209,6 +240,7 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 	if err := ls.Persist(&failed); err != nil {
 		return err
 	}
+	pe.reconcileUnifiedMetaStatus(&failed)
 	// Fire the session.failed hook best-effort (FR-118 deliverable 3): a hook
 	// panic is recovered and LOGGED (the doc above promises "recovered and
 	// logged"), never blocking the sweep. The earlier `recover()` silently
@@ -229,6 +261,47 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 		}()
 	}
 	return nil
+}
+
+// reconcileUnifiedMetaStatus reconciles the OTHER session-status store — the
+// one GET /api/v1/sessions and the SPA actually read, session.UnifiedMeta.
+// Status (daypartition.go: active/archived/interrupted) — with the
+// LifecycleRecord this sweep just wrote failed(interrupted). These are two
+// deliberately DISTINCT vocabularies for two distinct purposes (see
+// lifecycle.go's own package doc: "distinct from SessionStatus ... do not
+// conflate"), but as this codebase actually wires them, a lifecycle record
+// minted by delegate.go's `run` or by task_executor.go's
+// mintTaskLifecycleRecord uses the EXACT SAME session_id that
+// UnifiedStore.NewSession minted for that session's chat-transcript meta —
+// so leaving UnifiedMeta untouched here would leave the user-visible
+// session listing reporting "active" forever after a crash, even though the
+// durable S2 record now correctly says failed(interrupted). That divergence
+// between the two stores was itself the user-visible half of the FR-118/
+// G-13 gap this wave closes: a boot sweep with no user-visible effect is not
+// a fix.
+//
+// Best-effort and expected to legitimately fail for a delegate/subturn
+// session: pkg/tools/delegate.go's spawnSubTurn path never calls
+// UnifiedStore.NewSession for a child turn at all, so rec.SessionID resolves
+// to no UnifiedMeta record for those (SetMeta returns a not-found error) —
+// logged at Debug, never escalated, and never blocking the sweep. A nil
+// agentLoop (a bare struct-literal test engine) or an unresolvable AgentID
+// is handled the same way.
+func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
+	if pe.agentLoop == nil || rec == nil || rec.AgentID == "" {
+		return
+	}
+	sessStore := pe.agentLoop.GetAgentStore(rec.AgentID)
+	if sessStore == nil {
+		return
+	}
+	interrupted := session.StatusInterrupted
+	if setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &interrupted}); setErr != nil {
+		logger.DebugCF("plan_engine",
+			"boot sweep: could not reconcile UnifiedMeta status (expected for a delegate/subturn session, "+
+				"which has no chat-transcript meta.json at all)",
+			map[string]any{"session_id": rec.SessionID, "agent_id": rec.AgentID, "error": setErr.Error()})
+	}
 }
 
 // planIsAwaitingSupervision reports whether planID's durable plan record

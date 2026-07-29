@@ -501,7 +501,7 @@ func TestDelivery_SendMedia_InvokesChannelSendMedia(t *testing.T) {
 	m.channels["media-ch"] = ch
 	m.workers["media-ch"] = w
 	m.mu.Unlock()
-	go m.runWorker(dispatchCtx, "media-ch", w)
+	go m.runWorker(dispatchCtx, "media-ch", w, m.config)
 	go m.runMediaWorker(dispatchCtx, "media-ch", w)
 
 	mediaParts := []bus.MediaPart{
@@ -575,7 +575,7 @@ func TestDelivery_SendMedia_NonMediaChannel_TextFallback(t *testing.T) {
 	m.channels["text-only-ch"] = ch
 	m.workers["text-only-ch"] = w
 	m.mu.Unlock()
-	go m.runWorker(dispatchCtx, "text-only-ch", w)
+	go m.runWorker(dispatchCtx, "text-only-ch", w, m.config)
 	go m.runMediaWorker(dispatchCtx, "text-only-ch", w)
 
 	_ = mb.PublishOutboundMedia(context.Background(), bus.OutboundMediaMessage{

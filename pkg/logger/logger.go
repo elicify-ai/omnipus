@@ -242,7 +242,22 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 
 	skip := getCallerSkip()
 
-	event := getEvent(logger, level)
+	// Snapshot the two zerolog.Logger globals under a brief read-lock.
+	// zerolog.Logger is a plain value struct (writer interface, level,
+	// sampler, ...) with no internal mutex, so copying it is safe and gives
+	// us a consistent view: EnableFileLogging/DisableFileLogging swap
+	// `logFile`+`fileLogger` together inside a single mu.Lock() critical
+	// section, so this read observes either the fully-old or fully-new
+	// pair, never a torn mix of an already-closed file with a stale
+	// fileLogger (or vice versa). The lock is released immediately after
+	// the copy so the actual I/O below never blocks a concurrent mutator
+	// (or other logger callers) on a slow file write.
+	mu.RLock()
+	consoleLogger := logger
+	activeFileLogger := fileLogger
+	mu.RUnlock()
+
+	event := getEvent(consoleLogger, level)
 
 	if component != "" {
 		event.Str("component", component)
@@ -252,8 +267,8 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	event.CallerSkipFrame(skip).Msg(message)
 
 	// Also log to file if enabled
-	if fileLogger.GetLevel() != zerolog.NoLevel {
-		fileEvent := getEvent(fileLogger, level)
+	if activeFileLogger.GetLevel() != zerolog.NoLevel {
+		fileEvent := getEvent(activeFileLogger, level)
 
 		if component != "" {
 			fileEvent.Str("component", component)

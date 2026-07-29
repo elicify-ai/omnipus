@@ -873,12 +873,17 @@ func TestPlanStopREST_DispatchesARealOwnerWakeTurn(t *testing.T) {
 		require.True(t, ok, "the harness agent must resolve; the wake dispatch pre-resolves it")
 		inst.Provider = prov
 
-		// The registry lowercases agent ids, so the ADR-046 P1 membership gate
-		// looks the agent up under a key mustAgentLoop's seed (which reads
-		// cfg.Agents.List verbatim) never wrote. Without this the wake turn IS
-		// dispatched but refuses at that gate before ever reaching the
-		// provider — the turn goroutine still runs and still writes, it just
-		// stops being HOLDABLE, which is what this test needs.
+		// FIXED upstream: testHarnessAgentIDs (test_agent_loop_helper_test.go)
+		// now normalizes every id via routing.NormalizeAgentID before seeding,
+		// exactly matching what the registry keys agents under — so
+		// newTestRestAPIWithPlans's own mustAgentLoop call already seeds
+		// testPlansAgentID correctly (lower-cased) and this explicit call is a
+		// no-op (seedTestWorkspaceMembershipForIDs's toSeed loop finds the id
+		// already resolves via workspace.FindForAgent). Kept as a harmless,
+		// explicit belt-and-braces re-assertion — and because
+		// seedTestWorkspaceMembershipForIDs now guards its own postcondition,
+		// this line would fail LOUD (not silently refuse the turn) if the
+		// upstream normalization ever regressed.
 		seedTestWorkspaceMembershipForIDs(t, []string{strings.ToLower(testPlansAgentID)})
 
 		wsID := createTestWorkspace(t, api, "Wake Drain WS")

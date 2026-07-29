@@ -368,8 +368,19 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		}
 	}
 
-	// Trigger hot-reload so the new agent is immediately available for chat.
-	if t.deps.ReloadFunc != nil {
+	// Publish the new agent so it is immediately available for chat — the
+	// fast path (issue #571, sysagent half) when wired, falling back to a
+	// full config reload otherwise. UpsertAgentFastFunc mirrors
+	// pkg/gateway/rest.go's fastAgentUpsert: it swaps ONLY this agent's
+	// *AgentInstance into the live AgentRegistry (AgentLoop.UpsertAgentFast)
+	// instead of restarting channels/cron/schedulers/the plan engine for a
+	// one-agent change. See Deps.UpsertAgentFastFunc's doc comment.
+	if t.deps.UpsertAgentFastFunc != nil {
+		if err := t.deps.UpsertAgentFastFunc(finalID); err != nil {
+			slog.Warn("sysagent: fast agent upsert after agent create failed — agent available after restart",
+				"id", finalID, "error", err)
+		}
+	} else if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent create failed — agent available after restart",
 				"id", finalID, "error", err)
@@ -575,10 +586,15 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 		}
 	}
 
-	// Trigger hot-reload so the update takes effect immediately in routing,
-	// list_agents, and GET /api/v1/agents, without a restart — same pattern
-	// as AgentCreateTool.Execute above.
-	if t.deps.ReloadFunc != nil {
+	// Publish the update so it takes effect immediately in routing,
+	// list_agents, and GET /api/v1/agents, without a restart — same
+	// fast-path-first pattern as AgentCreateTool.Execute above.
+	if t.deps.UpsertAgentFastFunc != nil {
+		if err := t.deps.UpsertAgentFastFunc(id); err != nil {
+			slog.Warn("sysagent: fast agent upsert after agent update failed — change available after restart",
+				"id", id, "error", err)
+		}
+	} else if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent update failed — change available after restart",
 				"id", id, "error", err)
@@ -676,6 +692,24 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	// a deleted agent stayed live until the next process restart: its entity
 	// record was gone from disk, but the in-memory cfg.Agents.List/registry
 	// snapshot every routing/list read consults was never told to refresh.
+	//
+	// Deliberately NOT fast-pathed (issue #571): unlike create/update above,
+	// delete has no UpsertAgentFastFunc-shaped counterpart to call.
+	// AgentRegistry.RemoveAgent (pkg/agent/registry.go) is today only a bare
+	// map delete under the write lock — its own doc comment states plainly
+	// that no production code calls it — with NEITHER of UpsertAgentFast's
+	// two safety properties: (1) it does not rebuild the registry's cached
+	// RouteResolver/defaultAgentOverride, so a stale resolver would keep
+	// routing to a deleted agent (the exact "reports success, changes
+	// nothing" anti-pattern this project bans), and (2) it is not published
+	// via the atomic clone-wire-then-CAS-swap sequence UpsertAgentFast uses,
+	// so a concurrent reader could observe a half-updated registry. Adding
+	// that parity belongs in pkg/agent alongside UpsertAgentFast itself, not
+	// as a second, divergent implementation reinvented here. REST's own
+	// deleteAgent (pkg/gateway/rest.go) has not been fast-pathed either — it
+	// still calls triggerReloadAndWait unconditionally — so keeping delete on
+	// the full reload here maintains parity with that call rather than
+	// introducing a new asymmetry between the two delete entry points.
 	if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: hot-reload after agent delete failed — agent remains routable/listed until restart",

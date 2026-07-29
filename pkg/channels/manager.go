@@ -912,7 +912,9 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		// defaultRateLimit.
 		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
 		m.workers[name] = w
-		go m.runWorker(dispatchCtx, name, w)
+		// Snapshot m.config while still holding m.mu.Lock() (see runWorker's doc
+		// comment for why runWorker must never read m.config itself).
+		go m.runWorker(dispatchCtx, name, w, m.config)
 		go m.runMediaWorker(dispatchCtx, name, w)
 		startedCount++
 	}
@@ -1152,7 +1154,36 @@ func newChannelWorker(channelType string, ch Channel) *channelWorker {
 // Message processing follows this order:
 //  1. SplitByMarker (if enabled in config) - LLM semantic marker-based splitting
 //  2. SplitMessage - channel-specific length-based splitting (MaxMessageLength)
-func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) {
+//
+// cfg is a config SNAPSHOT captured by the caller (StartAll / Reload /
+// RegisterChannel — all of which spawn this goroutine while already holding
+// m.mu.Lock()), not a live read of m.config. This is deliberate, not merely
+// lock-avoidance: runWorker previously read m.config directly with no lock at
+// all, racing Reload's m.mu-protected write (`go test -race`: "WARNING: DATA
+// RACE ... Read ... runWorker ... manager.go:1179" vs "Previous write ...
+// Reload"). Taking m.mu.RLock() here instead was considered and rejected —
+// Reload's "restart workers for existing (unchanged) channels" step
+// (see below in Reload) blocks on `<-w.done`/`<-w.mediaDone` for the OLD
+// runWorker generation to exit while STILL HOLDING m.mu.Lock() (the write
+// lock is held across nearly all of Reload, released only briefly for the
+// separate dispatch-generation quiesce earlier in that function). If this
+// goroutine's select loop is mid-processing a message when cancellation
+// races the queue's ready case (both become selectable simultaneously, and
+// Go's select does not prefer ctx.Done()), it can keep dequeuing and
+// processing messages after ctx is canceled; an RLock in that path would
+// then block forever on the writer Reload is holding while Reload itself
+// blocks on this very goroutine's exit — a deadlock, not just a slow path.
+// A snapshot avoids taking any lock in the hot path.
+//
+// This does not change real-world semantics: every Reload (and StartAll/
+// RegisterChannel) already restarts every runWorker goroutine — including
+// ones for unchanged channels — on a fresh dispatchCtx, so a given runWorker
+// generation was already conceptually paired 1:1 with the config in effect
+// when it was (re)started; only the brief in-flight-message window during a
+// live Reload could previously observe a torn/racy value. A worker will not
+// see a config change until its next Reload-driven restart, exactly as
+// before, minus the race.
+func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker, cfg *config.Config) {
 	defer close(w.done)
 	for {
 		select {
@@ -1176,7 +1207,7 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			var chunks []string
 
 			// Step 1: Try marker-based splitting if enabled
-			if m.config != nil && m.config.Agents.Defaults.SplitOnMarker {
+			if cfg != nil && cfg.Agents.Defaults.SplitOnMarker {
 				if markerChunks := SplitByMarker(msg.Content); len(markerChunks) > 1 {
 					for _, chunk := range markerChunks {
 						chunks = append(chunks, splitByLength(chunk, maxLen)...)
@@ -1665,8 +1696,65 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	added, removed := compareChannels(m.channelHashes, list)
 
 	// Fix 16: cancel the existing dispatcher before creating a new one to prevent context leak.
-	if m.dispatchTask != nil {
-		m.dispatchTask.cancel()
+	//
+	// Capture the OLD task locally before it is replaced: newDispatchContext
+	// (below) immediately overwrites m.dispatchTask/m.dispatchCtx with a fresh
+	// generation, so oldTask is the only reference we will have left to wait on
+	// the OLD generation's goroutines in the quiesce phase further down.
+	oldTask := m.dispatchTask
+	if oldTask != nil {
+		oldTask.cancel()
+	}
+
+	// Refresh the dispatch context (and m.dispatchCtx, used by RegisterChannel and
+	// post-reload workers) in lockstep with m.dispatchTask. Without this, dispatch
+	// goroutines for channels added after a reload run on the just-canceled context
+	// and silently drop messages.
+	//
+	// Moved up from after the removed-channels loop (below) so it runs BEFORE the
+	// quiesce wait releases m.mu: a concurrent RegisterChannel landing in that
+	// released window must bind its worker to this live context, not the one we
+	// just cancelled above.
+	dispatchCtx, cancel := m.newDispatchContext(ctx)
+
+	// Quiesce the OLD dispatch generation before ANY worker queue for a removed
+	// channel is closed (see unregisterChannelLocked, invoked from deferFuncs at
+	// the end of this function).
+	//
+	// Cancelling oldTask above is not sufficient: enqueueOutbound and its media
+	// counterpart select on `w.queue <- msg` vs `<-ctx.Done()`, and a select whose
+	// send case is already runnable can be taken even after cancellation — so
+	// closing a removed channel's queue while the OLD dispatchOutbound /
+	// dispatchOutboundMedia goroutines might still be mid-select races a send
+	// against the close. A send on a closed channel PANICS — this is the same
+	// shape as the StopAll bug fixed in f5cfa241, just triggered by Reload
+	// instead of shutdown.
+	//
+	// The wait MUST run with m.mu released: dispatchLoop takes m.mu.RLock() to
+	// resolve a worker before it can even reach that select, so waiting under
+	// m.mu.Lock() — held for the rest of this function via the defer above —
+	// would deadlock against an OLD dispatch goroutine that has not yet gotten
+	// past the RLock gate.
+	//
+	// Releasing here is safe: in production, Reload is only ever invoked from the
+	// gateway's single reload-consumer loop (pkg/gateway/gateway.go's `for { select
+	// { ... } }`), which is itself single-flight (reloadCoalesceMu /
+	// beginReload+finishReload coalesce concurrent triggers into the in-flight
+	// cycle rather than starting a second one) and mutually exclusive with the
+	// shutdown path that calls StopAll — both are arms of the very same select, so
+	// only one of {Reload, StopAll} ever runs at a time. Nothing can therefore
+	// mutate m.dispatchTask/m.workers/m.channels out from under this wait via
+	// another Reload or StopAll call. The one real concurrent caller of a Manager
+	// method, RegisterChannel, is handled above (it observes the already-refreshed
+	// dispatchCtx). A concurrent RLock reader (GetStatus/GetChannel/
+	// GetEnabledChannels/SendMessage/SendToChannel/SendMedia) can observe the NEW
+	// m.config/m.secrets paired with the OLD m.channels/m.workers/m.channelHashes
+	// during this window, but none of those readers combine config with the
+	// channel set, so that transient mismatch is not observable as a bug.
+	if oldTask != nil {
+		m.mu.Unlock()
+		oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
+		m.mu.Lock()
 	}
 
 	// Fix 14 (removed loop): capture loop variable with a local copy to avoid Go closure capture bug.
@@ -1701,11 +1789,8 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 			m.unregisterChannelLocked(n)
 		})
 	}
-	// Refresh the dispatch context (and m.dispatchCtx, used by RegisterChannel and
-	// post-reload workers) in lockstep with m.dispatchTask. Without this, dispatch
-	// goroutines for channels added after a reload run on the just-canceled context
-	// and silently drop messages.
-	dispatchCtx, cancel := m.newDispatchContext(ctx)
+	// dispatchCtx/cancel were already created above (before the quiesce wait), so
+	// added-channel workers below bind to that same refreshed generation.
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
@@ -1777,7 +1862,9 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		// TYPE from instance ID for rate limiting (see channelTypeForRateLimit).
 		w := newChannelWorker(m.channelTypeForRateLimit(n), channel)
 		m.workers[n] = w
-		go m.runWorker(dispatchCtx, n, w)
+		// Snapshot m.config (already the NEW cfg, assigned above) while still
+		// holding m.mu.Lock() — see runWorker's doc comment.
+		go m.runWorker(dispatchCtx, n, w, m.config)
 		go m.runMediaWorker(dispatchCtx, n, w)
 		deferFuncs = append(deferFuncs, func() {
 			m.registerChannelLocked(n, channel)
@@ -1815,7 +1902,9 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		// Reset done channels so the new goroutines can close them cleanly.
 		w.done = make(chan struct{})
 		w.mediaDone = make(chan struct{})
-		go m.runWorker(dispatchCtx, name, w)
+		// Snapshot m.config (already the NEW cfg) while still holding
+		// m.mu.Lock() — see runWorker's doc comment.
+		go m.runWorker(dispatchCtx, name, w, m.config)
 		go m.runMediaWorker(dispatchCtx, name, w)
 	}
 
@@ -1852,7 +1941,9 @@ func (m *Manager) RegisterChannel(name string, channel Channel) {
 	if _, hasWorker := m.workers[name]; !hasWorker && m.dispatchCtx != nil {
 		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
 		m.workers[name] = w
-		go m.runWorker(m.dispatchCtx, name, w)
+		// Snapshot m.config while still holding m.mu.Lock() — see runWorker's
+		// doc comment.
+		go m.runWorker(m.dispatchCtx, name, w, m.config)
 		go m.runMediaWorker(m.dispatchCtx, name, w)
 	}
 }

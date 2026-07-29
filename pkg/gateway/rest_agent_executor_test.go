@@ -15,6 +15,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -919,11 +920,27 @@ func TestUpdateAgent_ExecutorOMNIPUSPrefixRejected(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "OMNIPUS_* is gateway-internal")
 }
 
-// TestCreateAgent_ReloadFailure_ReturnsWarning verifies that a failure during
-// TriggerReload after a successful persistence is surfaced as a warning rather
-// than failing the create request.
+// TestCreateAgent_ReloadFailure_ReturnsWarning verifies that a failure is
+// still surfaced as a warning (not a hard failure) after a successful
+// persistence, now that createAgent's primary publish mechanism is the
+// ADR-054 fast path (issue #571, fastAgentUpsert/AgentLoop.UpsertAgentFast)
+// rather than a full TriggerReload on every create.
+//
+// The fast path itself is the common case and does not fail here (nothing
+// about this harness's registry/provider is broken), so SetReloadFunc alone
+// — mocking the OLD primary mechanism — no longer reaches the warning path:
+// fastAgentUpsert only falls back to the full reload (and thus to the mocked
+// reload func) when the fast path itself reports an error first.
+// testForceFastUpsertErr (rest.go) is the deterministic seam for that: it
+// simulates "the fast path failed for some internal reason" without needing
+// to reverse-engineer a real provider/registry/CAS failure from a black-box
+// REST test. With BOTH the fast path and the reload fallback failing, the
+// warning must still surface — proving createAgent never silently drops a
+// failure that leaves the registry not-yet-updated (the same "reports
+// success it never achieved" defect class ADR-037 already bans elsewhere).
 func TestCreateAgent_ReloadFailure_ReturnsWarning(t *testing.T) {
 	api := buildExecutorTestAPI(t)
+	api.testForceFastUpsertErr = errors.New("fast upsert boom")
 	api.agentLoop.SetReloadFunc(func() error { return errors.New("reload boom") })
 
 	body := `{"name":"ReloadTest","type":"Main","soul":"soul content"}`
@@ -937,6 +954,51 @@ func TestCreateAgent_ReloadFailure_ReturnsWarning(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Warning)
 	assert.Contains(t, *resp.Warning, "config reload failed")
+}
+
+// TestCreateAgent_FastUpsertFailure_FallsBackAndSucceedsSilently is the
+// companion positive case: when the ADR-054 fast path fails but the full
+// reload fallback SUCCEEDS, the create must still report 201 with NO
+// warning — the operation genuinely completed correctly (registry and
+// config both reflect the new agent by the time the handler returns), so
+// surfacing an internal "the fast path had to fall back" detail as a
+// user-facing warning would be noise, not signal. This is the counterpart to
+// TestCreateAgent_ReloadFailure_ReturnsWarning (which proves the OTHER half:
+// a warning WHEN something is genuinely still wrong).
+func TestCreateAgent_FastUpsertFailure_FallsBackAndSucceedsSilently(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	api.testForceFastUpsertErr = errors.New("fast upsert boom")
+	// buildExecutorTestAPI's bare AgentLoop never wires SetReloadFunc on its
+	// own (AgentLoop.Run() — which does that in production — is never
+	// started in these unit tests): without wiring a real one here,
+	// triggerReloadAndWait's "reload not configured" branch would treat the
+	// fallback as a no-op SUCCESS that never actually rebuilds the registry,
+	// which would make this test pass for the wrong reason. Wire the actual
+	// registry-rebuilding call (mirrors gateway.go's production reload path
+	// closely enough to prove the fallback genuinely succeeds). By the time
+	// this closure runs, api.agentLoop.GetConfig() already reflects the new
+	// agent — createAgent's entity-store persist (via
+	// refreshConfigAndRewireServices/SwapConfig) runs BEFORE fastAgentUpsert.
+	api.agentLoop.SetReloadFunc(func() error {
+		defer api.agentLoop.ClearReloadPending()
+		return api.agentLoop.ReloadProviderAndConfig(
+			context.Background(), &restMockProvider{}, api.agentLoop.GetConfig())
+	})
+
+	body := `{"name":"FallbackTest","type":"Main","soul":"soul content"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	resp := decodeAgentResp(t, w.Body.Bytes())
+	assert.Nil(t, resp.Warning, "a fast-path failure that the full-reload fallback recovers from must not surface a warning")
+
+	// The registry must genuinely reflect the new agent — the fallback must
+	// have actually run and succeeded, not merely been skipped.
+	_, ok := api.agentLoop.GetRegistry().GetAgent(resp.Id)
+	require.True(t, ok, "the new agent must be resolvable in the registry after the full-reload fallback succeeds")
 }
 
 // TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning verifies that a model

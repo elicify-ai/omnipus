@@ -1834,8 +1834,52 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(configPath, c)
 		},
-		CredStore:       credStore,
-		ReloadFunc:      reloadTrigger,
+		CredStore:  credStore,
+		ReloadFunc: reloadTrigger,
+		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
+		// fastAgentUpsert so system.agent.create/update (an agent creating or
+		// updating another agent) gets the same fast-path publish REST
+		// already has, instead of triggering the full restartServices
+		// cascade (channels/cron/plan-engine/schedulers) on every call. Defers
+		// to an already in-flight full reload rather than racing it, exactly
+		// like fastAgentUpsert's own IsReloadPending check; any fast-path
+		// failure falls back to the full reload trigger so the caller here
+		// still gets a single hot-reload call site to invoke.
+		//
+		// Unlike the REST path — where updateConfigJSONLocked's
+		// refreshConfigAndRewireServices has ALREADY re-derived
+		// cfg.Agents.List from the entity store by the time fastAgentUpsert
+		// runs — the sysagent tools (AgentCreateTool/AgentUpdateTool)
+		// persist straight to the entity store (agentstore.Store) and never
+		// touch config.json or al.cfg at all (ADR-054: agents are per-entity
+		// records, not config.json's agents.list). So al.cfg.Agents.List
+		// would still be missing the just-created/updated agent here unless
+		// this closure re-derives it first. Reuses
+		// populateAgentsListFromEntityStoreStrict — the SAME in-memory,
+		// no-service-restart "list agents from the entity store" step the
+		// REST refresh performs — via MutateConfig so the read-modify-write
+		// is serialized with every other al.mu-guarded reader/writer, rather
+		// than reloading config.json from disk or re-resolving credentials
+		// (neither of which agent CRUD via the entity store can affect).
+		UpsertAgentFastFunc: func(agentID string) error {
+			if agentLoop.IsReloadPending() {
+				return reloadTrigger()
+			}
+			if err := agentLoop.MutateConfig(func(cfg *config.Config) error {
+				return populateAgentsListFromEntityStoreStrict(cfg, homePath)
+			}); err != nil {
+				slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
+					"from the entity store; falling back to full reload",
+					"agent_id", agentID, "error", err)
+				return reloadTrigger()
+			}
+			if _, err := agentLoop.UpsertAgentFast(agentLoop.GetConfig(), agentID); err != nil {
+				slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
+					"agent_id", agentID, "error", err)
+				return reloadTrigger()
+			}
+			return nil
+		},
 		SkillsLoader:    sysSkillsLoader,
 		RegistryManager: sysRegistryManager,
 		SkillInstaller:  sysSkillInstaller,

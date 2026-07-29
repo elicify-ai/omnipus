@@ -50,6 +50,20 @@ type CancelOutcome struct {
 	Descendants []string // turn IDs canceled (parent + sub-turns)
 	TurnID      string   // root turn ID; empty when Fired is false
 
+	// Armed is true when Fired is false because no turn was registered yet
+	// for the resolved identity AND a pre-registration cancel latch
+	// (cancel_prearm.go) was recorded in its place. It is NOT a synonym for
+	// "did nothing": the next turn to register under the same identity
+	// (session id, or (channel, chatID) when no session id resolved) will be
+	// canceled the instant it registers, through the same audit/transcript/
+	// stage-frame machinery a cancel arriving after registration uses — see
+	// registerActiveTurn (turn.go) and armCancelOrFindActiveTurn
+	// (cancel_prearm.go). Bounded by cancelPreArmTTL: a latch a turn does not
+	// consume within that window is discarded rather than reaching an
+	// unrelated later turn. Callers surfacing Fired to a user MUST also
+	// check Armed before reporting a cancel as a no-op.
+	Armed bool
+
 	// BackgroundSessionsKilled and BackgroundSessionsFailed report the
 	// hooks.KillBackgroundSessions cascade's outcome (FR-B10/FR-B11/FR-B14).
 	// Populated UNCONDITIONALLY — regardless of Fired — because the cascade
@@ -160,32 +174,7 @@ func (al *AgentLoop) RequestCancel(
 	// --- Resolve session ID from (channel, chatID) when SessionID is not set (Tier B) ---
 	sessionID := scope.SessionID
 	if sessionID == "" {
-		// Walk activeTurnStates to find the root turn matching (channel, chatID).
-		var rootTS *turnState
-		al.activeTurnStates.Range(func(_, value any) bool {
-			ts := value.(*turnState)
-			ts.mu.RLock()
-			ch := ts.channel
-			cid := ts.chatID
-			sid := ts.transcriptSessionID
-			depth := ts.depth
-			parentID := ts.parentTurnID
-			ts.mu.RUnlock()
-			if ch == scope.Channel && cid == scope.ChatID && sid != "" {
-				// Prefer the root turn (depth==0 / parentTurnID=="").
-				if depth == 0 || parentID == "" {
-					rootTS = ts
-					return false // stop
-				}
-				if rootTS == nil {
-					rootTS = ts
-				}
-			}
-			return true
-		})
-		if rootTS != nil {
-			sessionID = rootTS.transcriptSessionID
-		}
+		sessionID = al.resolveSessionIDByChannelChat(scope.Channel, scope.ChatID)
 	}
 
 	// --- Background-session kill cascade (FR-B10/FR-B11, User Story 5) —
@@ -239,14 +228,35 @@ func (al *AgentLoop) RequestCancel(
 	if sessionID != "" {
 		activeTurn = al.GetActiveTurnHookForSession(sessionID)
 	}
+
+	// --- Pre-registration latch (cancel_prearm.go) ---
+	//
+	// Reached only when the lookup above found nothing: no turn is currently
+	// registered for this identity. Rather than silently reporting Fired:false
+	// and forgetting the request ever happened (the pre-fix behavior — the
+	// exact bug this closes: a turn that registers moments later runs to
+	// completion having never seen the cancel), arm a latch keyed on the
+	// narrowest identity the caller supplied so the NEXT turn to register
+	// under it is canceled the instant it does. armCancelOrFindActiveTurn
+	// re-resolves under its own lock first (a turn may have registered in the
+	// interval between the unlocked lookup above and this call), so `armed`
+	// is only ever true when nothing was found on either check.
+	var armed bool
+	if activeTurn == nil {
+		if key := preArmKeyForScope(sessionID, scope); key != "" {
+			activeTurn, armed = al.armCancelOrFindActiveTurn(key, sessionID, scope, canceller, hooks)
+		}
+	}
+
 	wasFired := activeTurn != nil && activeTurn.ClaimCancel()
 
-	// --- Audit: attempt (always, even for duplicate or no-turn cancels) ---
+	// --- Audit: attempt (always, even for duplicate, no-turn, or armed-latch cancels) ---
 	audit.Emit(ctx, auditLogger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
 		"session_id":        sessionID,
 		"canceller_user":    canceller.UserID,
 		"canceller_channel": canceller.Channel,
 		"was_fired":         wasFired,
+		"armed":             armed,
 	})
 
 	if !wasFired {
@@ -256,6 +266,7 @@ func (al *AgentLoop) RequestCancel(
 			"session_id", sessionID,
 			"channel", scope.Channel,
 			"chat_id", scope.ChatID,
+			"armed", armed,
 			"background_sessions_killed", killedCount,
 			"background_sessions_failed", failedCount,
 		)
@@ -265,9 +276,12 @@ func (al *AgentLoop) RequestCancel(
 		// "background job outlived its own turn" case the cascade exists to
 		// handle, and callers (handleCancel, watchDeadline) need these counts
 		// to give the user/operator feedback despite there being no turn to
-		// report as canceled.
+		// report as canceled. Armed is true when a latch now stands in for
+		// this cancel (see the block above) — callers must not read
+		// Fired:false as "nothing will happen" when Armed is true.
 		return CancelOutcome{
 			Fired:                    false,
+			Armed:                    armed,
 			BackgroundSessionsKilled: killedCount,
 			BackgroundSessionsFailed: failedCount,
 		}, nil

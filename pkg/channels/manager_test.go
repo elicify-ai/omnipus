@@ -461,7 +461,7 @@ func TestWorkerRateLimiter(t *testing.T) {
 
 	ctx := t.Context()
 
-	go m.runWorker(ctx, "test", w)
+	go m.runWorker(ctx, "test", w, m.config)
 
 	// Enqueue 4 messages
 	for i := range 4 {
@@ -642,7 +642,7 @@ func TestRunWorker_MessageSplitting(t *testing.T) {
 
 	ctx := t.Context()
 
-	go m.runWorker(ctx, "test", w)
+	go m.runWorker(ctx, "test", w, m.config)
 
 	// Send a message that should be split
 	w.queue <- bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello world"}
@@ -1278,7 +1278,7 @@ func TestRunWorker_StripsDropSentinel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go m.runWorker(ctx, "eps", w)
+	go m.runWorker(ctx, "eps", w, m.config)
 
 	w.queue <- bus.OutboundMessage{
 		Channel: "eps", ChatID: "c1", Content: dropNoticePrefix + "[message dropped: channel is overloaded, please retry]",
@@ -1365,7 +1365,7 @@ func TestSendWithRetry_FallbackNotAmplified(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go m.runWorker(ctx, "eta", w)
+	go m.runWorker(ctx, "eta", w, m.config)
 
 	// A manager-injected notice arrives on the worker queue with the sentinel
 	// prefix, exactly as notifyDrop -> dispatchOutbound delivers it.
@@ -2337,6 +2337,249 @@ func TestReload_NoRaceWithReaders(t *testing.T) {
 
 	if _, ok := m.GetChannel("mock"); ok {
 		t.Fatalf("expected mock channel to be removed after Reload")
+	}
+}
+
+// TestReload_RemovedChannel_NoRaceWithInFlightDispatch is a deterministic -race
+// regression test for the sibling bug flagged (but not fixed) in f5cfa241: Reload
+// cancels the OLD dispatch context and then, via unregisterChannelLocked (run
+// from deferFuncs at the end of Reload), closes a removed channel's worker queue
+// WITHOUT waiting for the OLD dispatchOutbound/dispatchOutboundMedia goroutines
+// to actually exit.
+//
+// Cancelling is not sufficient: enqueueOutbound (and its media counterpart)
+// select on `w.queue <- msg` vs `<-ctx.Done()`, and a select whose send case is
+// already runnable can be taken even after cancellation — so a send racing the
+// close is possible. It PANICS (recovered by safeEnqueue, so this test does not
+// rely on catching an unhandled panic) and, independent of the panic, is an
+// unsynchronized concurrent close/send on the same channel — exactly the shape
+// `go test -race` caught for the StopAll sibling.
+//
+// This test floods the bus with outbound messages for "mock" from several
+// publisher goroutines so the manager-level dispatchOutbound goroutine is
+// continuously taking m.mu.RLock() to resolve "mock"'s worker and selecting on
+// its queue while Reload concurrently removes "mock" (a channel-less new
+// config). With the bug present this is flaky-but-real under `go test -race`
+// (verified below); with the fix (Reload waits for the OLD dispatch
+// generation's WaitGroup, with m.mu released, before any deferFunc can close a
+// queue) it is race-clean.
+//
+// Deliberately does NOT go through StartAll: StartAll also spins up
+// runWorker/runMediaWorker, which have their own, separate, pre-existing
+// unsynchronized read of m.config (manager.go:1179, unrelated to the bug under
+// test here) that a flood of delivered messages would trigger concurrently
+// with Reload's m.config write — a real bug, but a DIFFERENT one, and its
+// flakiness would contaminate this test's verdict on the dispatch/close race.
+// This test instead wires only the manager-level dispatch generation directly
+// (mirroring what StartAll does, minus the per-channel workers) and drains
+// "mock"'s worker with a minimal stand-in goroutine (see below) instead of the
+// real runWorker, so unregisterChannelLocked's drain-wait behaves normally
+// without ever touching m.config.
+func TestReload_RemovedChannel_NoRaceWithInFlightDispatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	// Seed a single mock channel and a non-empty hash so a Reload with an empty
+	// (channel-less) config yields removed=["mock"] — the path that drives
+	// unregisterChannelLocked's close(w.queue).
+	ch := &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return nil }}
+	m.channels["mock"] = ch
+	m.channelHashes["mock"] = "seed-hash"
+
+	// Start ONLY the manager-level dispatch generation — dispatchOutbound,
+	// dispatchOutboundMedia, and runTTLJanitor — the goroutines whose exit
+	// Reload must now wait for before a deferFunc closes "mock"'s queue.
+	dispatchCtx, dcancel := m.newDispatchContext(ctx)
+	defer dcancel()
+	m.startDispatchers(dispatchCtx)
+
+	// Wire "mock"'s worker directly instead of via StartAll (see doc comment
+	// above). A fake drain goroutine (not runWorker) keeps w.queue/w.mediaQueue
+	// mostly empty — as real drainage would — so the send case in
+	// dispatchOutbound's enqueue select has room to stay "ready" for most of the
+	// test, not just an initial burst of defaultChannelQueueSize messages before
+	// the queue fills and stays full (at which point ctx.Done() would become the
+	// ONLY ready case and the dispatcher would exit cleanly well before Reload
+	// ever closes the queue, masking the race entirely).
+	//
+	// It mirrors runWorker's actual shutdown contract exactly — select on a
+	// queue read OR dispatchCtx.Done(), close w.done/mediaDone on exit — WITHOUT
+	// touching m.config. Watching dispatchCtx (not just queue-closed) matters:
+	// Reload's "restart workers for unchanged channels" step also waits on
+	// <-w.done for every entry still in m.workers (which "mock" still is, until
+	// its deferFunc runs much later) and only cancels dispatchCtx, never closes
+	// the queue, before that wait — a range-only drain that ignores ctx would
+	// deadlock Reload right there.
+	w := newChannelWorker(m.channelTypeForRateLimit("mock"), ch)
+	go func() {
+		defer close(w.done)
+		for {
+			select {
+			case _, ok := <-w.queue:
+				if !ok {
+					return
+				}
+			case <-dispatchCtx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		defer close(w.mediaDone)
+		for {
+			select {
+			case _, ok := <-w.mediaQueue:
+				if !ok {
+					return
+				}
+			case <-dispatchCtx.Done():
+				return
+			}
+		}
+	}()
+	m.workers["mock"] = w
+
+	// Flood the bus with outbound messages targeting "mock" so dispatchOutbound is
+	// continuously mid-loop (RLock resolve -> select on w.queue<-msg) for the
+	// entire duration of the concurrent Reload below.
+	publishStop := make(chan struct{})
+	var publishers sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		publishers.Add(1)
+		go func() {
+			defer publishers.Done()
+			for {
+				select {
+				case <-publishStop:
+					return
+				default:
+					_ = m.bus.PublishOutbound(ctx, bus.OutboundMessage{
+						Channel: "mock", ChatID: "1", Content: "x",
+					})
+				}
+			}
+		}()
+	}
+
+	// Reload with an empty config removes "mock" while the flood above is live —
+	// this is the interleaving the old code raced.
+	if err := m.Reload(ctx, &config.Config{}, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	close(publishStop)
+	publishers.Wait()
+
+	if _, ok := m.GetChannel("mock"); ok {
+		t.Fatalf("expected mock channel to be removed after Reload")
+	}
+}
+
+// TestRunWorker_NoConfigRaceAcrossReload is a deterministic -race regression
+// test for a separate, real, pre-existing data race: runWorker (manager.go
+// ~:1179, pre-fix) read m.config directly with NO lock while Reload
+// (manager.go ~:1661) writes m.config under m.mu.Lock(). `go test -race`
+// reproduced this reliably in isolation ("WARNING: DATA RACE ... Read ...
+// (*Manager).runWorker() ... manager.go:1179" vs "Previous write ... Reload"),
+// independent of the removed-channel/dispatch-close race the sibling test
+// above covers — it fires even when no channel is ever removed.
+//
+// This test drives ONLY production entry points (Reload, PublishOutbound) —
+// never runWorker directly — so it stays meaningful against the actual fix
+// (runWorker now takes a config snapshot captured by its caller while holding
+// m.mu.Lock(), instead of reading m.config itself) rather than merely
+// asserting a call signature. A test that called runWorker directly with a
+// pre-captured snapshot would trivially pass regardless of whether the
+// production fix is present or reverted, and would fail to compile against
+// the reverted (3-arg) signature — neither of which proves anything about the
+// real bug.
+//
+// It registers a real channel instance ("mock-race") via a factory and keeps
+// its config hash IDENTICAL across many repeated Reload calls (only the
+// unrelated SplitOnMarker flag toggles, which does not affect the per-channel
+// hash toChannelHashes computes). An unchanged hash routes every Reload
+// through the "restart workers for existing (unchanged) channels" path
+// (manager.go, in Reload), which tears down and relaunches runWorker's
+// goroutine on every single call — exactly the repeated write/restart
+// interleaving the race needed, with messages continuously flowing into the
+// worker's queue (and being read as m.config, pre-fix) throughout.
+func TestRunWorker_NoConfigRaceAcrossReload(t *testing.T) {
+	withFactory(t, "mock-race", func(*config.Config, string, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
+		return &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return nil }}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	newCfg := func(splitOnMarker bool) *config.Config {
+		cfg := &config.Config{
+			Channels: map[string]config.ChannelInstanceConfig{
+				"mock-race": {Type: "mock-race", Enabled: true},
+			},
+		}
+		cfg.Agents.Defaults.SplitOnMarker = splitOnMarker
+		return cfg
+	}
+
+	// Bootstrap: this Reload adds "mock-race" (nothing existed before), starting
+	// its channel and spinning up the first runWorker generation.
+	if err := m.Reload(ctx, newCfg(false), credentials.SecretBundle{}); err != nil {
+		t.Fatalf("bootstrap Reload: %v", err)
+	}
+
+	// Flood the bus with outbound messages for "mock-race" so dispatchOutbound
+	// keeps pushing onto the worker's queue — and runWorker keeps dequeuing and
+	// (pre-fix) reading m.config — for the entire duration of the repeated
+	// Reload calls below.
+	publishStop := make(chan struct{})
+	var publishers sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		publishers.Add(1)
+		go func() {
+			defer publishers.Done()
+			for {
+				select {
+				case <-publishStop:
+					return
+				default:
+					_ = m.bus.PublishOutbound(ctx, bus.OutboundMessage{
+						Channel: "mock-race", ChatID: "1", Content: "x",
+					})
+				}
+			}
+		}()
+	}
+
+	// Repeated Reloads with an unchanged channel hash: every call restarts
+	// "mock-race"'s runWorker generation on a fresh dispatchCtx while writing a
+	// brand new m.config, racing the OLD (still-draining) generation's read.
+	for i := 0; i < 60; i++ {
+		if err := m.Reload(ctx, newCfg(i%2 == 0), credentials.SecretBundle{}); err != nil {
+			t.Fatalf("Reload iteration %d: %v", i, err)
+		}
+	}
+
+	close(publishStop)
+	publishers.Wait()
+
+	if _, ok := m.GetChannel("mock-race"); !ok {
+		t.Fatalf("expected mock-race channel to still be registered after repeated Reloads")
 	}
 }
 

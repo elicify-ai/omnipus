@@ -106,6 +106,28 @@ type TaskExecutor struct {
 	// completeTaskWithResult and failTask). A nil map is valid for reads
 	// (hasEvidenceGateRejection); bumpEvidenceRejectStreak lazily allocates it.
 	evidenceRejectStreak map[string]int
+
+	// lifecycleStore is the durable S2 session-lifecycle store (ADR-053,
+	// pkg/session/lifecycle.go), wired by the gateway boot seam via
+	// SetLifecycleStore alongside PlanEngine.SetLifecycleStore /
+	// AgentLoop.SetSessionMessagingStores — all three point at the SAME
+	// *session.LifecycleStore instance. Nil in test harnesses and any boot
+	// sequence that has not wired it yet: every access below
+	// (mintTaskLifecycleRecord, transitionTaskLifecycle) nil-guards it via
+	// getLifecycleStore and is a silent no-op, exactly mirroring
+	// createTaskSessionSync's own sessStore-nil handling — a missing/unwired
+	// durable record must never block or fail task dispatch.
+	//
+	// FR-118/G-13 gap this closes: before this field existed, the ONLY
+	// production constructor of session.LifecycleRecord was
+	// pkg/tools/delegate.go's `run` mint — a task/plan-member dispatch
+	// session (created by createTaskSessionSync/StartTaskNow below) had NO
+	// durable lifecycle record at all, so the boot sweep (boot_sweep.go)
+	// could never see it, let alone reconcile it to failed(interrupted)
+	// after a crash. Guarded by mu (the same mutex protecting `running`)
+	// rather than a dedicated lock — SetLifecycleStore is a boot-time,
+	// low-frequency write and every read is equally cheap.
+	lifecycleStore *session.LifecycleStore
 }
 
 // evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
@@ -135,6 +157,135 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 		dispatchSema:         newDispatchSemaphore(capacity),
 		evidenceRejectStreak: make(map[string]int),
 	}
+}
+
+// SetLifecycleStore installs the durable S2 session-lifecycle store
+// (ADR-053/FR-118) every task-dispatch session is minted into (see the
+// lifecycleStore field's own doc comment for the gap this closes). Mirrors
+// PlanEngine.SetLifecycleStore — the gateway wiring seam calls both with the
+// SAME store instance so the boot sweep and this producer agree on one
+// durable record per session_id. Optional: leaving it unset (nil) leaves
+// task dispatch exactly as it behaved before this wave — sessions created,
+// but with no durable lifecycle record and therefore invisible to the boot
+// sweep.
+func (te *TaskExecutor) SetLifecycleStore(ls *session.LifecycleStore) {
+	te.mu.Lock()
+	te.lifecycleStore = ls
+	te.mu.Unlock()
+}
+
+// getLifecycleStore returns the installed lifecycle store (nil if unset),
+// guarded by mu so a concurrent SetLifecycleStore never races a goroutine
+// reading it mid-dispatch.
+func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	return te.lifecycleStore
+}
+
+// mintTaskLifecycleRecord persists the initial durable S2 lifecycle record
+// (ADR-053, state=queued) for the freshly-created task-dispatch session
+// sessionID — closing the FR-118/G-13 producer gap described on the
+// lifecycleStore field's doc comment. Called synchronously by BOTH
+// task-session creation chokepoints — createTaskSessionSync (used by
+// ExecuteTask, and therefore by every one of CheckQueuedTasks,
+// advanceBlockedTasks, SpawnTriggeredRun, and plan-member dispatch via
+// executeTaskPlanVerified) and StartTaskNow's own inline session-creation
+// block — so EVERY task-dispatch path gets a record, not just one of them.
+//
+// OwnerScopeKind: a plan-member task (t.PlanID != "") names its plan as the
+// durable owner (OwnerScopePlan/t.PlanID) — the same discriminator a plan's
+// own OWNER/SUPERVISION sessions use (pkg/agent/plan_engine.go's
+// mintPlanSession, out of this wave's write-set/scope). A standalone task
+// has no single owning session, so it takes the same OwnerScopeHuman
+// default pkg/tools/delegate.go's own top-level (non-parented) mint uses.
+// ParentAgentID/ParentDurableKey are deliberately left empty: a task
+// dispatch is not a `delegate.run` call, so there is no delegating parent to
+// attribute — and leaving ParentDurableKey empty also means
+// verifyCallerOwnsSession (pkg/tools/delegate.go) fails closed if some
+// caller ever names a task's session_id in a delegate.* admin action
+// (cancel/steer/respond/follow_up/peek/inbox), preserving today's behavior
+// where such a call found no record at all.
+//
+// Best-effort: a mint failure is logged at Error but NEVER propagated —
+// unlike delegate.go's `run` (which refuses the WHOLE call on a mint
+// failure per FR-015's attribution contract), a task dispatch that already
+// claimed the task and created its chat-transcript session must proceed
+// even if the durable lifecycle record could not be written; the
+// crash-recovery gap this wave closes is strictly better than before
+// regardless of this one failure mode.
+func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) {
+	ls := te.getLifecycleStore()
+	if ls == nil || sessionID == "" {
+		return
+	}
+	ownerKind := session.OwnerScopeHuman
+	ownerID := ""
+	if t.PlanID != "" {
+		ownerKind = session.OwnerScopePlan
+		ownerID = t.PlanID
+	}
+	rec := &session.LifecycleRecord{
+		SessionID:      sessionID,
+		Generation:     0,
+		State:          session.LifecycleQueued,
+		OwnerScopeKind: ownerKind,
+		OwnerScopeID:   ownerID,
+		WorkspaceID:    t.WorkspaceID,
+		AgentID:        t.AgentID,
+	}
+	if err := ls.Persist(rec); err != nil {
+		logger.ErrorCF("task_executor", "mintTaskLifecycleRecord: failed to persist durable session record",
+			map[string]any{"task_id": t.ID, "session_id": sessionID, "error": err.Error()})
+	}
+}
+
+// transitionTaskLifecycle atomically transitions sessionID's durable S2
+// lifecycle record to state (+ failedReason when state==LifecycleFailed),
+// preserving every other field — mirrors
+// pkg/tools/delegate.go's DelegateTool.transitionLifecycle exactly (same
+// Mutate-based atomic RMW rationale: two concurrent transitions on the same
+// session_id must serialize through the store's own per-session lock,
+// rather than race a manual Load+Persist pair — Correctness-MAJOR-3/S4
+// INV-3). Best-effort: an error (including the no-record-yet case, when
+// lifecycleStore is nil or the initial mint above failed/was skipped) is
+// logged at Warn and never propagated — a durable-record write failure
+// must never fail or mask the outcome of the underlying task run.
+func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
+	ls := te.getLifecycleStore()
+	if ls == nil || sessionID == "" {
+		return
+	}
+	err := ls.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		rec.State = state
+		rec.FailedReason = failedReason
+		if state != session.LifecycleNeedsInput {
+			rec.NeedsInput = nil
+		}
+		return nil
+	})
+	if err != nil {
+		logger.WarnCF("task_executor", "transitionTaskLifecycle: atomic transition failed",
+			map[string]any{"session_id": sessionID, "state": string(state), "error": err.Error()})
+	}
+}
+
+// finalizeTaskLifecycle transitions sessionID's durable lifecycle record to
+// the terminal state matching a task's own just-written terminal status:
+// session.LifecycleCompleted for task.StatusDone, session.LifecycleFailed
+// (reason "task_failed") for anything else (task.StatusFailed is the only
+// other terminal task status this function is ever called with). Shared by
+// completeTaskWithResult and finishTaskRun's already-terminal branch so the
+// status->lifecycle-state mapping lives in exactly one place.
+func (te *TaskExecutor) finalizeTaskLifecycle(sessionID string, status task.Status) {
+	if status == task.StatusDone {
+		te.transitionTaskLifecycle(sessionID, session.LifecycleCompleted, "")
+		return
+	}
+	te.transitionTaskLifecycle(sessionID, session.LifecycleFailed, "task_failed")
 }
 
 // bumpEvidenceRejectStreak increments and returns taskID's consecutive
@@ -262,6 +413,15 @@ func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVeri
 		if gateErr := te.requirePlanExecuting(t); gateErr != nil {
 			return gateErr
 		}
+	}
+
+	// run_task tool-policy gate (see requireRunTaskAutoDispatchApproved's doc):
+	// applies to every caller of this primitive, including the
+	// executeTaskPlanVerified bypass — harmlessly a no-op there since that
+	// bypass only ever dispatches a plan member (PlanID != ""), which this
+	// gate already exempts.
+	if gateErr := te.requireRunTaskAutoDispatchApproved(t); gateErr != nil {
+		return gateErr
 	}
 
 	// Guard: do not dispatch a task that still has unsatisfied dependencies.
@@ -393,6 +553,12 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 		logger.ErrorCF("task_executor", "Could not persist session_id on task",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": updateErr.Error()})
 	}
+	// FR-118/G-13: mint the durable S2 lifecycle record for this session — see
+	// mintTaskLifecycleRecord's doc comment for why this is the producer that
+	// closes the boot-sweep visibility gap for CheckQueuedTasks,
+	// advanceBlockedTasks, SpawnTriggeredRun, and plan-member dispatch (every
+	// caller of ExecuteTask funnels through this function).
+	te.mintTaskLifecycleRecord(taskSessionID, t)
 	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
 		ID:        t.ID + "-prompt",
 		Role:      "user",
@@ -429,7 +595,7 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isPlanGateRefusal(err) {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -438,6 +604,10 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 
 	logger.InfoCF("task_executor", "runTask started",
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
+	// FR-118/G-13: the goroutine is now genuinely executing this attempt —
+	// mirrors pkg/tools/delegate.go's transitionLifecycle(..., LifecycleRunning,
+	// "") at the start of its own executeAsync/executeSync.
+	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -538,6 +708,12 @@ func (te *TaskExecutor) finishTaskRun(
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		// FR-118/G-13: a genuine run-time execution error (distinct from the
+		// boot sweep's own "interrupted" reason for a crash-stranded session —
+		// this run actually completed, badly) terminates the durable lifecycle
+		// record too, so it is never left non-terminal for a later boot sweep
+		// to (correctly, but redundantly) sweep.
+		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error")
 		te.failTask(t.ID, fmt.Sprintf("execution error: %v", err))
 		failedTask := *t
 		failedTask.Status = task.StatusFailed
@@ -580,6 +756,10 @@ func (te *TaskExecutor) finishTaskRun(
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		// FR-118/G-13: an explicit update_task(done|failed) call already wrote
+		// the task terminal — mirror that outcome onto the durable lifecycle
+		// record too (see finalizeTaskLifecycle's doc comment).
+		te.finalizeTaskLifecycle(taskSessionID, current.Status)
 		te.notifySourceChannel(current)
 		return ""
 	}
@@ -1198,6 +1378,12 @@ func (te *TaskExecutor) completeTaskWithResult(
 				map[string]any{"task_id": t.ID, "error": setErr.Error()})
 		}
 	}
+	// FR-118/G-13: this is completeTaskWithResult's own terminal write —
+	// mirror it onto the durable lifecycle record (see finalizeTaskLifecycle's
+	// doc comment). Placed AFTER the CAS write above lands (never on the
+	// dropped-conflict early returns), exactly like the UnifiedMeta archive
+	// this line sits next to.
+	te.finalizeTaskLifecycle(taskSessionID, status)
 	te.recordEvidenceBoundary(final)
 	te.onTaskComplete(final)
 	te.notifySourceChannel(final)
@@ -1609,7 +1795,7 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		if err := te.ExecuteTask(ctx, taskID); err != nil {
-			if !isPlanGateRefusal(err) {
+			if !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
 					map[string]any{"task_id": taskID, "error": err.Error()})
 			}
@@ -1802,6 +1988,12 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		} else {
 			t = updated
 		}
+		// FR-118/G-13: mint the durable S2 lifecycle record for this session —
+		// see mintTaskLifecycleRecord's doc comment. StartTaskNow is the SECOND
+		// (and only other) task-session creation chokepoint besides
+		// createTaskSessionSync; both must call this so every dispatch path
+		// gets a record.
+		te.mintTaskLifecycleRecord(taskSessionID, t)
 		if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
 			ID:        t.ID + "-prompt",
 			Role:      "user",
@@ -1855,12 +2047,20 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		delete(te.running, t.ID)
 		te.mu.Unlock()
 		if redispatchTaskID != "" {
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isPlanGateRefusal(err) {
+			if err := te.ExecuteTask(context.Background(), redispatchTaskID); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
 		}
 	}()
+
+	// FR-118/G-13: the goroutine is now genuinely executing this attempt —
+	// mirrors runTask's identical call (see its doc comment) and, deliberately,
+	// sits BEFORE the goroutineCtxHook test seam below: a test using the hook
+	// to intercept before real execution is still simulating a goroutine that
+	// truly started, so the durable record should show running, not queued,
+	// at the moment of interception.
+	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
 
 	// Test seam: when goroutineCtxHook is set, invoke it and return without
 	// performing real agent execution. The hook receives the goroutine's context so
@@ -2038,6 +2238,134 @@ func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
 	return te.planStore.Get(planID)
 }
 
+// ErrRunTaskApprovalRequired is returned by executeTask's automatic-dispatch
+// gate (requireRunTaskAutoDispatchApproved, below) when a STANDALONE task
+// (PlanID == "") is about to be cold-dispatched for an agent whose run_task
+// tool policy is "ask".
+//
+// Closes a real fail-open defect: a human DENYING an ask-gated run_task tool
+// call (pkg/tools/run_task.go's Execute, gated in pkg/agent/loop.go's runTurn
+// ask-policy branch) had NO durable effect on the underlying task at all —
+// Execute() is never even invoked on a denial (the loop `continue`s past it
+// after recording the transcript/audit entries), so the task simply stayed
+// `next`, and every UNATTENDED dispatch path (CheckQueuedTasks' ~60s
+// heartbeat drain, advanceBlockedTasks, SpawnTriggeredRun's cron fire) picked
+// it up and ran it anyway on its very next pass, because none of them ever
+// consulted the SAME tool-policy decision that gated the explicit call.
+//
+// The fix generalizes the existing S1 plan-state-gate pattern
+// (requirePlanExecuting, this file): the dispatch PRIMITIVE (executeTask)
+// itself now consults AgentLoop.ResolveApprovalToolPolicy(agentID,
+// "run_task") — the SAME authoritative resolver the gateway's own WS
+// approval hook and the runTurn ask-gate already resolve through (see that
+// method's own doc comment: "the SINGLE authority both the agent-loop tool
+// filter... and the gateway WS approval hook... resolve through, so the two
+// can never drift again") — for every cold, unattended dispatch of a
+// standalone task. This closes the loophole for EVERY future denial, not
+// merely a single recorded event: an agent whose run_task policy is "ask"
+// can never have a fresh standalone task auto-fire without a human
+// explicitly approving a run_task call.
+//
+// Deliberately scoped to policy=="ask" only, not "deny": (1) the reported
+// defect is specifically the ask-then-deny case — a "deny" policy never
+// produces a human "denial" event at all, since the tool call fails fast
+// with no approval prompt in the first place; (2) "deny" is genuinely
+// ambiguous at this call site — config.ValidateToolPolicyCoverage guarantees
+// every real production agent has an EXPLICIT allow/ask/deny entry for
+// every static builtin tool (CLAUDE.md hard constraint 6), but that
+// validation is boot-time-only and many lightweight test harnesses in this
+// package construct an AgentLoop with NO tool-policy configuration at all —
+// tools.EffectiveToolPolicy's own documented fail-closed default for that
+// gap is ALSO "deny" (logged at Error). Gating on bare policy!="allow" would
+// therefore misfire on every such harness (an artifact of incomplete test
+// fixtures, not an operator's real "deny" decision) and refuse dispatch for
+// unrelated tests across this package. "ask" has no such fallback anywhere
+// in the resolution chain — it can only ever be an explicit, deliberate
+// config.ToolPolicyAsk entry — so it is the one value this gate can act on
+// without a false-positive risk from missing test coverage.
+var ErrRunTaskApprovalRequired = errors.New(
+	"task_executor: standalone task's assigned agent requires an explicit run_task approval (ask policy); refusing unattended dispatch")
+
+// requireRunTaskAutoDispatchApproved is the run_task tool-policy gate, the
+// sibling of requirePlanExecuting: both are consulted from executeTask, the
+// ONE primitive shared by every automatic (unattended) dispatch path
+// (CheckQueuedTasks, advanceBlockedTasks, SpawnTriggeredRun, and the
+// goal-loop's own retry re-dispatch). See ErrRunTaskApprovalRequired's doc
+// comment for the full rationale.
+//
+// Returns nil (gate does not apply) when ANY of:
+//
+//   - t.PlanID != "" — a plan member's dispatch authority is the plan
+//     engine's own approval flow (requirePlanExecuting), entirely separate
+//     from run_task (which itself refuses any task naming a PlanID — see
+//     pkg/tools/run_task.go's G4/A3 check).
+//
+//   - t.StartedAt != "" — this task's CURRENT run has already been claimed
+//     at least once. ClaimForRun (pkg/task/claim.go) stamps StartedAt on
+//     every claim, and the goal loop's own retry-requeue writes
+//     (consumeAttemptOrExhaust, rejectBareEvidenceClaim — both flip Status
+//     back to `next` for one more attempt) never touch StartedAt. A
+//     non-empty StartedAt therefore means THIS dispatch is a CONTINUATION of
+//     an already-authorized run, not a fresh unattended one — the
+//     human/approval decision that authorized the original claim already
+//     covers its own retry budget (maxAttempts/hardCeiling already bounds
+//     how long that continuation can run); re-consulting policy on every
+//     retry would silently break any multi-attempt task for an ask-policy
+//     agent even though a human (or an approved run_task call) already
+//     authorized it to run at all. SpawnReset (pkg/task/store.go) — a cron
+//     trigger's NEW scheduled firing — deliberately clears StartedAt back to
+//     "" for exactly this reason: a new scheduled firing is a FRESH
+//     unattended dispatch of a task nobody has re-approved, and must be
+//     re-gated, never treated as a continuation of whatever the previous
+//     firing did.
+//
+//   - the resolved policy for (t.AgentID, "run_task") is not "ask" (the
+//     common "allow" case has nothing to gate — it matches exactly what an
+//     explicit run_task call would do: execute immediately, no prompt; see
+//     ErrRunTaskApprovalRequired's doc for why "deny" is deliberately not
+//     included here either).
+//
+// Otherwise returns ErrRunTaskApprovalRequired (fail-closed) and leaves the
+// task exactly as it is — still `next`, unchanged, still visible on the
+// board, still runnable the instant a human calls run_task and approves it
+// (or an operator relaxes the policy) — NOT silently retried forever with no
+// trace: the Debug log below (mirroring requirePlanExecuting's own
+// "routine, expected" logging convention) records every refusal.
+func (te *TaskExecutor) requireRunTaskAutoDispatchApproved(t *task.Task) error {
+	if t.PlanID != "" || t.StartedAt != "" {
+		return nil
+	}
+	// An unwired executor cannot resolve a policy at all. This is NOT a
+	// fail-open hole: the sole production constructor (newTaskExecutor) always
+	// sets agentLoop, and dereferences al.cfg before it ever returns, so a nil
+	// loop cannot reach production — it only occurs in bespoke test harnesses
+	// that build a TaskExecutor literal. Gating those would change what they
+	// test (e.g. TestDispatchSema_* asserts semaphore rejection, not policy),
+	// so the gate stays inert exactly where it cannot be evaluated.
+	if te.agentLoop == nil {
+		return nil
+	}
+	policy := te.agentLoop.ResolveApprovalToolPolicy(t.AgentID, "run_task")
+	if policy != string(config.ToolPolicyAsk) {
+		return nil
+	}
+	logger.DebugCF("task_executor",
+		"run_task policy gate: refusing unattended dispatch of a standalone task pending an explicit run_task approval",
+		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "run_task_policy": policy})
+	return fmt.Errorf("%w: task %q (agent %q, run_task policy %q)", ErrRunTaskApprovalRequired, t.ID, t.AgentID, policy)
+}
+
+// isRoutineAutoDispatchRefusal reports whether err is one of executeTask's
+// own fail-closed automatic-dispatch sentinels — the plan-state gate
+// (isPlanGateRefusal) or the run_task tool-policy gate
+// (ErrRunTaskApprovalRequired). Both already log themselves at their own
+// correct level the instant they return, so callers that otherwise
+// blanket-Warn on "dispatch failed for ANY reason" check this first to avoid
+// a duplicate, mismatched-severity second log line for the identical event.
+func isRoutineAutoDispatchRefusal(err error) bool {
+	return isPlanGateRefusal(err) || errors.Is(err, ErrRunTaskApprovalRequired)
+}
+
 // CheckQueuedTasks picks the highest-priority *dispatchable* `next` task per
 // agent and starts it. Called by the heartbeat service (pkg/heartbeat's
 // TaskDrainService) on an unconditional ~1-minute ticker — this is the
@@ -2168,14 +2496,21 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 			continue
 		}
 
-		if err := te.ExecuteTask(ctx, t.ID); err != nil && !isPlanGateRefusal(err) {
+		if err := te.ExecuteTask(ctx, t.ID); err != nil && !isRoutineAutoDispatchRefusal(err) {
 			// A plan-gate refusal is already logged by requirePlanExecuting at
 			// its own correct level (see isPlanGateRefusal's doc) — this
-			// branch's own pre-filter above means that case should be
-			// unreachable in practice, but the check is kept so a future
+			// branch's own plan-gate pre-filter above means THAT case should
+			// be unreachable in practice, but the check is kept so a future
 			// change to the pre-filter fails safe (no duplicate/mismatched-
 			// severity log) rather than silently reintroducing the exact
 			// per-tick spam this function's log-level note warns against.
+			// A run_task-policy refusal (ErrRunTaskApprovalRequired) has NO
+			// such pre-filter here — this loop has no per-agent tool-policy
+			// cache to hang one on, unlike the per-tick plan cache above — so
+			// isRoutineAutoDispatchRefusal reaching that branch is the
+			// EXPECTED, routine path for an ask-policy agent's standalone
+			// task, already logged at Debug by
+			// requireRunTaskAutoDispatchApproved itself.
 			logger.WarnCF("task_executor", "Heartbeat: could not start task",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
 		}

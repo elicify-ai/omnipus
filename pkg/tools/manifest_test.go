@@ -31,7 +31,7 @@ func TestToolManifestTier_FullSetExact(t *testing.T) {
 		"read_file", "write_file", "edit_file", "list_directory",
 		"bash", "search_web", "fetch_url", "send_message",
 		"hand_off", "return_to_default", "remember", "recall_memory", "set_todos",
-		"navigate", "create_task", "list_tasks", "update_task",
+		"navigate", "create_task", "list_tasks", "update_task", "delegate",
 	}
 	for _, n := range specFull {
 		if ToolManifestTier(n) != ManifestFull {
@@ -79,8 +79,8 @@ func TestToolManifestTier_InfraSet(t *testing.T) {
 
 func TestToolManifestTier_LazySet(t *testing.T) {
 	// Sample of tools that must be ManifestLazy per the spec.
-	// Note: navigate/create_task/list_tasks/update_task were promoted to Full-tier
-	// and must NOT appear in this list.
+	// Note: navigate/create_task/list_tasks/update_task/delegate were promoted
+	// to Full-tier and must NOT appear in this list.
 	lazySample := []string{
 		"create_agent",
 		"browser_navigate",
@@ -89,7 +89,6 @@ func TestToolManifestTier_LazySet(t *testing.T) {
 		"browser_screenshot",
 		"install_skill",
 		"workspace_shell",
-		"delegate",
 	}
 	for _, n := range lazySample {
 		got := ToolManifestTier(n)

@@ -1595,14 +1595,42 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 			jsonErr(w, http.StatusNotFound, "task not found")
 			return
 		}
-		// TOCTOU between the handler's own precheck and the engine's
-		// authoritative re-check under planDecisionMu: if the task left
-		// in_progress in that window (completed, or a concurrent Stop won),
-		// the raced request gets an honest 409, not a generic 500 — the
-		// same mapping handlePlanStop applies.
-		if reread, rerr := a.taskStore.Get(id); rerr == nil && reread.Status != task.StatusInProgress {
-			jsonErr(w, http.StatusConflict, fmt.Sprintf("task is %q; only an in-progress task can be stopped", reread.Status))
-			return
+		// TOCTOU between the handler's own precheck (above) and StopTask's
+		// own authoritative re-check under planDecisionMu: the task left
+		// in_progress in that window. That has two, NOT equivalent, causes:
+		//
+		//  1. A concurrent Stop request for the SAME task won the race —
+		//     the task is now failed+CancelReasonStoppedByUser. This
+		//     caller's own request achieved nothing itself, but the outcome
+		//     it asked for ("this task is stopped") is already true. A stop
+		//     that achieved its purpose must not be reported as an error —
+		//     idempotent 200, not 409 (this is the bug this branch used to
+		//     have: it mapped ANY non-in_progress re-read to 409, including
+		//     this one).
+		//  2. The task reached some OTHER terminal state on its own
+		//     (completed normally, or failed for an unrelated reason) —
+		//     that is a genuine conflict: this Stop request cannot apply,
+		//     and never did. 409, same as before.
+		//
+		// taskStopConflictOutcome makes that call from the re-read task's
+		// own Status/CancelReason (see its doc for the full state table). A
+		// re-read failure (rerr != nil — including the task having vanished
+		// between the two reads) or a re-read that STILL shows in_progress
+		// means StopTask's error had nothing to do with the task's status
+		// (e.g. an I/O failure from inside the engine's own Get or its
+		// cancelMemberLocked write) — falls through to the generic 500
+		// below, same mapping handlePlanStop uses for its own non-status
+		// engine failures.
+		if reread, rerr := a.taskStore.Get(id); rerr == nil {
+			if outcome, handled := taskStopConflictOutcome(reread); handled {
+				if outcome.alreadyStopped {
+					a.auditTask("task.stop", id)
+					jsonOK(w, a.toWireTask(*reread))
+					return
+				}
+				jsonErr(w, http.StatusConflict, outcome.message)
+				return
+			}
 		}
 		slog.Error("rest: task stop: engine stop failed", "id", id, "error", serr)
 		jsonErr(w, http.StatusInternalServerError, "could not stop task")
@@ -1613,6 +1641,42 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 	// (the engine package writes no audit entries).
 	a.auditTask("task.stop", id)
 	jsonOK(w, a.toWireTask(*updated))
+}
+
+// taskStopOutcome is what taskStopConflictOutcome decided for a task re-read
+// after PlanEngine.StopTask has already reported an error for it.
+type taskStopOutcome struct {
+	// alreadyStopped is true when the task is now failed with
+	// CancelReasonStoppedByUser — some request (not necessarily this one)
+	// already stopped it. handleTaskStop maps this to 200: the caller's
+	// stop achieved its purpose.
+	alreadyStopped bool
+	// message is the 409 body text; set only when alreadyStopped is false.
+	message string
+}
+
+// taskStopConflictOutcome maps a task re-read taken AFTER PlanEngine.StopTask
+// has already returned an error for taskID to the correct REST outcome. It
+// distinguishes "this task is now stopped, just not by this exact request"
+// (idempotent success) from a genuine conflict (409): only the task's own
+// Status/CancelReason on disk can tell those apart, since StopTask's error
+// text alone does not (both cases produce the identical "task %q is %s, not
+// in_progress" wrapping, see plan_engine.go's StopTask).
+//
+// handled is false when t is still in_progress: StopTask's error then can't
+// be explained by the task's own status having moved (an I/O failure
+// surfaced from inside the engine), and the caller should fall back to its
+// own generic 500 rather than treat this as a status-driven outcome.
+func taskStopConflictOutcome(t *task.Task) (outcome taskStopOutcome, handled bool) {
+	if t.Status == task.StatusInProgress {
+		return taskStopOutcome{}, false
+	}
+	if t.Status == task.StatusFailed && t.CancelReason == task.CancelReasonStoppedByUser {
+		return taskStopOutcome{alreadyStopped: true}, true
+	}
+	return taskStopOutcome{
+		message: fmt.Sprintf("task is %q; only an in-progress task can be stopped", t.Status),
+	}, true
 }
 
 // handleTaskRestart handles POST /api/v1/tasks/{id}/restart (ADR-052

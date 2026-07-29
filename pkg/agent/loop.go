@@ -404,6 +404,13 @@ type AgentLoop struct {
 	// Initialized in NewAgentLoop; always non-nil after construction.
 	cancelAbuse *cancelAbuseDetector
 
+	// cancelPreArm holds pre-registration cancel latches (cancel_prearm.go) —
+	// cancels that arrive before their target turn has registered in
+	// activeTurnStates. Initialized in NewAgentLoop; always non-nil after
+	// construction. See RequestCancel (cancel.go) for the arm side and
+	// registerActiveTurn (turn.go) for the consume side.
+	cancelPreArm *cancelPreArm
+
 	// sessionWorkers holds the active per-scope session workers (sync.Map).
 	// Key: scope string (e.g. "agent:jim:session:abc123").
 	// Value: *sessionWorker.
@@ -881,6 +888,9 @@ func NewAgentLoop(
 
 	// Initialize cancel abuse detector (shared across all four cancel entry points).
 	al.cancelAbuse = newCancelAbuseDetector()
+
+	// Initialize the pre-registration cancel latch table (cancel_prearm.go).
+	al.cancelPreArm = newCancelPreArm()
 
 	// SEC-26: Initialize rate limiter registry. The registry always exists
 	// so per-agent windows can be created even when no limit is configured.

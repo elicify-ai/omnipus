@@ -215,6 +215,18 @@ type restAPI struct {
 	// inject a stub. Nil means "use the production re-exec path"
 	// (gracefulSelfRestart), resolved lazily in HandleGatewayRestart.
 	restarter func()
+
+	// testForceFastUpsertErr is a test-only seam (same pattern as restarter
+	// above): when non-nil, fastAgentUpsert (issue #571) reports this error
+	// as if AgentLoop.UpsertAgentFast itself had failed, instead of calling
+	// it, and proceeds straight to the full-reload fallback. Exercising a
+	// genuine internal UpsertAgentFast failure (provider/registry state, a
+	// lost optimistic-concurrency race) deterministically from a black-box
+	// REST test is impractical; this lets a test simulate "the fast path
+	// failed" so the fallback-and-warning behavior can still be verified end
+	// to end (see TestCreateAgent_ReloadFailure_ReturnsWarning). Always nil
+	// in production.
+	testForceFastUpsertErr error
 }
 
 // ssrfChk returns the SSRF checker as a providers_pkg.URLChecker interface.
@@ -2039,6 +2051,73 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 	return true
 }
 
+// fastAgentUpsert is createAgent/updateAgent's ADR-054-completing fast path
+// (issue #571) for publishing a single agent create/update into the live
+// AgentRegistry, instead of a full config reload that restarts channels,
+// cron, schedulers, and the plan engine (up to ~60s under load).
+//
+// By the time either handler calls this, updateConfigJSONLocked has ALREADY
+// run (via withToolPolicyCoverageGuard) and its refreshConfigAndRewireServices
+// call has ALREADY re-read config.json and repopulated cfg.Agents.List from
+// the entity store — so a.agentLoop.GetConfig() here already contains
+// agentID's just-persisted entity record, and (for updateAgent's
+// default-agent-ID-flip case) the just-written agents.defaults.default_agent_id
+// singleton too. This function only has to swap the ONE affected
+// AgentInstance into the AgentRegistry; see AgentLoop.UpsertAgentFast for the
+// resolver/default-override rebuild (TRAP 1) and the atomic, lost-update-safe
+// publish (TRAP 2).
+//
+// Returns "" on success, or a non-empty warning string mirroring
+// createAgent/updateAgent's existing "warning" response field. Any failure —
+// the agent unexpectedly missing from the just-refreshed config, or a wiring
+// error inside UpsertAgentFast — falls back to the slow, already-hardened
+// full reload (triggerReloadAndWait) rather than leaving a half-wired agent
+// live: the exact risk AgentRegistry.UpsertAgent's own doc comment warns a
+// bare caller into.
+//
+// Defers to an ALREADY in-flight full reload rather than racing it:
+// AgentLoop.UpsertAgentFast's own doc documents a known, narrow residual —
+// a full ReloadProviderAndConfig that started with an OLDER config snapshot
+// (predating this agent's entity write) can complete AFTER this function's
+// fast-path publish and silently overwrite it, since that reload's snapshot
+// never saw the new agent. This is exactly the class of race
+// reload_coalescing_test.go's coalescing fix exists to close (a create
+// landing mid-reload must never be lost). Checking IsReloadPending() first
+// and, when true, going straight to the coalescing-aware
+// triggerReloadAndWait (which waits out the in-flight reload AND any
+// coalesced follow-up that re-reads config fresh) keeps that guarantee
+// intact — it only costs the full reload's latency in the narrower case
+// where one is already running for some other reason, not on every
+// create/update.
+func (a *restAPI) fastAgentUpsert(agentID string) string {
+	if a.agentLoop.IsReloadPending() {
+		return a.fallbackFullReload()
+	}
+	err := a.testForceFastUpsertErr
+	if err == nil {
+		cfg := a.agentLoop.GetConfig()
+		_, err = a.agentLoop.UpsertAgentFast(cfg, agentID)
+	}
+	if err != nil {
+		slog.Error("rest: fast agent upsert failed; falling back to full reload",
+			"agent_id", agentID, "error", err)
+		return a.fallbackFullReload()
+	}
+	return ""
+}
+
+// fallbackFullReload runs the slow, well-tested full config reload
+// (triggerReloadAndWait) and renders its error, if any, as a warning string
+// in the same shape createAgent/updateAgent already surface on their
+// "warning" response field. Used when fastAgentUpsert cannot complete the
+// narrow single-agent path.
+func (a *restAPI) fallbackFullReload() string {
+	if err := a.triggerReloadAndWait(); err != nil {
+		return fmt.Sprintf("config reload failed: %v", err)
+	}
+	return ""
+}
+
 // joinCoverageGapMessages renders a []config.CoverageGap as a single
 // semicolon-joined human-readable string for 400 error bodies — the smallest
 // adaptation for existing strings.Join call sites now that
@@ -2551,33 +2630,25 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Capture the default model name BEFORE triggering a reload to avoid a race
-	// between TriggerReload (which may swap the live config) and the read below.
+	// Capture the default model name BEFORE the fast upsert to avoid a race
+	// between it (which may swap the live config) and the read below.
 	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.ModelName
 
-	// Persistence succeeded. Reload so the in-memory config — and, critically,
-	// the AgentRegistry — pick up the new agent BEFORE we answer 201.
-	//
-	// triggerReloadAndWait, not the bare TriggerReload this used to call: the
-	// registry is rebuilt by exactly one path (executeReload →
-	// ReloadProviderAndConfig → NewAgentRegistry), so until that runs, the agent
-	// exists in cfg.Agents.List (SwapConfig already applied it) but NOT in the
-	// registry. That split is directly observable to the caller:
-	// validatePlanOwnerAgent reads the list and accepts the agent, while
-	// validateTaskAgentID reads the registry and rejects it as "not found" — so
-	// a 201 here was followed by POST /tasks 400 on the very agent we just
-	// created. Waiting closes that window; the coalescing in
-	// services.beginReload/finishReload is what makes the wait actually cover a
-	// request that arrived mid-reload (waiting alone would return when the
-	// IN-FLIGHT reload ends, and that reload's config snapshot predates this
-	// write).
+	// Persistence succeeded. Publish the new agent into the live AgentRegistry
+	// BEFORE we answer 201 — via the ADR-054 fast path (issue #571), not a
+	// full config reload: creating one agent must not restart channels, cron,
+	// the plan engine, or rebuild every OTHER agent's instance. fastAgentUpsert
+	// re-registers just this one agent (registry.UpsertAgent + a fresh
+	// resolver/default-agent-override, see AgentLoop.UpsertAgentFast) so
+	// GetAgent/ResolveRoute/GetDefaultAgent all observe it the instant this
+	// handler returns — closing the exact "201 followed by POST /tasks 400 on
+	// the agent we just created" split a bare cfg.Agents.List append used to
+	// leave open. It falls back to the slow, already-hardened full reload on
+	// any wiring error, so a failure degrades to "slow but correct" instead of
+	// a half-wired agent.
 	//
 	// The "warning" field signals a partial success — frontend must check this field.
-	var createReloadWarning string
-	if err := a.triggerReloadAndWait(); err != nil {
-		slog.Error("config reload after agent create failed", "error", err)
-		createReloadWarning = fmt.Sprintf("config reload failed: %v", err)
-	}
+	createReloadWarning := a.fastAgentUpsert(ac.ID)
 	// Build the response from local variables only (do NOT read from live config — race).
 	respModel := defaultModelName
 	if ac.Model != nil && ac.Model.Primary != "" {
@@ -3525,18 +3596,21 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// override AND the registry's nested RouteResolver's own config
 	// snapshot — the two ladders this bug fix makes agree.
 	//
-	// triggerReloadAndWait (not the bare TriggerReload): a default-agent flip is
-	// only real once the registry's cached override AND its nested
-	// RouteResolver snapshot are rebuilt, which only a completed reload does.
-	// Returning 200 before that is the ADR-037 anti-pattern — a control that
-	// looks like it worked and changed no routing. Same reasoning as createAgent.
+	// fastAgentUpsert (issue #571), not a full config reload: a default-agent
+	// flip is only real once the registry's cached override AND its nested
+	// RouteResolver snapshot are rebuilt (ADR-037 — a control that looks like
+	// it worked and changed no routing is the anti-pattern this project
+	// bans), and a soul change is only real once a fresh AgentInstance/
+	// ContextBuilder picks up the new SOUL.md — but neither requires
+	// restarting channels/cron/schedulers/the plan engine or rebuilding
+	// every OTHER agent's instance, only this one agent's. See
+	// AgentLoop.UpsertAgentFast for how the resolver/override/wiring parity
+	// is achieved without that cost; it falls back to the slow, hardened
+	// full reload on any wiring error.
 	needsReload := req.Soul != nil || defaultAgentIDChanged
 	var reloadWarning string
 	if needsReload {
-		if err := a.triggerReloadAndWait(); err != nil {
-			slog.Error("config reload after agent update failed", "error", err)
-			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
-		}
+		reloadWarning = a.fastAgentUpsert(id)
 	}
 
 	// #73: a model-only change is intentionally config-only (no reload above, so

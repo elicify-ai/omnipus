@@ -70,7 +70,29 @@ export function ModelPicker({
   // the selector shows that session's last-used model. Combined with the chat
   // store no longer clearing nextModel after a send, this makes a model pick
   // sticky within a conversation.
+  //
+  // MODEL SELECTION SOURCE — the twin of the AGENT PRECEDENCE RULE in
+  // src/store/session.ts (fixed for agents in 5157e378, "session attach
+  // clobbering the picked agent"). `modelSelectionSource` distinguishes a
+  // USER pick (`onPickerChange`) from an AUTO/derived seed (this effect).
+  // Without it, ANY activeAgentId change — most commonly the user switching
+  // agents mid-conversation via AgentPicker or the "@" mention menu, which
+  // changes activeAgentId while activeSessionId stays put — looked identical
+  // to a genuine navigation and silently re-seeded nextModel to the new
+  // agent's default, discarding whatever model the user had just explicitly
+  // picked for the next message. That overwritten value is what went out on
+  // the wire (metadata.model_name), so the user's choice was silently
+  // ignored.
+  //
+  // A SESSION change is still treated as real navigation (matching the
+  // pre-existing "genuine navigation ... still re-seeds" comment below): it
+  // releases any explicit pick and reseeds from the new conversation's own
+  // context, same as leaving a workspace releases an explicit agent pick in
+  // the agent-precedence rule. Only an agent change WITHOUT a session change
+  // is treated as "the same conversation, a new default" rather than
+  // "navigation".
   const lastSeedKey = useRef<string>('')
+  const modelSelectionSource = useRef<'auto' | 'user'>('auto')
   useEffect(() => {
     const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
     if (seedKey === lastSeedKey.current) return
@@ -85,11 +107,28 @@ export function ModelPicker({
     // opening/switching to a real session, or New Chat ('' target) — still
     // re-seeds from that target's last-used model.
     if (activeSessionId === '__pending' || prevSession === '__pending') return
+    if (activeSessionId !== prevSession) {
+      // Genuine navigation to a different conversation — any explicit pick
+      // was scoped to the conversation it was made in, so it is released and
+      // the new context's own history/default takes over below.
+      modelSelectionSource.current = 'auto'
+    } else if (modelSelectionSource.current === 'user') {
+      // Same conversation, only the agent changed — an explicit per-turn
+      // model pick survives an agent change, exactly like an explicit AGENT
+      // pick survives a session-derived hint under session.ts's AGENT
+      // PRECEDENCE RULE.
+      return
+    }
     setNextModel(transcriptLastModel ?? activeAgentModel ?? null)
   }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, setNextModel])
 
   function onPickerChange(model: string) {
     setNextModel(model || null)
+    // Either a non-empty pick (pin this model) or an explicit revert to ''
+    // (hand back to auto-follow) is the user's OWN action, not a derived
+    // seed — record which, so the re-seed effect above knows whether a later
+    // agent-only change is allowed to overwrite it.
+    modelSelectionSource.current = model ? 'user' : 'auto'
     if (model === '') {
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
