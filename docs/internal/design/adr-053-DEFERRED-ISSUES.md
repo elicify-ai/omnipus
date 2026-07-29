@@ -16,9 +16,19 @@ for full context.
 
 ---
 
-## E.1 — `Conformance_bootsweep_E2E` does not exercise the boot sweep
+## E.1 — `Conformance_bootsweep_E2E` does not exercise the boot sweep — **RESOLVED**
 
-- **Severity:** BLOCKER (DoD-6b §5 boot-sweep test is a stub)
+- **Status:** FIXED. `tests/e2e/fixtures/gateway-process.ts` now owns an isolated
+  gateway (own port, own `OMNIPUS_HOME`, own `credentials.json`) with real
+  `kill9()`/`restart()` and CSRF/cookie re-mint. `Conformance_bootsweep_E2E`
+  SIGKILLs a real gateway mid-task, restarts it, and asserts the sweep
+  reconciled the session — **PASSED in CI on `be182706`**.
+- **Note:** building the real test immediately exposed a production bug the old
+  stub could not see — nothing called `tExecutor.SetLifecycleStore`, so the
+  `LifecycleRecord` producer was a no-op for the gateway's entire life and the
+  boot sweep had nothing to reconcile. Wired at `gateway.go:3048`. The Go unit
+  tests all passed throughout, because each called the setter itself.
+- **Severity (historical):** BLOCKER (DoD-6b §5 boot-sweep test is a stub)
 - **Files:** `tests/e2e/conformance-design-e2e.spec.ts:1391-1490`
 - **Root cause:** The test does not fork the gateway, `kill -9` it, restart it, or
   seed the non-terminal / paused / reconstructable-needs_input lifecycle states.
@@ -34,9 +44,21 @@ for full context.
   restart → assert boot sweep reconciled it`.
 - **Target date:** end of next sprint (Aug 8, 2026)
 
-## E.2 — `Conformance_t2_PlanLifecycleE2E` does not prove the F2 hold
+## E.2 — `Conformance_t2_PlanLifecycleE2E` does not prove the F2 hold — **RESOLVED**
 
-- **Severity:** BLOCKER (DoD-6b §t2 plan lifecycle test is a stub)
+- **Status:** FIXED. The test now forces a deterministic first-round UNMET
+  verdict (a `check:"exit 1"` plan DoD), asserts the hold as a mandatory —
+  not conditional — step, and samples `(judge_rounds, plan_phase, member
+  signature)` to assert the causal invariant that rounds may only advance
+  alongside a signature change. **PASSED in CI on `be182706`** as
+  "deterministic unmet → F2 hold proven → no wedge". The Go-side twin
+  (`pkg/agent/conformance_design_test.go`) additionally pins `JudgeRounds`
+  across idle ticks and is mutation-proven.
+- **Note:** the real test exposed a second production bug — overlapping
+  PlanSupervisor wakes raced for the same park (4 sessions in ~2 min live), so
+  a stall-triggered `abandon` could terminate a plan while slower DoD-unmet
+  corrections were still reasoning. Fixed by CAS-claiming the wake per plan.
+- **Severity (historical):** BLOCKER (DoD-6b §t2 plan lifecycle test is a stub)
 - **Files:** `tests/e2e/conformance-design-e2e.spec.ts:685-749`
 - **Root cause:** The test passes when the plan immediately reaches `done` or
   `failed`. It does not force a deterministic first-round unmet verdict, does
@@ -53,9 +75,37 @@ for full context.
   reduced to a thin smoke check.
 - **Target date:** end of next sprint (Aug 8, 2026)
 
-## E.3 — `Conformance_t3_PlanningReplanningE2E` does not prove correction verbs
+## E.3 — `Conformance_t3_PlanningReplanningE2E` does not prove correction verbs — **RESOLVED (pending final CI confirmation)**
 
-- **Severity:** BLOCKER (DoD-6b §t3 test uses a label string instead of a real task ID)
+- **Status:** the label-string defect is FIXED (the test asserts against real
+  member task IDs via `memberIds[label]`), and SUPERSEDE now commits with
+  `status:"success"` — **verified in CI on `be182706`**, where it previously
+  could not commit at all.
+- **What the real test exposed (a G-11 blocker, now fixed):** SUPERSEDE was
+  *unusable in production*. Its criteria-carryover guard compared criteria by
+  exact `(kind, expression)` — for a `check`, `command` + `expected_exit_code`
+  verbatim — while `buildSupervisionTargetsText` renders only
+  `id | status | title` to the PlanSupervisor and the tool schema accepts no
+  criterion id. The model was asked to reproduce information it was never
+  given: it tried four times, varying shape, then silently fell back to
+  `append` — a different semantic that does not supersede the wrong member.
+  Fixed by inheriting the superseded member's criteria engine-side
+  (`tools.InheritSupersededCriteria`, deep-copied with ids cleared so the
+  replacement never aliases the frozen original), keeping the strict check as
+  a backstop.
+- **TARGETED-RETRY split out, not dropped:** t3's `targeted_retry` assertion
+  was over-specified. `plan_engine.go:4295` auto-resets **all** live-round
+  failed members on append/supersede (`autoResetLiveRoundFailedMembers`,
+  `:4902`), whereas targeted_retry resets only its named member (`:4859`) — so
+  a committed SUPERSEDE had already given the retry target a fresh attempt,
+  and the supervisor correctly declined to issue a redundant verb. G-11
+  requires each verb to *work*, not that one scenario use all three. t3 keeps
+  its SUPERSEDE half byte-identical in strictness; a new
+  `Conformance_t3b_TargetedRetryOnlyE2E` proves targeted_retry in a scenario
+  with no `done` member, so supersede is structurally impossible and cannot
+  mask it. **t3b awaits its first CI run** — this entry moves to plain
+  RESOLVED once that shard is green.
+- **Severity (historical):** BLOCKER (DoD-6b §t3 test uses a label string instead of a real task ID)
 - **Files:** `tests/e2e/conformance-design-e2e.spec.ts:843-946`
 - **Root cause:** The test uses `target_member_id: 'm3'` (a LABEL string) instead
   of a real task ID. The wire contract accepts task IDs. The test never sends
@@ -195,7 +245,15 @@ F.1 `mountedRef.current = true` moved into the effect setup (was only
   plus 1 `/grill-code` for completeness
 - **~80 findings** aggregated
 - **41 fixes applied** (12 + 8 + 8 + 12 + 1)
-- **5 BLOCKERs deferred-with-issue** (E.1–E.5, this doc)
+- **5 BLOCKERs deferred-with-issue** (E.1–E.5, this doc) — **all five now RESOLVED**
+  (E.4/E.5 during the sign-off wave; E.1/E.2/E.3 in the 2026-07-29 closeout,
+  each verified by a real-LLM CI shard rather than by inspection). Building the
+  three real conformance tests exposed four production defects the stubs could
+  not see: an inert `LifecycleRecord` producer (nothing called
+  `tExecutor.SetLifecycleStore`), racing PlanSupervisor wakes, an unusable
+  SUPERSEDE verb, and an over-broad cancel latch. That is the argument for
+  DoD-6b existing at all — a conformance test that asserts enum membership
+  proves nothing, and every one of these was green in CI beforehand.
 - **0 lint issues** (`golangci-lint` 0, `go vet` clean, `gofmt -l` 0, `go build` clean)
 
 ## Authoritative spec + delivery contract

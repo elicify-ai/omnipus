@@ -130,7 +130,7 @@ const cancelLatchExpiredMessageSubstring = "did not take effect"
 // hook before calling it) — a clean, real RED, not a panic.
 func TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame(t *testing.T) {
 	// Not t.Parallel(): waits out a real multi-second timer (cancelPreArmTTL).
-	handler, _, _ := newTestWSHandler(t)
+	handler, _, al := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -141,6 +141,21 @@ func TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame(t *testing.T) {
 
 	const sessionA = "cancel-latch-expiry-never-registered-a"
 	const sessionB = "cancel-latch-expiry-never-registered-b"
+
+	// armCancelOrFindActiveTurn (pkg/agent/cancel_prearm.go) now additionally
+	// requires turnImminentForIdentity — real dispatcher evidence a turn is
+	// actually about to exist, not merely "none is registered right now" (see
+	// that function's doc comment). Both A and B need this primed: A so its
+	// own cancel below arms a latch at all, and B so ITS cancel in step 3
+	// reaches armLocked (cancel_prearm.go) — the opportunistic sweep that
+	// discovers and evicts A's now-expired latch is inside armLocked, which
+	// turnImminentForIdentity gates just as much as the arm itself.
+	// PrimeSessionImminentForTest is the exported, test-only
+	// (testing.Testing()-guarded) cross-package equivalent of pkg/agent's own
+	// unexported primeImminentSessionWorker helper (cancel_prearm_test.go) —
+	// see cancel_armed_ack_test.go's identical note for the full rationale.
+	require.NoError(t, al.PrimeSessionImminentForTest(sessionA))
+	require.NoError(t, al.PrimeSessionImminentForTest(sessionB))
 
 	// Step 1: cancel A — arms a latch, Armed:true. Read exactly one frame
 	// (the "graceful" ack); this succeeds without ever hitting conn's read

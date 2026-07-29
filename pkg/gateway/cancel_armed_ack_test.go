@@ -56,7 +56,7 @@ import (
 // already uses — never silence, and never a stage implying the turn was
 // actually stopped (there is nothing yet to stop).
 func TestHandleCancel_ArmedLatch_SendsAckFrame(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
+	handler, _, al := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -68,6 +68,22 @@ func TestHandleCancel_ArmedLatch_SendsAckFrame(t *testing.T) {
 	// This session id has never had a turn registered under it. Canceling it
 	// is exactly the pre-registration race cancel_prearm.go exists to close.
 	const sessionID = "armed-latch-never-registered-session"
+
+	// armCancelOrFindActiveTurn (pkg/agent/cancel_prearm.go) now additionally
+	// requires turnImminentForIdentity — real dispatcher evidence that a turn
+	// is actually about to exist for this identity, not merely "none is
+	// registered right now" (see that function's doc comment; caught by
+	// TestWS_Cancel_OnlyInterruptsTargetSession,
+	// websocket_multisession_test.go). PrimeSessionImminentForTest installs
+	// the same real sessionWorkers evidence pkg/agent's own
+	// primeImminentSessionWorker test helper does (cancel_prearm_test.go) —
+	// this package cannot call that unexported helper directly, so
+	// PrimeSessionImminentForTest is the exported, test-only (testing.Testing()
+	// guarded) cross-package seam. It exercises the REAL gate rather than
+	// forcing Armed=true, so this test still fails if turnImminentForIdentity
+	// itself is deleted (see the mutation-test note in this fix's report).
+	require.NoError(t, al.PrimeSessionImminentForTest(sessionID))
+
 	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
 	data, err := json.Marshal(cancelFrame)
 	require.NoError(t, err)

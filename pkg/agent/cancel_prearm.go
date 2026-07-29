@@ -58,9 +58,11 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -635,4 +637,96 @@ func (al *AgentLoop) turnImminentForIdentity(sessionID string, scope CancelScope
 		return true
 	})
 	return imminent
+}
+
+// ---------------------------------------------------------------------------
+// Cross-package test seam
+//
+// turnImminentForIdentity's only production evidence source is
+// al.sessionWorkers — a real, in-flight dispatcher. Constructing that
+// evidence from a bare unit test (no real message dispatch) requires
+// touching the unexported *sessionWorker type, which pkg/agent's OWN test
+// files do via primeImminentSessionWorker/primeImminentSessionWorkerTierB
+// (cancel_prearm_test.go). Those helpers cannot be reused by a DIFFERENT
+// package's tests (pkg/gateway's WS integration suite, which drives cancel
+// requests through a real *AgentLoop returned by its own test harness) —
+// Go does not export a package's _test.go symbols across package boundaries,
+// and pkg/gateway cannot construct pkg/agent's unexported sessionWorker type
+// directly.
+//
+// The two exported methods below are that seam: they install the exact same
+// evidence (a real sessionWorkers entry with inTurn=true) that
+// primeImminentSessionWorker/TierB install, so a cross-package caller
+// exercises turnImminentForIdentity's REAL production Range/inTurn read —
+// not a stand-in for its boolean result. A helper that instead forced
+// CancelOutcome.Armed to true directly would make the caller's test vacuous
+// (it would keep passing even if turnImminentForIdentity were deleted
+// outright), which is exactly the failure mode this fix's own report calls
+// out.
+//
+// Guarded by testing.Testing() (stdlib, Go 1.21+): it reports false in every
+// production binary, so these methods return an error instead of touching
+// al.sessionWorkers outside `go test` — there is no config flag, env var, or
+// build tag that can make them fire in production. This mirrors the same
+// guard this codebase already uses for a test-only fallback
+// (pkg/audit/hmac.go's resolveChainKey, gated the same way for the same
+// reason: dev/test convenience that must never leak into a shipped binary).
+// ---------------------------------------------------------------------------
+
+// newFakeImminentSessionWorker builds a *sessionWorker suitable for
+// registering directly into al.sessionWorkers from a test, WITHOUT ever
+// starting its runLoop goroutine. It still needs to survive
+// AgentLoop.Close() -> stopSessionWorkers (loop.go), which unconditionally
+// calls w.cancel() and waits on w.done for every worker found in the map —
+// a bare &sessionWorker{} has both as nil (nil func panics on call; a nil
+// channel blocks forever, up to stopSessionWorkers' 5s per-worker budget).
+// cancel is wired to a real (harmless) context.CancelFunc and done is
+// pre-closed, so cleanup treats this fake worker as already exited.
+//
+// Single source of truth for both this file's exported cross-package seam
+// and cancel_prearm_test.go's in-package primeImminentSessionWorker/TierB
+// helpers, which call PrimeSessionImminentForTest/PrimeChannelChatImminentForTest
+// below rather than duplicating this construction.
+func newFakeImminentSessionWorker() *sessionWorker {
+	_, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	close(done)
+	w := &sessionWorker{cancel: cancel, done: done}
+	w.inTurn.Store(true)
+	return w
+}
+
+// PrimeSessionImminentForTest installs a minimal fake sessionWorker under a
+// session-id scope key so a subsequent RequestCancel (and the
+// turnImminentForIdentity gate it consults) observes genuine dispatcher
+// evidence that a turn is imminent for sessionID — see the package doc
+// comment immediately above for the full rationale and the guard this
+// relies on.
+//
+// Returns an error (touching nothing) when called outside `go test` or with
+// an empty sessionID; both are test-authoring bugs, not runtime conditions.
+func (al *AgentLoop) PrimeSessionImminentForTest(sessionID string) error {
+	if !testing.Testing() {
+		return fmt.Errorf("agent: PrimeSessionImminentForTest is test-only and must not be called outside go test")
+	}
+	if sessionID == "" {
+		return fmt.Errorf("agent: PrimeSessionImminentForTest requires a non-empty sessionID")
+	}
+	al.sessionWorkers.Store("test-scope:session:"+sessionID, newFakeImminentSessionWorker())
+	return nil
+}
+
+// PrimeChannelChatImminentForTest is PrimeSessionImminentForTest's Tier B
+// (channel, chatID) counterpart — see turnImminentForIdentity's doc comment
+// for why the scope key must contain both, lower-cased, for its substring
+// match. Same test-only guard and rationale.
+func (al *AgentLoop) PrimeChannelChatImminentForTest(channel, chatID string) error {
+	if !testing.Testing() {
+		return fmt.Errorf("agent: PrimeChannelChatImminentForTest is test-only and must not be called outside go test")
+	}
+	if channel == "" || chatID == "" {
+		return fmt.Errorf("agent: PrimeChannelChatImminentForTest requires non-empty channel and chatID")
+	}
+	al.sessionWorkers.Store("test-scope:"+channel+":"+chatID, newFakeImminentSessionWorker())
+	return nil
 }

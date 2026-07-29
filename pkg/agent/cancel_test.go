@@ -328,6 +328,13 @@ func TestRequestCancelForSession_EmptySessionID_ReturnsError(t *testing.T) {
 func TestRequestCancelForSession_NoActiveTurn_ArmsLatch(t *testing.T) {
 	t.Parallel()
 	al := newCancelTestAgentLoop(t)
+
+	// Construct the precondition turnImminentForIdentity now requires: a
+	// message genuinely in flight for this identity, not merely "no active
+	// turn registered" (see cancel_prearm_test.go's file-level PREMISE
+	// UPDATE comment).
+	primeImminentSessionWorker(al, "sess-empty")
+
 	fired, armed, err := al.RequestCancelForSession(context.Background(), "sess-empty", "alice", "web")
 	require.NoError(t, err)
 	assert.False(t, fired, "no active turn exists — fired must be false")

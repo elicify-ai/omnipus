@@ -62,24 +62,6 @@ func newPreArmTestTurnState(turnID, sessionKey, transcriptSessionID, channel, ch
 	}
 }
 
-// newFakeImminentSessionWorker builds a *sessionWorker suitable for
-// registering directly into al.sessionWorkers from a test, WITHOUT ever
-// starting its runLoop goroutine. It still needs to survive
-// AgentLoop.Close() -> stopSessionWorkers (loop.go), which unconditionally
-// calls w.cancel() and waits on w.done for every worker found in the map —
-// a bare &sessionWorker{} has both as nil (nil func panics on call; a nil
-// channel blocks forever, up to stopSessionWorkers' 5s per-worker budget).
-// cancel is wired to a real (harmless) context.CancelFunc and done is
-// pre-closed, so cleanup treats this fake worker as already exited.
-func newFakeImminentSessionWorker() *sessionWorker {
-	_, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	close(done)
-	w := &sessionWorker{cancel: cancel, done: done}
-	w.inTurn.Store(true)
-	return w
-}
-
 // primeImminentSessionWorker registers a minimal fake sessionWorker so
 // turnImminentForIdentity (cancel_prearm.go) reports a turn as genuinely
 // imminent for sessionID — simulating "a message has been dequeued and is
@@ -91,18 +73,32 @@ func newFakeImminentSessionWorker() *sessionWorker {
 // TestWS_Cancel_OnlyInterruptsTargetSession,
 // pkg/gateway/websocket_multisession_test.go, the integration test that
 // caught the pre-fix over-broad behavior these unit tests used to encode
-// unconditionally). The scope key's prefix is arbitrary — it only needs to
-// satisfy turnImminentForIdentity's ":"+sessionID suffix match.
+// unconditionally).
+//
+// Delegates to AgentLoop.PrimeSessionImminentForTest (cancel_prearm.go) —
+// the same cross-package seam pkg/gateway's WS integration tests use (they
+// cannot construct the unexported *sessionWorker type this package's own
+// helper used to build inline) — so both packages exercise the identical
+// mechanism rather than two parallel ones. The error return is ignored via
+// panic, not a silent drop: every call site here passes a non-empty
+// sessionID from within `go test`, so a non-nil error can only mean this
+// helper itself was mis-called, which should fail loudly, not quietly no-op.
 func primeImminentSessionWorker(al *AgentLoop, sessionID string) {
-	al.sessionWorkers.Store("test-scope:session:"+sessionID, newFakeImminentSessionWorker())
+	if err := al.PrimeSessionImminentForTest(sessionID); err != nil {
+		panic(fmt.Sprintf("primeImminentSessionWorker: %v", err))
+	}
 }
 
 // primeImminentSessionWorkerTierB is primeImminentSessionWorker's (channel,
 // chatID) counterpart — see turnImminentForIdentity's doc comment for why
 // the scope key must contain both, lower-cased, for its Tier B substring
-// match.
+// match. Delegates to AgentLoop.PrimeChannelChatImminentForTest for the same
+// reason primeImminentSessionWorker delegates to PrimeSessionImminentForTest
+// above.
 func primeImminentSessionWorkerTierB(al *AgentLoop, channel, chatID string) {
-	al.sessionWorkers.Store("test-scope:"+channel+":"+chatID, newFakeImminentSessionWorker())
+	if err := al.PrimeChannelChatImminentForTest(channel, chatID); err != nil {
+		panic(fmt.Sprintf("primeImminentSessionWorkerTierB: %v", err))
+	}
 }
 
 // readCancelAuditRows parses every audit.jsonl line under dir into a raw
