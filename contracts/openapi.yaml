@@ -43,6 +43,12 @@ tags:
   description: Config state introspection (pending restarts)
 - name: Workspace
   description: Agent workspace file access
+- name: Library
+  description: >
+    File explorer over workspace work trees (library-spec.md D-2) — list,
+    read, write, rename, delete, upload, and download files by
+    workspace-relative path. Entries are paths, not UUIDs, distinct from
+    the UUID-keyed Workspace Media library.
 - name: Preview
   description: Agent-generated preview content served on the main gateway listener at /preview/ (token-authenticated, ADR-044)
 - name: Agents
@@ -111,6 +117,18 @@ components:
       $ref: ./components/schemas/MediaLibraryEntry.yaml
     MediaAttachmentRequest:
       $ref: ./components/schemas/MediaAttachmentRequest.yaml
+    LibraryWorkspaceNode:
+      $ref: ./components/schemas/LibraryWorkspaceNode.yaml
+    LibraryEntry:
+      $ref: ./components/schemas/LibraryEntry.yaml
+    LibraryContentResponse:
+      $ref: ./components/schemas/LibraryContentResponse.yaml
+    LibraryContentRequest:
+      $ref: ./components/schemas/LibraryContentRequest.yaml
+    LibraryRenameRequest:
+      $ref: ./components/schemas/LibraryRenameRequest.yaml
+    LibraryUploadResponse:
+      $ref: ./components/schemas/LibraryUploadResponse.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:
@@ -5594,6 +5612,12 @@ paths:
     post:
       operationId: createWorkspaceMediaAttachment
       summary: Create a chat attachment from a workspace library entry
+      description: >
+        Verifies the referenced entry exists, increments its refcount, and
+        returns the updated MediaLibraryEntry — the handler re-reads the
+        entry after the increment so the response reflects the new
+        refcount/last_refcount_seen_at rather than a stale pre-increment
+        projection.
       tags:
       - Workspace Media
       security:
@@ -5612,8 +5636,12 @@ paths:
             schema:
               $ref: '#/components/schemas/MediaAttachmentRequest'
       responses:
-        '204':
-          description: The library entry was accepted as a chat attachment.
+        '200':
+          description: The library entry was accepted as a chat attachment. Body is the updated MediaLibraryEntry (post-increment refcount).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaLibraryEntry'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -5692,6 +5720,372 @@ paths:
                 $ref: '#/components/schemas/MediaLibraryEntry'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/workspaces:
+    get:
+      operationId: listLibraryWorkspaces
+      summary: List every workspace as a Library virtual-root node
+      description: >
+        Backs the Library sidebar entry point (library-spec.md D-3): every
+        workspace the caller can browse, as a top-level node. Drilling into
+        one node scopes subsequent Library calls to that workspace via
+        {workspace_id} — see GET /library/{workspace_id}/entries.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Every workspace as a Library virtual-root node.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LibraryWorkspaceNode'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/entries:
+    get:
+      operationId: listLibraryEntries
+      summary: List a directory inside a workspace's work tree
+      description: >
+        Lists the entries directly inside the given workspace-relative
+        directory path (library-spec.md D-2 — entries are paths, not
+        UUIDs). Omit path or pass an empty string to list the work-tree
+        root. Returns 403 if path resolves outside the workspace's work
+        tree (traversal or an out-of-root symlink); 404 if the workspace or
+        the directory itself does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ""
+        description: >
+          Workspace-relative directory path to list. Empty or absent lists
+          the work-tree root.
+        example: "uploads"
+      responses:
+        '200':
+          description: Entries directly inside the requested directory.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    delete:
+      operationId: deleteLibraryEntry
+      summary: Delete a file or directory from a workspace's work tree
+      description: >
+        Deletes the file or directory at the given workspace-relative path.
+        Deleting a directory removes it and everything under it. Returns
+        403 if path resolves outside the workspace's work tree; 404 if
+        nothing exists at path.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the file or directory to delete.
+        example: "uploads/draft.md"
+      responses:
+        '204':
+          description: Deleted.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/content:
+    get:
+      operationId: getLibraryContent
+      summary: Read a file's text content for the Library editor/viewer
+      description: >
+        Returns the text content of the file at path for the SPA editor
+        (library-spec.md D-5), with explicit is_text / too_large fields so
+        the SPA falls back to GET .../download rather than guessing from
+        the content field. Returns 403 if path resolves outside the
+        workspace's work tree; 404 if path does not exist or names a
+        directory.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the file to read.
+        example: "uploads/report.md"
+      responses:
+        '200':
+          description: File text content (or the is_text/too_large signal that it cannot be inlined).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryContentResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: putLibraryContent
+      summary: Write a file's text content from the Library editor
+      description: >
+        Writes text content to the file at the given workspace-relative
+        path (library-spec.md D-5), creating the file if it does not
+        already exist and overwriting any existing content entirely.
+        Returns 403 if path resolves outside the workspace's work tree;
+        404 if the path's parent directory does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryContentRequest'
+      responses:
+        '200':
+          description: The written file's updated entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/upload:
+    post:
+      operationId: uploadLibraryFiles
+      summary: Upload files into a directory in a workspace's work tree
+      description: >
+        Streams a multipart upload directly into the given workspace-relative
+        directory (library-spec.md D-1 — uploads land as real, named files
+        inside the work tree, de-duplicated with a numeric suffix on
+        collision). Omit path or pass an empty string to upload into the
+        work-tree root. Returns 403 if path resolves outside the
+        workspace's work tree; 404 if the target directory does not exist.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ""
+        description: >
+          Workspace-relative directory to upload into. Empty or absent
+          uploads into the work-tree root.
+        example: "uploads"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: One or more files to upload.
+      responses:
+        '201':
+          description: Files uploaded successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryUploadResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/rename:
+    post:
+      operationId: renameLibraryEntry
+      summary: Rename or move a file or directory in a workspace's work tree
+      description: >
+        Renames or moves the entry at "from" to "to" (library-spec.md D-2).
+        "to" may name a different parent directory than "from", so this
+        operation doubles as move. Returns 403 if either path resolves
+        outside the workspace's work tree; 404 if nothing exists at
+        "from"; 409 if an entry already exists at "to".
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LibraryRenameRequest'
+      responses:
+        '200':
+          description: The renamed entry, reflecting its new path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/download:
+    get:
+      operationId: downloadLibraryFile
+      summary: Download the raw bytes of a file in a workspace's work tree
+      description: >
+        Streams the raw bytes of the file at path with a best-effort
+        Content-Type and a Content-Disposition attachment filename. The
+        binary counterpart to GET .../content — used for non-text files
+        and for text files GET .../content reports as too_large. Returns
+        403 if path resolves outside the workspace's work tree; 404 if
+        path does not exist or names a directory.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Workspace-relative path of the file to download.
+        example: "uploads/Copy of elicify_company_profile.pptx"
+      responses:
+        '200':
+          description: File content streamed with a best-effort Content-Type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
         '500':

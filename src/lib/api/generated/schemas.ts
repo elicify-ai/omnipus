@@ -108,6 +108,18 @@ type ToolCall = {
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
 };
+type LibraryUploadResponse = {
+  entries: Array<LibraryEntry>;
+};
+type LibraryEntry = {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified_at: string;
+  mime?: string | undefined;
+  is_text_editable: boolean;
+};
 type Agent = {
   id: string;
   name: string;
@@ -2411,6 +2423,43 @@ export const MediaLibraryEntry = z.object({
 export const MediaAttachmentRequest = z.object({
   media_id: z.string().max(36).uuid(),
 }).strict();
+export const LibraryWorkspaceNode = z.object({
+  id: z.string(),
+  name: z.string(),
+  entry_count: z.number().int().gte(0),
+});
+export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
+  name: z.string().min(1),
+  path: z.string().min(1),
+  is_dir: z.boolean(),
+  size: z.number().int().gte(0),
+  modified_at: z.string().datetime({ offset: true }),
+  mime: z.string().optional(),
+  is_text_editable: z.boolean(),
+});
+export const LibraryContentResponse = z.object({
+  path: z.string(),
+  content: z.string().optional(),
+  size: z.number().int().gte(0),
+  is_text: z.boolean(),
+  too_large: z.boolean(),
+  mime: z.string().optional(),
+});
+export const LibraryContentRequest = z.object({
+  path: z.string().min(1),
+  content: z.string().max(10485760),
+});
+export const uploadLibraryFiles_Body = z
+  .object({ files: z.array(z.instanceof(File)) })
+  .partial()
+  .passthrough();
+export const LibraryUploadResponse: z.ZodType<LibraryUploadResponse> = z.object(
+  { entries: z.array(LibraryEntry) }
+);
+export const LibraryRenameRequest = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -4114,6 +4163,373 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 403,
         description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/content",
+    alias: "getLibraryContent",
+    description: `Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryContentResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/library/:workspace_id/content",
+    alias: "putLibraryContent",
+    description: `Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryContentRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/download",
+    alias: "downloadLibraryFile",
+    description: `Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/entries",
+    alias: "listLibraryEntries",
+    description: `Lists the entries directly inside the given workspace-relative directory path (library-spec.md D-2 — entries are paths, not UUIDs). Omit path or pass an empty string to list the work-tree root. Returns 403 if path resolves outside the workspace&#x27;s work tree (traversal or an out-of-root symlink); 404 if the workspace or the directory itself does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional().default(""),
+      },
+    ],
+    response: z.array(LibraryEntry),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/library/:workspace_id/entries",
+    alias: "deleteLibraryEntry",
+    description: `Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at path.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/rename",
+    alias: "renameLibraryEntry",
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as move. Returns 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot;; 409 if an entry already exists at &quot;to&quot;.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: LibraryRenameRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: LibraryEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/upload",
+    alias: "uploadLibraryFiles",
+    description: `Streams a multipart upload directly into the given workspace-relative directory (library-spec.md D-1 — uploads land as real, named files inside the work tree, de-duplicated with a numeric suffix on collision). Omit path or pass an empty string to upload into the work-tree root. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the target directory does not exist.
+`,
+    requestFormat: "form-data",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: uploadLibraryFiles_Body,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "path",
+        type: "Query",
+        schema: z.string().optional().default(""),
+      },
+    ],
+    response: LibraryUploadResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/workspaces",
+    alias: "listLibraryWorkspaces",
+    description: `Backs the Library sidebar entry point (library-spec.md D-3): every workspace the caller can browse, as a top-level node. Drilling into one node scopes subsequent Library calls to that workspace via {workspace_id} — see GET /library/{workspace_id}/entries.
+`,
+    requestFormat: "json",
+    response: z.array(LibraryWorkspaceNode),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -7359,6 +7775,8 @@ Returns HTTP 201 on success.
     method: "post",
     path: "/workspaces/:id/media/attachments",
     alias: "createWorkspaceMediaAttachment",
+    description: `Verifies the referenced entry exists, increments its refcount, and returns the updated MediaLibraryEntry — the handler re-reads the entry after the increment so the response reflects the new refcount/last_refcount_seen_at rather than a stale pre-increment projection.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -7372,7 +7790,7 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: z.void(),
+    response: MediaLibraryEntry,
     errors: [
       {
         status: 400,

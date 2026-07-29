@@ -5339,6 +5339,108 @@ type IntegrationProvidersResponse struct {
 	Voice []IntegrationProvider `json:"voice"`
 }
 
+// LibraryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
+type LibraryContentRequest struct {
+	// Content Full replacement text content for the file, UTF-8. Maximum 10485760 bytes (10 MB) — matches the threshold GET .../content uses to set too_large=true, so a file this endpoint can write is always one the read endpoint can subsequently render inline.
+	Content string `json:"content"`
+
+	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
+	Path string `json:"path"`
+}
+
+// LibraryContentResponse Response from GET /api/v1/library/{workspace_id}/content — the text content of one file for the SPA editor/viewer (library-spec.md D-5). Carries explicit is_text / too_large flags so the SPA can fall back to the download endpoint rather than guessing from the content field.
+type LibraryContentResponse struct {
+	// Content File text content, UTF-8. Present only when is_text is true and too_large is false; absent otherwise. The SPA MUST check both flags before rendering this field rather than treating an absent/empty value as "the file is empty."
+	Content *string `json:"content,omitempty"`
+
+	// IsText Whether the server sniffed this file as text (not binary). False for images, video, and other binary formats — the SPA renders a metadata card + download link instead (library-spec.md section 4 scope table).
+	IsText bool `json:"is_text"`
+
+	// Mime Best-effort MIME type sniffed from the file extension/content.
+	Mime *string `json:"mime,omitempty"`
+
+	// Path Workspace-relative path echoed back from the request.
+	Path string `json:"path"`
+
+	// Size Actual file size in bytes, provided even when content is omitted.
+	Size int64 `json:"size"`
+
+	// TooLarge Whether the file exceeds the server's inline-text-editing size threshold — the same 10485760-byte (10 MB) threshold enforced as LibraryContentRequest.content's maxLength, so a file this endpoint reports as editable is always one the write endpoint can accept back. When true, content is omitted even for a text file.
+	TooLarge bool `json:"too_large"`
+}
+
+// LibraryEntry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
+type LibraryEntry struct {
+	// IsDir True when this entry is a directory.
+	IsDir bool `json:"is_dir"`
+
+	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+	IsTextEditable bool `json:"is_text_editable"`
+
+	// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+	Mime *string `json:"mime,omitempty"`
+
+	// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
+	ModifiedAt time.Time `json:"modified_at"`
+
+	// Name Base filename or directory name (final path segment).
+	Name string `json:"name"`
+
+	// Path Workspace-relative path from the work-tree root, forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+	Path string `json:"path"`
+
+	// Size File size in bytes. Always 0 for directories.
+	Size int64 `json:"size"`
+}
+
+// LibraryRenameRequest Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
+type LibraryRenameRequest struct {
+	// From Current workspace-relative path of the file or directory, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
+	From string `json:"from"`
+
+	// To New workspace-relative path, same constraints as "from". Rejected (409) if an entry already exists at this path.
+	To string `json:"to"`
+}
+
+// LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
+type LibraryUploadResponse struct {
+	// Entries Entries created by this upload, in the order the multipart parts were received.
+	Entries []struct {
+		// IsDir True when this entry is a directory.
+		IsDir bool `json:"is_dir"`
+
+		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+		IsTextEditable bool `json:"is_text_editable"`
+
+		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+		Mime *string `json:"mime,omitempty"`
+
+		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
+		ModifiedAt time.Time `json:"modified_at"`
+
+		// Name Base filename or directory name (final path segment).
+		Name string `json:"name"`
+
+		// Path Workspace-relative path from the work-tree root, forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+		Path string `json:"path"`
+
+		// Size File size in bytes. Always 0 for directories.
+		Size int64 `json:"size"`
+	} `json:"entries"`
+}
+
+// LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
+type LibraryWorkspaceNode struct {
+	// EntryCount Number of direct entries (files and directories) at the root of this workspace's work tree, counted non-recursively so this stays cheap across every workspace on one request. 0 when the work tree does not exist yet or is empty.
+	EntryCount int32 `json:"entry_count"`
+
+	// Id Workspace identifier (matches Workspace.id).
+	Id string `json:"id"`
+
+	// Name Human-readable workspace name (matches Workspace.name).
+	Name string `json:"name"`
+}
+
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {
 	// Password The user's password. Maximum 72 characters (bcrypt limit).
@@ -8518,6 +8620,42 @@ type RotateCredentials200JSONResponseBodyStatus string
 // DeleteCredential200JSONResponseBodyStatus defines parameters for DeleteCredential.
 type DeleteCredential200JSONResponseBodyStatus string
 
+// GetLibraryContentParams defines parameters for GetLibraryContent.
+type GetLibraryContentParams struct {
+	// Path Workspace-relative path of the file to read.
+	Path string `form:"path" json:"path"`
+}
+
+// DownloadLibraryFileParams defines parameters for DownloadLibraryFile.
+type DownloadLibraryFileParams struct {
+	// Path Workspace-relative path of the file to download.
+	Path string `form:"path" json:"path"`
+}
+
+// DeleteLibraryEntryParams defines parameters for DeleteLibraryEntry.
+type DeleteLibraryEntryParams struct {
+	// Path Workspace-relative path of the file or directory to delete.
+	Path string `form:"path" json:"path"`
+}
+
+// ListLibraryEntriesParams defines parameters for ListLibraryEntries.
+type ListLibraryEntriesParams struct {
+	// Path Workspace-relative directory path to list. Empty or absent lists the work-tree root.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+}
+
+// UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.
+type UploadLibraryFilesMultipartBody struct {
+	// Files One or more files to upload.
+	Files *[]openapi_types.File `json:"files,omitempty"`
+}
+
+// UploadLibraryFilesParams defines parameters for UploadLibraryFiles.
+type UploadLibraryFilesParams struct {
+	// Path Workspace-relative directory to upload into. Empty or absent uploads into the work-tree root.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+}
+
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
@@ -8709,6 +8847,15 @@ type SetGodModeJSONRequestBody = GodModeUpdateRequest
 
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
+
+// PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
+type PutLibraryContentJSONRequestBody = LibraryContentRequest
+
+// RenameLibraryEntryJSONRequestBody defines body for RenameLibraryEntry for application/json ContentType.
+type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest
+
+// UploadLibraryFilesMultipartRequestBody defines body for UploadLibraryFiles for multipart/form-data ContentType.
+type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
