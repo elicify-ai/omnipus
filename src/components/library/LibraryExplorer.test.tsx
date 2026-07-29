@@ -15,6 +15,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchLibraryWorkspaces: vi.fn(),
     fetchLibraryEntries: vi.fn(),
+    fetchLibraryContent: vi.fn(),
     deleteLibraryEntry: vi.fn(),
     renameLibraryEntry: vi.fn(),
     moveLibraryEntry: vi.fn(),
@@ -27,11 +28,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import {
   fetchLibraryWorkspaces,
   fetchLibraryEntries,
+  fetchLibraryContent,
   deleteLibraryEntry,
 } from '@/lib/api'
 
 const mockedFetchWorkspaces = vi.mocked(fetchLibraryWorkspaces)
 const mockedFetchEntries = vi.mocked(fetchLibraryEntries)
+const mockedFetchContent = vi.mocked(fetchLibraryContent)
 const mockedDelete = vi.mocked(deleteLibraryEntry)
 
 import { LibraryExplorer } from './LibraryExplorer'
@@ -69,6 +72,17 @@ function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
 beforeEach(() => {
   vi.clearAllMocks()
   act_setToasts()
+  // Deterministic default so selecting the default markdown entry (see
+  // makeEntry) never fires an unmocked network call — LibraryPreviewPane
+  // fetches content for markdown/mermaid/text kinds as soon as a file is
+  // selected. Individual tests override this when the content itself matters.
+  mockedFetchContent.mockResolvedValue({
+    path: 'report.md',
+    content: '# Report\n',
+    size: 9,
+    is_text: true,
+    too_large: false,
+  })
 })
 
 function act_setToasts() {
@@ -166,7 +180,7 @@ describe('LibraryExplorer — Show Hidden toggle (D-8)', () => {
 })
 
 describe('LibraryExplorer — destructive-action confirm (delete)', () => {
-  it('selecting a file opens the details strip; Delete requires an explicit confirm before deleteLibraryEntry fires', async () => {
+  it('selecting a file opens the preview pane; Delete requires an explicit confirm before deleteLibraryEntry fires', async () => {
     mockedFetchWorkspaces.mockResolvedValue([])
     mockedFetchEntries.mockResolvedValueOnce([makeEntry({ name: 'report.md', path: 'report.md' })])
     mockedFetchEntries.mockResolvedValueOnce([]) // after invalidation, refetch shows it gone
@@ -177,9 +191,9 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
 
-    await waitFor(() => expect(screen.getByTestId('library-details-strip')).toBeInTheDocument())
-    const strip = screen.getByTestId('library-details-strip')
-    fireEvent.click(within(strip).getByRole('button', { name: /delete/i }))
+    await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
+    const pane = screen.getByTestId('library-preview-pane')
+    fireEvent.click(within(pane).getByRole('button', { name: /delete/i }))
 
     // The delete has NOT happened yet — a confirm dialog must appear first.
     expect(mockedDelete).not.toHaveBeenCalled()
@@ -189,8 +203,8 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
 
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('ws-1', 'report.md'))
     await waitFor(() => expect(screen.queryByTestId('library-row-report.md')).not.toBeInTheDocument())
-    // Details strip closes once its entry is gone.
-    expect(screen.queryByTestId('library-details-strip')).not.toBeInTheDocument()
+    // Preview pane closes once its entry is gone.
+    expect(screen.queryByTestId('library-preview-pane')).not.toBeInTheDocument()
   })
 
   it('cancelling the confirm dialog does NOT call deleteLibraryEntry', async () => {
@@ -202,8 +216,8 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     await waitFor(() => expect(screen.getByTestId('library-row-draft.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-draft.md'))
 
-    await waitFor(() => expect(screen.getByTestId('library-details-strip')).toBeInTheDocument())
-    fireEvent.click(within(screen.getByTestId('library-details-strip')).getByRole('button', { name: /delete/i }))
+    await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
+    fireEvent.click(within(screen.getByTestId('library-preview-pane')).getByRole('button', { name: /delete/i }))
 
     await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
@@ -211,6 +225,44 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     await waitFor(() => expect(screen.queryByTestId('library-delete-confirm')).not.toBeInTheDocument())
     expect(mockedDelete).not.toHaveBeenCalled()
     expect(screen.getByTestId('library-row-draft.md')).toBeInTheDocument()
+  })
+})
+
+describe('LibraryExplorer — unsaved-edit navigation guard', () => {
+  // Drives the guard directly via its own module (preview/unsavedGuard.ts)
+  // rather than through a real CodeMirror keystroke: CodeMirror 6 mounts a
+  // contenteditable div with its own internal DOM-mutation handling that
+  // jsdom cannot reliably simulate through fireEvent, but the integration
+  // point THIS test exists to cover — LibraryExplorer's navigation handlers
+  // calling confirmDiscardLibraryEdits() before switching files — only
+  // depends on the guard's boolean state, not on how it got set. The
+  // editor's own dirty-tracking (draft !== last-saved) is covered separately
+  // by useLibraryFileEditor.test.ts.
+  it('warns before switching to a different file while an editor has unsaved edits, and stays put if the user cancels', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({ name: 'report.md', path: 'report.md' }),
+      makeEntry({ name: 'draft.md', path: 'draft.md' }),
+    ])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+    await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
+
+    const { setLibraryEditorDirty } = await import('./preview/unsavedGuard')
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    setLibraryEditorDirty(true)
+
+    fireEvent.click(screen.getByTestId('library-row-draft.md'))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    // Still on report.md — draft.md's content was never requested.
+    expect(mockedFetchContent).not.toHaveBeenCalledWith('ws-1', 'draft.md')
+
+    confirmSpy.mockRestore()
+    setLibraryEditorDirty(false)
   })
 })
 

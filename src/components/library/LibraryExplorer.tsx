@@ -9,12 +9,18 @@
 // directory, back out via breadcrumb, "Library" crumb to return to the
 // virtual root) is available regardless of how the panel was opened.
 //
-// Preview/edit pane (library-spec.md D-5) is explicitly OUT OF SCOPE for this
-// component — see the "PREVIEW/EDIT PANE PLACEHOLDER" comment below, where a
-// later task mounts CodeMirror/Shiki/<img>/<video>/Mermaid. Selecting a file
-// today opens a details strip with real metadata + real actions (download,
-// rename, move/copy, delete) — nothing fake, just narrower than the eventual
-// preview.
+// Preview/edit pane (library-spec.md D-5): LibraryPreviewPane, mounted below
+// where the "PREVIEW/EDIT PANE PLACEHOLDER" comment used to mark the spot —
+// see that mount site further down. It owns the actual content surface
+// (img/video/CodeMirror/Shiki/Mermaid); this file owns only navigation
+// (workspace/dir/file selection, breadcrumb) and the entry actions
+// (download/rename/move/copy/delete) that the pane's header delegates back
+// up to via props, unchanged from before the pane existed. The
+// confirmDiscardLibraryEdits() guard sprinkled through the navigation
+// handlers below is this file's one piece of pane-aware wiring: it's a
+// no-op whenever no editor is open or nothing is unsaved (see
+// preview/unsavedGuard.ts), so it does not change behavior for any caller
+// that never touches the editor.
 
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -27,12 +33,7 @@ import {
   Tray,
   SpinnerGap,
   FolderOpen,
-  DownloadSimple,
-  PencilSimple,
-  ArrowsLeftRight,
-  Trash,
 } from '@phosphor-icons/react'
-import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -45,8 +46,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { fileTypeMeta } from '@/components/chat/AttachmentCard'
-import { formatRelative } from '@/lib/formatRelative'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import {
@@ -62,9 +61,11 @@ import {
   getErrorMessage,
 } from '@/lib/api'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode } from '@/lib/api'
-import { LibraryEntryRow, formatLibrarySize } from './LibraryEntryRow'
+import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
+import { LibraryPreviewPane } from './LibraryPreviewPane'
+import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 
 export interface LibraryExplorerProps {
   /** undefined = start at the virtual root (D-3 sidebar entry point). */
@@ -192,26 +193,39 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
   })
 
   function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
+    if (!confirmDiscardLibraryEdits()) return
     setWorkspaceId(node.id)
     setPath('')
     setSelectedEntry(null)
   }
   function handleGoRoot() {
+    if (!confirmDiscardLibraryEdits()) return
     setWorkspaceId(null)
     setPath('')
     setSelectedEntry(null)
   }
   function handleGoWorkspaceRoot() {
+    if (!confirmDiscardLibraryEdits()) return
     setPath('')
     setSelectedEntry(null)
   }
   function handleOpenDirectory(entry: LibraryEntry) {
+    if (!confirmDiscardLibraryEdits()) return
     setPath(entry.path)
     setSelectedEntry(null)
   }
   function handleBreadcrumbSegment(index: number, segments: string[]) {
+    if (!confirmDiscardLibraryEdits()) return
     setPath(segments.slice(0, index + 1).join('/'))
     setSelectedEntry(null)
+  }
+  // Selecting a file that's ALREADY selected is not navigation (no editor
+  // would be discarded), so it skips the guard entirely rather than prompting
+  // to confirm leaving the file the user is already looking at.
+  function handleSelectFile(entry: LibraryEntry) {
+    if (selectedEntry?.path === entry.path) return
+    if (!confirmDiscardLibraryEdits()) return
+    setSelectedEntry(entry)
   }
   function handleDownload(entry: LibraryEntry) {
     if (!workspaceId) return
@@ -336,7 +350,9 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
             <button
               type="button"
               tabIndex={0}
-              onClick={onPopOut}
+              onClick={() => {
+                if (confirmDiscardLibraryEdits()) onPopOut()
+              }}
               aria-label="Open Library in a new tab"
               title="Open in new tab"
               data-testid="library-popout-button"
@@ -349,7 +365,9 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
             <button
               type="button"
               tabIndex={0}
-              onClick={onClose}
+              onClick={() => {
+                if (confirmDiscardLibraryEdits()) onClose()
+              }}
               aria-label="Close Library"
               title="Close"
               data-testid="library-close-button"
@@ -421,7 +439,7 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
                   entry={entry}
                   selected={selectedEntry?.path === entry.path}
                   onOpenDirectory={handleOpenDirectory}
-                  onSelectFile={setSelectedEntry}
+                  onSelectFile={handleSelectFile}
                   onDownload={handleDownload}
                   onRename={setRenameTarget}
                   onTransfer={(e, mode) => setTransferTarget({ entry: e, mode })}
@@ -432,24 +450,28 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
         )}
       </div>
 
-      {/* ── PREVIEW/EDIT PANE PLACEHOLDER (library-spec.md D-5) ────────────────
-          A LATER, SEPARATE task mounts the real preview/edit surface here:
-          <img>/<video controls> for media, HistoricalMessageMarkdown +
-          MermaidDiagram for markdown/diagrams, Shiki for code, and a
-          lazy-loaded CodeMirror 6 editor for the editable text types (see the
-          section-4 scope table in library-spec.md). Until then, selecting a
-          file shows this metadata + real-action strip only — every control
-          in it (Download/Rename/Move/Copy/Delete) is fully wired, nothing
-          here is a placeholder EXCEPT the content-preview area itself. */}
+      {/* ── Preview / edit pane (library-spec.md D-5) ───────────────────────
+          `flex-1 min-h-0` (a sibling of the entries-list body div above,
+          which is ALSO `flex-1 min-h-0`) splits the panel's remaining height
+          evenly between the file list and the open file — so a user can
+          still see and click a different row while previewing/editing the
+          current one (exactly the in-app navigation path
+          confirmDiscardLibraryEdits() guards above). */}
       {selectedEntry && workspaceId !== null && (
-        <LibraryDetailsStrip
-          entry={selectedEntry}
-          onClose={() => setSelectedEntry(null)}
-          onDownload={handleDownload}
-          onRename={() => setRenameTarget(selectedEntry)}
-          onTransfer={(mode) => setTransferTarget({ entry: selectedEntry, mode })}
-          onDelete={() => setDeleteTarget(selectedEntry)}
-        />
+        <div className="flex-1 min-h-0 border-t border-[var(--color-border)]" data-testid="library-preview-pane-wrapper">
+          <LibraryPreviewPane
+            workspaceId={workspaceId}
+            entry={selectedEntry}
+            onClose={() => {
+              if (!confirmDiscardLibraryEdits()) return
+              setSelectedEntry(null)
+            }}
+            onDownload={handleDownload}
+            onRename={() => setRenameTarget(selectedEntry)}
+            onTransfer={(mode) => setTransferTarget({ entry: selectedEntry, mode })}
+            onDelete={() => setDeleteTarget(selectedEntry)}
+          />
+        </div>
       )}
 
       {/* ── Rename dialog ────────────────────────────────────────────────── */}
@@ -536,69 +558,6 @@ function EmptyState({ icon, message }: { icon: React.ReactNode; message: string 
   )
 }
 
-interface LibraryDetailsStripProps {
-  entry: LibraryEntry
-  onClose: () => void
-  onDownload: (entry: LibraryEntry) => void
-  onRename: () => void
-  onTransfer: (mode: 'move' | 'copy') => void
-  onDelete: () => void
-}
-
-function LibraryDetailsStrip({ entry, onClose, onDownload, onRename, onTransfer, onDelete }: LibraryDetailsStripProps) {
-  const { Icon, color } = fileTypeMeta(entry.name, entry.mime)
-  return (
-    <div
-      className="shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
-      data-testid="library-details-strip"
-    >
-      <div className="flex items-start gap-3">
-        <div
-          className="shrink-0 w-10 h-10 rounded-md flex items-center justify-center"
-          style={{ backgroundColor: `${color}22`, color }}
-          aria-hidden="true"
-        >
-          <Icon size={20} weight="fill" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-[var(--color-secondary)]" title={entry.name}>
-            {entry.name}
-          </p>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            {formatLibrarySize(entry.size)} · modified {formatRelative(entry.modified_at)}
-            {entry.is_text_editable && ' · text'}
-          </p>
-        </div>
-        <button
-          type="button"
-          tabIndex={0}
-          onClick={onClose}
-          aria-label="Close details"
-          data-testid="library-details-close"
-          className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <div className="flex items-center gap-1.5 mt-3">
-        <Button variant="outline" size="sm" onClick={() => onDownload(entry)} className="gap-1.5 text-xs">
-          <DownloadSimple size={13} /> Download
-        </Button>
-        <Button variant="outline" size="sm" onClick={onRename} className="gap-1.5 text-xs">
-          <PencilSimple size={13} /> Rename
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => onTransfer('move')} className="gap-1.5 text-xs">
-          <ArrowsLeftRight size={13} /> Move…
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onDelete}
-          className="gap-1.5 text-xs ml-auto text-[var(--color-muted)] hover:text-[var(--color-error)]"
-        >
-          <Trash size={13} /> Delete
-        </Button>
-      </div>
-    </div>
-  )
-}
+// LibraryDetailsStrip (the narrow metadata-only placeholder this task
+// replaces) is gone — LibraryPreviewPane.tsx now owns the entry header AND
+// the actual content surface. See the mount site above.
