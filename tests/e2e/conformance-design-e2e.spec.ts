@@ -39,7 +39,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page, type APIRequestContext, request } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test } from './fixtures/plan-cleanup'
 import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors'
 import { GatewayProcess } from './fixtures/gateway-process.js'
 
@@ -364,8 +364,16 @@ async function createPlanWithMembers(
   ownerAgentId: string,
   fields: PlanFields,
   members: MemberSpec[],
+  // Best-effort teardown tracking (see fixtures/plan-cleanup.ts): when
+  // provided, the newly-created plan id is pushed here so the auto fixture
+  // stops it after this attempt, pass or fail — preventing a failed/retried
+  // attempt from leaving a live plan (and its recurring supervision wake)
+  // running into the next retry. Optional only so this helper stays usable
+  // outside a test that wires the fixture (none currently do).
+  trackPlanIds?: string[],
 ): Promise<{ planId: string; memberIds: Record<string, string> }> {
   const planId = await createPlan(page, workspaceId, ownerAgentId, fields)
+  if (trackPlanIds) trackPlanIds.push(planId)
   const memberIds: Record<string, string> = {}
   for (const m of members) {
     const blockedBy = (m.blocked_by_labels ?? [])
@@ -602,6 +610,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → verdict
 
 test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancels turn+verifier', async ({
   page,
+  createdTaskIds,
 }) => {
   requireApiKey()
 
@@ -648,6 +657,12 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
     throw new Error(`Conformance_t1: POST /tasks failed ${taskRes.status}: ${taskRes.raw}`)
   }
   const taskId = taskRes.body.id
+  // Best-effort teardown tracking (fixtures/plan-cleanup.ts): if this attempt
+  // fails/times out before the polling loop below reaches a terminal state,
+  // don't leave the task in_progress into the next retry. A task that DOES
+  // reach done/failed on its own makes this a harmless no-op (POST
+  // /tasks/{id}/stop 400s on a non-in-progress task).
+  createdTaskIds.push(taskId)
 
   // PATCH the task to status=in_progress (the ▶ Run button's wire contract —
   // see handleTaskPatch + the runner dispatcher).
@@ -793,6 +808,7 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
 
 test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deterministic unmet → F2 hold proven → no wedge', async ({
   page,
+  createdPlanIds,
 }) => {
   requireApiKey()
 
@@ -849,6 +865,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
         criteria: [checkCriterion('m2 trivially passes', 'exit 0', 0)],
       },
     ],
+    createdPlanIds,
   )
 
   // Approve (tiered-DoD + unconditional member-creation; ADR-049). This
@@ -1081,10 +1098,19 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
 
 test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED-RETRY with real member ids', async ({
   page,
+  createdPlanIds,
 }) => {
   requireApiKey()
 
-  test.setTimeout(600_000)
+  // 900s, not 600s: Step 1's own hold budget below was widened from 120s to
+  // 300s (see that constant's comment for the live-shard evidence), and
+  // Step 2's observe loop already budgets a further 420s after Step 1
+  // returns — 300s + 420s = 720s of INTENTIONAL polling alone, before setup
+  // (agent/workspace/plan creation) or teardown assertions run at all. The
+  // old 600s ceiling was already tighter than the 720s of polling it was
+  // asked to contain; it happened to work only when round-1 finished fast
+  // enough that Step 1 returned in a few seconds, not close to its deadline.
+  test.setTimeout(900_000)
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target owner + member assignee) in
@@ -1161,6 +1187,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
         criteria: [checkCriterion('m3 deterministically fails its one attempt', 'exit 1', 0)],
       },
     ],
+    createdPlanIds,
   )
 
   // Approve + run.
@@ -1174,8 +1201,37 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // m2 done-but-DoD-wrong and m3 deterministically failed, a round-1 unmet
   // verdict (and the awaiting_supervision hold it triggers) is expected
   // reliably, not merely hoped for.
+  //
+  // BUDGET, widened from 120s to 300s (investigation, 2026-07-29, plan
+  // 01KYQ6T9HAMNWNG507Y94G4GHS on the ee7ecc47 CI shard): 120s was a TIMING
+  // defect, not a correctness one. Pulled straight from that plan's own
+  // persisted record on the CI worker (plan_intents/<id>.jsonl,
+  // plans/<id>.json) — approved at 15:10:26Z, round-1's real Judge verdict
+  // and PlanSupervisor turn produced its first committed SUPERSEDE at
+  // 15:15:08Z, ~282s later — reaching the hold itself (strictly before that
+  // commit) was already past 120s. This is unlike t3b's E.3 fix (a scenario
+  // ambiguity, fixed by splitting the test): here the mechanism is provably
+  // sound — the SAME plan went on to commit three real SUPERSEDE corrections
+  // (each with a genuine Judge-cited falsified-assumption) over the
+  // following ~19 minutes, ending in a legitimate judge_rounds_exhausted,
+  // not a premature abandon. t3's own round-1 requires THREE parallel real
+  // member LLM turns plus a real Judge LLM call against a prose DoD
+  // criterion (unlike t2's machine-checked, judgment-free DoD, or t3b's
+  // single-member scenario) — the heaviest real-LLM critical path of any
+  // conformance test here, and therefore the one most exposed when the
+  // shared CI worker is under load. The SAME shard log showed, concurrently
+  // with this plan's round-1: a sibling plan's supervision turn repeatedly
+  // timing out over real HTTP (`net/http: request canceled
+  // (Client.Timeout...)`) and re-arming its wake every ~30s for several
+  // minutes, and an unrelated agent turn retrying a denied load_tool call
+  // every few seconds for the same window — genuine, external LLM/CPU
+  // contention on the shard, not anything introduced by plan_engine.go's own
+  // dispatch/judge/supervision logic (unchanged by the commits under test).
+  // 300s carries comfortable margin over the observed ~282s without eating
+  // into Step 2's own 420s observation budget (see test.setTimeout's comment
+  // above for the combined worst case).
   let reachedHoldOnce = false
-  const firstHoldDeadline = Date.now() + 120_000
+  const firstHoldDeadline = Date.now() + 300_000
   while (Date.now() < firstHoldDeadline) {
     const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
@@ -1187,7 +1243,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   }
   expect(
     reachedHoldOnce,
-    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — m2 (done, ` +
+    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within 300s of approval — m2 (done, ` +
       'DoD-flagged wrong) + m3 (deterministically failed) make a round-1 unmet verdict expected reliably.',
   ).toBe(true)
 
@@ -1353,6 +1409,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
 // existence gives the plan no supersede target either.
 test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as the sole correct verb (no done-but-wrong member exists to trigger supersede's auto-reset masking)", async ({
   page,
+  createdPlanIds,
 }) => {
   requireApiKey()
 
@@ -1423,6 +1480,7 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
         criteria: [checkCriterion('m2 deterministically fails its one attempt', 'exit 1', 0)],
       },
     ],
+    createdPlanIds,
   )
 
   // Approve + run.
@@ -1567,6 +1625,7 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 
 test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping rejected', async ({
   page,
+  createdPlanIds,
 }) => {
   requireApiKey()
 
@@ -1611,6 +1670,7 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
         criteria: [proseCriterion('reply contains "beta"')],
       },
     ],
+    createdPlanIds,
   )
 
   // Approve the disjoint plan — must succeed (lint passes: disjoint
@@ -1656,6 +1716,7 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
         criteria: [proseCriterion('reply contains "y"')],
       },
     ],
+    createdPlanIds,
   )
 
   // Drawn-path assertion 2: the overlapping plan is REJECTED at approve
@@ -1697,6 +1758,7 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
 
 test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG executes, join is first-class', async ({
   page,
+  createdPlanIds,
 }) => {
   requireApiKey()
 
@@ -1771,6 +1833,7 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
         criteria: [proseCriterion('reply contains "assembled"')],
       },
     ],
+    createdPlanIds,
   )
 
   // Drawn-path assertion 1: the plan-lint accepted this topology.
