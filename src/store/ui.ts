@@ -143,6 +143,24 @@ interface UiStore {
   browserPanel: { sessionId: string; agentId: string } | null
   openBrowserPanel: (sessionId: string, agentId: string) => void
   closeBrowserPanel: () => void
+
+  // Library panel (library-spec.md D-4) — docked file explorer over a
+  // workspace's work/ tree. A SINGLE global instance mounted at the app root
+  // (AppShell), mirroring browserPanel/mediaLightbox above. null = closed.
+  //
+  // `workspaceId` is the ONLY thing that differs between the Library's two
+  // entry points (D-3) — both render the exact same LibraryExplorer:
+  //   - undefined → the virtual root (every workspace as a top-level node;
+  //     the sidebar's "Library" entry, Sidebar.tsx).
+  //   - a real id → scoped straight to that workspace's work/ tree (the
+  //     chat/header-bar entry point — wired by whoever owns that surface;
+  //     this store slice is the contract they call into).
+  // Open = ALWAYS docked, same flex-<aside> pattern as browserPanel — there
+  // is no Sheet/overlay variant here either (operator direction 2026-07-16;
+  // see LibraryPanel.tsx's own doc comment).
+  libraryPanel: { workspaceId?: string } | null
+  openLibraryPanel: (workspaceId?: string) => void
+  closeLibraryPanel: () => void
 }
 
 /** Discriminated payload for the global media lightbox: a raster image (by URL)
@@ -238,4 +256,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   browserPanel: null,
   openBrowserPanel: (sessionId, agentId) => set({ browserPanel: { sessionId, agentId } }),
   closeBrowserPanel: () => set({ browserPanel: null }),
+
+  libraryPanel: null,
+  openLibraryPanel: (workspaceId) => set({ libraryPanel: { workspaceId } }),
+  closeLibraryPanel: () => set({ libraryPanel: null }),
 }))

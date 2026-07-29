@@ -116,13 +116,28 @@ vi.mock('@/store/auth', () => {
   return { useAuthStore }
 })
 
-// Mock useUiStore — Sidebar calls toggleNotificationPanel
-vi.mock('@/store/ui', () => ({
-  useUiStore: (selector?: (s: { toggleNotificationPanel: () => void }) => unknown) => {
-    const state = { toggleNotificationPanel: vi.fn() }
-    return selector ? selector(state) : state
-  },
+// Mock useUiStore — Sidebar calls toggleNotificationPanel via the selector-
+// less hook call, and (library-spec.md D-3) openLibraryPanel/openSearchModal
+// via useUiStore.getState() from click handlers — the mock needs a `.getState`
+// static mirroring the real zustand hook shape, or those calls throw.
+// vi.hoisted (not a plain const): the vi.mock factory below is hoisted above
+// this file's top-level declarations by Vitest's static transform, so a
+// plain `const` here would be a temporal-dead-zone ReferenceError when the
+// factory runs — same reasoning as mockSetActiveWorkspaceId etc. above.
+const { mockOpenLibraryPanel, mockOpenSearchModal } = vi.hoisted(() => ({
+  mockOpenLibraryPanel: vi.fn(),
+  mockOpenSearchModal: vi.fn(),
 }))
+vi.mock('@/store/ui', () => {
+  const state = {
+    toggleNotificationPanel: vi.fn(),
+    openLibraryPanel: mockOpenLibraryPanel,
+    openSearchModal: mockOpenSearchModal,
+  }
+  const useUiStore = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state)
+  useUiStore.getState = () => state
+  return { useUiStore }
+})
 
 // Mock useNotificationsStore — Sidebar reads unreadCount
 vi.mock('@/store/notifications', () => ({
@@ -196,23 +211,37 @@ beforeEach(() => {
 // test_sidebar_overlay_rendering
 // Traces to: wave0-brand-design-spec.md Scenario: Sidebar opens as overlay (US-5 AC2, FR-011)
 describe('Sidebar — overlay rendering when open', () => {
-  it('renders the Workspaces section + Library when sidebar is open', () => {
+  it('renders the Workspaces section + Assets when sidebar is open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // + a Library section (Agents, Skills & Tools, Connectors) + username trigger.
+    // + an Assets section (Agents, Skills & Tools, Connectors, Library) + username trigger.
+    // library-spec.md D-7: "Library" renamed the SECTION to "Assets"; the new
+    // nav entry (opens the Library panel) took the "Library" name instead.
     expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
-    expect(screen.getByRole('group', { name: 'Library' })).toBeTruthy()
+    expect(screen.getByRole('group', { name: 'Assets' })).toBeTruthy()
 
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Connectors')).toBeTruthy()
+    expect(screen.getByTestId('sidebar-library-button')).toBeTruthy()
     expect(screen.getByTestId('sidebar-profile-trigger')).toBeTruthy()
 
     // Removed entries must NOT be present.
     expect(screen.queryByText('Chat')).toBeNull()
     expect(screen.queryByText('Automations')).toBeNull()
     expect(screen.queryByText('Command Center')).toBeNull()
+  })
+
+  it('the Library nav entry opens the Library panel at the virtual root (D-3 sidebar entry point)', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    mockOpenLibraryPanel.mockClear()
+    fireEvent.click(screen.getByTestId('sidebar-library-button'))
+
+    // Called with no argument — undefined workspaceId means the virtual root.
+    expect(mockOpenLibraryPanel).toHaveBeenCalledWith()
   })
 
   it('shows the "omnipus.ai" wordmark in sidebar (gold .ai)', () => {

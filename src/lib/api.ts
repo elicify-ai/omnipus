@@ -168,6 +168,14 @@ import {
   BrowserInspectResponse as BrowserInspectResponseSchema,
   // ADR-051 Rev 4 — workspace media library (contract-first #8):
   MediaLibraryEntry as MediaLibraryEntrySchema,
+  // library-spec.md — Library file explorer over workspace work/ trees
+  // (contract-first #8), supersedes the media library above. Only response
+  // schemas are imported (request bodies are validated server-side, matching
+  // the existing convention — see the comment above ExecutorCommandPreviewResponse).
+  LibraryWorkspaceNode as LibraryWorkspaceNodeSchema,
+  LibraryEntry as LibraryEntrySchema,
+  LibraryContentResponse as LibraryContentResponseSchema,
+  LibraryUploadResponse as LibraryUploadResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -420,6 +428,14 @@ import type {
   // ADR-051 Rev 4 — workspace media library (contract-first #8):
   MediaLibraryEntry,
   MediaAttachmentRequest,
+  // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
+  LibraryWorkspaceNode,
+  LibraryEntry,
+  LibraryContentResponse,
+  LibraryContentRequest,
+  LibraryRenameRequest,
+  LibraryUploadResponse,
+  LibraryTransferRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -568,6 +584,14 @@ export type {
   // ADR-051 Rev 4 — workspace media library (contract-first #8):
   MediaLibraryEntry,
   MediaAttachmentRequest,
+  // library-spec.md — Library file explorer over workspace work/ trees (contract-first #8):
+  LibraryWorkspaceNode,
+  LibraryEntry,
+  LibraryContentResponse,
+  LibraryContentRequest,
+  LibraryRenameRequest,
+  LibraryUploadResponse,
+  LibraryTransferRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -3387,6 +3411,182 @@ export function attachWorkspaceMedia(workspaceId: string, mediaId: string): Prom
     `/workspaces/${encodeURIComponent(workspaceId)}/media/attachments`,
     { method: 'POST', body: JSON.stringify(body) },
   )
+}
+
+// ── Library (library-spec.md) ────────────────────────────────────────────────
+//
+// A file explorer over workspace work/ trees — supersedes the Media Library
+// above (D-2: entries are workspace-relative PATHS, not UUIDs; a workspace's
+// Library root IS its work/ directory). Two entry points share one component
+// (D-3): the sidebar's virtual root (every workspace, GET /library/workspaces)
+// and a workspace-scoped view (GET /library/{workspace_id}/entries). Wire
+// types are the generated Library* schemas (contract-first #8) — never
+// hand-written. See contracts/components/schemas/Library*.yaml.
+
+export const libraryQueryKeys = {
+  workspaces: () => ['library', 'workspaces'] as const,
+  entries: (workspaceId: string, path: string, includeHidden: boolean) =>
+    ['library', workspaceId, 'entries', path, includeHidden] as const,
+  content: (workspaceId: string, path: string) => ['library', workspaceId, 'content', path] as const,
+}
+
+/** Every workspace as a Library virtual-root node (D-3 sidebar entry point). */
+export function fetchLibraryWorkspaces(): Promise<LibraryWorkspaceNode[]> {
+  return request<LibraryWorkspaceNode[]>(
+    '/library/workspaces',
+    undefined,
+    z.array(LibraryWorkspaceNodeSchema) as ZodType<LibraryWorkspaceNode[]>,
+  )
+}
+
+/**
+ * List the entries directly inside `path` in a workspace's work/ tree. Omit
+ * or pass '' to list the work-tree root. `includeHidden` surfaces
+ * dot-prefixed entries (e.g. work/.library/ — D-8's "Show Hidden" toggle;
+ * LibraryEntry.is_hidden is the sole definition of "hidden").
+ */
+export function fetchLibraryEntries(
+  workspaceId: string,
+  path = '',
+  includeHidden = false,
+): Promise<LibraryEntry[]> {
+  const params = new URLSearchParams()
+  if (path) params.set('path', path)
+  if (includeHidden) params.set('include_hidden', 'true')
+  const qs = params.toString()
+  return request<LibraryEntry[]>(
+    `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
+    undefined,
+    z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
+  )
+}
+
+/** Delete a file or directory (and everything under it) from a workspace's work tree. Returns 204. */
+export function deleteLibraryEntry(workspaceId: string, path: string): Promise<void> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<void>(`/library/${encodeURIComponent(workspaceId)}/entries?${qs}`, { method: 'DELETE' })
+}
+
+/** Read a file's text content for the Library viewer (D-5 preview/edit — read side; the editor/preview pane itself is a separate, later task). */
+export function fetchLibraryContent(workspaceId: string, path: string): Promise<LibraryContentResponse> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<LibraryContentResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/content?${qs}`,
+    undefined,
+    LibraryContentResponseSchema as ZodType<LibraryContentResponse>,
+  )
+}
+
+/** Write a file's text content from the Library editor (D-5 — write side; the editor itself is a separate, later task). */
+export function putLibraryContent(workspaceId: string, body: LibraryContentRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/content`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/** Rename or move an entry within a single workspace's work tree — same-workspace sugar over /library/move. Rejects (409) if "to" already exists. */
+export function renameLibraryEntry(workspaceId: string, body: LibraryRenameRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/rename`,
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Move a file or directory, optionally across two workspaces (D-9). Rejects
+ * (409) if the destination already exists — the server never silently
+ * overwrites, so there is no "overwrite" outcome to confirm beyond the
+ * dialog step itself; a 409 here is surfaced to the caller as a normal
+ * ApiError (never swallowed).
+ */
+export function moveLibraryEntry(body: LibraryTransferRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    '/library/move',
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/** Copy a file or directory, optionally across two workspaces (D-9), leaving the source in place. Same 409-on-conflict behavior as moveLibraryEntry. */
+export function copyLibraryEntry(body: LibraryTransferRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    '/library/copy',
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Upload one or more files into `path` inside a workspace's work tree (D-1 —
+ * uploads land as real, named files, de-duplicated server-side on collision).
+ * Multipart; mirrors uploadFiles's raw-fetch pattern above since request() is
+ * JSON-only.
+ */
+export async function uploadLibraryFiles(workspaceId: string, files: File[], path = ''): Promise<LibraryUploadResponse> {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append('files', file)
+  }
+  // Upload is a state-changing POST — fail fast if we have no CSRF cookie
+  // (see request() for the same pattern).
+  if (readCSRFCookie() === null) {
+    throw new ApiError(
+      403,
+      'CSRF cookie missing — cannot upload files. Log in first so the server can issue the CSRF cookie.',
+      { code: 'csrf_missing' },
+    )
+  }
+  // FormData holds File references (not a consumed stream), so retrying with
+  // the same formData on a CSRF-recovery pass (withCsrfRetry) re-sends the
+  // same bytes safely.
+  return withCsrfRetry(() => doUploadLibraryFiles(workspaceId, formData, path))
+}
+
+async function doUploadLibraryFiles(workspaceId: string, formData: FormData, path: string): Promise<LibraryUploadResponse> {
+  // Read fresh — never cache (see readCSRFCookie).
+  const csrf = readCSRFCookie()
+  const headers: Record<string, string> = {}
+  if (csrf) headers[CSRF_HEADER_NAME] = csrf
+  const qs = path ? `?${new URLSearchParams({ path }).toString()}` : ''
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/library/${encodeURIComponent(workspaceId)}/upload${qs}`, {
+      method: 'POST',
+      credentials: 'include',
+      // NOTE: do NOT set Content-Type — the browser sets the multipart boundary.
+      headers,
+      body: formData,
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res)
+  }
+  const raw: unknown = await res.json()
+  const parsed = (LibraryUploadResponseSchema as ZodType<LibraryUploadResponse>).safeParse(raw)
+  if (!parsed.success) {
+    _recordApiSchemaError('/library/upload', parsed.error.issues.length)
+    const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
+    void maybeDevToast(`[api] uploadLibraryFiles response schema mismatch: ${issues[0]?.message ?? 'unknown'}`, 'POST:/library/upload:schema')
+    throw new ApiSchemaError('/library/upload', issues, raw)
+  }
+  return parsed.data
+}
+
+/**
+ * URL for downloading a file's raw bytes (GET .../download). Deliberately
+ * NOT routed through request() — the response is a binary stream, not JSON,
+ * and GET is not state-changing so no CSRF token is required. Meant for an
+ * <a href=… download> or window.open(): auth rides the same-origin
+ * omnipus-session cookie automatically on a plain navigation/anchor click.
+ */
+export function libraryDownloadUrl(workspaceId: string, path: string): string {
+  const qs = new URLSearchParams({ path }).toString()
+  return `${BASE_URL}/api/v1/library/${encodeURIComponent(workspaceId)}/download?${qs}`
 }
 
 // ── Per-workspace delegation graph (M5) ─────────────────────────────────────────

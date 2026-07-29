@@ -6,6 +6,7 @@ import { ToastContainer } from '@/components/ui/toast-container'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
+import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
@@ -39,6 +40,9 @@ export function AppShell() {
   // Live browser panel open state — used below to inert the chat region when
   // it's collapsed to zero width by the panel's docked takeover on phones.
   const browserPanel = useUiStore((s) => s.browserPanel)
+  // Library panel (library-spec.md D-4) — same docked-takeover-on-phone
+  // shape as browserPanel above, so it needs the same inert treatment.
+  const libraryPanel = useUiStore((s) => s.libraryPanel)
   // Tailwind's `sm:` breakpoint (640px) can gate CSS, but not a non-CSS HTML
   // attribute like `inert` — that needs an actual JS media-query signal.
   const isPhoneViewport = useMediaQuery('(max-width: 639px)')
@@ -180,7 +184,7 @@ export function AppShell() {
       <div
         data-testid="app-main-content"
         className="flex flex-1 flex-col min-w-0 overflow-hidden"
-        inert={Boolean(browserPanel) && isPhoneViewport}
+        inert={(Boolean(browserPanel) || Boolean(libraryPanel)) && isPhoneViewport}
       >
         {/* OmnipusRuntimeProvider: AssistantUI context + WebSocket connection for entire app */}
         <OmnipusRuntimeProvider>
@@ -268,6 +272,12 @@ export function AppShell() {
           either would break the docked layout's participation in this flex
           row. */}
       <BrowserLivePanel />
+
+      {/* Library panel (library-spec.md D-4) — same docked-<aside>-as-flex-
+          sibling pattern as BrowserLivePanel above; see LibraryPanel.tsx for
+          why popping THIS one out does not close the docked copy (no
+          exclusive control lock to hand over, unlike the live browser). */}
+      <LibraryPanel />
     </div>
   )
 }

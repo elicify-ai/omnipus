@@ -20,6 +20,7 @@ import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
+import { Route as AppLibraryRouteImport } from './routes/_app/library'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
 import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
 import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
@@ -91,6 +92,11 @@ const AppProfileRoute = AppProfileRouteImport.update({
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
   id: '/policies',
   path: '/policies',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLibraryRoute = AppLibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
   getParentRoute: () => AppRoute,
 } as any)
 const AppConnectorsRoute = AppConnectorsRouteImport.update({
@@ -203,6 +209,7 @@ export interface FileRoutesByFullPath {
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
+  '/library': typeof AppLibraryRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -231,6 +238,7 @@ export interface FileRoutesByTo {
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
+  '/library': typeof AppLibraryRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -262,6 +270,7 @@ export interface FileRoutesById {
   '/_app/automations': typeof AppAutomationsRoute
   '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/connectors': typeof AppConnectorsRoute
+  '/_app/library': typeof AppLibraryRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -295,6 +304,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/browser-live'
     | '/connectors'
+    | '/library'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -323,6 +333,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/browser-live'
     | '/connectors'
+    | '/library'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -353,6 +364,7 @@ export interface FileRouteTypes {
     | '/_app/automations'
     | '/_app/browser-live'
     | '/_app/connectors'
+    | '/_app/library'
     | '/_app/policies'
     | '/_app/profile'
     | '/_app/settings'
@@ -460,6 +472,13 @@ declare module '@tanstack/react-router' {
       path: '/policies'
       fullPath: '/policies'
       preLoaderRoute: typeof AppPoliciesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/library': {
+      id: '/_app/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof AppLibraryRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/connectors': {
@@ -642,6 +661,7 @@ interface AppRouteChildren {
   AppAutomationsRoute: typeof AppAutomationsRoute
   AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
+  AppLibraryRoute: typeof AppLibraryRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -659,6 +679,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppAutomationsRoute: AppAutomationsRoute,
   AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppConnectorsRoute: AppConnectorsRoute,
+  AppLibraryRoute: AppLibraryRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,
