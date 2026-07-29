@@ -25,6 +25,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -627,7 +629,65 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 // uninitialized dependency is never treated as "no FK to check", mirroring
 // validateTaskAgentID's errTaskAgentLoopUnavailable convention immediately
 // above.
-func (a *restAPI) validateTaskPlanID(planID, workspaceID string) error {
+//
+// SECURITY (closes the 4th run_task ask-policy gate bypass — code review
+// finding, follows the StartedAt/SessionID and CompletedAt fixes to the same
+// gate): also rejects linking to a TERMINAL plan (parity with
+// pkg/tools/plan.go's validateTaskPlanLinkage, which already had this check;
+// this REST validator previously did not), and — the actual bypass fix —
+// rejects the attach outright when the plan has already left `draft` (i.e.
+// it already permits, or will imminently permit, autonomous member dispatch:
+// approved, running, and running-but-paused all count; only draft is safe)
+// AND agentID's resolved run_task policy is "ask".
+//
+// Why this is the right place to close it: requireRunTaskAutoDispatchApproved
+// (pkg/agent/task_executor.go) exempts EVERY task naming a non-empty PlanID
+// from the ask-policy check, on the premise that "being a plan member" is
+// itself an act of authorization (a human clicked Execute, or plan_correct's
+// own supervisor-only gate ran). That premise held only as long as PlanID
+// could only be acquired through the plan engine's own vetted flows — this
+// generic attach path (reachable by any caller with ordinary task-write REST
+// access: PATCH /api/v1/tasks/{id} with a plan_id body, or POST with
+// agent_id+plan_id together) broke it. A standalone `next` task assigned to
+// an ask-policy agent could be attached to ANY already-Executing plan in the
+// same workspace, and the very next CheckQueuedTasks heartbeat tick (or the
+// plan engine's own Tick — both funnel every unattended dispatch through the
+// SAME requireRunTaskAutoDispatchApproved check) would auto-dispatch it with
+// no approval and no log trace, since the gate's PlanID != "" exemption never
+// even consults the policy. A per-dispatch-callsite fix does not work here
+// (verified: PlanEngine.Tick's own periodic pass re-lists every task
+// currently carrying a plan's PlanID and dispatches ready ones via the same
+// exempted bypass dispatchReadyMembers/executeTaskPlanVerified uses,
+// regardless of how that PlanID was set) — the field has to stop being
+// forgeable by an ordinary caller once it would actually matter, i.e. once
+// the named plan is past draft.
+//
+// This is deliberately narrower than "reject any attach past draft"
+// (rejected candidate: would break the intentional, tested
+// "attach a task to an Approved/Running plan via PATCH, then click Run Now"
+// UI flow — TestHandleTaskPatch_InProgress_ApprovedPlanMember_StillLaunches).
+// That flow is untouched by this fix because (a) StartTaskNow (the Run
+// Now / PATCH-to-in_progress path) is ALREADY a documented, deliberate bypass
+// of the ask-policy gate — a human's explicit click IS the approval, so it
+// never depended on the PlanID exemption at all — and (b) this check only
+// fires when the assigned agent's own resolved policy is literally "ask",
+// never "allow", "deny", or an unconfigured/test-harness default — mirroring
+// requireRunTaskAutoDispatchApproved's own "ask", never "deny", scoping and
+// its documented rationale (many test harnesses build an agent loop with no
+// explicit tool-policy configuration at all, and
+// tools.EffectiveToolPolicy's fail-closed default for that gap is "deny",
+// not "ask"; gating on anything broader than "ask" would misfire on every
+// such harness).
+//
+// Net effect: attaching a task to a plan is unrestricted while the plan is
+// still `draft` (draft never auto-dispatches, nothing to gate yet); once the
+// plan has left draft, attaching a NON-ask-policy agent's task is still
+// unrestricted (unchanged from before), but an ask-policy agent's task can
+// no longer be linked to a live plan through this generic surface — only
+// through the plan engine's own vetted paths (authored before Execute, or
+// added by the plan's supervisor via plan_correct, neither of which calls
+// this validator).
+func (a *restAPI) validateTaskPlanID(planID, workspaceID, agentID string) error {
 	if planID == "" {
 		return nil
 	}
@@ -637,7 +697,42 @@ func (a *restAPI) validateTaskPlanID(planID, workspaceID string) error {
 	if err := validateEntityID(planID); err != nil {
 		return fmt.Errorf("invalid plan_id: %w", err)
 	}
-	return a.planStore.ValidatePlanWorkspace(planID, workspaceID)
+	if err := a.planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
+		return err
+	}
+	p, err := a.planStore.Get(planID)
+	if err != nil {
+		return fmt.Errorf("could not load plan %q: %w", planID, err)
+	}
+	if plan.IsTerminal(p.State) {
+		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
+	}
+	return a.requireDraftOrNonAskAgentForPlanAttach(p, agentID)
+}
+
+// requireDraftOrNonAskAgentForPlanAttach is the run_task ask-policy half of
+// validateTaskPlanID's SECURITY note above. agentID == "" (no assignee yet)
+// or a nil a.agentLoop (policy unresolvable) both no-op — mirrors
+// validateTaskAgentID's own "unassigned tasks carry no ownership constraint"
+// convention; the sole production wiring path always sets agentLoop, so a
+// nil loop here is a test-harness artifact, never a production gap.
+func (a *restAPI) requireDraftOrNonAskAgentForPlanAttach(p *plan.Plan, agentID string) error {
+	if agentID == "" || a.agentLoop == nil {
+		return nil
+	}
+	if p.State == plan.StateDraft {
+		return nil
+	}
+	policy := a.agentLoop.ResolveApprovalToolPolicy(agentID, "run_task")
+	if policy != string(config.ToolPolicyAsk) {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot attach a task assigned to agent %q to plan %q: the plan is %q (no longer draft) and "+
+			"%q's run_task policy is %q — an unattended dispatch of this member would never consult that "+
+			"policy; attach the task while the plan is still draft, have the plan's supervisor add it via "+
+			"plan_correct, or start it explicitly (Run Now) once attached",
+		agentID, p.ID, p.State, agentID, policy)
 }
 
 // errTaskPlanStoreUnavailable is returned by validateTaskPlanID when
@@ -872,7 +967,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		t.ParentTaskID = *req.ParentTaskId
 	}
 	if req.PlanId != nil && *req.PlanId != "" {
-		if err := a.validateTaskPlanID(*req.PlanId, req.WorkspaceId); err != nil {
+		if err := a.validateTaskPlanID(*req.PlanId, req.WorkspaceId, t.AgentID); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1080,7 +1175,19 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				jsonErr(w, http.StatusInternalServerError, "could not read task")
 				return
 			}
-			if err := a.validateTaskPlanID(*req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
+			// The run_task ask-policy check inside validateTaskPlanID needs the
+			// EFFECTIVE assigned agent for the task as it will exist after this
+			// same patch is applied — not the stale on-disk value — since
+			// agent_id and plan_id may both be set in one request (exactly the
+			// one-shot "assign to an ask-policy agent AND attach to a live plan"
+			// shape). req.AgentId (if present in this same patch) wins over the
+			// existing on-disk value; see patch.AgentID's own handling above,
+			// which this mirrors.
+			effectivePlanAttachAgentID := existingForPlanCheck.AgentID
+			if req.AgentId != nil {
+				effectivePlanAttachAgentID = *req.AgentId
+			}
+			if err := a.validateTaskPlanID(*req.PlanId, existingForPlanCheck.WorkspaceID, effectivePlanAttachAgentID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}

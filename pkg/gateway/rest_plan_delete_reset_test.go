@@ -87,15 +87,21 @@ func TestPlanDelete_StoppedPlan_NextMembers_NoneBecomeRunnable(t *testing.T) {
 	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 	planStore := wirePlanStore(t, api)
 
+	// Attach the members while the plan is still draft, THEN Stop it — the
+	// 4th-run_task-ask-policy-bypass fix (validateTaskPlanID's terminal-plan
+	// check, parity with pkg/tools/plan.go's validateTaskPlanLinkage) now
+	// rejects attaching a NEW member to an ALREADY-terminal plan, so members
+	// must exist (exactly as they would in production — the direct Stop path
+	// acts on members that are already there) before the plan reaches its
+	// terminal failed(stopped_by_user) state.
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
-	drivePlanToFailed(t, api, p.ID, plan.FailedReasonStoppedByUser)
-
 	var members []gen.Task
 	for i := 0; i < 3; i++ {
 		tsk := assignPlanMemberTask(t, api, fmt.Sprintf("StoppedMember%d", i), wsID, p.ID)
 		require.Equal(t, gen.TaskStatusNext, getTaskStatus(t, api, tsk.Id))
 		members = append(members, tsk)
 	}
+	drivePlanToFailed(t, api, p.ID, plan.FailedReasonStoppedByUser)
 
 	wDel := deletePlan(t, api, p.ID)
 	require.Equal(t, 204, wDel.Code, "delete stopped plan must succeed; body=%s", wDel.Body.String())

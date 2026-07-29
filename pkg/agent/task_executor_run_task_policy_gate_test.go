@@ -209,6 +209,25 @@ func TestCheckQueuedTasks_DenyPolicyStandaloneTaskStillDispatched_KnownGap(t *te
 			"%q — a deny-policy agent's standalone task is a KNOWN, documented gap this fix does not "+
 			"close (see ErrRunTaskApprovalRequired's doc comment)", got.Status, task.StatusNext)
 	}
+
+	// Test-lifecycle fix (CI flake): this deliberately lets a REAL dispatch
+	// run (deny is not gated — that is the whole point of this pin), which
+	// spawns runTask's background goroutine (executeTask's `go
+	// te.runTask(...)`). Without waiting for it to settle, that goroutine
+	// keeps writing under t.TempDir() (transcript appends, the task-store
+	// completion update) after this test function returns, racing
+	// t.TempDir()'s own RemoveAll cleanup — observed in CI as
+	// "TempDir RemoveAll cleanup: unlinkat ...: directory not empty", not an
+	// assertion failure. Mirrors the sibling
+	// TestCheckQueuedTasks_AllowPolicyStandaloneTaskStillDispatched, which
+	// already waits for exactly this reason.
+	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	if final.Status != task.StatusDone {
+		t.Fatalf("final status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
+	}
+	if calls := scriptedProviderCallCount(provider); calls == 0 {
+		t.Fatal("provider was never called — a deny-policy task did not actually dispatch")
+	}
 }
 
 // --- 4. Continuation carve-out: an in-flight retry is not re-gated ---------

@@ -68,6 +68,21 @@ type AgentLoop struct {
 	registry *AgentRegistry
 	state    *state.Manager
 
+	// configGen is a monotonic counter bumped every time al.cfg is replaced
+	// with a new pointer, under al.mu.Lock() — currently by SwapConfig and by
+	// ReloadProviderAndConfig's own al.cfg/al.registry swap (see both call
+	// sites for the Add(1) call). It exists because "al.registry changed" is
+	// NOT a reliable proxy for "al.cfg changed": SwapConfig (the path every
+	// REST-initiated config write goes through — see
+	// pkg/gateway/rest.go's refreshConfigAndRewireServices) replaces al.cfg
+	// ALONE and never touches al.registry at all. UpsertAgentFast's
+	// optimistic-concurrency publish loop (pkg/agent/registry.go) reads this
+	// alongside al.registry to detect ANY concurrent config writer, not just
+	// a full registry-swapping reload — otherwise a bare SwapConfig landing
+	// mid-upsert is invisible to a registry-pointer-only CAS check and gets
+	// silently reverted by the upsert's own later `al.cfg = cfg` publish.
+	configGen atomic.Uint64
+
 	// Event system
 	eventBus *EventBus
 	hooks    *HookManager
@@ -3964,6 +3979,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Store new values
 	al.cfg = cfg
 	al.registry = registry
+	// DEFECT 2 fix (concurrency review): keep configGen in lockstep with
+	// every al.cfg replacement, not only a bare SwapConfig — see configGen's
+	// doc comment on the AgentLoop struct.
+	al.configGen.Add(1)
 
 	// Also update fallback chain with new config
 	al.fallback = providers.NewFallbackChainWithTimeout(
@@ -4145,6 +4164,11 @@ func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
 func (al *AgentLoop) SwapConfig(newCfg *config.Config) {
 	al.mu.Lock()
 	al.cfg = newCfg
+	// DEFECT 2 fix (concurrency review): bump configGen so a concurrent
+	// UpsertAgentFast in-flight against the PRE-swap cfg detects this write
+	// even though al.registry is untouched — see configGen's doc comment on
+	// the AgentLoop struct.
+	al.configGen.Add(1)
 	al.mu.Unlock()
 }
 

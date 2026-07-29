@@ -836,6 +836,50 @@ func TestTaskCreate_PlanLinkage_TerminalPlanRejected(t *testing.T) {
 	}
 }
 
+// TestTaskCreate_PlanLinkage_NonDraftPlanRejected is the create_task-surface
+// regression test for the 4th run_task ask-policy gate bypass (code review
+// finding; see pkg/gateway/rest_tasks.go's validateTaskPlanID for the full
+// writeup). create_task is an agent tool with no human review step
+// equivalent to the REST/Kanban UI's "attach, then explicitly click Run
+// Now" flow — before this fix, a single call could mint a brand-new,
+// already-`next`, plan-linked task for ANY agent (including one with an
+// "ask" run_task policy) naming ANY plan already past draft (Approved,
+// Running, or Running-paused), bypassing the plan engine's own vetted
+// membership paths (authored before Execute, or added by the plan's
+// supervisor via plan_correct) entirely. validateTaskPlanLinkage now
+// requires the named plan to still be StateDraft.
+func TestTaskCreate_PlanLinkage_NonDraftPlanRejected(t *testing.T) {
+	t.Parallel()
+	planStore, taskStore := newPlanAndTaskStores(t)
+	p := &plan.Plan{Title: "P", WorkspaceID: "ws-1", OwnerAgentID: "jim", CreatedBy: "jim"}
+	if err := planStore.Create(p); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+	approved := plan.StateApproved
+	if _, err := planStore.Update(p.ID, plan.Patch{State: &approved}); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	tool := NewTaskCreateTool(taskStore)
+	tool.SetPlanStore(planStore)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+
+	ctx := WithAgentID(context.Background(), "jim")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+	res := tool.Execute(ctx, map[string]any{
+		"title": "opportunistic member", "prompt": "do it", "agent_id": "worker",
+		"plan_id": p.ID, "criteria": validCriteriaArg(),
+	})
+	if !res.IsError {
+		t.Fatal("expected rejection for a plan that has already left draft (approved)")
+	}
+
+	all, _ := taskStore.List(task.Filter{WorkspaceID: "ws-1"})
+	if len(all) != 0 {
+		t.Fatal("no task should have been persisted for the rejected create")
+	}
+}
+
 // TestTaskCreate_PlanLinkage_UnwiredStore_FailsClosed proves a plan_id arg
 // with no plan store wired fails closed rather than silently linking.
 func TestTaskCreate_PlanLinkage_UnwiredStore_FailsClosed(t *testing.T) {

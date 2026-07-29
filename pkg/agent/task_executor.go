@@ -2300,6 +2300,67 @@ var ErrRunTaskApprovalRequired = errors.New(
 //     from run_task (which itself refuses any task naming a PlanID — see
 //     pkg/tools/run_task.go's G4/A3 check).
 //
+//     SECURITY (2026-07, closes the 4th bypass of this gate — code review
+//     finding, follows the StartedAt/SessionID pair and the CompletedAt
+//     fixes above): this exemption is sound ONLY because t.PlanID is no
+//     longer forgeable by an ordinary caller once it would actually matter.
+//     Before this fix, t.PlanID was a directly wire-settable field with NO
+//     relationship to plan membership whatsoever: any caller with ordinary
+//     task-write access (PATCH /api/v1/tasks/{id}, the create_task agent
+//     tool, or its create_task_in_workspace sysagent-tool sibling) could
+//     attach ANY standalone `next` task — assigned to ANY agent, including
+//     one whose run_task policy is "ask" — onto ANY already-Executing plan
+//     in the same workspace. requirePlanExecuting only ever checks the
+//     PLAN's own state (PermitsMemberDispatch), never whether THIS task was
+//     ever vetted as one of its members, so the very next unattended
+//     dispatch pass (CheckQueuedTasks' heartbeat, or the plan engine's own
+//     Tick — both funnel through this exact gate) would auto-dispatch the
+//     grafted task with no approval and no log trace, because this
+//     exemption never even consulted the policy.
+//
+//     A dispatch-primitive-level fix (e.g. distinguishing the trusted
+//     PlanEngine.dispatchReadyMembers/executeTaskPlanVerified bypass from
+//     the ordinary ExecuteTask path via planVerifiedUnderDecisionMu) was
+//     considered and REJECTED as both insufficient and unsafe: (1)
+//     insufficient — PlanEngine.Tick's own periodic pass re-lists every
+//     `next` task carrying a given PlanID (task.Filter{PlanID: ...}) and
+//     redispatches ready ones through the identical exempted bypass, so a
+//     grafted task reaches the SAME "trusted" call path on the plan's very
+//     next tick regardless of which mechanism first noticed it — the bypass
+//     flag does not correlate with membership legitimacy at all; (2) unsafe
+//     — advanceBlockedTasks (this file) dispatches a plan member whose
+//     BlockedBy dependency just completed via the ordinary, non-bypass
+//     ExecuteTask path, and that member may be entirely genuine (authored
+//     before Execute, ask-policy agent and all) — narrowing this exemption
+//     to the bypass-only path would wrongly re-gate that completely normal,
+//     already-authorized continuation of plan execution.
+//
+//     The actual fix therefore lives upstream, at the two places a task can
+//     ACQUIRE a PlanID through a generic (non-plan-engine) path:
+//     pkg/gateway/rest_tasks.go's validateTaskPlanID (REST create/PATCH) and
+//     pkg/tools/plan.go's validateTaskPlanLinkage (the create_task agent
+//     tool). Both now refuse to let a task acquire a PlanID naming a plan
+//     that has already left `draft` when doing so would produce exactly the
+//     exploitable shape (REST: the assigned agent's resolved run_task policy
+//     is "ask"; create_task: unconditionally, since that tool's plan_id
+//     linkage was never a supported non-draft feature to begin with). By the
+//     time a task carries a non-empty PlanID naming a plan that
+//     PermitsMemberDispatch(), it is therefore guaranteed to be either (a)
+//     linked while the plan was still draft (vetted, at minimum, by
+//     plan.Lint at approve time), (b) linked to a live plan via a REST/tool
+//     caller whose agent's run_task policy is not "ask", or (c) added by the
+//     plan's supervisor via plan_correct/AppendCorrection, which has its own
+//     caller-authority gate (requireCorrectionAuthority) — never a bare,
+//     unauthenticated claim planted by an arbitrary caller. See
+//     pkg/gateway/rest_tasks.go's validateTaskPlanID doc comment for the
+//     full writeup, and TestCheckQueuedTasks_AskPolicyPlanIDAttachedToRunning
+//     PlanStillGated (this package) /
+//     TestHandleTaskPatch_PlanAttach_AskPolicyAgent_RejectedOnLivePlan
+//     (pkg/gateway) for the paired proof: the forged attach is now rejected
+//     BEFORE the task ever acquires the exempting PlanID, and a genuine
+//     Approved-plan member (non-ask agent, or attached pre-draft-exit)
+//     still dispatches exactly as before.
+//
 //   - t.StartedAt != "" AND t.SessionID != "" — this task's CURRENT run has
 //     already been claimed AND dispatched at least once. ClaimForRun
 //     (pkg/task/claim.go) stamps StartedAt on every claim, and executeTask's

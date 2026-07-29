@@ -130,8 +130,18 @@ func TestHandleTaskPatch_InProgress_StoppedPlanMember_DoesNotLaunch(t *testing.T
 	setWorkspaceCoreTeam(t, api, wsID, []string{"main"})
 	planStore := wirePlanStore(t, api)
 
-	p := makeTestPlan(t, planStore, wsID, plan.StateFailed)
+	// Attach the member while the plan is still draft, THEN drive it to
+	// failed — mirroring drivePlanToFailed's own convention
+	// (rest_plan_task_restart_test.go, same package) and matching real
+	// production sequencing: a plan is never CREATED already-terminal, a
+	// member is attached first and the plan fails later. This also exercises
+	// validateTaskPlanID's post-4th-bypass-fix terminal-plan check correctly
+	// — attaching a NEW member to an ALREADY-terminal plan is now rejected
+	// (parity with pkg/tools/plan.go's validateTaskPlanLinkage), so the
+	// attach step itself must happen before the plan reaches State=failed.
+	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
 	tsk := assignPlanMemberTask(t, api, "StoppedPlanMemberTask", wsID, p.ID)
+	drivePlanToFailed(t, api, p.ID, plan.FailedReasonStoppedByUser)
 
 	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
 	assert.Equal(t, 409, w.Code,

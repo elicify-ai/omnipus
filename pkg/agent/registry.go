@@ -1,14 +1,17 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
@@ -546,35 +549,91 @@ var upsertAgentFastTestHook func(attempt int)
 // settings) — while this function still reported success.
 //
 // Since fastUpsertMu (above) already serializes every UpsertAgentFast call
-// against every OTHER UpsertAgentFast call, the only thing that can ever win
-// this CAS race is a concurrent ReloadProviderAndConfig — and it publishes
-// al.cfg and al.registry TOGETHER, under the same al.mu.Lock (see its own
-// tail: `al.cfg = cfg; al.registry = registry`). So "al.registry changed
-// since my snapshot" and "al.cfg changed since my snapshot" are the same
-// event here. On a lost race, this loop now also captures the
-// freshly-published al.cfg (while still holding the lock) and rebases
-// `cfg`/`ac` onto it before retrying: via cfg.Clone() (the existing
-// clone-mutate-discard idiom used elsewhere, e.g. pkg/gateway/rest.go's
-// candidate-config validation — never mutating the live, shared al.cfg in
-// place, since GetConfig hands out that exact pointer to every other
-// concurrent reader) with THIS call's own requested AgentConfig (`wantAC`,
-// captured once up front, before the retry loop, so it survives untouched
-// across any number of rebases) spliced back into the clone's Agents.List
-// by ID. That guarantees two things at once: every retry publishes on top
-// of whatever the reload just installed (no more silent revert), AND the
-// caller's own upsert is never lost even if the reload's own disk read
-// raced the caller's entity write and doesn't yet reflect it.
+// against every OTHER UpsertAgentFast call, the two remaining publishers that
+// can win this CAS race are a concurrent ReloadProviderAndConfig (swaps
+// al.cfg AND al.registry together, under al.mu.Lock — see its own tail:
+// `al.cfg = cfg; al.registry = registry`) and a concurrent SwapConfig (swaps
+// al.cfg ALONE, al.registry untouched — the path EVERY REST-initiated
+// config write goes through per pkg/gateway/rest.go's
+// refreshConfigAndRewireServices doc comment: "the single authoritative
+// refresh path for EVERY REST-initiated config write — agent create/update/
+// delete, channel configure, tool-policy write, mailbox grant, god-mode
+// toggle, all of it").
+//
+// DEFECT 2 (concurrency review, fixed here): an earlier revision of this
+// comment claimed "the only thing that can ever win this CAS race is a
+// concurrent ReloadProviderAndConfig ... so 'al.registry changed since my
+// snapshot' and 'al.cfg changed since my snapshot' are the same event here."
+// That premise was false — SwapConfig is proof by construction that al.cfg
+// can change with al.registry held fixed. A CAS check keyed on the registry
+// pointer alone is blind to that case: a concurrent SwapConfig lands, this
+// function's own `al.registry != oldRegistry` reads false ("no race"), and
+// the eventual publish's `al.cfg = cfg` silently reverts whatever SwapConfig
+// just installed — e.g. a tool-policy tightening or a god-mode disable that
+// had already been reported 200 OK to its own caller.
+//
+// Fixed by tracking al.configGen (see its doc comment on the AgentLoop
+// struct), a monotonic counter bumped under al.mu.Lock by BOTH SwapConfig
+// and ReloadProviderAndConfig's own swap — so "has al.cfg changed since my
+// snapshot" is answered directly instead of inferred from the registry
+// pointer. The CAS check below is `al.registry != oldRegistry ||
+// al.configGen.Load() != oldGen`: a plain atomic load, no extra locking, so
+// the cost on this hot REST path is one uint64 compare per attempt — the
+// wiring pass this function exists to avoid re-running per request remains
+// exactly as expensive as before, just correctly re-triggered.
+//
+// On a lost race (either leg), this loop captures the freshly-published
+// al.cfg (while still holding the lock) and rebases `cfg`/`ac` onto it
+// before retrying: via cfg.Clone() (the existing clone-mutate-discard idiom
+// used elsewhere, e.g. pkg/gateway/rest.go's candidate-config validation —
+// never mutating the live, shared al.cfg in place, since GetConfig hands out
+// that exact pointer to every other concurrent reader) with THIS call's own
+// requested AgentConfig (`wantAC`, captured once up front, before the retry
+// loop, so it survives untouched across any number of rebases) spliced back
+// into the clone's Agents.List by ID. That guarantees every retry publishes
+// on top of whatever the other writer just installed (no more silent
+// revert, from either publisher), AND the caller's own upsert is never lost
+// even if a racing reload's own disk read predates the caller's entity write
+// and doesn't yet reflect it.
+//
+// DEFECT 1 (concurrency review, fixed here): the "not found in the rebased
+// config, so append it" branch used to fire unconditionally whenever `id`
+// was absent from the live config being rebased onto — which is also
+// exactly what a concurrent DELETE of THIS SAME agent produces (deleteAgent,
+// pkg/gateway/rest.go, calls agentstore.Store.Delete then
+// triggerReloadAndWait, which legitimately drops `id` from both
+// cfg.Agents.List and the registry via ReloadProviderAndConfig's swap).
+// Appending wantAC back unconditionally cannot distinguish "a genuine create
+// whose entity write predates this reload's disk read" from "this agent was
+// just deleted" — both look identical from cfg alone — and would silently
+// resurrect a legitimately deleted agent. Distinguished by asking the
+// durable entity store directly (agentstore.Store.Get, not cfg): a real
+// create always durably writes the entity record BEFORE calling
+// UpsertAgentFast (see pkg/gateway/rest.go's createAgent, which calls
+// agentstore.Store.Create synchronously ahead of fastAgentUpsert), so by the
+// time this rebase runs the record is already on disk for that case. If Get
+// instead reports entity.ErrNotFound, the agent is genuinely gone — this
+// aborts with an error instead of resurrecting it, and the caller
+// (fastAgentUpsert) falls back to a full reload, which will correctly NOT
+// contain the deleted agent.
 //
 // This does not itself serialize against gateway.go's
 // services.reloadCoalesceMu single-flight (the mechanism that already
 // prevents two full reloads from racing each other) — a concurrent reload
-// can still start and finish at any point during this function's run. That
-// is fine now: every such interleaving is caught by the CAS check and
-// rebased as described above, however many times it happens (bounded by
-// maxFastUpsertAttempts). This is a narrower version of a pre-existing
-// hazard class (any two writers of al.registry/al.cfg), not a regression
-// this change introduces — closed here for the pkg/agent/pkg/gateway/rest.go
-// surface this fix targets.
+// or SwapConfig can still start and finish at any point during this
+// function's run. That is fine now: every such interleaving is caught by
+// the CAS check and rebased as described above, however many times it
+// happens (bounded by maxFastUpsertAttempts). This is a narrower version of
+// a pre-existing hazard class (any two writers of al.registry/al.cfg), not a
+// regression this change introduces — closed here for the
+// pkg/agent/pkg/gateway/rest.go surface this fix targets. MutateConfig
+// (mutates al.cfg's fields in place, under al.mu.Lock, without replacing the
+// pointer or bumping configGen) is a residual, narrower hazard this fix does
+// NOT cover: a concurrent MutateConfig mutating the very same *config.Config
+// object this call's `cfg` parameter aliases (GetConfig hands out the live
+// pointer, so `cfg` IS `al.cfg` unless/until a rebase clones it) races this
+// function's own unsynchronized field reads during the wiring pass. Flagged
+// for follow-up, out of scope for this fix.
 func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*AgentInstance, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("upsert agent fast: config is nil")
@@ -611,6 +670,7 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 	for attempt := 0; attempt < maxFastUpsertAttempts; attempt++ {
 		al.mu.RLock()
 		oldRegistry := al.registry
+		oldGen := al.configGen.Load()
 		al.mu.RUnlock()
 		if oldRegistry == nil {
 			return nil, fmt.Errorf("upsert agent fast: registry not initialized")
@@ -683,14 +743,13 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		}
 
 		al.mu.Lock()
-		if al.registry != oldRegistry {
-			// Lost the race: another publisher swapped al.registry out from
-			// under this attempt's snapshot. Since fastUpsertMu (held for this
-			// entire call) rules out a concurrent UpsertAgentFast, the only
-			// possible publisher is a full ReloadProviderAndConfig — and it
-			// swaps al.cfg and al.registry TOGETHER under this same lock. Grab
-			// that freshly-published al.cfg now, while still holding the lock,
-			// so the retry below can rebase onto it (BUG 1 fix) instead of
+		if al.registry != oldRegistry || al.configGen.Load() != oldGen {
+			// Lost the race: another publisher changed al.registry and/or
+			// al.cfg out from under this attempt's snapshot — either a full
+			// ReloadProviderAndConfig (swaps both together) or a bare
+			// SwapConfig (swaps al.cfg alone; DEFECT 2). Grab that
+			// freshly-published al.cfg now, while still holding the lock, so
+			// the retry below can rebase onto it (BUG 1 fix) instead of
 			// continuing to build off our now-superseded snapshot.
 			liveCfg := al.cfg
 			al.mu.Unlock()
@@ -702,14 +761,14 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 			// Rebase cfg (and ac, which points into it) onto the live config
 			// instead of retrying with the pre-reload snapshot — otherwise the
 			// eventual successful publish's `al.cfg = cfg` below would revert
-			// everything the reload just installed. Clone rather than mutate
-			// liveCfg in place: al.cfg is shared with every other concurrent
-			// reader (GetConfig hands out this exact pointer, never a copy), so
-			// mutating its Agents.List in place would itself be a data race.
-			// Splice this call's own requested AgentConfig (wantAC) into the
-			// clone by ID so the upsert this caller asked for is never lost,
-			// whether or not liveCfg's own disk read happened to already
-			// include it.
+			// everything the other writer just installed. Clone rather than
+			// mutate liveCfg in place: al.cfg is shared with every other
+			// concurrent reader (GetConfig hands out this exact pointer, never
+			// a copy), so mutating its Agents.List in place would itself be a
+			// data race. Splice this call's own requested AgentConfig
+			// (wantAC) into the clone by ID so the upsert this caller asked
+			// for is never lost, whether or not liveCfg's own disk read
+			// happened to already include it.
 			if liveCfg != nil && liveCfg != cfg {
 				rebased, cloneErr := liveCfg.Clone()
 				if cloneErr != nil {
@@ -724,6 +783,27 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 					}
 				}
 				if !replaced {
+					// DEFECT 1: `id` is absent from the config we are rebasing
+					// onto. This is expected for a genuine create racing a
+					// reload/SwapConfig whose disk read predates this agent's
+					// entity write (agentstore.Store.Create always runs,
+					// synchronously, before fastAgentUpsert/UpsertAgentFast is
+					// ever called — see pkg/gateway/rest.go's createAgent) —
+					// but it is ALSO exactly what a concurrent DELETE of this
+					// same agent produces (deleteAgent's agentstore.Delete +
+					// triggerReloadAndWait already dropped `id` from both
+					// cfg.Agents.List AND the registry). cfg alone cannot tell
+					// those two apart; ask the durable entity store instead.
+					if _, getErr := agentstore.New(al.homePath).Get(id); getErr != nil {
+						if errors.Is(getErr, entity.ErrNotFound) {
+							return nil, fmt.Errorf(
+								"upsert agent fast: agent %q was deleted by a concurrent request; refusing to resurrect it",
+								id)
+						}
+						return nil, fmt.Errorf(
+							"upsert agent fast: could not confirm agent %q still exists before rebasing onto a concurrent config change: %w",
+							id, getErr)
+					}
 					rebased.Agents.List = append(rebased.Agents.List, wantAC)
 				}
 				cfg = rebased

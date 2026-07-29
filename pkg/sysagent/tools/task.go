@@ -121,6 +121,40 @@ func allCheckCriteriaWorkspace(criteria []task.AcceptanceCriterion) bool {
 // (no linkage requested) is always valid (nil). A nil planStore fails
 // CLOSED — an unwired store is a configuration error, never a permission
 // grant.
+//
+// SECURITY (closes the 5th run_task ask-policy gate bypass — this is the
+// create_task_in_workspace sysagent-tool copy of the SAME hole that was just
+// closed in pkg/tools/plan.go's validateTaskPlanLinkage: see that function's
+// own doc comment, and pkg/agent/task_executor.go's
+// requireRunTaskAutoDispatchApproved, for the full writeup of why a task
+// acquiring a non-empty PlanID through any generic, non-plan-engine path
+// must be gated before the field would actually matter. This validator was
+// duplicated from validateTaskPlanLinkage specifically to keep the two
+// surfaces byte-for-byte identical — the terminal-plan check was copied over
+// at the time, but this draft-only requirement was NOT, which is exactly how
+// this 5th bypass reopened the hole through create_task_in_workspace
+// (reachable via the privileged cross-workspace/Orchestrator surface) even
+// after the other four were closed. Also rejects linking to a plan that is
+// not (still) StateDraft, unconditionally — create_task_in_workspace is an
+// agent tool with no human review step equivalent to the REST/Kanban UI's
+// own explicit "attach, then click Run Now" flow, so (exactly like
+// create_task) attaching a NEW member to a plan that has already left draft
+// was never a supported feature of this tool, only an unintended gap that
+// let a caller mint a fully-formed, already-`next`, plan-linked task for ANY
+// agent (including one with an "ask" run_task policy) bypassing the plan
+// engine's own vetted membership paths (authored before Execute, or added by
+// the plan's supervisor via plan_correct) entirely.
+//
+// KEEP IN SYNC with pkg/tools/plan.go's validateTaskPlanLinkage — the two
+// drifting apart is how this hole appeared in the first place. Exporting the
+// shared helper from pkg/tools and importing it here (this package already
+// imports pkg/tools for tools.DelegationDenial etc., a one-directional edge
+// — pkg/tools' production code does not import pkg/sysagent/tools, only its
+// external `tools_test` package does, which is a separate compilation unit
+// and not a cycle) would eliminate the duplication and this whole class of
+// drift; that change touches pkg/tools/plan.go, which is out of this fix's
+// scope, so it is left as a follow-up. If you edit one of these two
+// functions, edit the other.
 func validateTaskPlanLinkageWorkspace(planStore *plan.Store, planID, workspaceID string) error {
 	if planID == "" {
 		return nil
@@ -137,6 +171,13 @@ func validateTaskPlanLinkageWorkspace(planStore *plan.Store, planID, workspaceID
 	}
 	if plan.IsTerminal(p.State) {
 		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
+	}
+	if p.State != plan.StateDraft {
+		return fmt.Errorf(
+			"plan %q is %q, not draft — new members can only be linked via create_task_in_workspace before "+
+				"the plan is approved; once a plan has left draft, only its supervisor may add members "+
+				"(plan_correct)",
+			planID, p.State)
 	}
 	return nil
 }
