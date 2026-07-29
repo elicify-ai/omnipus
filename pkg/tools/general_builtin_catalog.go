@@ -43,7 +43,7 @@ import (
 // Constructor errors are logged at Warn level and the corresponding tool is
 // skipped. The caller must not treat a shorter-than-expected slice as fatal.
 func GeneralBuiltinMetadata() []Tool {
-	out := make([]Tool, 0, 38)
+	out := make([]Tool, 0, 40)
 
 	// --- bash (CategoryShell, ScopeCore) — ADR-036 merge of
 	// exec/workspace_shell/workspace_shell_bg into one universally-registered
@@ -61,6 +61,11 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewListDirTool("", false))
 	out = append(out, NewEditFileTool("", false))
 	out = append(out, NewAppendFileTool("", false))
+	// library_list / library_read (D3, library-spec): scoped facades over
+	// the workspace's .library/ dual-write directory where chat uploads
+	// land (D-1) — see pkg/agent.LibraryDirName.
+	out = append(out, NewLibraryListTool("", false))
+	out = append(out, NewLibraryReadTool("", false, 0))
 
 	// --- Web tools (CategoryWeb) ---
 	// search_web: use DuckDuckGoEnabled to satisfy the at-least-one-provider

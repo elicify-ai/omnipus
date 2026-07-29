@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,8 +19,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // TestHandleUpload_RegistersMediaRef is the #254 regression test: an uploaded
@@ -581,4 +585,165 @@ func TestUpload_Endpoint_NoWorkspaceIDStillLegacy(t *testing.T) {
 		assert.False(t, strings.HasPrefix(*resp.Files[0].Ref, "media://workspace/"),
 			"legacy upload must not produce a workspace ref, got %q", *resp.Files[0].Ref)
 	}
+}
+
+// --- D-1 (library-spec, 2026-07-29 UAT) dual-write tests ---
+//
+// workspaces/<id>/media/ is a SIBLING of work/ — structurally unreachable by
+// every agent file tool, which opens an os.Root at work/ and cannot escape
+// it by construction (ADR-046). These tests prove the fix: a chat upload
+// with a workspace_id ALSO lands as a real, named file inside
+// workspaces/<id>/work/.library/, readable through the SAME sandboxed
+// file-tool machinery every other agent file operation uses — not just
+// present on disk, but ACTUALLY reachable through the rooted tool path.
+
+// TestUpload_Endpoint_DualWritesToWorkspaceLibrary is the core D-1
+// regression test: the uploaded bytes must ALSO be staged at
+// workspaces/<id>/work/.library/<filename> (not just workspaces/<id>/media/),
+// and the exact work-relative path must be recorded in the
+// pkg/agent upload-work-path registry for D1b's announcement to use. Proves
+// the round trip end-to-end: the file is then read back through
+// tools.LibraryReadTool — the SAME sandboxed, os.Root-confined path a real
+// agent turn uses — not merely os.ReadFile against a known path.
+func TestUpload_Endpoint_DualWritesToWorkspaceLibrary(t *testing.T) {
+	api := newUploadTestAPI(t)
+	workspaceID := "ws-dualwrite"
+	fileContent := "PPTX-BYTES-STAND-IN"
+	fileName := "Copy of elicify_company_profile.pptx"
+
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	require.NoError(t, w.WriteField("workspace_id", workspaceID))
+	fw, err := w.CreateFormFile("file", fileName)
+	require.NoError(t, err)
+	_, _ = io.WriteString(fw, fileContent)
+	require.NoError(t, w.Close())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+	require.NotNil(t, resp.Files[0].Ref)
+	ref := *resp.Files[0].Ref
+
+	// The dual-write copy must exist on disk, byte-identical to the library copy.
+	workDir, err := workspace.SafeWorkDir(api.homePath, workspaceID)
+	require.NoError(t, err)
+	dualWritePath := filepath.Join(workDir, ".library", fileName)
+	data, readErr := os.ReadFile(dualWritePath)
+	require.NoError(t, readErr, "dual-write copy must exist at work/.library/<filename>")
+	assert.Equal(t, fileContent, string(data))
+
+	// The exact work-relative path must be recorded for D1b's announcement.
+	recorded, ok := agent.LookupUploadWorkPath(ref)
+	require.True(t, ok, "the upload handler must record the work-relative path for this ref")
+	assert.Equal(t, ".library/"+fileName, recorded)
+
+	// Round trip: prove the SAME sandboxed tool path a real agent turn uses
+	// (os.Root-confined, restrict=true) can read this exact file back.
+	libReadTool := tools.NewLibraryReadTool(workDir, true, tools.MaxReadFileSize)
+	result := libReadTool.Execute(context.Background(), map[string]any{"path": fileName})
+	require.False(t, result.IsError, "library_read must succeed reading the dual-written file: %s", result.ForLLM)
+	assert.Contains(t, result.ForLLM, fileContent,
+		"library_read must return the exact bytes the upload staged")
+}
+
+// TestUpload_Endpoint_DualWriteDeduplicatesOnFilenameCollision verifies the
+// numeric-suffix de-duplication D-1 requires: uploading two DIFFERENT files
+// with the SAME name to the same workspace must not let the second upload
+// clobber the first — the second lands at ".library/name (1).ext".
+func TestUpload_Endpoint_DualWriteDeduplicatesOnFilenameCollision(t *testing.T) {
+	api := newUploadTestAPI(t)
+	workspaceID := "ws-dedup"
+
+	upload := func(content string) gen.UploadedFile {
+		body := &bytes.Buffer{}
+		w := multipart.NewWriter(body)
+		require.NoError(t, w.WriteField("workspace_id", workspaceID))
+		fw, err := w.CreateFormFile("file", "report.txt")
+		require.NoError(t, err)
+		_, _ = io.WriteString(fw, content)
+		require.NoError(t, w.Close())
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		rr := httptest.NewRecorder()
+		api.HandleUpload(rr, req)
+		require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+		var resp gen.UploadFilesResponse
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+		require.Len(t, resp.Files, 1)
+		return resp.Files[0]
+	}
+
+	first := upload("first version")
+	second := upload("second version")
+
+	workDir, err := workspace.SafeWorkDir(api.homePath, workspaceID)
+	require.NoError(t, err)
+
+	firstData, err := os.ReadFile(filepath.Join(workDir, ".library", "report.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "first version", string(firstData))
+
+	secondData, err := os.ReadFile(filepath.Join(workDir, ".library", "report (1).txt"))
+	require.NoError(t, err, "second upload with a colliding name must be de-duplicated with a numeric suffix")
+	assert.Equal(t, "second version", string(secondData))
+
+	require.NotNil(t, first.Ref)
+	require.NotNil(t, second.Ref)
+	firstRecorded, ok := agent.LookupUploadWorkPath(*first.Ref)
+	require.True(t, ok)
+	assert.Equal(t, ".library/report.txt", firstRecorded)
+	secondRecorded, ok := agent.LookupUploadWorkPath(*second.Ref)
+	require.True(t, ok)
+	assert.Equal(t, ".library/report (1).txt", secondRecorded)
+}
+
+// TestUpload_Endpoint_DualWriteFailureRollsBackLibraryEntry verifies that if
+// the D-1 dual-write cannot be staged (here: a plain file already occupies
+// the .library/ path, so os.MkdirAll fails), the WHOLE upload is treated as
+// a failure — including rolling back the media-library entry that had
+// already been created — rather than silently leaving an entry the agent
+// still cannot read.
+func TestUpload_Endpoint_DualWriteFailureRollsBackLibraryEntry(t *testing.T) {
+	api := newUploadTestAPI(t)
+	workspaceID := "ws-stage-fail"
+
+	workDir, err := workspace.SafeWorkDir(api.homePath, workspaceID)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	// Occupy the .library/ path with a plain file so MkdirAll(libraryDir) fails.
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".library"), []byte("blocker"), 0o644))
+
+	body, ct := func() (*bytes.Buffer, string) {
+		body := &bytes.Buffer{}
+		w := multipart.NewWriter(body)
+		require.NoError(t, w.WriteField("workspace_id", workspaceID))
+		fw, err := w.CreateFormFile("file", "blocked.txt")
+		require.NoError(t, err)
+		_, _ = io.WriteString(fw, "should not persist")
+		require.NoError(t, w.Close())
+		return body, w.FormDataContentType()
+	}()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", ct)
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code, "body: %s", rr.Body.String())
+
+	lib := api.agentLoop.GetWorkspaceLibrary(workspaceID)
+	require.NotNil(t, lib)
+	assert.Empty(t, lib.List(),
+		"the media-library entry must be rolled back when the dual-write fails — "+
+			"an entry the agent still cannot read must not survive as a false success")
 }

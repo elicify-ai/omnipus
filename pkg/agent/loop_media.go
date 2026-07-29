@@ -175,6 +175,21 @@ func resolveMediaRefsWithOffload(
 
 			mime := detectMIME(localPath, meta)
 
+			// D1b (library-spec, 2026-07-29 UAT): announce every successfully
+			// resolved workspace-library attachment with its real,
+			// agent-actionable path BEFORE any type-specific handling below —
+			// the model must be told a file arrived and WHERE, in text it can
+			// act on (pass straight to read_file/library_read), rather than
+			// guessing a filename the way Ray did in the UAT. Applies to every
+			// branch below (image, PDF, document, offload) uniformly; a
+			// non-workspace ref (legacy media://<uuid>, channel-native
+			// attachments) has no "workspace-relative path" to announce, so
+			// buildUploadAnnouncement returns "" for those and nothing is
+			// injected.
+			if announcement := buildUploadAnnouncement(ref, meta); announcement != "" {
+				contentInjections = append(contentInjections, announcement)
+			}
+
 			if strings.HasPrefix(mime, "image/") {
 				// Step 1 — capability gate (FR-010). If the catalog says
 				// the model lacks the image modality, skip native send
@@ -279,6 +294,37 @@ func resolveMediaRefsWithOffload(
 	}
 
 	return result
+}
+
+// buildUploadAnnouncement returns the D1b "[user uploaded: ...]" content
+// injection for a successfully-resolved media ref, or "" for a ref this
+// function has nothing useful to announce for: a non-workspace ref (legacy
+// media://<uuid>, channel-native attachments) has no "workspace-relative
+// path" the way a chat-upload's workspace/work/.library/ dual-write does
+// (D-1), so nothing is announced for those.
+//
+// The returned path is NEVER run through sanitizeInjectedName's
+// truncate-to-128-runes cap: both of its possible sources — the exact
+// recorded write-time path (LookupUploadWorkPath) and the fallback formula
+// (FallbackAnnouncedUploadPath) — route through SanitizeUploadFilename
+// first, which already guarantees no control characters and no path
+// separators beyond the deliberate ".library/" prefix this file's own
+// upload handler adds. Truncating an otherwise-valid up-to-256-character
+// filename to 128 runes here would corrupt the exact string the model is
+// meant to pass straight to read_file/library_read — the one thing this
+// fix cannot afford to get wrong.
+func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
+	if !media.IsWorkspaceRef(ref) {
+		return ""
+	}
+	workPath, ok := LookupUploadWorkPath(ref)
+	if !ok {
+		workPath = FallbackAnnouncedUploadPath(meta.Filename)
+	}
+	if workPath == "" {
+		return ""
+	}
+	return "\n\n[user uploaded: " + workPath + "]"
 }
 
 // pdfCapableModel returns true for models known to support native PDF document
@@ -1073,6 +1119,16 @@ func isWithinWorkDir(path, dir string) bool {
 		return false
 	}
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// DetectFileClass is the exported wrapper around detectFileClass (D2,
+// library-spec): pkg/gateway's websocket handler uses it to classify a
+// resolved attachment's session.TranscriptEntry.Attachments[].Type as
+// "image", "document", or "file" — the SAME three-way classification the
+// step-5 offload guidance line already uses, so the persisted transcript
+// and the LLM-visible guidance never drift into two independent taxonomies.
+func DetectFileClass(mime, filename string) string {
+	return detectFileClass(mime, filename)
 }
 
 // detectFileClass returns the FR-021 presentation noun class for a file:

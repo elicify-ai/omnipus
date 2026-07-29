@@ -961,8 +961,16 @@ func (cb *ContextBuilder) BuildMessages(
 	// since span messages were prepended to history before sanitization.
 	messages = append(messages, combinedHistory...)
 
-	// Add current user message
-	if strings.TrimSpace(currentMessage) != "" {
+	// Add current user message. D1 (library-spec, 2026-07-29 UAT): a turn
+	// carrying media but no caption used to be dropped ENTIRELY here (the
+	// gate only checked currentMessage), so an uploaded file with no caption
+	// never reached the LLM at all — the model had no way to even know a
+	// file arrived. The gate now also fires whenever media is present, even
+	// with an empty currentMessage, so a caption-less attachment still
+	// reaches the model this turn instead of only resurfacing later via
+	// session history (see resolveMediaRefsWithOffload's per-file upload
+	// announcement, which now covers this turn too).
+	if strings.TrimSpace(currentMessage) != "" || len(media) > 0 {
 		msg := providers.Message{
 			Role:    "user",
 			Content: currentMessage,

@@ -62,6 +62,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	wkspace "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // Version is set at build time via -ldflags "-X github.com/elicify-ai/omnipus/pkg/gateway.Version=x.y.z".
@@ -9116,6 +9117,39 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				_, mediaID, _ := media.ParseWorkspaceRef(ref)
 				relativePath := filepath.Join("workspaces", workspaceID, "media", mediaID)
 
+				// D-1 (library-spec, 2026-07-29 UAT): the media-library blob
+				// above lives in workspaces/<id>/media/ — a SIBLING of work/,
+				// structurally unreachable by every agent file tool (they
+				// open an os.Root at work/ and cannot escape it by
+				// construction, ADR-046). Dual-write the SAME bytes as a
+				// real, named file inside workspaces/<id>/work/.library/ so
+				// library_read/read_file can actually find it — this is the
+				// single change that makes the agent-visibility requirement
+				// satisfiable. The media-library entry above remains the
+				// metadata index (mime/size/sha256/refcount/source); this is
+				// purely an additional copy, never a replacement. A failure
+				// here means the upload as a whole does NOT satisfy "the
+				// agent can read this file", so it is treated as a hard
+				// upload failure — the just-created library entry is rolled
+				// back rather than left as a half-satisfied promise.
+				workRelPath, stageErr := a.stageWorkspaceUploadCopy(workspaceID, mediaID, fileName, workspaceLib)
+				if stageErr != nil {
+					logger.ErrorCF("rest", "upload: could not stage workspace library copy for agent access",
+						map[string]any{
+							"workspace_id": workspaceID, "media_id": mediaID,
+							"filename": fileName, "error": stageErr.Error(),
+						})
+					if _, delErr := workspaceLib.Delete(mediaID); delErr != nil {
+						slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
+							"media_id", mediaID, "error", delErr)
+					}
+					a.cleanupWorkspaceUploads(&resp, workspaceLib)
+					jsonErr(w, http.StatusInternalServerError,
+						fmt.Sprintf("could not stage uploaded file for agent access: %v", stageErr))
+					return
+				}
+				agent.RecordUploadWorkPath(ref, workRelPath)
+
 				var refPtr *string
 				if ref != "" {
 					refCopy := ref
@@ -9136,6 +9170,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 					"size", size,
 					"content_type", mimeStr,
 					"media_ref", ref,
+					"work_path", workRelPath,
 				)
 				continue
 			}
@@ -9314,6 +9349,100 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // from this batch when a later file in the same request fails. The failing
 // file's own cleanup is handled transactionally by library.Upload; this only
 // removes files that already succeeded. Best-effort — errors are logged.
+// stageWorkspaceUploadCopy performs the D-1 (library-spec) dual-write: it
+// reads back the just-uploaded file's bytes from the workspace media
+// library (lib.Read, which sha256-verifies on read) and writes them a
+// SECOND time into the SAME workspace's work/.library/ directory — a real,
+// named file inside the os.Root every agent file tool is confined to
+// (ADR-046), unlike workspaces/<id>/media/ which is a sibling those tools
+// cannot reach by construction. De-duplicates a filename collision with a
+// human-readable " (N)" numeric suffix, mirroring the legacy session-scoped
+// upload path's own collision handling further down in HandleUpload.
+//
+// Returns the workspace-relative announced path (".library/<name>",
+// agent.LibraryDirName()-prefixed) on success. On any failure, the
+// caller MUST treat the whole upload as failed (see HandleUpload's use)
+// rather than leaving a media-library entry the agent still cannot read —
+// stageWorkspaceUploadCopy itself removes any partially-written destination
+// file before returning an error, so the caller does not need to.
+func (a *restAPI) stageWorkspaceUploadCopy(
+	workspaceID, mediaID, filename string,
+	lib *library.Library,
+) (string, error) {
+	sanitized, err := agent.SanitizeUploadFilename(filename)
+	if err != nil {
+		return "", fmt.Errorf("sanitize filename: %w", err)
+	}
+	workDir, err := wkspace.SafeWorkDir(a.homePath, workspaceID)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace work dir: %w", err)
+	}
+	libraryDir := filepath.Join(workDir, agent.LibraryDirName())
+	if mkErr := os.MkdirAll(libraryDir, 0o700); mkErr != nil {
+		return "", fmt.Errorf("create workspace library dir: %w", mkErr)
+	}
+
+	// Read back the FULL, sha256-verified bytes rather than tee-ing the
+	// original multipart reader — the multipart part is already fully
+	// consumed by lib.Upload above by the time this is called, and
+	// re-reading through the library's own integrity-checked Read keeps this
+	// function's contract simple (one clear source of truth for "what did we
+	// actually store") at the cost of one extra full read, bounded by the
+	// same 100 MB library.MaxFileSize every upload is already capped at.
+	data, _, err := lib.Read(mediaID)
+	if err != nil {
+		return "", fmt.Errorf("read back uploaded bytes: %w", err)
+	}
+
+	ext := filepath.Ext(sanitized)
+	base := strings.TrimSuffix(sanitized, ext)
+	const maxDedupAttempts = 1000
+
+	destName := sanitized
+	var destFile *os.File
+	var destPath string
+	for attempt := 1; ; attempt++ {
+		destPath = filepath.Join(libraryDir, destName)
+		f, openErr := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if openErr == nil {
+			destFile = f
+			break
+		}
+		if !os.IsExist(openErr) {
+			return "", fmt.Errorf("create workspace library file: %w", openErr)
+		}
+		if attempt > maxDedupAttempts {
+			return "", fmt.Errorf("too many filename collisions for %q in workspace library", sanitized)
+		}
+		destName = fmt.Sprintf("%s (%d)%s", base, attempt, ext)
+	}
+
+	// keepFile flips to true only once the write AND close both succeed —
+	// any earlier return leaves it false, so the deferred cleanup below
+	// removes the just-created (possibly empty or partially-written) file
+	// rather than stranding it.
+	keepFile := false
+	defer func() {
+		if !keepFile {
+			if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				logger.WarnCF("rest", "upload: cleanup partial workspace library file failed",
+					map[string]any{"path": destPath, "error": rmErr.Error()})
+			}
+		}
+	}()
+
+	if _, writeErr := destFile.Write(data); writeErr != nil {
+		destFile.Close()
+		return "", fmt.Errorf("write workspace library file: %w", writeErr)
+	}
+	if closeErr := destFile.Close(); closeErr != nil {
+		return "", fmt.Errorf("close workspace library file: %w", closeErr)
+	}
+	keepFile = true
+
+	return agent.LibraryDirName() + "/" + destName, nil
+}
+
 func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *library.Library) {
 	if lib == nil {
 		return

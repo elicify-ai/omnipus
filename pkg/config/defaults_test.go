@@ -46,7 +46,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	}
 
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6) — 78 static builtin tools (32 general + 11 browser + 35
+	// constraint 6) — 80 static builtin tools (34 general + 11 browser + 35
 	// sysagent), matching pkg/coreagent's allStaticToolNames literal-for-literal.
 	// Browser gained browser_list_tabs / browser_switch_tab / browser_close_tab
 	// (ADR-041 multi-tab), taking browser from 7 to 10, then browser_open_tab
@@ -54,8 +54,11 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// General gained recall_conversation — the 4th memory tool (remember /
 	// recall_memory / run_retrospective / recall_conversation) that was
 	// registered but omitted from the seed + catalog, so it was denied-by-default
-	// (fail-closed) on every install — taking general from 31 to 32.
-	const wantToolCount = 78
+	// (fail-closed) on every install — taking general from 31 to 32. General then
+	// gained library_list / library_read (D3, library-spec, 2026-07-29 UAT) —
+	// scoped read/list facades over a workspace's chat-upload dual-write
+	// directory (D-1) — taking general from 32 to 34.
+	const wantToolCount = 80
 	if got := len(cfg.Sandbox.ToolPolicies); got != wantToolCount {
 		t.Errorf(
 			"expected sandbox.tool_policies to enumerate all %d static builtin tools, got %d entries",

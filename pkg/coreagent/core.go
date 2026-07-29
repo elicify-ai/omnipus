@@ -216,7 +216,7 @@ func GetPrompt(id string) string {
 // allStaticToolNames is the complete, hardcoded enumeration of every static
 // builtin tool name known to the platform:
 //
-//   - 31 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
+//   - 34 general builtin tools (pkg/tools/*.go, excluding pkg/tools/browser and
 //     the dynamic MCP-adapter tool names, which are per-server and can't be
 //     statically enumerated — see the Constraint #6 MCP exception).
 //   - 11 browser-automation tools (pkg/tools/browser/tools.go +
@@ -233,6 +233,10 @@ var allStaticToolNames = []string{
 	// General builtin tools.
 	"bash",
 	"read_file", "write_file", "list_directory", "edit_file", "append_file",
+	// library_list / library_read (D3, library-spec): scoped facades over a
+	// workspace's own .library/ dual-write directory (D-1) — see
+	// pkg/agent.LibraryDirName / pkg/tools/library_tool.go.
+	"library_list", "library_read",
 	"search_web", "fetch_url",
 	"send_message", "hand_off", "return_to_default", "send_file",
 	"find_skills", "install_skill",
@@ -435,6 +439,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// the Planner only decomposes, it doesn't browse.
 			overrides["read_file"] = allow
 			overrides["list_directory"] = allow
+			// Chat-uploaded files land in this workspace's library (D3,
+			// library-spec) — matches the read_file/list_directory allowance above.
+			overrides["library_list"] = allow
+			overrides["library_read"] = allow
 			overrides["create_task"] = allow
 			overrides["update_task"] = allow
 			overrides["list_tasks"] = allow
@@ -449,6 +457,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// browsing for pages that need rendering (NOT browser_evaluate).
 			overrides["read_file"] = allow
 			overrides["list_directory"] = allow
+			// Chat-uploaded files land in this workspace's library (D3,
+			// library-spec) — matches the read_file/list_directory allowance above.
+			overrides["library_list"] = allow
+			overrides["library_read"] = allow
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -469,6 +481,10 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["search_web"] = allow
 			overrides["fetch_url"] = allow
 			overrides["read_file"] = allow
+			// Chat-uploaded files land in this workspace's library (D3,
+			// library-spec) — Researcher gets read access only (matches his
+			// read_file-only allowance; he has no list_directory either).
+			overrides["library_read"] = allow
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -593,6 +609,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"write_file":     allow,
 			"append_file":    allow,
 			"edit_file":      allow,
+			// Chat-uploaded files land in this workspace's library (D3,
+			// library-spec) — Ray needs to find and read them, matching his
+			// read_file/list_directory allowance above.
+			"library_list": allow,
+			"library_read": allow,
 			// Persistent memory (carries research context across sessions).
 			"remember":            allow,
 			"recall_memory":       allow,
@@ -627,6 +648,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"edit_file":      allow,
 			"append_file":    allow,
 			"list_directory": allow,
+			// Chat-uploaded files land in this workspace's library (D3,
+			// library-spec) — Jim needs to find and read them, matching his
+			// read_file/list_directory allowance above.
+			"library_list": allow,
+			"library_read": allow,
 			// External lookups.
 			"search_web": allow,
 			"fetch_url":  allow,
@@ -1092,8 +1118,14 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// denied until the operator opts in.
 				"read_file":      allow,
 				"list_directory": allow,
-				"remember":       allow,
-				"recall_memory":  allow,
+				// library_list/library_read (D3, library-spec) are part of
+				// the same read-only filesystem surface as read_file/
+				// list_directory above — a fresh agent can find and read
+				// whatever the operator uploaded to this workspace's chat.
+				"library_list":  allow,
+				"library_read":  allow,
+				"remember":      allow,
+				"recall_memory": allow,
 			}),
 		},
 	}

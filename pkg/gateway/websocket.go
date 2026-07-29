@@ -1456,6 +1456,55 @@ func (h *WSHandler) handleChatMessage(
 	// used as msg.Content for a kickoff turn.
 	var kickoffInstruction string
 
+	// #254: thread client-supplied media refs into the inbound message so the
+	// agent loop resolves them into multimodal content blocks. Only accept
+	// Hard-cap inbound media to prevent resource exhaustion. Refs beyond
+	// maxInboundMediaRefs and refs exceeding maxInboundRefLen are dropped and
+	// counted against the inbound-dropped counter.
+	//
+	// Computed HERE — before the transcript-append block below — so that
+	// D2 (library-spec) can persist the accepted, validated set as
+	// session.TranscriptEntry.Attachments. It used to be computed AFTER
+	// that block, which meant the persisted transcript never had access to
+	// the media this very message carried.
+	const maxInboundMediaRefs = 16
+	const maxInboundRefLen = 256
+
+	var acceptedMedia []string
+	for i, ref := range mediaRefs {
+		if i >= maxInboundMediaRefs {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
+				"chat_id", chatID, "session_id", sessionID,
+				"dropped_from_index", i, "total_supplied", len(mediaRefs))
+			break
+		}
+		if len(ref) > maxInboundRefLen {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: dropping oversized ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", ref[:32])
+			continue
+		}
+		// Accept only well-formed media:// refs (non-empty ID validated by
+		// ParseMediaRef — rejects bare "media://" with empty ID, non-prefixed
+		// strings, raw paths, and HTTP URLs that a buggy channel might emit).
+		// Non-matching strings are a client error or smuggling attempt — drop
+		// and count them via the inboundDropped counter.
+		if _, err := media.ParseMediaRef(ref); err == nil {
+			acceptedMedia = append(acceptedMedia, ref)
+		} else {
+			wc.inboundDropped.Add(1)
+			truncated := ref
+			if len(truncated) > 64 {
+				truncated = truncated[:64] + "…"
+			}
+			slog.Warn("ws: dropping invalid media:// ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", truncated)
+		}
+	}
+
 	if store != nil {
 		// Workspace-setup kickoff idempotency guard: clear SetupPending exactly
 		// once, under the per-workspace lock (workspace.LockID). ANY outcome
@@ -1641,6 +1690,15 @@ func (h *WSHandler) handleChatMessage(
 				AgentID:   targetAgentID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
+				// D2 (library-spec, 2026-07-29 UAT): persist which files this
+				// message attached. Previously this field was never set even
+				// though it has existed on TranscriptEntry all along — a later
+				// turn (or a DIFFERENT AGENT after a handoff, exactly what
+				// happened in the UAT: Mia -> Ray) had no durable record of
+				// what was uploaded, only the live in-flight message. Built
+				// from acceptedMedia (the validated ref set), not the raw
+				// client-supplied mediaRefs.
+				Attachments: buildTranscriptAttachments(h.agentLoop.GetMediaStore(), acceptedMedia, workspaceID),
 			}
 			if setupKickoff {
 				// Record the kickoff trigger as a system-role event, not a user
@@ -1665,49 +1723,6 @@ func (h *WSHandler) handleChatMessage(
 			// that could still fail, producing a false "consumed" audit
 			// record even on a failure that had just restored the flag and
 			// rolled back this very session.
-		}
-	}
-
-	// #254: thread client-supplied media refs into the inbound message so the
-	// agent loop resolves them into multimodal content blocks. Only accept
-	// Hard-cap inbound media to prevent resource exhaustion. Refs beyond
-	// maxInboundMediaRefs and refs exceeding maxInboundRefLen are dropped and
-	// counted against the inbound-dropped counter.
-	const maxInboundMediaRefs = 16
-	const maxInboundRefLen = 256
-
-	var acceptedMedia []string
-	for i, ref := range mediaRefs {
-		if i >= maxInboundMediaRefs {
-			wc.inboundDropped.Add(1)
-			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
-				"chat_id", chatID, "session_id", sessionID,
-				"dropped_from_index", i, "total_supplied", len(mediaRefs))
-			break
-		}
-		if len(ref) > maxInboundRefLen {
-			wc.inboundDropped.Add(1)
-			slog.Warn("ws: dropping oversized ref in message frame",
-				"chat_id", chatID, "session_id", sessionID,
-				"ref_prefix", ref[:32])
-			continue
-		}
-		// Accept only well-formed media:// refs (non-empty ID validated by
-		// ParseMediaRef — rejects bare "media://" with empty ID, non-prefixed
-		// strings, raw paths, and HTTP URLs that a buggy channel might emit).
-		// Non-matching strings are a client error or smuggling attempt — drop
-		// and count them via the inboundDropped counter.
-		if _, err := media.ParseMediaRef(ref); err == nil {
-			acceptedMedia = append(acceptedMedia, ref)
-		} else {
-			wc.inboundDropped.Add(1)
-			truncated := ref
-			if len(truncated) > 64 {
-				truncated = truncated[:64] + "…"
-			}
-			slog.Warn("ws: dropping invalid media:// ref in message frame",
-				"chat_id", chatID, "session_id", sessionID,
-				"ref_prefix", truncated)
 		}
 	}
 
@@ -1866,6 +1881,62 @@ func (h *WSHandler) consumeWorkspaceSetupKickoff(
 		return kickoffFailed, "", ""
 	}
 	return kickoffConsumed, w.Name, w.Description
+}
+
+// buildTranscriptAttachments resolves each accepted media ref into a
+// session.Attachment for persistence on the user's TranscriptEntry (D2,
+// library-spec). A ref that fails to resolve (deleted file, integrity
+// failure, cross-workspace mismatch) is logged and skipped rather than
+// aborting the whole message — an attachment record is best-effort
+// metadata, not load-bearing for the turn itself (the raw ref still reaches
+// the agent loop via msg.Media regardless of what this function returns).
+//
+// Path prefers the EXACT workspace-relative path the D-1 dual-write staged
+// the file at (agent.LookupUploadWorkPath), falling back to the best-effort
+// plain-name formula (agent.FallbackAnnouncedUploadPath) for a workspace ref
+// whose write-time record is unavailable (e.g. a gateway restart between
+// the upload and this message), and finally to the bare ref for a
+// non-workspace ref (legacy media://<uuid>, channel-native attachments),
+// which has no workspace-relative path at all.
+func buildTranscriptAttachments(store media.MediaStore, refs []string, callerWorkspace string) []session.Attachment {
+	if store == nil || len(refs) == 0 {
+		return nil
+	}
+	opts := media.ResolveOpts{}
+	if callerWorkspace != "" {
+		opts = media.WithCallerWorkspace(callerWorkspace)
+	}
+	out := make([]session.Attachment, 0, len(refs))
+	for _, ref := range refs {
+		localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
+		if err != nil {
+			slog.Warn("ws: could not resolve media ref for transcript attachment",
+				"ref", ref, "error", err)
+			continue
+		}
+		var size int64
+		if info, statErr := os.Stat(localPath); statErr == nil {
+			size = info.Size()
+		} else {
+			slog.Warn("ws: could not stat media file for transcript attachment size",
+				"ref", ref, "error", statErr)
+		}
+		path := ref
+		if media.IsWorkspaceRef(ref) {
+			if workPath, ok := agent.LookupUploadWorkPath(ref); ok {
+				path = workPath
+			} else if fallback := agent.FallbackAnnouncedUploadPath(meta.Filename); fallback != "" {
+				path = fallback
+			}
+		}
+		out = append(out, session.Attachment{
+			Type:     agent.DetectFileClass(meta.ContentType, meta.Filename),
+			Path:     path,
+			Size:     size,
+			MIMEType: meta.ContentType,
+		})
+	}
+	return out
 }
 
 // buildWorkspaceKickoffInstruction assembles the SERVER-CANONICAL prompt that

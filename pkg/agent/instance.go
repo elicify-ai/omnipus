@@ -145,6 +145,15 @@ func NewAgentInstance(
 	toolsRegistry.Register(tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
 	toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict, allowWritePaths))
 	toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+	// library_list / library_read (D3, library-spec): scoped facades over
+	// this agent's own workspace .library/ dual-write directory, where chat
+	// uploads land (D-1) so file tools can actually reach them (ADR-046).
+	// Registered unconditionally for every agent, exactly like their
+	// read_file/list_directory siblings above — tool POLICY (allow/ask/
+	// deny), not conditional registration, decides who can actually invoke
+	// them (CLAUDE.md Constraint #6).
+	toolsRegistry.Register(tools.NewLibraryListTool(workspace, readRestrict, allowReadPaths))
+	toolsRegistry.Register(tools.NewLibraryReadTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
 
 	execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
 	if err != nil {
