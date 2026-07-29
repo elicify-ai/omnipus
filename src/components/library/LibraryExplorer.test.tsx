@@ -30,12 +30,19 @@ import {
   fetchLibraryEntries,
   fetchLibraryContent,
   deleteLibraryEntry,
+  renameLibraryEntry,
+  moveLibraryEntry,
+  uploadLibraryFiles,
+  ApiError,
 } from '@/lib/api'
 
 const mockedFetchWorkspaces = vi.mocked(fetchLibraryWorkspaces)
 const mockedFetchEntries = vi.mocked(fetchLibraryEntries)
 const mockedFetchContent = vi.mocked(fetchLibraryContent)
 const mockedDelete = vi.mocked(deleteLibraryEntry)
+const mockedRename = vi.mocked(renameLibraryEntry)
+const mockedMove = vi.mocked(moveLibraryEntry)
+const mockedUpload = vi.mocked(uploadLibraryFiles)
 
 import { LibraryExplorer } from './LibraryExplorer'
 
@@ -284,5 +291,120 @@ describe('LibraryExplorer — empty and error states', () => {
 
     await waitFor(() => expect(screen.getByTestId('library-entries-error')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+  })
+})
+
+// UAT fix (Dana, live tester) — Rename/Move/Upload failures were
+// indistinguishable from nothing happening: the dialog quietly reverted to
+// its idle state with zero error text, and a Move destination's leading "/"
+// was silently stripped before being sent, so the server acted on a
+// different path than the one the user typed. These tests prove each
+// failure path now surfaces a message the user can act on (the server's own
+// reason where available), keeps the dialog open with their input intact,
+// and that the client never silently rewrites what was typed.
+describe('LibraryExplorer — surfacing real failures (rename / move / upload)', () => {
+  async function openPreviewAndClick(nameRegex: RegExp) {
+    await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
+    fireEvent.click(within(screen.getByTestId('library-preview-pane')).getByRole('button', { name: nameRegex }))
+  }
+
+  it('a failed rename shows a persistent, actionable error banner — dialog stays open, typed name preserved, button reverts (never silent)', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'report.md', path: 'report.md' })])
+    mockedRename.mockRejectedValue(new ApiError(400, 'Invalid path: contains directory traversal characters'))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+    await openPreviewAndClick(/rename/i)
+
+    await waitFor(() => expect(screen.getByTestId('library-rename-dialog')).toBeInTheDocument())
+    const input = screen.getByTestId('library-rename-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '..\\dana-pwned-backslash.txt' } })
+    fireEvent.click(screen.getByTestId('library-rename-confirm'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-rename-error')).toHaveTextContent(
+        'Invalid path: contains directory traversal characters',
+      )
+    })
+    // Dialog stayed open with the edit intact — not a silent revert.
+    expect(screen.getByTestId('library-rename-dialog')).toBeInTheDocument()
+    expect(input.value).toBe('..\\dana-pwned-backslash.txt')
+    expect(screen.getByTestId('library-rename-confirm')).toHaveTextContent('Rename')
+    // Same two-channel pattern as the save flow: banner AND toast.
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(true)
+  })
+
+  it('rejects a leading "/" in a Move destination instead of silently stripping it before sending', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1', name: 'Website API' })])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'report.md', path: 'report.md' })])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+    await openPreviewAndClick(/move/i)
+
+    await waitFor(() => expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument())
+    const pathInput = screen.getByTestId('library-transfer-path') as HTMLInputElement
+    fireEvent.change(pathInput, { target: { value: '/etc/dana-abs-test.txt' } })
+
+    await waitFor(() => expect(screen.getByTestId('library-transfer-leading-slash')).toBeInTheDocument())
+    expect(screen.getByTestId('library-transfer-confirm')).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('library-transfer-confirm'))
+    expect(mockedMove).not.toHaveBeenCalled()
+    // The input still shows exactly what the user typed — nothing was
+    // silently rewritten to a different path behind their back.
+    expect(pathInput.value).toBe('/etc/dana-abs-test.txt')
+  })
+
+  it('a failed move shows a persistent, actionable error banner — dialog stays open with the destination preserved', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1', name: 'Website API' })])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'report.md', path: 'report.md' })])
+    mockedMove.mockRejectedValue(new ApiError(404, 'Destination workspace not found'))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+    await openPreviewAndClick(/move/i)
+
+    await waitFor(() => expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument())
+    const pathInput = screen.getByTestId('library-transfer-path') as HTMLInputElement
+    fireEvent.change(pathInput, { target: { value: 'archive/report.md' } })
+    fireEvent.click(screen.getByTestId('library-transfer-confirm'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-transfer-error')).toHaveTextContent('Destination workspace not found')
+    })
+    expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument()
+    expect(pathInput.value).toBe('archive/report.md')
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(true)
+  })
+
+  it('a failed upload shows a persistent, dismissible error banner instead of the file just silently never appearing', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([])
+    mockedUpload.mockRejectedValue(new ApiError(400, 'Upload rejected: filename contains invalid characters'))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-upload-button')).toBeInTheDocument())
+    const fileInput = screen.getByTestId('library-upload-input') as HTMLInputElement
+    const file = new File(['data'], '..\\dana-upload-traversal.txt', { type: 'text/plain' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-upload-error')).toHaveTextContent(
+        'Upload rejected: filename contains invalid characters',
+      )
+    })
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss error/i }))
+    expect(screen.queryByTestId('library-upload-error')).not.toBeInTheDocument()
   })
 })

@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { LibraryEntry } from '@/lib/api'
+import { LibraryErrorBanner } from './LibraryErrorBanner'
 
 interface LibraryRenameDialogProps {
   open: boolean
@@ -33,9 +34,24 @@ interface LibraryRenameDialogProps {
   siblingNames: ReadonlySet<string>
   onSubmit: (newPath: string) => void
   isPending: boolean
+  /** Set by the parent when the server rejects a rename attempt (e.g. a 400
+   * for an invalid path, a 409 collision the client-side check couldn't
+   * anticipate). Rendered as a persistent banner — same pattern as the
+   * preview pane's save flow — instead of the dialog silently reverting to
+   * its idle state with no explanation. The parent clears this whenever the
+   * dialog is (re)opened or a new attempt starts. */
+  error?: string
 }
 
-export function LibraryRenameDialog({ open, onOpenChange, entry, siblingNames, onSubmit, isPending }: LibraryRenameDialogProps) {
+export function LibraryRenameDialog({
+  open,
+  onOpenChange,
+  entry,
+  siblingNames,
+  onSubmit,
+  isPending,
+  error,
+}: LibraryRenameDialogProps) {
   const [name, setName] = useState('')
 
   useEffect(() => {
@@ -83,6 +99,9 @@ export function LibraryRenameDialog({ open, onOpenChange, entry, siblingNames, o
             <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-collision">
               An entry named "{trimmed}" already exists here.
             </p>
+          )}
+          {error && (
+            <LibraryErrorBanner message={error} testId="library-rename-error" />
           )}
         </div>
         <DialogFooter>

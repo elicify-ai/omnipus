@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode } from '@/lib/api'
+import { LibraryErrorBanner } from './LibraryErrorBanner'
 
 interface LibraryTransferDialogProps {
   open: boolean
@@ -42,6 +43,13 @@ interface LibraryTransferDialogProps {
   workspaces: LibraryWorkspaceNode[]
   onSubmit: (body: LibraryTransferRequest) => void
   isPending: boolean
+  /** Set by the parent when the server rejects a move/copy attempt (e.g. a
+   * 404 destination-workspace, a 409 collision the client-side check
+   * couldn't anticipate). Rendered as a persistent banner — same pattern as
+   * the preview pane's save flow — instead of the dialog silently reverting
+   * with no explanation. The parent clears this whenever the dialog is
+   * (re)opened or a new attempt starts. */
+  error?: string
 }
 
 export function LibraryTransferDialog({
@@ -53,6 +61,7 @@ export function LibraryTransferDialog({
   workspaces,
   onSubmit,
   isPending,
+  error,
 }: LibraryTransferDialogProps) {
   const [destWorkspaceId, setDestWorkspaceId] = useState(sourceWorkspaceId)
   const [destPath, setDestPath] = useState('')
@@ -66,9 +75,17 @@ export function LibraryTransferDialog({
 
   if (!entry) return null
 
-  const trimmedPath = destPath.trim().replace(/^\/+/, '')
+  // NEVER silently rewrite what the user typed (a silent-failure class in
+  // its own right — a user who typed "/etc/foo" and got "etc/foo" sent
+  // instead has no way to know that happened until the server 404s on a path
+  // they didn't ask for). A leading "/" and ".." are both rejected outright,
+  // client-side, with a message explaining why — same treatment as the
+  // no-op case below — rather than silently normalized.
+  const trimmedPath = destPath.trim()
+  const hasLeadingSlash = trimmedPath.startsWith('/')
+  const hasTraversal = trimmedPath.includes('..')
   const isNoOp = trimmedPath === entry.path && destWorkspaceId === sourceWorkspaceId
-  const invalid = trimmedPath.length === 0 || trimmedPath.includes('..') || isNoOp
+  const invalid = trimmedPath.length === 0 || hasLeadingSlash || hasTraversal || isNoOp
 
   function handleSubmit() {
     if (invalid || !entry) return
@@ -128,12 +145,25 @@ export function LibraryTransferDialog({
             <p className="text-xs text-[var(--color-muted)]">
               Workspace-relative path, e.g. "reports/{entry.name}".
             </p>
-            {isNoOp && (
+            {hasLeadingSlash && (
+              <p className="text-xs text-[var(--color-error)]" data-testid="library-transfer-leading-slash">
+                Paths are workspace-relative — remove the leading "/".
+              </p>
+            )}
+            {!hasLeadingSlash && hasTraversal && (
+              <p className="text-xs text-[var(--color-error)]" data-testid="library-transfer-traversal">
+                A path can't contain "..".
+              </p>
+            )}
+            {!hasLeadingSlash && !hasTraversal && isNoOp && (
               <p className="text-xs text-[var(--color-error)]" data-testid="library-transfer-noop">
                 That's the same location "{entry.name}" is already at.
               </p>
             )}
           </div>
+          {error && (
+            <LibraryErrorBanner message={error} testId="library-transfer-error" />
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

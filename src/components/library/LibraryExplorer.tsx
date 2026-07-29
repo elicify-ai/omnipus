@@ -22,7 +22,7 @@
 // preview/unsavedGuard.ts), so it does not change behavior for any caller
 // that never touches the editor.
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Files,
@@ -65,6 +65,7 @@ import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
+import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 
 export interface LibraryExplorerProps {
@@ -76,6 +77,14 @@ export interface LibraryExplorerProps {
   onPopOut?: () => void
   /** Extra classes for the root element — e.g. the pop-out route's `absolute inset-0` fill. */
   className?: string
+  /** Fires whenever the workspace currently being VIEWED changes (including
+   * the initial mount) — null for the virtual root. This tracks internal
+   * navigation state, which is independent of any URL search param a caller
+   * may have opened this component with (library-spec.md D-4's pop-out
+   * route uses this to know what to announce via libraryHandoff.ts when the
+   * tab closes, since the URL param alone goes stale the moment the user
+   * navigates to a different workspace inside the explorer). */
+  onWorkspaceChange?: (workspaceId: string | null) => void
 }
 
 function sortEntries(entries: LibraryEntry[]): LibraryEntry[] {
@@ -85,7 +94,13 @@ function sortEntries(entries: LibraryEntry[]): LibraryEntry[] {
   })
 }
 
-export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, className }: LibraryExplorerProps) {
+export function LibraryExplorer({
+  initialWorkspaceId,
+  onClose,
+  onPopOut,
+  className,
+  onWorkspaceChange,
+}: LibraryExplorerProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -95,8 +110,19 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
   const [includeHidden, setIncludeHidden] = useState(false)
   const [selectedEntry, setSelectedEntry] = useState<LibraryEntry | null>(null)
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
+  const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
   const [transferTarget, setTransferTarget] = useState<{ entry: LibraryEntry; mode: 'move' | 'copy' } | null>(null)
+  const [transferError, setTransferError] = useState<string>()
+  const [uploadError, setUploadError] = useState<string>()
+
+  useEffect(() => {
+    onWorkspaceChange?.(workspaceId)
+    // Only the explorer's OWN navigation state matters here — re-running
+    // this because the caller passed a new function reference would be
+    // harmless but pointless noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
 
   // Always fetched (cheap, small list) — backs the virtual-root listing AND
   // resolves the current workspace's display name for the breadcrumb + the
@@ -147,20 +173,35 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
   const renameMutation = useMutation({
     mutationFn: ({ wsId, from, to }: { wsId: string; from: string; to: string }) =>
       renameLibraryEntry(wsId, { from, to }),
+    onMutate: () => {
+      setRenameError(undefined)
+    },
     onSuccess: (updated, vars) => {
       invalidateEntries(vars.wsId)
       addToast({ message: 'Renamed.', variant: 'success' })
       setRenameTarget(null)
+      setRenameError(undefined)
       setSelectedEntry((cur) => (cur && cur.path === vars.from ? updated : cur))
     },
     onError: (err) => {
-      addToast({ message: getErrorMessage(err, 'Rename failed'), variant: 'error' })
+      // Never silently swallowed: the dialog stays open (renameTarget is
+      // untouched here) with a persistent banner AND a toast — same
+      // two-channel pattern the save flow uses (useLibraryFileEditor.ts) —
+      // so a real failure (permissions, transient network, a genuine
+      // collision the client-side check couldn't anticipate) is
+      // indistinguishable from nothing at all.
+      const message = getErrorMessage(err, 'Rename failed')
+      setRenameError(message)
+      addToast({ message, variant: 'error' })
     },
   })
 
   const transferMutation = useMutation({
     mutationFn: ({ mode, body }: { mode: 'move' | 'copy'; body: LibraryTransferRequest }) =>
       mode === 'move' ? moveLibraryEntry(body) : copyLibraryEntry(body),
+    onMutate: () => {
+      setTransferError(undefined)
+    },
     onSuccess: (_data, vars) => {
       invalidateEntries(vars.body.from_workspace_id)
       invalidateEntries(vars.body.to_workspace_id)
@@ -170,27 +211,51 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
         setSelectedEntry((cur) => (cur && cur.path === vars.body.from_path ? null : cur))
       }
       setTransferTarget(null)
+      setTransferError(undefined)
     },
-    onError: (err) => {
-      addToast({ message: getErrorMessage(err, `${transferTarget?.mode === 'copy' ? 'Copy' : 'Move'} failed`), variant: 'error' })
+    onError: (err, vars) => {
+      // Dialog stays open (transferTarget untouched) with the destination
+      // fields exactly as typed, plus a persistent banner AND a toast.
+      const message = getErrorMessage(err, `${vars.mode === 'copy' ? 'Copy' : 'Move'} failed`)
+      setTransferError(message)
+      addToast({ message, variant: 'error' })
     },
   })
 
   const uploadMutation = useMutation({
     mutationFn: ({ wsId, files, dir }: { wsId: string; files: File[]; dir: string }) =>
       uploadLibraryFiles(wsId, files, dir),
+    onMutate: () => {
+      setUploadError(undefined)
+    },
     onSuccess: (data, vars) => {
       invalidateEntries(vars.wsId)
       invalidateWorkspaces()
+      setUploadError(undefined)
       addToast({
         message: `Uploaded ${data.entries.length} file${data.entries.length === 1 ? '' : 's'}.`,
         variant: 'success',
       })
     },
     onError: (err) => {
-      addToast({ message: getErrorMessage(err, 'Upload failed'), variant: 'error' })
+      // No dialog to keep open here (upload is a direct file-picker action,
+      // not a form) — the toolbar-level banner (rendered below) is the
+      // persistent surface, dismissible since there's no "retry" step that
+      // would otherwise clear it.
+      const message = getErrorMessage(err, 'Upload failed')
+      setUploadError(message)
+      addToast({ message, variant: 'error' })
     },
   })
+
+  function openRenameDialog(entry: LibraryEntry) {
+    setRenameError(undefined)
+    setRenameTarget(entry)
+  }
+  function openTransferDialog(entry: LibraryEntry, mode: 'move' | 'copy') {
+    setTransferError(undefined)
+    setTransferTarget({ entry, mode })
+  }
 
   function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
     if (!confirmDiscardLibraryEdits()) return
@@ -379,6 +444,20 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
         </div>
       </div>
 
+      {/* Upload error — persistent (not a fire-and-forget toast alone) and
+          dismissible, since upload has no dialog of its own to keep open the
+          way Rename/Move do. A failed upload must never look identical to
+          nothing happening. */}
+      {uploadError && (
+        <div className="shrink-0 p-2 pb-0">
+          <LibraryErrorBanner
+            message={uploadError}
+            onDismiss={() => setUploadError(undefined)}
+            testId="library-upload-error"
+          />
+        </div>
+      )}
+
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-y-auto p-2 relative">
         {workspaceId === null ? (
@@ -441,8 +520,8 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
                   onOpenDirectory={handleOpenDirectory}
                   onSelectFile={handleSelectFile}
                   onDownload={handleDownload}
-                  onRename={setRenameTarget}
-                  onTransfer={(e, mode) => setTransferTarget({ entry: e, mode })}
+                  onRename={openRenameDialog}
+                  onTransfer={openTransferDialog}
                   onDelete={setDeleteTarget}
                 />
               ))}
@@ -467,8 +546,8 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
               setSelectedEntry(null)
             }}
             onDownload={handleDownload}
-            onRename={() => setRenameTarget(selectedEntry)}
-            onTransfer={(mode) => setTransferTarget({ entry: selectedEntry, mode })}
+            onRename={() => openRenameDialog(selectedEntry)}
+            onTransfer={(mode) => openTransferDialog(selectedEntry, mode)}
             onDelete={() => setDeleteTarget(selectedEntry)}
           />
         </div>
@@ -477,10 +556,16 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
       {/* ── Rename dialog ────────────────────────────────────────────────── */}
       <LibraryRenameDialog
         open={renameTarget !== null}
-        onOpenChange={(open) => !open && setRenameTarget(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRenameTarget(null)
+            setRenameError(undefined)
+          }
+        }}
         entry={renameTarget}
         siblingNames={new Set(sortedEntries.filter((e) => e.path !== renameTarget?.path).map((e) => e.name))}
         isPending={renameMutation.isPending}
+        error={renameError}
         onSubmit={(to) => {
           if (!workspaceId || !renameTarget) return
           renameMutation.mutate({ wsId: workspaceId, from: renameTarget.path, to })
@@ -490,12 +575,18 @@ export function LibraryExplorer({ initialWorkspaceId, onClose, onPopOut, classNa
       {/* ── Move / Copy dialog (D-9, cross-workspace) ──────────────────────── */}
       <LibraryTransferDialog
         open={transferTarget !== null}
-        onOpenChange={(open) => !open && setTransferTarget(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTransferTarget(null)
+            setTransferError(undefined)
+          }
+        }}
         mode={transferTarget?.mode ?? 'move'}
         entry={transferTarget?.entry ?? null}
         sourceWorkspaceId={workspaceId ?? ''}
         workspaces={sortedWorkspaces}
         isPending={transferMutation.isPending}
+        error={transferError}
         onSubmit={(body) => {
           if (!transferTarget) return
           transferMutation.mutate({ mode: transferTarget.mode, body })

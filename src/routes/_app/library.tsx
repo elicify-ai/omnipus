@@ -12,8 +12,19 @@
 // `initialWorkspaceId` contract exactly — undefined means "start at the
 // virtual root", not an error state, unlike /browser-live's session/agent
 // params which ARE required).
+//
+// UAT fix (2026-07): the `workspace` search param only reflects what this
+// TAB WAS OPENED WITH — LibraryExplorer manages in-tab navigation (drilling
+// into a different workspace from the virtual root, or switching workspaces
+// some other way) as its own internal state, never synced back to the URL.
+// A `handlePageHide` closed over the initial `workspace` value would
+// therefore announce a STALE workspace once the user had navigated
+// elsewhere before closing the tab, and the docked panel would re-dock to
+// the wrong place. `currentWorkspaceRef` — kept live via LibraryExplorer's
+// `onWorkspaceChange` — is what's actually announced, so the re-dock always
+// lands on whatever was on screen at close time.
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { LibraryExplorer } from '@/components/library/LibraryExplorer'
@@ -30,6 +41,7 @@ export const Route = createFileRoute('/_app/library')({
 
 function LibraryRoute() {
   const { workspace } = Route.useSearch()
+  const currentWorkspaceRef = useRef<string | undefined>(workspace)
 
   // Tell the main app's docked panel (LibraryPanel.tsx) this pop-out went
   // away, so it can re-dock itself IF nothing is currently docked (see
@@ -37,17 +49,22 @@ function LibraryRoute() {
   // unlike /browser-live, the docked panel is never force-closed just
   // because this pop-out opened). `pagehide` fires for every teardown path
   // (native tab-close/Cmd+W, navigate-away, or this route's own unmount),
-  // so this one listener covers all of them.
+  // so this one listener covers all of them. Registered once (not keyed on
+  // `workspace`) since it always reads the live ref at call time rather than
+  // closing over a point-in-time value.
   useEffect(() => {
-    const handlePageHide = () => announceLibraryPopoutClosed(workspace)
+    const handlePageHide = () => announceLibraryPopoutClosed(currentWorkspaceRef.current)
     window.addEventListener('pagehide', handlePageHide)
     return () => window.removeEventListener('pagehide', handlePageHide)
-  }, [workspace])
+  }, [])
 
   return (
     <LibraryExplorer
       key={workspace ?? 'root'}
       initialWorkspaceId={workspace}
+      onWorkspaceChange={(id) => {
+        currentWorkspaceRef.current = id ?? undefined
+      }}
       // onClose omitted: closing "the Library" from a standalone tab means
       // closing the tab itself, not returning to some other in-app view —
       // there's no Close-button affordance that makes sense here (mirrors
