@@ -114,7 +114,6 @@ import {
   // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
   Session as WireSessionSchema,
-  SessionDetail as WireSessionDetailSchema,
   // Newly promoted from inline openapi.yaml schemas:
   SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
   PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
@@ -1387,15 +1386,105 @@ export async function fetchSessions(agentId?: string, type?: Session['type']): P
   return raw.map(rawToSession)
 }
 
+// ── Per-item message-list resilience (Issue 3 / library-uat HIGH) ────────────
+//
+// GET /sessions/{id}/messages, and the `messages` array nested inside
+// GET /sessions/{id} (SessionDetail), are LIST responses. Before this fix
+// both validated the ENTIRE array against z.array(WireMessageSchema) in one
+// shot: a single malformed entry (e.g. a future/unknown EntryType, or — the
+// case reproduced live by all three UAT testers — an attachment `type`
+// value outside the Attachment enum) rejected the whole array, so one bad
+// historical row made the ENTIRE session appear unrecoverably empty
+// ("Could not load messages." + a Retry that can never succeed, since the
+// same bad row comes back every time).
+//
+// Per CLAUDE.md hard-constraint #8, the SPA edge validates every incoming
+// payload and on failure should drop + counter + dev-mode toast, with NO
+// prod crash. That machinery already existed (_recordApiSchemaError below)
+// but this call site still threw the whole batch. Fixed here by validating
+// each element independently: keep the valid ones, and count + surface the
+// invalid ones through the EXISTING _recordApiSchemaError path (no parallel
+// counter — see fetchSkills/fetchCommands below for an older, simpler
+// per-item pattern that predates _recordApiSchemaError and does NOT feed
+// the shared counter; this one deliberately does).
+//
+// Scoping note: this degrade-per-item treatment applies ONLY to the
+// `messages` LIST. The `session` object nested alongside it in
+// SessionDetail is a single-object response and still fails loudly via the
+// normal request()/ApiSchemaError path (see fetchSessionDetail below) —
+// blanket-suppressing single-object validation failures would hide real
+// contract drift instead of exposing it.
+//
+// Judgment call — placeholder vs. silent drop: a dropped item is replaced
+// with a minimal placeholder SystemMessage ("This message could not be
+// displayed") rather than vanishing without a trace. Silently omitting the
+// row is itself a mild silent failure: message counts and scrollback shift
+// with no visible signal, and a user/support conversation about "where did
+// my upload go" becomes undebuggable. A visible placeholder costs a little
+// transcript noise but tells the truth — something was here and couldn't
+// be rendered — while the rest of the conversation still loads normally.
+
+function placeholderMessage(raw: unknown, index: number): SystemMessage {
+  const obj = (raw !== null && typeof raw === 'object') ? raw as Record<string, unknown> : {}
+  const id = typeof obj.id === 'string' && obj.id.length > 0 ? obj.id : `unrenderable-${index}`
+  const timestamp = typeof obj.timestamp === 'string' && obj.timestamp.length > 0
+    ? obj.timestamp
+    : new Date().toISOString()
+  return {
+    id,
+    session_id: undefined,
+    role: 'system',
+    content: 'This message could not be displayed.',
+    timestamp,
+    status: 'done',
+  }
+}
+
+// Validates each element of a raw message-list body against the wire
+// Message schema. Valid entries are transformed via rawToMessage(); invalid
+// entries are counted through _recordApiSchemaError (endpoint + that item's
+// own issue list) and replaced with placeholderMessage() so the list length
+// and ordering the user sees still matches what the server actually holds.
+// A single rate-limited dev toast summarises the drop (maybeDevToast is
+// throttled per key, so a burst of bad items in one response doesn't spam
+// the UI); production gets the existing _recordApiSchemaError telemetry.
+function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
+  const messages: Message[] = []
+  let dropped = 0
+  let firstIssue: string | undefined
+  items.forEach((item, index) => {
+    const result = WireMessageSchema.safeParse(item)
+    if (result.success) {
+      messages.push(rawToMessage(result.data as RawMessage))
+      return
+    }
+    dropped++
+    firstIssue ??= result.error.issues[0]?.message
+    _recordApiSchemaError(endpoint, result.error.issues.length)
+    messages.push(placeholderMessage(item, index))
+  })
+  if (dropped > 0) {
+    void maybeDevToast(
+      `[api] Dropped ${dropped} malformed message${dropped === 1 ? '' : 's'} from ${endpoint}: ${firstIssue ?? 'unknown'}`,
+      `${endpoint}:message-item-schema`,
+    )
+  }
+  return messages
+}
+
 export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
-  // Validate with the wire Message schema first, then transform each message
-  // so that tool_calls[].parameters is renamed to tool_calls[].params.
-  const raw = await request<RawMessage[]>(
-    `/sessions/${encodeURIComponent(sessionId)}/messages`,
+  // Top-level shape assertion only: the body must be an array. A non-array
+  // body (an error page, a wholly different endpoint shape) is a genuine
+  // contract break and still fails loudly here. Each element is validated
+  // and degraded individually by parseWireMessageList — see the block
+  // comment above for why.
+  const path = `/sessions/${encodeURIComponent(sessionId)}/messages`
+  const rawItems = await request<unknown[]>(
+    path,
     undefined,
-    z.array(WireMessageSchema) as ZodType<RawMessage[]>,
+    z.array(z.unknown()) as ZodType<unknown[]>,
   )
-  return raw.map(rawToMessage)
+  return parseWireMessageList(rawItems, `GET /api/v1${path}`)
 }
 
 export async function installSkillFromFile(content: string, filename: string): Promise<void> {
@@ -1461,17 +1550,30 @@ export interface SessionDetail { // not-wire-format: SPA-internal detail type. U
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
-  // Validate with the wire SessionDetail schema (session + messages array),
-  // then transform both the nested session stats and each message's tool_calls.
-  type RawSessionDetail = { session: RawSession; messages: RawMessage[]; agent_removed?: boolean }
-  const raw = await request<RawSessionDetail>(
-    `/sessions/${encodeURIComponent(sessionId)}`,
+  // `session` (a single object) is still validated strictly via
+  // WireSessionSchema and fails loudly on mismatch — same policy as any
+  // other single-object GET. `messages` (a list) is loosened to
+  // z.array(z.unknown()) at this top-level shape check and validated /
+  // degraded per-item below via parseWireMessageList, so one malformed
+  // historical message can't take down the whole session-detail view
+  // (Issue 3 / library-uat HIGH finding — see the block comment above
+  // fetchSessionMessages for the full rationale and the placeholder
+  // judgment call).
+  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean }
+  const shapeSchema = z.object({
+    session: WireSessionSchema,
+    messages: z.array(z.unknown()),
+    agent_removed: z.boolean().optional(),
+  })
+  const path = `/sessions/${encodeURIComponent(sessionId)}`
+  const raw = await request<RawSessionDetailShape>(
+    path,
     undefined,
-    WireSessionDetailSchema as ZodType<RawSessionDetail>,
+    shapeSchema as ZodType<RawSessionDetailShape>,
   )
   return {
     session: rawToSession(raw.session),
-    messages: raw.messages.map(rawToMessage),
+    messages: parseWireMessageList(raw.messages, `GET /api/v1${path}`),
     agent_removed: raw.agent_removed,
   }
 }

@@ -1261,10 +1261,17 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].id).toBe('cancel_xyz')
   })
 
-  it('rejects unknown entry type with ApiSchemaError', async () => {
-    // Negative direction: a type value outside the enum must fail validation
-    // so a future code change emitting a new EntryType without updating the
-    // schema is caught loudly rather than silently.
+  it('degrades an unknown entry type to a placeholder instead of rejecting the whole list (Issue 3 / library-uat HIGH)', async () => {
+    // Updated for the per-item resilience fix. Previously this asserted
+    // fetchSessionMessages REJECTED the whole array on a single out-of-enum
+    // `type` value — that all-or-nothing behaviour is exactly the bug the
+    // live UAT reproduced (one malformed attachment `type` made an entire
+    // session permanently unloadable, Retry included). The contract-drift
+    // signal is preserved (still counted via getApiSchemaErrorCount, so a
+    // future EntryType added without a schema update is NOT silently
+    // invisible) but a single bad row must no longer take the whole
+    // transcript down — see the block comment above placeholderMessage()
+    // in src/lib/api.ts for the full rationale.
     const wirePayload = [
       {
         id: 'msg_x',
@@ -1279,8 +1286,234 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
         headers: { 'Content-Type': 'application/json' },
       }),
     )
+    const { fetchSessionMessages, getApiSchemaErrorCount: count } = await import('./api')
+    const messages = await fetchSessionMessages('sid-unknown')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toBe('This message could not be displayed.')
+    expect(count()).toBe(1)
+  })
+
+  it('keeps the valid messages and replaces only the malformed one when a list is mixed (Issue 3 / library-uat HIGH)', async () => {
+    // Reproduces the exact live-server shape from the UAT finding: an
+    // attachment `type` of "document", which is outside the Attachment
+    // enum (image|audio|video|file). Sits between two otherwise-valid
+    // messages so we can assert order, count, and content are all correct.
+    const wirePayload = [
+      {
+        id: 'msg-before',
+        agent_id: 'agent-1',
+        role: 'user',
+        content: 'here is a file',
+        timestamp: '2026-07-20T10:00:00Z',
+        status: 'ok',
+      },
+      {
+        id: 'msg-bad-attachment',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'got it',
+        timestamp: '2026-07-20T10:00:01Z',
+        status: 'ok',
+        attachments: [
+          { type: 'document', path: '/work/spec.docx', size: 1024, mime_type: 'application/msword' },
+        ],
+      },
+      {
+        id: 'msg-after',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'anything else?',
+        timestamp: '2026-07-20T10:00:02Z',
+        status: 'ok',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages, getApiSchemaErrorCount: count } = await import('./api')
+    const messages = await fetchSessionMessages('sid-mixed')
+
+    // All three positions are present — the bad one is a visible placeholder,
+    // not a silently vanished row (see the judgment-call comment in api.ts).
+    expect(messages).toHaveLength(3)
+    expect(messages[0].id).toBe('msg-before')
+    expect(messages[0].content).toBe('here is a file')
+    expect(messages[1].id).toBe('msg-bad-attachment')
+    expect(messages[1].role).toBe('system')
+    expect(messages[1].content).toBe('This message could not be displayed.')
+    expect(messages[2].id).toBe('msg-after')
+    expect(messages[2].content).toBe('anything else?')
+
+    // Counted through the existing _recordApiSchemaError path (no parallel counter).
+    expect(count()).toBe(1)
+  })
+
+  it('leaves a fully valid list completely unaffected — no drops counted', async () => {
+    const wirePayload = [
+      {
+        id: 'msg-a',
+        agent_id: 'agent-1',
+        role: 'user',
+        content: 'hello',
+        timestamp: '2026-07-20T10:00:00Z',
+        status: 'ok',
+      },
+      {
+        id: 'msg-b',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'hi there',
+        timestamp: '2026-07-20T10:00:01Z',
+        status: 'ok',
+        attachments: [
+          { type: 'image', path: '/work/photo.png', size: 2048, mime_type: 'image/png' },
+        ],
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages, getApiSchemaErrorCount: count } = await import('./api')
+    const messages = await fetchSessionMessages('sid-all-valid')
+    expect(messages).toHaveLength(2)
+    expect(messages.map((m) => m.id)).toEqual(['msg-a', 'msg-b'])
+    expect(count()).toBe(0)
+  })
+
+  it('still throws ApiSchemaError when the body is not an array at all (genuine contract break, not a list-item defect)', async () => {
+    // Scoping guard: per-item recovery is for LIST responses only. A
+    // response that isn't even shaped like a list (e.g. an error object)
+    // is a real contract break and must still fail loudly.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'not a list' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
     const { fetchSessionMessages, ApiSchemaError } = await import('./api')
-    await expect(fetchSessionMessages('sid-unknown')).rejects.toBeInstanceOf(ApiSchemaError)
+    await expect(fetchSessionMessages('sid-not-array')).rejects.toBeInstanceOf(ApiSchemaError)
+  })
+})
+
+// ── fetchSessionDetail: per-item message resilience (Issue 3 / library-uat HIGH) ──
+//
+// GET /sessions/{id} (SessionDetail) nests the SAME messages array inside its
+// body. Mirrors the fetchSessionMessages coverage above: the `session`
+// object (single-object response) still fails loudly, while the nested
+// `messages` list degrades per-item.
+
+describe('fetchSessionDetail: per-item message resilience', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  const validSession = {
+    id: 'sid-detail',
+    agent_id: 'agent-1',
+    title: 'Test session',
+    status: 'active',
+    created_at: '2026-07-20T09:00:00Z',
+    updated_at: '2026-07-20T09:00:00Z',
+    stats: {
+      tokens_in: 0,
+      tokens_out: 0,
+      tokens_total: 0,
+      cost: 0,
+      tool_calls: 0,
+      message_count: 2,
+    },
+    channel: 'webchat',
+    partitions: ['2026-07-20'],
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    stubCookieLocal('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal()
+    vi.resetModules()
+  })
+
+  it('keeps the valid session and messages, replacing only the malformed message', async () => {
+    const wirePayload = {
+      session: validSession,
+      messages: [
+        {
+          id: 'msg-ok',
+          agent_id: 'agent-1',
+          role: 'user',
+          content: 'hi',
+          timestamp: '2026-07-20T10:00:00Z',
+          status: 'ok',
+        },
+        {
+          id: 'msg-bad',
+          agent_id: 'agent-1',
+          role: 'assistant',
+          content: 'here',
+          timestamp: '2026-07-20T10:00:01Z',
+          status: 'ok',
+          attachments: [
+            { type: 'document', path: '/work/spec.docx', size: 1024, mime_type: 'application/msword' },
+          ],
+        },
+      ],
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionDetail, getApiSchemaErrorCount: count } = await import('./api')
+    const detail = await fetchSessionDetail('sid-detail')
+    expect(detail.session.id).toBe('sid-detail')
+    expect(detail.messages).toHaveLength(2)
+    expect(detail.messages[0].id).toBe('msg-ok')
+    expect(detail.messages[1].id).toBe('msg-bad')
+    expect(detail.messages[1].role).toBe('system')
+    expect(detail.messages[1].content).toBe('This message could not be displayed.')
+    expect(count()).toBe(1)
+  })
+
+  it('still throws ApiSchemaError when the session object itself is malformed (single-object response — not degraded)', async () => {
+    // Scoping guard: the `session` field is a single object, not a list.
+    // Per-item recovery must NOT extend to it — a malformed session is a
+    // real contract break and should still fail loudly.
+    const wirePayload = {
+      session: { ...validSession, id: undefined }, // id is required — malformed
+      messages: [],
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionDetail, ApiSchemaError } = await import('./api')
+    await expect(fetchSessionDetail('sid-bad-session')).rejects.toBeInstanceOf(ApiSchemaError)
   })
 })
 
