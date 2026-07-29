@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Monitor, SpinnerGap } from '@phosphor-icons/react'
+import { Monitor, SpinnerGap, Files } from '@phosphor-icons/react'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { createSession } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,24 @@ interface ChatControlsProps {
 export function ChatControls({ className }: ChatControlsProps) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const addToast = useUiStore((s) => s.addToast)
+  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+
+  // library-spec D-3, second entry point. Opening from HERE passes the active
+  // workspace id, so the explorer lands directly in that workspace's work/
+  // tree. Opening from the sidebar passes nothing, which selects the virtual
+  // root listing every workspace — same component, different initial
+  // selection. Unlike the browser launcher above there is no session to
+  // create first: the Library is a view over files on disk, not a live
+  // attachment to a running agent, so it opens immediately.
+  const handleOpenLibrary = () => {
+    if (!activeWorkspaceId) {
+      // Fall back to the virtual root rather than refusing outright — with no
+      // active workspace, "all workspaces" is still a useful, correct view.
+      useUiStore.getState().openLibraryPanel(undefined)
+      return
+    }
+    useUiStore.getState().openLibraryPanel(activeWorkspaceId)
+  }
 
   // ADR-039 D-A1: persistent "Open browser" launcher. The backend
   // BrowserManager.Session() lazily creates a blank tab on WS attach, so
@@ -138,6 +157,28 @@ export function ChatControls({ className }: ChatControlsProps) {
       >
         {creatingBrowserSession ? <SpinnerGap size={15} className="animate-spin" /> : <Monitor size={15} />}
         <span className="hidden @2xl:inline">Open browser</span>
+      </button>
+
+      {/* Open Library — library-spec D-3's second entry point. Scoped to the
+          active workspace (the sidebar entry opens the all-workspaces virtual
+          root instead). tabIndex 8 continues the closed composer ring
+          documented on the browser button above; it sits after browser=7 so
+          the existing 1-7 order is untouched. */}
+      <button
+        type="button"
+        onClick={handleOpenLibrary}
+        tabIndex={8}
+        aria-label="Open library"
+        title="Browse this workspace's files"
+        className={cn(
+          'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
+          'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
+          'transition-colors text-xs whitespace-nowrap',
+          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
+        )}
+      >
+        <Files size={15} />
+        <span className="hidden @2xl:inline">Library</span>
       </button>
     </div>
   )
