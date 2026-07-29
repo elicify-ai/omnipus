@@ -1204,8 +1204,8 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 		Revision: plan.RevisionEntry{RevisionID: "rev-t3-uncommitted", PlanID: "plan-t3",
 			Verb: plan.RevisionAppend, Generation: 0},
 	}
-	if err := il.AppendIntent(recUncommitted); err != nil {
-		t.Fatalf("(4) AppendIntent uncommitted: %v", err)
+	if appendErr := il.AppendIntent(recUncommitted); appendErr != nil {
+		t.Fatalf("(4) AppendIntent uncommitted: %v", appendErr)
 	}
 	// committed-but-not-done (crash after MarkCommitted, before MarkDone) — replayed FORWARD.
 	recCommitted := plan.IntentRecord{
@@ -1214,11 +1214,11 @@ func TestConformance_t3_PlanningReplanning_Design(t *testing.T) {
 		Revision: plan.RevisionEntry{RevisionID: "rev-t3-committed", PlanID: "plan-t3",
 			Verb: plan.RevisionAppend, Generation: 0},
 	}
-	if err := il.AppendIntent(recCommitted); err != nil {
-		t.Fatalf("(4) AppendIntent committed: %v", err)
+	if appendErr := il.AppendIntent(recCommitted); appendErr != nil {
+		t.Fatalf("(4) AppendIntent committed: %v", appendErr)
 	}
-	if err := il.MarkCommitted("plan-t3", "rev-t3-committed"); err != nil {
-		t.Fatalf("(4) MarkCommitted: %v", err)
+	if commitErr := il.MarkCommitted("plan-t3", "rev-t3-committed"); commitErr != nil {
+		t.Fatalf("(4) MarkCommitted: %v", commitErr)
 	}
 	// boot replay (the kill-mid-append recovery).
 	ts := task.New(filepath.Join(dir, "tasks"))
