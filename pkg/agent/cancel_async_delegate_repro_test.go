@@ -85,6 +85,29 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	al.activeTurnStates.Store(sessionID, parentTS)
 	al.activeTurnStates.Delete(sessionID)
 
+	// PREMISE NOTE (design-flaw fix, cancel_prearm.go): armCancelOrFindActiveTurn
+	// now additionally requires turnImminentForIdentity — real evidence (a
+	// queued or in-flight message on the identity's sessionWorker) that a
+	// turn is genuinely about to exist, closing the false-positive arm a
+	// FINISHED session used to trigger (TestWS_Cancel_OnlyInterruptsTargetSession,
+	// pkg/gateway/websocket_multisession_test.go). That discriminator has no
+	// visibility into THIS test's scenario: an async delegate spawn is
+	// dispatched by pkg/tools/delegate.go's executeAsync directly from a
+	// tool call, never through the session-worker message-dispatch path this
+	// fix's signal is built on, and — by construction, mirroring the real
+	// T24a race — the spawning goroutine has not even been launched yet at
+	// the moment RequestCancel runs below. There is currently NO
+	// dispatcher-level signal (comparable to sessionWorker.inTurn/inbox) for
+	// "an async delegate spawn is imminent," so this call is primed
+	// explicitly to stand in for one, and the resulting gap is real: closing
+	// it for the message-dispatch path narrows, but does not eliminate, the
+	// original race for THIS specific path (async delegate whose parent
+	// turn finishes before its child registers) — see this fix's own report
+	// for the recommended follow-up (a dedicated pending-spawn marker in
+	// pkg/tools/delegate.go / pkg/agent/subturn.go, both out of this fix's
+	// scope).
+	primeImminentSessionWorker(al, sessionID)
+
 	// REAL production Stop-button path, arriving in the window where NEITHER
 	// the parent NOR the not-yet-spawned child is registered. Must ARM a
 	// latch rather than silently no-op.

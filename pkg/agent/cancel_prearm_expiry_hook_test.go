@@ -16,6 +16,19 @@
 //     opportunistically sweeps out an expired latch that no turn ever
 //     checked at all (the dropped-message case cancel_prearm.go's own doc
 //     comment names as the reason the TTL exists in the first place).
+//
+// PREMISE UPDATE: arming used to be unconditional whenever no active turn was
+// registered. cancel_prearm.go's armCancelOrFindActiveTurn now additionally
+// requires turnImminentForIdentity — real evidence (a queued or in-flight
+// message on the identity's sessionWorker) that a turn is actually coming;
+// see cancel_prearm_test.go's file-level PREMISE UPDATE comment for the full
+// rationale (TestWS_Cancel_OnlyInterruptsTargetSession,
+// pkg/gateway/websocket_multisession_test.go, is what caught the over-broad
+// behavior). Both tests below now call primeImminentSessionWorker
+// (cancel_prearm_test.go) before any RequestCancel call whose Armed:true is
+// asserted as a precondition, so they keep testing the expiry/notification
+// mechanism correctly under the precondition that now actually gates
+// arming.
 
 package agent
 
@@ -69,6 +82,10 @@ func TestPreArmedCancel_OnLatchExpired_FiresOnLateConsume(t *testing.T) {
 		canceller CancelCanceller
 	}, 4)
 
+	// Construct the precondition turnImminentForIdentity now requires. See
+	// this file's PREMISE UPDATE comment above.
+	primeImminentSessionWorker(al, sessionID)
+
 	outcome, err := al.RequestCancel(
 		context.Background(),
 		CancelScope{SessionID: sessionID},
@@ -121,6 +138,12 @@ func TestPreArmedCancel_OnLatchExpired_FiresOnOpportunisticSweep(t *testing.T) {
 		scope     CancelScope
 		canceller CancelCanceller
 	}, 4)
+
+	// Construct the precondition turnImminentForIdentity now requires, for
+	// both sessions — both cancels below assert Armed:true as a
+	// precondition. See this file's PREMISE UPDATE comment above.
+	primeImminentSessionWorker(al, sessionA)
+	primeImminentSessionWorker(al, sessionB)
 
 	// Arm A's latch — nothing will ever register for it.
 	outcomeA, err := al.RequestCancel(

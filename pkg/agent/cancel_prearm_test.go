@@ -11,6 +11,23 @@
 // having never seen the cancel (observed repro: two Stop clicks, a full
 // completion delivered anyway, and the orphan watchdog's ClaimCancel
 // succeeding 22s later on the same session).
+//
+// PREMISE UPDATE (this file): arming used to be unconditional whenever no
+// active turn was registered. TestWS_Cancel_OnlyInterruptsTargetSession
+// (pkg/gateway/websocket_multisession_test.go) proved that premise wrong —
+// "no active turn" is equally true of a session about to start its first
+// turn and one that just finished its last turn with nothing coming, and a
+// latch armed in the second case would sit for cancelPreArmTTL and cancel
+// whatever unrelated turn the user started next in that same session.
+// cancel_prearm.go's armCancelOrFindActiveTurn now additionally requires
+// turnImminentForIdentity — real evidence (a queued or in-flight message on
+// the identity's sessionWorker) that a turn is actually coming. Every test
+// below that expects Armed:true now calls primeImminentSessionWorker(TierB)
+// first to construct that evidence explicitly, so these tests keep
+// validating the arm+consume MECHANISM correctly under the precondition
+// that now actually gates it, rather than relying on the over-broad
+// behavior. TestPreArmedCancel_FinishedSession_DoesNotArmOrPoisonNextTurn
+// (bottom of this file) is the new test covering the case that changed.
 
 package agent
 
@@ -43,6 +60,49 @@ func newPreArmTestTurnState(turnID, sessionKey, transcriptSessionID, channel, ch
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
+}
+
+// newFakeImminentSessionWorker builds a *sessionWorker suitable for
+// registering directly into al.sessionWorkers from a test, WITHOUT ever
+// starting its runLoop goroutine. It still needs to survive
+// AgentLoop.Close() -> stopSessionWorkers (loop.go), which unconditionally
+// calls w.cancel() and waits on w.done for every worker found in the map —
+// a bare &sessionWorker{} has both as nil (nil func panics on call; a nil
+// channel blocks forever, up to stopSessionWorkers' 5s per-worker budget).
+// cancel is wired to a real (harmless) context.CancelFunc and done is
+// pre-closed, so cleanup treats this fake worker as already exited.
+func newFakeImminentSessionWorker() *sessionWorker {
+	_, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	close(done)
+	w := &sessionWorker{cancel: cancel, done: done}
+	w.inTurn.Store(true)
+	return w
+}
+
+// primeImminentSessionWorker registers a minimal fake sessionWorker so
+// turnImminentForIdentity (cancel_prearm.go) reports a turn as genuinely
+// imminent for sessionID — simulating "a message has been dequeued and is
+// mid-registration" (inTurn=true), which is the real-world condition
+// armCancelOrFindActiveTurn now requires before it will arm a latch. Without
+// this, RequestCancel correctly refuses to arm for a bare session id that
+// carries no evidence a turn is actually coming (see
+// TestPreArmedCancel_FinishedSession_DoesNotArmOrPoisonNextTurn below, and
+// TestWS_Cancel_OnlyInterruptsTargetSession,
+// pkg/gateway/websocket_multisession_test.go, the integration test that
+// caught the pre-fix over-broad behavior these unit tests used to encode
+// unconditionally). The scope key's prefix is arbitrary — it only needs to
+// satisfy turnImminentForIdentity's ":"+sessionID suffix match.
+func primeImminentSessionWorker(al *AgentLoop, sessionID string) {
+	al.sessionWorkers.Store("test-scope:session:"+sessionID, newFakeImminentSessionWorker())
+}
+
+// primeImminentSessionWorkerTierB is primeImminentSessionWorker's (channel,
+// chatID) counterpart — see turnImminentForIdentity's doc comment for why
+// the scope key must contain both, lower-cased, for its Tier B substring
+// match.
+func primeImminentSessionWorkerTierB(al *AgentLoop, channel, chatID string) {
+	al.sessionWorkers.Store("test-scope:"+channel+":"+chatID, newFakeImminentSessionWorker())
 }
 
 // readCancelAuditRows parses every audit.jsonl line under dir into a raw
@@ -83,6 +143,11 @@ func TestRequestCancel_PreArm_ReportsArmedNotBareFalse(t *testing.T) {
 	al := newCancelTestAgentLoop(t)
 	auditDir := t.TempDir()
 	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
+
+	// Construct the precondition turnImminentForIdentity now requires: a
+	// message genuinely in flight for this identity, not merely "no active
+	// turn registered" (see the file-level PREMISE UPDATE comment above).
+	primeImminentSessionWorker(al, "sess-prearm-report")
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -129,6 +194,13 @@ func TestPreArmedCancel_AppliesToTurnThatRegistersNext(t *testing.T) {
 
 	const sessionID = "sess-prearm-2"
 
+	// 0. Construct the precondition turnImminentForIdentity now requires: a
+	// message genuinely in flight for this identity (simulating the real
+	// race — the worker has dequeued the message and is mid-processMessage,
+	// before registerActiveTurn runs), not merely "no active turn
+	// registered." See the file-level PREMISE UPDATE comment above.
+	primeImminentSessionWorker(al, sessionID)
+
 	// 1. Cancel arrives first — no turn registered yet.
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -171,6 +243,11 @@ func TestPreArmedCancel_TierB_ChannelChatIDKey(t *testing.T) {
 
 	al := newCancelTestAgentLoop(t)
 
+	// Construct the Tier B precondition turnImminentForIdentity now
+	// requires: a message genuinely in flight for (channel, chatID). See the
+	// file-level PREMISE UPDATE comment above.
+	primeImminentSessionWorkerTierB(al, "telegram", "chat-prearm-1")
+
 	outcome, err := al.RequestCancel(
 		context.Background(),
 		CancelScope{Channel: "telegram", ChatID: "chat-prearm-1"},
@@ -207,6 +284,10 @@ func TestPreArmedCancel_ExpiredLatch_DoesNotCancelSubsequentTurn(t *testing.T) {
 
 	const sessionID = "sess-prearm-expired"
 
+	// Construct the precondition turnImminentForIdentity now requires. See
+	// the file-level PREMISE UPDATE comment above.
+	primeImminentSessionWorker(al, sessionID)
+
 	outcome, err := al.RequestCancel(
 		context.Background(),
 		CancelScope{SessionID: sessionID},
@@ -239,6 +320,12 @@ func TestPreArmedCancel_KeyMismatch_DoesNotCancelUnrelatedTurn(t *testing.T) {
 
 	const sessionA = "sess-prearm-a"
 	const sessionB = "sess-prearm-b"
+
+	// Construct the precondition turnImminentForIdentity now requires, for
+	// session A only — session B never has a cancel requested against it in
+	// this test, only a turn registered directly. See the file-level
+	// PREMISE UPDATE comment above.
+	primeImminentSessionWorker(al, sessionA)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -286,6 +373,15 @@ func TestPreArmedCancel_ConcurrentArmAndRegister_AlwaysCancels(t *testing.T) {
 		sessionID := fmt.Sprintf("sess-race-%03d", i)
 		wg.Add(2)
 
+		// Construct the precondition turnImminentForIdentity now requires,
+		// for EVERY iteration's identity, before either goroutine below can
+		// run — otherwise the "cancel first" half of iterations would
+		// correctly refuse to arm (nothing imminent yet from
+		// turnImminentForIdentity's point of view) and this test would stop
+		// proving what it says it proves. See the file-level PREMISE UPDATE
+		// comment above.
+		primeImminentSessionWorker(al, sessionID)
+
 		cancelFirst := i%2 == 0
 
 		go func(sid string, cancelFirst bool) {
@@ -319,4 +415,70 @@ func TestPreArmedCancel_ConcurrentArmAndRegister_AlwaysCancels(t *testing.T) {
 		}
 		al.clearActiveTurn(ts)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The case that changed: a finished/idle session must not arm, and must not
+// poison whatever turn the user starts next
+// ---------------------------------------------------------------------------
+
+// TestPreArmedCancel_FinishedSession_DoesNotArmOrPoisonNextTurn is the
+// regression test for the design flaw TestWS_Cancel_OnlyInterruptsTargetSession
+// (pkg/gateway/websocket_multisession_test.go) caught: RequestCancel used to
+// arm a pre-registration latch whenever no active turn was registered for an
+// identity — with no check for whether a turn was actually about to exist.
+// A cancel on a session that had simply FINISHED its only turn (nothing
+// queued, nothing in flight) armed identically to a cancel that arrived a
+// moment before a real turn's registration, which is wrong in two ways this
+// test pins down separately:
+//
+//  1. The user-visible symptom: canceling a finished session must be a true
+//     no-op (Armed:false), not "acknowledged, pending" — the WS integration
+//     test asserts the corollary of this at the wire level (no cancel_stage
+//     frame emitted).
+//  2. The dangerous one — the actual reason this is a design flaw and not
+//     just a cosmetic over-report: an unconditionally-armed latch on a
+//     finished session sits there for cancelPreArmTTL (5s) and will cancel
+//     the NEXT, wholly unrelated turn the user starts in that same session
+//     if they do so within the window — silently stopping work the user
+//     just asked for. This is exactly the hazard cancel_prearm.go's own top
+//     doc comment warns a latch with no bound would create; the TTL and
+//     exactly-once protections bound HOW LONG and HOW MANY TIMES a stale
+//     latch can fire, but neither one prevents arming a latch that should
+//     never have existed in the first place — only turnImminentForIdentity
+//     does that.
+//
+// Deliberately does NOT call primeImminentSessionWorker: the whole point is
+// that NO evidence of an imminent turn exists for this identity.
+func TestPreArmedCancel_FinishedSession_DoesNotArmOrPoisonNextTurn(t *testing.T) {
+	t.Parallel()
+
+	al := newCancelTestAgentLoop(t)
+
+	const sessionID = "sess-prearm-finished"
+
+	// Cancel arrives for a session with nothing active and nothing queued —
+	// the "just finished, nothing coming" state, not "about to start."
+	outcome, err := al.RequestCancel(
+		context.Background(),
+		CancelScope{SessionID: sessionID},
+		CancelCanceller{UserID: "alice", Channel: "web"},
+		CancelHooks{},
+	)
+	require.NoError(t, err)
+	assert.False(t, outcome.Fired, "no active turn → Fired must be false")
+	assert.False(t, outcome.Armed,
+		"no active turn AND no evidence a turn is imminent → this must be a genuine no-op, not an armed latch")
+
+	// A brand-new, wholly unrelated turn registers under the SAME session id
+	// shortly after — well within cancelPreArmTTL. Under the pre-fix
+	// unconditional-arm behavior, THIS turn would be the one spuriously
+	// canceled: "a latch that outlives its turn would cancel the next one"
+	// (cancel_prearm.go's own top doc comment), made concrete.
+	ts := newPreArmTestTurnState("turn-prearm-finished-next", "sess-prearm-finished-key", sessionID, "", "")
+	al.registerActiveTurn(ts)
+	defer al.clearActiveTurn(ts)
+
+	assert.False(t, ts.cancelFired.Load(),
+		"a new turn registering after a finished-session cancel must NOT be canceled by a stale latch that should never have armed")
 }

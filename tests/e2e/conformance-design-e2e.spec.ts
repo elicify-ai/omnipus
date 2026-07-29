@@ -1051,11 +1051,33 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
 // choose SUPERSEDE with `superseded_member_id` set to the member's actual
 // task id (never a label). This test engineers TWO independent, unambiguous
 // problems into one plan — m2 (done, but its outcome is wrong per the DoD)
-// and m3 (failed for a framed-as-transient reason) — so the "one correction
-// per wake" adjudicator has a clean, well-motivated reason to eventually
-// apply both SUPERSEDE (to m2) and TARGETED-RETRY (to m3) across successive
-// wakes, and asserts on the REAL member ids used by whichever corrections it
-// actually commits — never a label string.
+// and m3 (failed for a framed-as-transient reason) — and asserts on the REAL
+// member ids used by whichever corrections it actually commits — never a
+// label string.
+//
+// UPDATE — this test asserts SUPERSEDE only (targeted_retry moved to a
+// sibling test, see below). The original design assumed SUPERSEDE and
+// TARGETED-RETRY would both show up in ONE run against this two-problem
+// plan. They do not, by product design: `AppendCorrection` auto-resets
+// EVERY live-round failed member (excludes only frozen/`done` members) for
+// BOTH append and supersede — never for targeted_retry alone, which instead
+// resets only its one named member via its own path —
+// `if req.Verb != CorrectionTargetedRetry { pe.autoResetLiveRoundFailedMembers(...) }`
+// (pkg/agent/plan_engine.go:4295, reset logic at :4902) vs. targeted_retry's
+// own single-member reset in `buildCorrectionApplyFunc` (:4859). The instant
+// the real PlanSupervisor commits a SUPERSEDE against m2, m3 — still
+// `failed` at that moment, never `done`/superseded — is swept up by that
+// auto-reset and gets another dispatch for free. A real run's own recorded
+// reasoning said exactly this: "m3-retry-target (failed) was a
+// transient/flaky failure that was never retried — it will be auto-reset by
+// the supersede and get another attempt under the corrected plan." Emitting
+// a redundant targeted_retry against an already-reset m3 would be busywork,
+// not correctness, so a well-reasoned supervisor will not do it — asserting
+// it here demanded a tool call the product's own semantics make
+// unnecessary. TARGETED-RETRY is proven in isolation by
+// `Conformance_t3b_TargetedRetryOnlyE2E` immediately below, whose plan has
+// NO done-but-wrong member at all, so supersede has no valid target, cannot
+// fire, and cannot mask the retry.
 
 test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED-RETRY with real member ids', async ({
   page,
@@ -1238,39 +1260,35 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
     ).toBe(true)
   }
 
-  // THE core E.3 ask: both SUPERSEDE and TARGETED-RETRY were actually
-  // applied, each against a real member id (verified above). This is a hard
-  // requirement, not a best-effort one — if the real adjudicator only ever
-  // reaches for one of the two verbs, that is real, reportable information
-  // about the correction path, not something to downgrade to a soft pass.
+  // THE core E.3 ask, SUPERSEDE half: the real adjudicator actually applied
+  // SUPERSEDE against m2 (the done-but-wrong target), naming its real member
+  // id (verified above, never a label). This is a hard requirement, not a
+  // best-effort one.
+  //
+  // TARGETED-RETRY is deliberately NOT asserted here — see the "UPDATE"
+  // paragraph in this test's header comment: committing a SUPERSEDE in this
+  // same round auto-resets every live-round failed member, m3 included, so a
+  // well-reasoned supervisor that has already superseded m2 has no remaining
+  // reason to ALSO spend a targeted_retry on an already-reset m3.
+  // `Conformance_t3b_TargetedRetryOnlyE2E` immediately below is the isolated
+  // proof that targeted_retry itself works, in a plan with no done-but-wrong
+  // member so supersede cannot fire and cannot mask it.
   const verbsSeen = new Set(committed.map((c) => c.parameters.verb as string))
   expect(
     verbsSeen.has('supersede'),
     `t3: no committed correction used verb="supersede" against m2 (the done-but-wrong target). ` +
       `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
   ).toBe(true)
-  expect(
-    verbsSeen.has('targeted_retry'),
-    `t3: no committed correction used verb="targeted_retry" against m3 (the failed-transient target). ` +
-      `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
-  ).toBe(true)
 
-  // Cross-check the SPECIFIC members: at least one supersede named m2's
-  // real id, and at least one targeted_retry named m3's real id (not just
-  // "both verbs occurred somewhere, against arbitrary targets").
+  // Cross-check the SPECIFIC member: at least one supersede named m2's real
+  // id (not just "supersede occurred somewhere, against an arbitrary
+  // target").
   const supersededM2 = committed.some(
     (c) => c.parameters.verb === 'supersede' && c.parameters.superseded_member_id === memberIds.m2,
-  )
-  const retriedM3 = committed.some(
-    (c) => c.parameters.verb === 'targeted_retry' && c.parameters.retried_member_id === memberIds.m3,
   )
   expect(
     supersededM2,
     `t3: no committed supersede named m2's real id (${memberIds.m2}) as superseded_member_id. ${diagnostic}`,
-  ).toBe(true)
-  expect(
-    retriedM3,
-    `t3: no committed targeted_retry named m3's real id (${memberIds.m3}) as retried_member_id. ${diagnostic}`,
   ).toBe(true)
 
   // No-wedge sanity: the plan must not still be stuck neither terminal nor
@@ -1278,6 +1296,260 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   expect(
     finalPlanState === 'done' || finalPlanState === 'failed' || finalPlanPhase === HOLD_PHASE,
     `t3: plan ${planId} must be at a documented terminus or still legitimately held after the observation ` +
+      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}".`,
+  ).toBe(true)
+})
+
+// ── Conformance_t3b_TargetedRetryOnlyE2E ─────────────────────────────────────
+//
+// BDD (§9.1 t3, same underlying scenario as Conformance_t3_PlanningReplanningE2E
+// above — see that test's header comment for the full "REAL PATH" mechanism
+// writeup: how a correction is issued exclusively by PlanSupervisor's
+// `plan_correct` tool on an automatic wake, and how it is observed via the
+// adjudication session transcript's committed `plan_correct` tool_calls).
+//
+// Traces to:
+//   - §9.1 t3 "planning & re-planning walks the drawn path" (line ~1181)
+//   - TDD Plan row 44 `Conformance_t3_PlanningReplanningE2E` — this test
+//     proves the TARGETED-RETRY half of that same row. G-11/FR-143 requires
+//     append + SUPERSEDE + TARGETED-RETRY to each WORK and each record a
+//     revision entry — it does not require one scenario to exercise all
+//     three; splitting the proof across two deterministic scenarios still
+//     satisfies it, and satisfies it more honestly than one scenario whose
+//     two halves are not actually independent (see below).
+//
+// WHY THIS IS A SEPARATE TEST, NOT AN ASSERTION ADDED TO t3: t3's plan
+// engineers TWO problems at once (m2 done-but-wrong, m3 failed-transient) so
+// it could assert both SUPERSEDE and TARGETED-RETRY were committed in one
+// run. They are not independent outcomes: `AppendCorrection`
+// (pkg/agent/plan_engine.go:4295) auto-resets EVERY live-round failed member
+// (excludes only frozen/`done` members — `autoResetLiveRoundFailedMembers`,
+// :4902) for BOTH append and supersede; targeted_retry alone resets only its
+// one named member, via its own path inside `buildCorrectionApplyFunc`
+// (:4859). The instant a real PlanSupervisor commits a SUPERSEDE against a
+// done-but-wrong member, every OTHER still-failed member in that plan —
+// however it got there — is swept back to `next` for free. A real run's own
+// recorded reasoning said exactly this about m3: "m3-retry-target (failed)
+// was a transient/flaky failure that was never retried — it will be
+// auto-reset by the supersede and get another attempt under the corrected
+// plan." A well-reasoned supervisor has no motivation to ALSO spend a
+// targeted_retry on a member the engine already reset, so a plan that offers
+// BOTH a supersede target AND a failed-transient member cannot reliably
+// prove targeted_retry fires at all — it proves, at most, that the plan
+// eventually clears.
+//
+// This test removes that confound: the plan below has exactly ONE problem
+// (a deterministically-failed, framed-as-transient member) and structurally
+// NO candidate for supersede — supersede requires an existing `done` member
+// whose outcome is in question
+// (`resolvePlanMember(..., task.StatusDone, ...)`, pkg/tools/plan_correct.go),
+// and the DoD here explicitly states no such member exists and no new work
+// is needed, so append has no motivated use either. TARGETED-RETRY — "reset
+// one failed member," per the tool's own description to the LLM
+// (pkg/tools/plan_correct.go:141/165) — is the one verb whose stated purpose
+// matches the diagnosis, and the only one discoverable here without
+// inventing unmotivated new work. The filler member (m1) reaches `done` on
+// its own trivial check but is never named as a problem by the DoD, so its
+// existence gives the plan no supersede target either.
+test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as the sole correct verb (no done-but-wrong member exists to trigger supersede's auto-reset masking)", async ({
+  page,
+}) => {
+  requireApiKey()
+
+  test.setTimeout(600_000)
+  await startFreshChatWithJim(page)
+
+  // Setup: per-test Main agent (chat-target owner + member assignee) in its
+  // own workspace core_team — same rationale as t3's createMainAgent comment.
+  const ownerId = await createMainAgent(page, `conformance-t3b-owner-${Date.now()}`, { bash: 'allow' })
+  const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
+    name: 'conformance-t3b',
+    core_team: [ownerId],
+  })
+  if (!wsRes.ok) throw new Error(`t3b: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
+  const workspaceId = wsRes.body.id
+
+  // Two independent (disjoint write_set, no blocked_by — they dispatch in
+  // parallel) members:
+  //   m1 — trivial filler, own check trivially passes, reaches `done`, and
+  //        is never named as a problem by the DoD — a `done` member that
+  //        exists in the plan but is not a valid/motivated supersede target.
+  //   m2 — the SOLE TARGETED-RETRY target: max_attempts=1 with a check that
+  //        deterministically fails (`exit 1`), so it ends `failed` after
+  //        exactly one attempt. Its title frames the failure as transient —
+  //        the identical idiom Conformance_t3_PlanningReplanningE2E already
+  //        used for its own m3, which is exactly the wake data PlanSupervisor
+  //        reads ("member_id | status | title").
+  const { planId, memberIds } = await createPlanWithMembers(
+    page,
+    workspaceId,
+    ownerId,
+    {
+      title: 't3b conformance plan (targeted-retry isolation)',
+      goal: 'exercise the targeted-retry correction path in isolation, with no supersede candidate',
+      description:
+        'owner re-plans after an unmet DoD adjudication whose ONLY problem is one failed-transient member',
+      // A single prose DoD (real Judge LLM call) that names the ONE problem
+      // and explicitly forecloses the other verbs: no done member's outcome
+      // is in question (no supersede target), and no new work is needed (no
+      // motivated append) — so TARGETED-RETRY is the only verb whose stated
+      // purpose matches the diagnosis.
+      dod: [
+        proseCriterion(
+          'Member "m2-retry-target" must have SUCCEEDED at its check. If it is currently `failed`, that ' +
+            'failure was for a transient, recoverable reason — the member itself is sound and does not ' +
+            'need to be replaced or abandoned; simply retry it. Member "m1-filler" already completed ' +
+            'correctly and needs no correction of any kind — its outcome is NOT in question, so there is ' +
+            'no done member here whose result needs discounting. There is no other problem with this plan ' +
+            'and no new work is required. The plan is only met once "m2-retry-target" succeeds.',
+        ),
+      ],
+      bounds: { plan_judge_max_rounds: 4 },
+    },
+    [
+      {
+        label: 'm1',
+        title: 'm1-filler',
+        prompt: 'reply with alpha',
+        write_set: ['out/t3b/m1.txt'],
+        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
+      },
+      {
+        label: 'm2',
+        title: 'm2-retry-target: transient/flaky failure, safe and expected to succeed if retried',
+        prompt: 'reply with beta',
+        write_set: ['out/t3b/m2.txt'],
+        max_attempts: 1,
+        criteria: [checkCriterion('m2 deterministically fails its one attempt', 'exit 1', 0)],
+      },
+    ],
+  )
+
+  // Approve + run.
+  const approveRes = await apiFetch<{ status: string }>(page, 'POST', `/api/v1/plans/${planId}/approve`, {})
+  expect(approveRes.ok, `t3b: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(true)
+
+  const HOLD_PHASE = 'awaiting_supervision'
+
+  // --- Step 1: MANDATORY — reach the hold at least once -------------------
+  // With m2 deterministically failed, a round-1 unmet verdict (and the
+  // awaiting_supervision hold it triggers) is expected reliably.
+  let reachedHoldOnce = false
+  const firstHoldDeadline = Date.now() + 120_000
+  while (Date.now() < firstHoldDeadline) {
+    const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
+    if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
+    if (poll.body.plan_phase === HOLD_PHASE) {
+      reachedHoldOnce = true
+      break
+    }
+    await page.waitForTimeout(1_500)
+  }
+  expect(
+    reachedHoldOnce,
+    `t3b: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — m2 ` +
+      '(deterministically failed) makes a round-1 unmet verdict expected reliably.',
+  ).toBe(true)
+
+  // --- Step 2: observe the REAL correction mechanism over the plan's full
+  // round budget. Same session/transcript plumbing as
+  // Conformance_t3_PlanningReplanningE2E — a NEW session may be minted each
+  // time the plan opens a fresh park, so every session id ever observed is
+  // tracked and all of them are inspected at the end.
+  const seenSessionIds = new Set<string>()
+  let finalPlanState = ''
+  let finalPlanPhase = ''
+  const observeDeadline = Date.now() + 420_000
+  while (Date.now() < observeDeadline) {
+    const poll = await apiFetch<{ state: string; plan_phase?: string; supervision?: { session_id?: string } }>(
+      page,
+      'GET',
+      `/api/v1/plans/${planId}`,
+    )
+    if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
+    finalPlanState = poll.body.state
+    finalPlanPhase = poll.body.plan_phase ?? ''
+    const sid = poll.body.supervision?.session_id
+    if (sid) seenSessionIds.add(sid)
+    if (finalPlanState === 'done' || finalPlanState === 'failed') break
+    await page.waitForTimeout(4_000)
+  }
+
+  // Collect every plan_correct call (any status) across every adjudication
+  // session this plan ever used.
+  const allCalls: Array<{ status: string; parameters: Record<string, unknown> }> = []
+  for (const sid of seenSessionIds) {
+    const messages = await getSessionMessages(page, sid)
+    allCalls.push(...extractPlanCorrectCalls(messages))
+  }
+  const committed = allCalls.filter((c) => c.status === 'success')
+
+  const diagnostic =
+    `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
+    `all plan_correct calls: ${JSON.stringify(allCalls)}`
+
+  // MANDATORY: the mechanism actually committed at least one correction.
+  // Zero committed corrections after a full round budget with one
+  // unambiguous, well-motivated problem means plan_correct is not genuinely
+  // wired end-to-end — a CRITICAL finding, not a soft skip.
+  expect(
+    committed.length,
+    `t3b: zero plan_correct calls committed (status=success) across the plan's full round budget. ${diagnostic}`,
+  ).toBeGreaterThan(0)
+
+  // Real member ids — never a label string ('m1'/'m2'), always a real task
+  // id from memberIds (the same E.3 defect Conformance_t3_PlanningReplanningE2E
+  // exists to catch, checked here too since any committed correction — of
+  // any verb — could in principle repeat it).
+  const realMemberIds = new Set(Object.values(memberIds))
+  const labelStrings = new Set(Object.keys(memberIds))
+  for (const call of committed) {
+    const supersededId = call.parameters.superseded_member_id as string | undefined
+    const retriedId = call.parameters.retried_member_id as string | undefined
+    const targetId = supersededId ?? retriedId
+    if (targetId === undefined) continue // append/abandon name no existing member
+    expect(
+      labelStrings.has(targetId),
+      `t3b: a committed correction named a LABEL STRING ("${targetId}") instead of a real task id. ${diagnostic}`,
+    ).toBe(false)
+    expect(
+      realMemberIds.has(targetId),
+      `t3b: a committed correction's target id ("${targetId}") does not match any real member task id ` +
+        `(${[...realMemberIds].join(', ')}). ${diagnostic}`,
+    ).toBe(true)
+  }
+
+  // THE core ask: TARGETED-RETRY was actually applied against m2's real id.
+  // This scenario has no done-but-wrong member (supersede has no valid
+  // target) and the DoD forecloses new work (no motivated append), so
+  // TARGETED-RETRY is the one verb whose stated purpose matches the
+  // diagnosis. This is a hard requirement, not a best-effort one — if the
+  // real adjudicator never reaches for it here, that is real, reportable
+  // information about the correction path, not something to downgrade to a
+  // soft pass.
+  const verbsSeen = new Set(committed.map((c) => c.parameters.verb as string))
+  expect(
+    verbsSeen.has('targeted_retry'),
+    `t3b: no committed correction used verb="targeted_retry" against m2 (the sole failed-transient target). ` +
+      `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
+  ).toBe(true)
+
+  // Cross-check the SPECIFIC member: at least one targeted_retry named m2's
+  // real id (not just "targeted_retry occurred somewhere, against an
+  // arbitrary target").
+  const retriedM2 = committed.some(
+    (c) => c.parameters.verb === 'targeted_retry' && c.parameters.retried_member_id === memberIds.m2,
+  )
+  expect(
+    retriedM2,
+    `t3b: no committed targeted_retry named m2's real id (${memberIds.m2}) as retried_member_id. ${diagnostic}`,
+  ).toBe(true)
+
+  // No-wedge sanity: the plan must not still be stuck neither terminal nor
+  // held after the full observation window.
+  expect(
+    finalPlanState === 'done' || finalPlanState === 'failed' || finalPlanPhase === HOLD_PHASE,
+    `t3b: plan ${planId} must be at a documented terminus or still legitimately held after the observation ` +
       `window — observed state="${finalPlanState}" phase="${finalPlanPhase}".`,
   ).toBe(true)
 })

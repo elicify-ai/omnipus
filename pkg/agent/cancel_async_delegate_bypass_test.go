@@ -90,6 +90,14 @@ func TestRepro_SpawnSubTurn_RawStoreBypassesPreArmedCancel(t *testing.T) {
 	// parent's own turn having already finished (T24a's real race window)
 	// before the Stop click's RequestCancel arrives.
 
+	// PREMISE NOTE (design-flaw fix, cancel_prearm.go): see the identical
+	// note in cancel_async_delegate_repro_test.go — armCancelOrFindActiveTurn
+	// now additionally requires turnImminentForIdentity, whose only signal
+	// (sessionWorker inbox/inTurn) does not cover the async-delegate-spawn
+	// path this test exercises. Primed explicitly; the resulting gap for
+	// this specific path is real and documented in this fix's own report.
+	primeImminentSessionWorker(al, sessionID)
+
 	outcome, cancelErr := al.RequestCancel(
 		context.Background(),
 		CancelScope{SessionID: sessionID},

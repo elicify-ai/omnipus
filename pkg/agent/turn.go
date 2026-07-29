@@ -352,6 +352,20 @@ func (al *AgentLoop) registerActiveTurn(ts *turnState) {
 
 func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	al.activeTurnStates.Delete(ts.sessionKey)
+	// Design-flaw fix (cancel_prearm.go, turnImminentForIdentity): record
+	// that a turn JUST cleared for this identity so a still-true
+	// sessionWorker.inTurn (session_worker.go's processTurn stays "in turn"
+	// through its own post-clear tail — steering-drain check, typing-stop
+	// notify, response-guard/panic-recover defers) is not misread as
+	// evidence a DIFFERENT, new turn is imminent for the next
+	// armCancelOrFindActiveTurn call that finds nothing registered. See
+	// turnSettleGrace's doc comment for the full rationale. Keyed on both
+	// identity forms (session id and (channel, chatID)) exactly like
+	// consumePreArmedCancel's own preArmKeysForTurn lookup, so either a Web
+	// SPA/Tier A session-id cancel or a Tier B channel/chatID cancel sees
+	// the same suppression. No-op when al.cancelPreArm is nil (bare
+	// turnState-only unit tests that never went through NewAgentLoop).
+	al.cancelPreArm.markSettled(time.Now(), preArmKeysForTurn(ts)...)
 }
 
 func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {

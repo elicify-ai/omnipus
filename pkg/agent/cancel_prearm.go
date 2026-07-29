@@ -39,11 +39,27 @@
 //     an orphaned latch that would otherwise sit armed until some much later,
 //     unrelated message for the same session/chat identity walks in and
 //     gets spuriously canceled.
+//
+// A THIRD protection, added after the TTL/exactly-once pair above shipped:
+// arming itself is now gated on turnImminentForIdentity (below), not merely
+// on "no active turn is registered right now." The two conditions are NOT
+// the same thing — a session that just finished its only turn also has no
+// active turn registered, and the pre-gate code armed identically for that
+// case, which TestWS_Cancel_OnlyInterruptsTargetSession
+// (pkg/gateway/websocket_multisession_test.go) caught: canceling a finished
+// session emitted a server frame it should never have produced, and — the
+// consequence that actually hurts users — a stale latch armed against a
+// finished session would sit there for cancelPreArmTTL and cancel the NEXT,
+// wholly unrelated turn the user starts in that same session, exactly the
+// hazard the TTL/exactly-once pair above exists to bound. See
+// turnImminentForIdentity's doc comment for the discriminator this adds and
+// the alternatives rejected in its favor.
 package agent
 
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -64,6 +80,47 @@ import (
 // file's top doc comment).
 var cancelPreArmTTL = 5 * time.Second
 
+// turnSettleGrace bounds how long turnImminentForIdentity's inTurn signal
+// stays suppressed for an identity right after its own turn's
+// clearActiveTurn (turn.go) has run. Declared as a var (not const) so tests
+// can shrink it instead of sleeping the full duration.
+//
+// Why this exists: sessionWorker.inTurn (session_worker.go) is true for the
+// ENTIRE span of processTurn — from the moment a message is dequeued all
+// the way through its post-turn steering-drain check, typing-stop
+// notification, and response-guard/panic-recover defers — not just the
+// pre-registration sub-window this file's turnImminentForIdentity cares
+// about. A turn that has ALREADY registered and cleared (clearActiveTurn
+// already ran, well before the client-visible "done" frame — see runTurn's
+// own defer-ordering comment, pkg/agent/loop.go) still leaves inTurn=true
+// for that short in-memory tail. TestWS_Cancel_OnlyInterruptsTargetSession
+// (pkg/gateway/websocket_multisession_test.go) caught this directly: its
+// cancel frame, sent the instant the client sees "done", can reach
+// armCancelOrFindActiveTurn while the SAME goroutine's processTurn tail is
+// still unwinding server-side — inTurn reads true, and without this grace
+// window the fix would arm on exactly the finished-session case it exists
+// to stop arming on.
+//
+// Sizing rationale: the tail this suppresses is pure in-memory bookkeeping
+// (a queue-depth check, a map lookup, a few deferred closures) with no I/O —
+// microseconds in practice, not the 1-3s-under-load pre-registration window
+// cancelPreArmTTL's own rationale measures (two to three orders of magnitude
+// larger). 250ms is chosen to comfortably cover realistic scheduler
+// contention on that tail while staying far short of a genuine next-turn
+// registration, so it does not meaningfully re-open the race this whole
+// mechanism exists to close.
+//
+// Residual risk this DOES accept, documented rather than hidden: a second,
+// genuinely NEW message for the SAME identity that is dequeued and enters
+// its OWN pre-registration window within this grace period of the FIRST
+// turn's clear — an unusually fast back-to-back follow-up landing during an
+// unusually slow registration — could have a cancel arriving in that narrow
+// overlap wrongly suppressed. This is a narrow, low-probability coincidence
+// (both an immediate follow-up AND a slow second registration have to occur
+// together) rather than the deterministic, 100%-reproducible false positive
+// this fix closes, and is called out in this fix's own report.
+var turnSettleGrace = 250 * time.Millisecond
+
 // cancelPreArmLatch is a single early-arriving cancel recorded because
 // RequestCancel found no live turn to claim at the moment it ran.
 type cancelPreArmLatch struct {
@@ -71,11 +128,23 @@ type cancelPreArmLatch struct {
 	canceller CancelCanceller
 	hooks     CancelHooks
 	armedAt   time.Time
+	// ttl is cancelPreArmTTL's value CAPTURED ONCE at arm time (armLocked),
+	// not read live from the mutable package var thereafter. This is a
+	// correctness fix, not just style: notifyLatchExpired runs on its own
+	// detached goroutine (this file's own doc comment on that function),
+	// which can still be alive after the arming test function has returned
+	// and a LATER test's t.Cleanup (or a concurrent test) mutates
+	// cancelPreArmTTL — a live re-read there raced under -race
+	// (WARNING: DATA RACE between notifyLatchExpired's log call and
+	// TestPreArmedCancel_ExpiredLatch_DoesNotCancelSubsequentTurn's
+	// t.Cleanup restoring the shrunk TTL). A latch's own arm-time TTL is
+	// immutable, latch-owned data — reading it never races with anything.
+	ttl time.Duration
 }
 
 // expired reports whether now is at or past the latch's TTL deadline.
 func (l *cancelPreArmLatch) expired(now time.Time) bool {
-	return now.Sub(l.armedAt) > cancelPreArmTTL
+	return now.Sub(l.armedAt) > l.ttl
 }
 
 // cancelPreArm is the AgentLoop-wide table of armed pre-registration cancel
@@ -88,10 +157,81 @@ func (l *cancelPreArmLatch) expired(now time.Time) bool {
 type cancelPreArm struct {
 	mu      sync.Mutex
 	latches map[string]*cancelPreArmLatch
+
+	// settled records, per identity key (same key space as latches —
+	// preArmKeyForScope/preArmKeysForTurn), the timestamp of the most recent
+	// clearActiveTurn (turn.go) call for that identity. Read by
+	// turnImminentForIdentity to suppress a sessionWorker.inTurn=true
+	// reading that is merely that identity's own just-finished turn's
+	// post-clear tail — see turnSettleGrace's doc comment for the full
+	// rationale. Guarded by the same mu as latches (not a hot path).
+	settled map[string]time.Time
 }
 
 func newCancelPreArm() *cancelPreArm {
-	return &cancelPreArm{latches: make(map[string]*cancelPreArmLatch)}
+	return &cancelPreArm{
+		latches: make(map[string]*cancelPreArmLatch),
+		settled: make(map[string]time.Time),
+	}
+}
+
+// markSettled records that a turn just cleared for each of keys, opportunistically
+// pruning any settled entries that have already aged out past turnSettleGrace
+// (mirrors armLocked's own opportunistic-eviction shape, keeping this map from
+// growing unbounded across a long-running process without a background sweep
+// goroutine). Empty keys are skipped. Safe to call with a nil receiver (no-op)
+// so clearActiveTurn does not need its own nil check beyond the existing
+// al.cancelPreArm nil guard.
+func (p *cancelPreArm) markSettled(now time.Time, keys ...string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k, t := range p.settled {
+		if now.Sub(t) > turnSettleGrace {
+			delete(p.settled, k)
+		}
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		p.settled[key] = now
+	}
+}
+
+// recentlySettledLocked reports whether any of keys had a clearActiveTurn
+// recorded (via markSettled) within the last turnSettleGrace, as of now.
+// Callers MUST hold p.mu (or, for a nil p, nothing at all — see the nil
+// check below). Deliberately NOT self-locking: turnImminentForIdentity is
+// called ONLY from armCancelOrFindActiveTurn's own critical section, which
+// ALREADY holds al.cancelPreArm.mu for its entire body (cancel_prearm.go) —
+// a self-locking variant called from there would re-lock the same
+// non-reentrant sync.Mutex the caller is still holding and deadlock every
+// cancel attempt that reaches it. There is currently only one caller
+// (turnImminentForIdentity), and it always holds the lock; a future
+// external, not-already-locked caller would need its own thin
+// self-locking wrapper (p.mu.Lock(); defer p.mu.Unlock(); return
+// p.recentlySettledLocked(...)) rather than reusing this one directly.
+//
+// A nil receiver or an empty/absent key reports false (never suppress —
+// the safe default, matching this file's "when in doubt, do not treat as
+// settled, let turnImminentForIdentity fall through to its inTurn/inbox
+// signal" posture).
+func (p *cancelPreArm) recentlySettledLocked(now time.Time, keys ...string) bool {
+	if p == nil {
+		return false
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if t, ok := p.settled[key]; ok && now.Sub(t) <= turnSettleGrace {
+			return true
+		}
+	}
+	return false
 }
 
 // armLocked records latch under key, opportunistically evicting any entries
@@ -141,7 +281,7 @@ func (p *cancelPreArm) consume(now time.Time, keys ...string) (latch *cancelPreA
 		delete(p.latches, key)
 		if l.expired(now) {
 			slog.Debug("agent: cancelPreArm: latch expired before a turn consumed it",
-				"key", key, "armed_at", l.armedAt, "ttl", cancelPreArmTTL)
+				"key", key, "armed_at", l.armedAt, "ttl", l.ttl)
 			return nil, false, l
 		}
 		return l, true, nil
@@ -249,11 +389,26 @@ func (al *AgentLoop) armCancelOrFindActiveTurn(
 		return hook, false
 	}
 
+	// Only arm when a turn is genuinely IMMINENT for this identity — not
+	// merely because none is registered right now. "No active turn" is
+	// equally true of a session about to start its first turn and one that
+	// just finished its last turn with nothing coming; see
+	// turnImminentForIdentity's doc comment for the discriminator and why an
+	// unconditional arm here (the previous behavior) is itself the bug
+	// TestWS_Cancel_OnlyInterruptsTargetSession caught. When nothing is
+	// imminent this is a genuine no-op: Fired stays false, Armed is now
+	// false too (not a latch standing in for it), and no stale latch is left
+	// behind to poison whatever turn this identity runs next.
+	if !al.turnImminentForIdentity(sessionID, scope) {
+		return nil, false
+	}
+
 	expired := al.cancelPreArm.armLocked(key, &cancelPreArmLatch{
 		scope:     scope,
 		canceller: canceller,
 		hooks:     hooks,
 		armedAt:   time.Now(),
+		ttl:       cancelPreArmTTL, // captured once, here — see cancelPreArmLatch.ttl's doc comment
 	})
 	if len(expired) > 0 {
 		// Notify off this goroutine, and specifically BEFORE this method's own
@@ -336,7 +491,7 @@ func notifyLatchExpired(expired ...*cancelPreArmLatch) {
 			"canceller_user", latch.canceller.UserID,
 			"canceller_channel", latch.canceller.Channel,
 			"armed_at", latch.armedAt,
-			"ttl", cancelPreArmTTL,
+			"ttl", latch.ttl,
 		)
 		if latch.hooks.OnLatchExpired == nil {
 			continue
@@ -351,4 +506,133 @@ func notifyLatchExpired(expired ...*cancelPreArmLatch) {
 			l.hooks.OnLatchExpired(l.scope, l.canceller)
 		}(latch)
 	}
+}
+
+// turnImminentForIdentity reports whether a turn is genuinely about to exist
+// for the identity armCancelOrFindActiveTurn is considering arming a latch
+// for (sessionID when known, otherwise (scope.Channel, scope.ChatID)) — as
+// opposed to merely "no turn is registered right now," which is equally true
+// of a session about to start its FIRST turn and one that just finished its
+// LAST turn with nothing coming.
+//
+// Candidates considered, and why they lost to this one:
+//
+//   - Arm unconditionally whenever nothing is registered (the pre-fix
+//     behavior this replaces): cannot tell "about to start" from "just
+//     finished" at all — proven wrong by
+//     TestWS_Cancel_OnlyInterruptsTargetSession
+//     (pkg/gateway/websocket_multisession_test.go), which cancels a session
+//     immediately after its only turn's "done" frame and requires that
+//     cancel to be a true no-op, not an acknowledged-but-armed one.
+//   - A short time-based epsilon ("only arm if this identity's last turn
+//     ended within the last N ms"): rejected as fragile and, worse, not
+//     actually a discriminator — any finished session is trivially "recently
+//     idle" for SOME N, and an N large enough to cover the real
+//     scheduler/admission-controller contention this file's own TTL
+//     rationale cites (1-3s under load) is large enough to misclassify a
+//     truly finished session as "about to start" for that same window. It
+//     just relocates the false positive instead of removing it.
+//   - Session meta Status (pkg/session.SessionStatus): only has
+//     Active/Archived/Interrupted values (pkg/session/daypartition.go) and
+//     sits at StatusActive both WHILE a turn runs and immediately AFTER it
+//     finishes — nothing flips it on ordinary turn completion, only
+//     RequestCancel's own SetSessionInterrupted hook does, and only on a
+//     real cancel. Rejected: it cannot distinguish the two states this
+//     discriminator exists to tell apart.
+//   - Tried, then refined: raw dispatcher state. Is there a message sitting
+//     queued in, or already being processed (but not yet registered) by,
+//     the per-scope sessionWorker (session_worker.go) that owns this
+//     identity? A queued-but-undequeued message (sessionWorker.inbox,
+//     buffered) is unambiguous physical evidence on its own. But
+//     sessionWorker.inTurn taken RAW is not: it is true for processTurn's
+//     ENTIRE span, including the brief post-clear tail after THIS
+//     identity's own turn already registered AND cleared (the
+//     steering-drain check, typing-stop notify, response-guard/
+//     panic-recover defers) — a turn that finished and sent its client-
+//     visible "done" frame moments ago still reads inTurn=true for that
+//     tail. TestWS_Cancel_OnlyInterruptsTargetSession caught this directly
+//     the first time this function shipped with raw inTurn: its cancel
+//     frame, sent the instant the client sees "done", reached this
+//     function while the SAME server goroutine's tail was still unwinding.
+//   - Chosen: inbox depth unconditionally, PLUS inTurn gated on
+//     turnSettleGrace (recentlySettledLocked, above) — inTurn only counts as
+//     imminent when clearActiveTurn has NOT just run for this identity.
+//     See turnSettleGrace's doc comment for the sizing rationale and the
+//     narrow residual risk this trades in return (a genuinely new message
+//     for the same identity, dequeued and mid-registration within that
+//     grace window of the previous turn's clear).
+//
+// sessionWorkers is keyed by a routing-derived "scope" string
+// (agentSessionKey / resolveSteeringTarget, pkg/agent/loop.go) this function
+// cannot reconstruct exactly: CancelScope carries no agentID, and a Tier B
+// (channel, chatID) pair may not even appear in the key under DMScopeMain
+// (routing.BuildAgentPeerSessionKey collapses a direct-message peer to
+// "agent:<id>:main" under that scope). Rather than duplicate routing/DMScope
+// resolution here, this matches on the one part of the key format
+// resolveSteeringTarget guarantees unconditionally: a literal ":"+sessionID
+// suffix whenever msg.SessionID is non-empty (pkg/agent/loop.go,
+// resolveSteeringTarget's final two lines) — that covers every SessionID-
+// keyed caller (web SPA, Tier A /cancel, the orphan watchdog reap). For the
+// (channel, chatID) fallback (Tier B, no session id resolved), matching is
+// best-effort substring containment on the lower-cased scope string: sound
+// for group/channel peers (which always key by peerID per
+// routing.BuildAgentPeerSessionKey's "Group/channel peers always get
+// per-peer sessions" rule) but blind to direct peers under DMScopeMain. That
+// residual gap is real and is called out in this fix's own report rather
+// than papered over — see this function's callers for the discussion.
+func (al *AgentLoop) turnImminentForIdentity(sessionID string, scope CancelScope) bool {
+	lowerChatID := strings.ToLower(scope.ChatID)
+	lowerChannel := strings.ToLower(scope.Channel)
+	settleKey := preArmKeyForScope(sessionID, scope)
+	now := time.Now()
+
+	imminent := false
+	al.sessionWorkers.Range(func(key, value any) bool {
+		wscope, _ := key.(string)
+		w, ok := value.(*sessionWorker)
+		if !ok || w == nil {
+			return true // keep scanning
+		}
+
+		matched := false
+		switch {
+		case sessionID != "":
+			matched = strings.HasSuffix(wscope, ":"+sessionID)
+		case scope.Channel != "" && scope.ChatID != "":
+			lw := strings.ToLower(wscope)
+			matched = strings.Contains(lw, lowerChatID) && strings.Contains(lw, lowerChannel)
+		}
+		if !matched {
+			return true // keep scanning
+		}
+
+		// A queued-but-undequeued message is unambiguous evidence on its
+		// own: nothing has claimed it yet, so it can only mean "about to be
+		// processed," never "leftover from an already-finished turn."
+		if len(w.inbox) > 0 {
+			imminent = true
+			return false
+		}
+		// inTurn, by contrast, spans processTurn's ENTIRE call — including
+		// the brief post-clear tail after THIS identity's own turn already
+		// registered and cleared. Only count it as imminent when
+		// clearActiveTurn has NOT just run for this identity — see
+		// turnSettleGrace's doc comment for why (this is exactly what
+		// TestWS_Cancel_OnlyInterruptsTargetSession caught: raw inTurn,
+		// unsuppressed, false-positived on a finished session).
+		// Locked variant: this whole function runs from within
+		// armCancelOrFindActiveTurn's al.cancelPreArm.mu critical section —
+		// see recentlySettledLocked's doc comment for why the self-locking
+		// recentlySettled would deadlock here.
+		if w.inTurn.Load() && !al.cancelPreArm.recentlySettledLocked(now, settleKey) {
+			imminent = true
+			return false
+		}
+		// Matched but idle (or settled): this is the "just finished" case,
+		// not "about to start." Keep scanning in case a DIFFERENT worker
+		// (unlikely, but Tier B's substring match is not exclusive) does
+		// show imminent work.
+		return true
+	})
+	return imminent
 }
