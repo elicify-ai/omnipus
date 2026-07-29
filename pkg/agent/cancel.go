@@ -519,8 +519,11 @@ func (al *AgentLoop) RequestCancel(
 // the source rather than in each of the (several) call sites that go through
 // it. See pkg/commands/runtime.go's CancelActiveTurn for the Tier A /cancel
 // consumer this was fixed for; pkg/agent/plan_engine.go's cancelSessions
-// (Stop fan-out) is a further consumer of this same adapter that still needs
-// its own bucket for the armed case — tracked separately, not fixed here.
+// (Stop fan-out) is a further consumer of this same adapter — it now has its
+// own dedicated `armed` bucket on sessionCancelReport (plan_engine.go), kept
+// apart from `failed`/`notFired` for exactly the same reason this doc
+// comment gives, so the "still needs its own bucket" gap noted here at the
+// time of this widening has since been closed, not merely tracked.
 func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error) {
 	if sessionID == "" {
 		return false, false, fmt.Errorf("RequestCancelForSession: sessionID must not be empty")

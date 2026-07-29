@@ -168,12 +168,41 @@ type cancelPreArm struct {
 	// post-clear tail — see turnSettleGrace's doc comment for the full
 	// rationale. Guarded by the same mu as latches (not a hot path).
 	settled map[string]time.Time
+
+	// pendingSpawns records, per identity key (same key space as latches —
+	// pendingSpawnKeys, mirroring preArmKeyForScope/preArmKeysForTurn), the
+	// timestamp at which pkg/tools/delegate.go's DelegateTool.executeAsync
+	// (via the DelegateSpawnMarker seam, AgentLoopSpawner.MarkPendingDelegateSpawn)
+	// recorded that a delegate sub-turn's spawn goroutine is ABOUT to be
+	// dispatched for that identity — synchronously, on the delegating
+	// parent's own turn goroutine, before the goroutine that will actually
+	// call spawnSubTurn is even launched.
+	//
+	// This is the fourth signal turnImminentForIdentity consults (see its
+	// doc comment), and the one that closes the gap the other three cannot:
+	// sessionWorkers (inbox/inTurn) is populated exclusively by the
+	// top-level inbound-message dispatch loop (loop.go), which a delegated
+	// sub-turn NEVER goes through — spawnSubTurn dispatches straight to
+	// al.runTurn from a bare goroutine kicked off by executeAsync. Without
+	// this signal, a Stop click landing between "the delegating parent's own
+	// turn finished" and "the child sub-turn has registered" finds no active
+	// turn AND no sessionWorker evidence, so armCancelOrFindActiveTurn
+	// refuses to arm — exactly the T24a regression this closes (see
+	// cancel_async_delegate_repro_test.go's history for the two prior,
+	// narrower fixes that only worked in their own tests because they
+	// primed FAKE sessionWorker evidence that does not exist in production
+	// for this path).
+	//
+	// Guarded by the same mu as latches/settled (not a hot path — delegate
+	// spawns are not a per-request hotpath operation).
+	pendingSpawns map[string]time.Time
 }
 
 func newCancelPreArm() *cancelPreArm {
 	return &cancelPreArm{
-		latches: make(map[string]*cancelPreArmLatch),
-		settled: make(map[string]time.Time),
+		latches:       make(map[string]*cancelPreArmLatch),
+		settled:       make(map[string]time.Time),
+		pendingSpawns: make(map[string]time.Time),
 	}
 }
 
@@ -329,6 +358,137 @@ func preArmKeysForTurn(ts *turnState) []string {
 		keys = append(keys, "c:"+ts.channel+":"+ts.chatID)
 	}
 	return keys
+}
+
+// pendingSpawnKeys returns the identity key(s) a delegate-spawn
+// "about to register" marker is filed under (markPendingSpawn) and checked
+// against (hasPendingSpawnLocked) — the SAME key space preArmKeysForTurn
+// uses (session-id form when sessionID is non-empty, (channel, chatID) form
+// when both are present), so a marker set with one form and a check made
+// with the other never accidentally miss each other when both happen to be
+// known. Both forms are returned together when applicable (mirroring
+// preArmKeysForTurn's own "check/set both, cheap and correct" shape) rather
+// than picking the single "narrowest" one preArmKeyForScope favors for
+// arming an actual latch — a marker has no exactly-once consumption
+// semantics to protect, so there is no reason to narrow it to one key.
+//
+// Called from two directions with different argument sources that are
+// nonetheless the SAME identity by construction:
+//   - pkg/tools/delegate.go's executeAsync supplies (ToolTranscriptSessionID(ctx),
+//     ToolChannel(ctx), ToolChatID(ctx)) — the delegating PARENT turn's own
+//     identity, injected into ctx by runTurn (loop.go) from ts.opts.TranscriptSessionID/
+//     ts.channel/ts.chatID.
+//   - turnImminentForIdentity supplies (sessionID, scope.Channel, scope.ChatID) —
+//     the identity a Stop click's RequestCancel resolved.
+//   - spawnSubTurn's own early-return/registration cleanup supplies
+//     (parentTS.transcriptSessionID, parentTS.channel, parentTS.chatID) —
+//     the same parent identity the child inherits verbatim (opts.Channel/
+//     opts.ChatID/TranscriptSessionID all copy straight from parentTS, see
+//     spawnSubTurn's processOptions construction), so the SAME keys the
+//     marker was set under are the ones cleared, with no recomputation
+//     needed from the child's own (freshly-constructed) fields.
+func pendingSpawnKeys(sessionID, channel, chatID string) []string {
+	var keys []string
+	if sessionID != "" {
+		keys = append(keys, "s:"+sessionID)
+	}
+	if channel != "" && chatID != "" {
+		keys = append(keys, "c:"+channel+":"+chatID)
+	}
+	return keys
+}
+
+// markPendingSpawn records, for each of keys, that a delegate sub-turn spawn
+// is about to be dispatched — self-locking (unlike recentlySettledLocked/
+// hasPendingSpawnLocked below): its only caller,
+// AgentLoopSpawner.MarkPendingDelegateSpawn (subturn.go), runs on the
+// delegating parent's own tool-execution goroutine, which does NOT already
+// hold al.cancelPreArm.mu (contrast with turnImminentForIdentity, which is
+// only ever reached from inside armCancelOrFindActiveTurn's own critical
+// section). Opportunistically evicts stale entries past cancelPreArmTTL on
+// every call (mirrors armLocked's and markSettled's own opportunistic-sweep
+// shape) so a leaked marker — the goroutine that was supposed to clear it
+// never even got scheduled — cannot grow this map unbounded across a
+// long-running process.
+//
+// Safe to call with a nil receiver (no-op), matching markSettled's own
+// nil-safety, so a bare turnState-only unit test's al.cancelPreArm being nil
+// never needs its own guard at this call site.
+func (p *cancelPreArm) markPendingSpawn(now time.Time, keys ...string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k, t := range p.pendingSpawns {
+		if now.Sub(t) > cancelPreArmTTL {
+			delete(p.pendingSpawns, k)
+		}
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		p.pendingSpawns[key] = now
+	}
+}
+
+// clearPendingSpawn removes any pending-spawn marker filed under each of
+// keys. Self-locking (see markPendingSpawn's doc comment for why) and a
+// harmless no-op for a key that was never marked (an ordinary map delete on
+// an absent key) — safe to call unconditionally from spawnSubTurn's cleanup
+// regardless of whether THIS specific spawn ever had a marker set for it
+// (e.g. a non-delegate caller of SpawnSubTurn/spawnSubTurn, which never
+// calls MarkPendingDelegateSpawn in the first place).
+func (p *cancelPreArm) clearPendingSpawn(keys ...string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		delete(p.pendingSpawns, key)
+	}
+}
+
+// hasPendingSpawnLocked reports whether any of keys has a live (not
+// TTL-expired) pending-spawn marker, as of now. Callers MUST hold p.mu —
+// mirrors recentlySettledLocked's exact same contract and for the identical
+// reason: this is called ONLY from turnImminentForIdentity, itself called
+// ONLY from armCancelOrFindActiveTurn's own critical section, which already
+// holds al.cancelPreArm.mu for its whole body. A self-locking variant here
+// would re-lock that same non-reentrant mutex and deadlock every cancel
+// attempt that reaches it.
+//
+// Deliberately reuses cancelPreArmTTL rather than a second, independent
+// duration: a pending-spawn marker's only job is to make
+// armCancelOrFindActiveTurn arm a latch; that latch has its OWN
+// cancelPreArmTTL-bounded lifetime once armed, so a pending-spawn marker
+// that outlived cancelPreArmTTL would buy nothing — any latch it caused to
+// arm during that extra time would itself already be past its own expiry by
+// the time a child could plausibly consume it. Sharing the one constant
+// avoids a second magic number that could drift out of sync with the thing
+// it feeds into.
+//
+// A nil receiver or an empty/absent/expired key reports false (never
+// suppress-into-true by omission — matches every other lookup in this file
+// defaulting to "not evidence of an imminent turn" rather than the reverse).
+func (p *cancelPreArm) hasPendingSpawnLocked(now time.Time, keys ...string) bool {
+	if p == nil {
+		return false
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if t, ok := p.pendingSpawns[key]; ok && now.Sub(t) <= cancelPreArmTTL {
+			return true
+		}
+	}
+	return false
 }
 
 // armCancelOrFindActiveTurn is called by RequestCancel exactly when its own
@@ -563,6 +723,27 @@ func notifyLatchExpired(expired ...*cancelPreArmLatch) {
 //     narrow residual risk this trades in return (a genuinely new message
 //     for the same identity, dequeued and mid-registration within that
 //     grace window of the previous turn's clear).
+//   - ALSO chosen, added after the above shipped: a pending-spawn marker
+//     (hasPendingSpawnLocked, pendingSpawnKeys) for the ONE class of turn
+//     the sessionWorkers-based signals above structurally cannot see at
+//     all — a delegate sub-turn. spawnSubTurn is dispatched by
+//     pkg/tools/delegate.go's executeAsync on a bare goroutine, never
+//     through the inbound-message dispatch loop that populates
+//     sessionWorkers in the first place, so for exactly this path the
+//     inbox/inTurn checks above always read "nothing," turn after turn,
+//     regardless of how imminent a delegate spawn genuinely is. This used
+//     to be a documented, un-closed gap (see cancel_async_delegate_repro_test.go's
+//     history — both of its two prior passes only worked by calling a
+//     test-only helper to FABRICATE sessionWorker evidence that has no
+//     production analog for this path, making the test pass without the
+//     production bug being fixed). DelegateTool.executeAsync now calls the
+//     DelegateSpawnMarker seam (AgentLoopSpawner.MarkPendingDelegateSpawn,
+//     subturn.go) synchronously, on the delegating parent's own
+//     tool-execution goroutine, before dispatching the goroutine that will
+//     eventually call spawnSubTurn — closing the window with REAL evidence
+//     instead of a test fake. See pendingSpawns' own field doc comment
+//     (above, on the cancelPreArm struct) for the full mark/clear/TTL
+//     contract.
 //
 // sessionWorkers is keyed by a routing-derived "scope" string
 // (agentSessionKey / resolveSteeringTarget, pkg/agent/loop.go) this function
@@ -587,6 +768,19 @@ func (al *AgentLoop) turnImminentForIdentity(sessionID string, scope CancelScope
 	lowerChannel := strings.ToLower(scope.Channel)
 	settleKey := preArmKeyForScope(sessionID, scope)
 	now := time.Now()
+
+	// Delegate-spawn signal, checked first: a pending-spawn marker is real,
+	// unambiguous evidence on its own — pkg/tools/delegate.go's executeAsync
+	// only ever calls MarkPendingDelegateSpawn immediately before dispatching
+	// the goroutine that WILL call spawnSubTurn (see pendingSpawns' own doc
+	// comment on the cancelPreArm struct) — there is no path that marks and
+	// then never spawns. This is the only evidence source for a delegate
+	// sub-turn, which never touches sessionWorkers at all (see this
+	// function's own doc comment above), so it must be checked independent
+	// of — not merged into — the sessionWorkers scan below.
+	if al.cancelPreArm.hasPendingSpawnLocked(now, pendingSpawnKeys(sessionID, scope.Channel, scope.ChatID)...) {
+		return true
+	}
 
 	imminent := false
 	al.sessionWorkers.Range(func(key, value any) bool {

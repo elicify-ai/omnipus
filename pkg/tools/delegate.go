@@ -273,6 +273,15 @@ type DelegateTool struct {
 	maxTokens    int
 	temperature  float64
 
+	// spawnMarker, when non-nil, is the DelegateSpawnMarker seam executeAsync
+	// calls (synchronously, before dispatching the async spawn goroutine) to
+	// record that a delegate spawn is genuinely imminent for the delegating
+	// parent's own identity. Wired automatically by SetSpawner via a type
+	// assertion against the concrete spawner passed in — see SetSpawner's
+	// doc comment. nil is a silent no-op (no marker recorded), matching
+	// every other optional capability on this tool.
+	spawnMarker DelegateSpawnMarker
+
 	// asyncWG tracks the detached goroutines executeAsync launches. Background
 	// delegation is deliberately fire-and-forget for the CALLER (the parent
 	// turn moves on immediately — see executeAsync's Critical:true comment),
@@ -581,6 +590,41 @@ type DelegateSteeringSink interface {
 	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
 }
 
+// DelegateSpawnMarker lets DelegateTool record — synchronously, on the
+// dispatching goroutine, BEFORE the goroutine that will actually spawn the
+// child sub-turn is even launched — that a delegate spawn is genuinely about
+// to happen for a given identity (sessionID, or the (channel, chatID) Tier B
+// fallback form). This exists to close a real gap: a Stop click's
+// RequestCancel decides whether to arm a pre-registration cancel latch via
+// turnImminentForIdentity (pkg/agent/cancel_prearm.go), whose ONLY
+// production evidence source is al.sessionWorkers — populated exclusively
+// by the top-level inbound-message dispatch loop. A delegate sub-turn NEVER
+// goes through that loop (executeAsync below dispatches straight to
+// SpawnSubTurn on a bare goroutine), so without this marker, a Stop landing
+// between "the delegating parent's own turn finished" and "the child has
+// registered" finds no active turn AND no dispatcher evidence, and the
+// cancel is silently lost — precisely the bug this closes.
+//
+// Satisfied by *agent.AgentLoopSpawner (pkg/agent/subturn.go), the SAME
+// concrete type already passed to SetSpawner as a SubTurnSpawner — see
+// SetSpawner's own doc comment for how the two interfaces are wired
+// together from that one call. Defined as a SEPARATE interface (not folded
+// into SubTurnSpawner itself) so a test-only SubTurnSpawner mock (this
+// package's own tests construct several) is never forced to implement a
+// marker method it has no use for; DelegateTool treats an unwired marker
+// (nil) as a silent no-op, matching every other optional capability this
+// tool already accepts via a setter (cancelSoft/cancelHard,
+// sessionMessagingEnabled, etc.).
+//
+// Deliberately has NO Clear method: clearing the marker is entirely
+// pkg/agent's own responsibility (spawnSubTurn clears it the instant the
+// child registers, or on any early return that never reaches registration —
+// see subturn.go's pendingSpawnKeysForThisCall/registeredForCancel), which
+// never needs to cross the tools<->agent boundary at all.
+type DelegateSpawnMarker interface {
+	MarkPendingDelegateSpawn(sessionID, channel, chatID string)
+}
+
 // defaultCancelGrace is the cooperative-stop grace window before the hard
 // RequestCancel backstop fires when SetCancelGrace is never called
 // (session_messaging.cancel_grace default, FR-195).
@@ -604,8 +648,26 @@ func (t *DelegateTool) WaitForAsyncTasks() {
 }
 
 // SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
+//
+// If spawner ALSO implements DelegateSpawnMarker (as *agent.AgentLoopSpawner
+// does, in the real production wiring — pkg/agent/subturn.go), it is
+// automatically installed as this tool's pending-spawn marker too, via a
+// plain interface type assertion. This is a deliberate "one setter wires
+// both capabilities" choice, not an oversight: production has exactly one
+// real SubTurnSpawner implementation and it always supports marking, so a
+// second SetSpawnMarker call at every wiring site would be pure
+// boilerplate; a test-only SubTurnSpawner mock that does NOT implement
+// DelegateSpawnMarker simply leaves t.spawnMarker nil (the type assertion's
+// ok is false), which is the correct, harmless "no marker configured"
+// behavior for a test that never exercises this path. Calling SetSpawner
+// again with a spawner that does NOT implement the marker interface clears
+// any previously-wired marker rather than leaving a stale one from an
+// earlier call — this setter is the single source of truth for both
+// fields, never a partial update.
 func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
+	marker, _ := spawner.(DelegateSpawnMarker)
+	t.spawnMarker = marker
 }
 
 // SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
@@ -1194,6 +1256,32 @@ func (t *DelegateTool) executeAsync(
 	// REAL delivery path, this same cb -> AsyncNotifier.Notify chain, is
 	// unaffected by parent lifecycle and fires correctly once the child
 	// actually finishes). See SubTurnConfig.Critical's doc comment.
+	//
+	// Pending-spawn marker (delegate-spawn cancel race fix): recorded HERE,
+	// synchronously on THIS (the delegating parent's own tool-execution)
+	// goroutine, as the LAST thing that happens before the goroutine below
+	// is dispatched — not inside the goroutine itself, and not any earlier
+	// than this point. Marking any earlier (e.g. before the t.tasks
+	// bookkeeping above) would risk recording a marker for a spawn that
+	// this function then aborts before ever reaching the goroutine — there
+	// is no such abort path between here and the `go func` below, so this
+	// is also the LATEST point that still guarantees "marked implies a
+	// spawn attempt is genuinely in flight," which is exactly the
+	// invariant AgentLoopSpawner.MarkPendingDelegateSpawn's own doc comment
+	// (pkg/agent/subturn.go) requires of every caller. sessionID/channel/
+	// chatID are the delegating PARENT turn's own identity (captured above
+	// from this same ctx) — the SAME identity a Stop click's
+	// CancelScope carries (CancelScope.SessionID for the web SPA/CLI/Tier A
+	// path, or (Channel, ChatID) for Tier B), and the SAME identity the
+	// spawned child inherits verbatim (pkg/agent/subturn.go's
+	// processOptions construction copies parentTS.transcriptSessionID/
+	// channel/chatID onto the child), so spawnSubTurn's own cleanup clears
+	// the exact keys marked here. A nil t.spawnMarker (SetSpawner was never
+	// called with a marker-capable spawner — e.g. this package's own unit
+	// tests) makes this call a silent no-op, unchanged from before this fix.
+	if t.spawnMarker != nil {
+		t.spawnMarker.MarkPendingDelegateSpawn(sessionID, channel, chatID)
+	}
 	t.asyncWG.Add(1)
 	go func() {
 		defer t.asyncWG.Done()

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,31 +21,53 @@ import (
 // al.activeTurnStates) BEFORE the backgrounded spawnSubTurn goroutine has
 // even reached its own bookkeeping — DelegateTool.executeAsync dispatches
 // SpawnSubTurn on a fresh goroutine and returns an immediate ack to the
-// parent (pkg/tools/delegate.go:1198-1213), so there is a real window in
-// which NEITHER the parent NOR the child turn is present in
-// al.activeTurnStates at all. A Stop click landing in that exact window is
-// precisely the "cancel arrives before its turn registers" race
-// cancel_prearm.go closes for TOP-LEVEL turns — RequestCancel finds nothing
-// and ARMS a latch instead of silently no-op'ing.
+// parent (pkg/tools/delegate.go), so there is a real window in which NEITHER
+// the parent NOR the child turn is present in al.activeTurnStates at all. A
+// Stop click landing in that exact window is precisely the "cancel arrives
+// before its turn registers" race cancel_prearm.go closes for TOP-LEVEL
+// turns — RequestCancel finds nothing and ARMS a latch instead of silently
+// no-op'ing.
 //
-// The bug: spawnSubTurn (pkg/agent/subturn.go) registers the child directly
-// via `al.activeTurnStates.Store(childID, childTS)` — bypassing
-// registerActiveTurn (turn.go), and therefore bypassing
-// consumePreArmedCancel, entirely. The latch armed above is never consumed
-// at the EARLIEST moment the child becomes visible; the only consumption
-// point left is runTurn's OWN internal registerActiveTurn call deep inside
-// al.runTurn (loop.go), which runs only after workspace-dir resolution,
-// citation-tracker setup, and every other per-turn setup step in between —
-// widening the exact race window this mechanism exists to close, for
-// delegate sub-turns specifically.
+// The gate that decides whether to arm, armCancelOrFindActiveTurn, only arms
+// when turnImminentForIdentity reports a turn as genuinely imminent — not
+// merely "nothing registered right now" (see that function's own doc
+// comment: a just-FINISHED session must never arm, or a stale latch would
+// poison the user's next, unrelated turn). Its evidence used to be
+// al.sessionWorkers ALONE — populated exclusively by the top-level
+// inbound-message dispatch loop (loop.go), which a delegate sub-turn NEVER
+// goes through (spawnSubTurn dispatches straight to al.runTurn from a bare
+// goroutine kicked off by executeAsync). Two PRIOR passes at this exact test
+// papered over that gap by calling primeImminentSessionWorker to fabricate
+// sessionWorker evidence that has NO production analog for this path — the
+// test passed, but proved nothing about whether a delegate spawn made
+// turnImminentForIdentity return true in production, which is the actual
+// bug T24a is about.
 //
-// This test drives the REAL production sequence: delete the parent from
-// activeTurnStates (simulating its own turn already finished), call the REAL
-// RequestCancel (arms a latch, since nothing is registered), THEN dispatch
-// spawnSubTurn on a goroutine exactly as executeAsync does. It asserts the
-// child sub-turn still unblocks (proving the pre-arm latch was honored) and
-// that a turn_canceled transcript entry lands with a non-empty
-// DescendantsCancelled — the exact assertion T24a makes.
+// THE FIX under test here: pkg/tools/delegate.go's executeAsync now calls a
+// real production signal — MarkPendingDelegateSpawn (the DelegateSpawnMarker
+// seam, wired automatically by SetSpawner onto *agent.AgentLoopSpawner) —
+// synchronously, on the delegating parent's own tool-execution goroutine,
+// immediately before dispatching the goroutine that will call SpawnSubTurn.
+// turnImminentForIdentity now checks this pending-spawn marker (see
+// cancel_prearm.go's pendingSpawns field and hasPendingSpawnLocked) ahead of
+// the sessionWorkers scan, so a delegate spawn is imminent EVIDENCE, not a
+// fabricated stand-in for it. spawnSubTurn clears the marker the instant the
+// child registers (or on any early return that never reaches registration —
+// see its own registeredForCancel/pendingSpawnKeysForThisCall).
+//
+// This test drives the REAL production dispatch chain end to end:
+// DelegateTool.Execute(action="run", async=true) — exactly what a real LLM
+// tool call would invoke — with NO test-only priming helper anywhere in it.
+// The only thing this test controls that production does not is WHEN the
+// spawned goroutine is allowed to proceed past its concurrency-semaphore
+// wait (parentTS.concurrencySem, pre-filled to capacity below): that
+// substitutes a deterministic hand-off for what is, in production, a real
+// but narrow goroutine-scheduling race — the same "delegate's own turn
+// already finished, child not yet registered" window T24a hit live, just
+// pinned open long enough for this test to observe it without flakiness. It
+// asserts the child sub-turn is still unblocked (proving the pre-arm latch
+// was honored) and that a turn_canceled transcript entry lands with a
+// non-empty DescendantsCancelled — the exact assertion T24a makes.
 func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -66,18 +87,40 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	ctx := context.Background()
+	// Real production DelegateTool, wired the same way loop.go's own
+	// registerSharedTools wiring pass does (NewDelegateTool + SetSpawner(
+	// NewSubTurnSpawner(al))) — that SAME SetSpawner call ALSO wires the
+	// real DelegateSpawnMarker automatically (see delegate.go's SetSpawner
+	// doc comment for the type-assertion mechanism), which is the exact
+	// production behavior this test exercises. A permissive background
+	// deny-checker is wired so the call reaches the spawner at all (the
+	// gate fails CLOSED when unwired, by design — unrelated to this fix).
+	delegateTool := tools.NewDelegateTool("slow-model", 0, 0)
+	delegateTool.SetSpawner(NewSubTurnSpawner(al))
+	delegateTool.SetDelegationDenyCheckerBackground(
+		func(context.Context, string) *tools.DelegationDenial { return nil },
+	)
+
 	parentTS := &turnState{
 		turnID:              "parent-async-cancel-repro",
 		transcriptSessionID: sessionID,
+		agentID:             DefaultAgentID,
+		channel:             "web",
+		chatID:              "main",
 		depth:               0,
 		session:             newEphemeralSession(nil),
 		pendingResults:      make(chan *tools.ToolResult, 16),
-		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
-		al:                  al,
-		finishedChan:        make(chan struct{}),
+		// Deliberately capacity 1 and pre-filled (below) to capacity, so
+		// spawnSubTurn's own semaphore acquisition (step 0) deterministically
+		// BLOCKS until this test releases a slot — the child is PROVABLY not
+		// yet registered at the moment this test issues its Stop click, with
+		// no dependence on goroutine-scheduling luck.
+		concurrencySem: make(chan struct{}, 1),
+		al:             al,
+		finishedChan:   make(chan struct{}),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(context.Background())
+	parentTS.concurrencySem <- struct{}{} // fill the size-1 buffer: any send now blocks
 
 	// Mimic the real timeline: the parent turn registers, then finishes and
 	// clears itself (its own quick "OK, delegating..." follow-up completed)
@@ -85,32 +128,43 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	al.activeTurnStates.Store(sessionID, parentTS)
 	al.activeTurnStates.Delete(sessionID)
 
-	// PREMISE NOTE (design-flaw fix, cancel_prearm.go): armCancelOrFindActiveTurn
-	// now additionally requires turnImminentForIdentity — real evidence (a
-	// queued or in-flight message on the identity's sessionWorker) that a
-	// turn is genuinely about to exist, closing the false-positive arm a
-	// FINISHED session used to trigger (TestWS_Cancel_OnlyInterruptsTargetSession,
-	// pkg/gateway/websocket_multisession_test.go). That discriminator has no
-	// visibility into THIS test's scenario: an async delegate spawn is
-	// dispatched by pkg/tools/delegate.go's executeAsync directly from a
-	// tool call, never through the session-worker message-dispatch path this
-	// fix's signal is built on, and — by construction, mirroring the real
-	// T24a race — the spawning goroutine has not even been launched yet at
-	// the moment RequestCancel runs below. There is currently NO
-	// dispatcher-level signal (comparable to sessionWorker.inTurn/inbox) for
-	// "an async delegate spawn is imminent," so this call is primed
-	// explicitly to stand in for one, and the resulting gap is real: closing
-	// it for the message-dispatch path narrows, but does not eliminate, the
-	// original race for THIS specific path (async delegate whose parent
-	// turn finishes before its child registers) — see this fix's own report
-	// for the recommended follow-up (a dedicated pending-spawn marker in
-	// pkg/tools/delegate.go / pkg/agent/subturn.go, both out of this fix's
-	// scope).
-	primeImminentSessionWorker(al, sessionID)
+	// Build the same ctx shape a real tool dispatch carries (loop.go's
+	// runTurn injects AgentLoop/turnState/agentID/transcriptSessionID/
+	// channel+chatID before every tool call — see
+	// pkg/tools/registry.go's ExecuteWithContext and loop.go's turnCtx
+	// construction).
+	ctx := WithAgentLoop(context.Background(), al)
+	ctx = withTurnState(ctx, parentTS)
+	ctx = withSpawnToolCallID(ctx, "call-async-cancel-repro")
+	ctx = tools.WithAgentID(ctx, parentTS.agentID)
+	ctx = tools.WithTranscriptSessionID(ctx, sessionID)
+	ctx = tools.WithToolContext(ctx, parentTS.channel, parentTS.chatID)
+
+	// Drive the REAL production dispatch: DelegateTool.Execute(action="run",
+	// async=true — the default). Unlike the two prior passes at this test,
+	// nothing here fabricates dispatcher evidence: executeAsync's own
+	// MarkPendingDelegateSpawn call (synchronous, before its `go func`) is
+	// what makes the upcoming RequestCancel see this spawn as imminent.
+	execResult := delegateTool.Execute(ctx, map[string]any{
+		"task":  "background task for the pre-arm cancel repro",
+		"async": true,
+	})
+	require.NotNil(t, execResult)
+	require.False(t, execResult.IsError, "delegate run must be accepted: %+v", execResult)
+
+	// Execute has returned, so the mark call — synchronous, inside
+	// executeAsync, strictly before its own `go func` — is GUARANTEED to
+	// have already happened. The spawned goroutine may or may not have
+	// started, but even if it has, it is GUARANTEED to be blocked at
+	// spawnSubTurn's semaphore acquisition: parentTS.concurrencySem is a
+	// full, size-1 buffered channel, and nothing has received from it yet.
+	// Registration is therefore PROVABLY unreached — there is no scheduling
+	// race left to lose.
 
 	// REAL production Stop-button path, arriving in the window where NEITHER
 	// the parent NOR the not-yet-spawned child is registered. Must ARM a
-	// latch rather than silently no-op.
+	// latch rather than silently no-op — via the REAL pending-spawn marker
+	// executeAsync just recorded, not a test-fabricated sessionWorker.
 	outcome, cancelErr := al.RequestCancel(
 		context.Background(),
 		CancelScope{SessionID: sessionID},
@@ -121,35 +175,13 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	require.False(t, outcome.Fired, "nothing is registered yet — RequestCancel must not report Fired")
 	require.True(t, outcome.Armed, "RequestCancel must arm a pre-registration latch when nothing is registered")
 
-	// NOW dispatch the async delegate exactly as executeAsync does: a fresh
-	// goroutine calling spawnSubTurn, with Async:true, Critical:true.
-	spawnCtx := withSpawnToolCallID(parentTS.ctx, "call-async-cancel-repro")
-	subCfg := SubTurnConfig{Model: "slow-model", Async: true, Critical: true}
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	spawnDone := make(chan struct{})
-	go func() {
-		defer wg.Done()
-		defer close(spawnDone)
-		_, _ = spawnSubTurn(spawnCtx, al, parentTS, subCfg)
-	}()
+	// Release the semaphore slot: the blocked spawnSubTurn goroutine can now
+	// proceed to registration, where it consumes the latch armed above.
+	<-parentTS.concurrencySem
 
 	// The child MUST unblock well within the hard-abort/detach ladder if the
 	// armed latch was honored. If this times out, the async delegate cancel
 	// cascade is broken — the e2e T24a regression.
-	select {
-	case <-spawnDone:
-		// PASS: async spawn unblocked after the pre-armed cancel was consumed.
-	case <-time.After(15 * time.Second):
-		t.Fatal("FAIL: async delegate (async=true) spawnSubTurn did NOT unblock within 15s " +
-			"of an armed pre-registration cancel latch — the background-subagent cancel " +
-			"cascade is stalled (e2e T24a regression)")
-	}
-	wg.Wait()
-
-	// Assert the transcript recorded turn_canceled with a non-empty
-	// descendants_canceled array — the exact e2e T24a assertion.
 	require.Eventually(t, func() bool {
 		entries, err := store.ReadTranscript(sessionID)
 		if err != nil {
@@ -161,6 +193,20 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 			}
 		}
 		return false
-	}, 5*time.Second, 50*time.Millisecond,
-		"transcript must contain a turn_canceled entry with a non-empty descendants_canceled array")
+	}, 15*time.Second, 50*time.Millisecond,
+		"transcript must contain a turn_canceled entry with a non-empty descendants_canceled array "+
+			"— the async delegate cancel cascade is stalled (e2e T24a regression)")
+
+	// Drain the background goroutine before the test (and its al.Close
+	// cleanup) returns, mirroring WaitForAsyncTasks' own documented purpose.
+	waitDone := make(chan struct{})
+	go func() {
+		delegateTool.WaitForAsyncTasks()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("FAIL: the async delegate goroutine did not finish unwinding after cancellation")
+	}
 }

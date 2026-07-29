@@ -502,6 +502,32 @@ func NewSubTurnSpawner(al *AgentLoop) *AgentLoopSpawner {
 	return &AgentLoopSpawner{al: al}
 }
 
+// MarkPendingDelegateSpawn implements tools.DelegateSpawnMarker. DelegateTool
+// calls this (via the interface, wired automatically by SetSpawner's type
+// assertion — see delegate.go's SetSpawner) synchronously, on the delegating
+// parent's own tool-execution goroutine, immediately before dispatching the
+// goroutine that will call SpawnSubTurn — never after. This is what makes it
+// safe for spawnSubTurn's own cleanup (below) to assume "a marker was set
+// implies a spawn attempt is genuinely in flight for this identity": there is
+// no caller that marks without following through.
+//
+// See pendingSpawns' field doc comment on the cancelPreArm struct
+// (cancel_prearm.go) for the full mark/clear/TTL contract this closes —
+// turnImminentForIdentity's only OTHER evidence source (al.sessionWorkers) is
+// structurally blind to a delegate sub-turn, which is dispatched straight to
+// al.runTurn from a bare goroutine and never touches the inbound-message
+// dispatch loop that populates sessionWorkers.
+func (s *AgentLoopSpawner) MarkPendingDelegateSpawn(sessionID, channel, chatID string) {
+	if s == nil || s.al == nil || s.al.cancelPreArm == nil {
+		return
+	}
+	keys := pendingSpawnKeys(sessionID, channel, chatID)
+	if len(keys) == 0 {
+		return
+	}
+	s.al.cancelPreArm.markPendingSpawn(time.Now(), keys...)
+}
+
 // SpawnSubTurn is the exported entry point for tools to spawn sub-turns.
 // It retrieves AgentLoop and parent turnState from context and delegates to spawnSubTurn.
 func SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*tools.ToolResult, error) {
@@ -528,6 +554,44 @@ func spawnSubTurn(
 	parentTS *turnState,
 	cfg SubTurnConfig,
 ) (result *tools.ToolResult, err error) {
+	// Delegate-spawn pending-marker cleanup (cancel_prearm.go's pendingSpawns
+	// / DelegateSpawnMarker seam): pkg/tools/delegate.go's executeAsync may
+	// have called MarkPendingDelegateSpawn for parentTS's own identity
+	// (transcriptSessionID, channel, chatID — inherited verbatim by the
+	// child below, so the SAME keys apply regardless of whether this call
+	// ever reaches child construction) immediately before dispatching the
+	// goroutine that reached this function. That marker's ONLY job is to
+	// make turnImminentForIdentity report "imminent" for the brief window
+	// before the child registers below; once this function exits — whether
+	// by registering the child (the common case) or by returning early
+	// (depth limit, concurrency timeout, invalid config, unresolved
+	// delegation target, or a panic) — the marker must not outlive it, or
+	// it would make turnImminentForIdentity report true forever for an
+	// identity with no turn actually coming, reopening the
+	// TestPreArmedCancel_FinishedSession_DoesNotArmOrPoisonNextTurn hazard
+	// from the delegate-spawn side instead of the message-dispatch side.
+	//
+	// registeredForCancel flips true the instant the child is registered
+	// (al.registerActiveTurn below) — at that point the child's own
+	// turnState is real, discoverable evidence
+	// (GetActiveTurnHookForSession/sessionTurnsStillAlive) and the marker is
+	// cleared explicitly, right there, rather than left for this defer.
+	// This defer is the catch-all for every OTHER exit — every early
+	// `return` between here and that point, and a panic anywhere in
+	// between (this defer is registered first, so it is still live — Go
+	// defers registered before a panic still run during that panic's
+	// unwind — regardless of whether a LATER defer, e.g. the panic-recovery
+	// one further down, ever got registered at all).
+	pendingSpawnKeysForThisCall := pendingSpawnKeys(parentTS.transcriptSessionID, parentTS.channel, parentTS.chatID)
+	registeredForCancel := false
+	if al.cancelPreArm != nil && len(pendingSpawnKeysForThisCall) > 0 {
+		defer func() {
+			if !registeredForCancel {
+				al.cancelPreArm.clearPendingSpawn(pendingSpawnKeysForThisCall...)
+			}
+		}()
+	}
+
 	// Get effective SubTurn configuration
 	rtCfg := al.getSubTurnConfig()
 
@@ -1049,6 +1113,18 @@ func spawnSubTurn(
 	// no pending cancel behaves identically to the old bare Store.
 	al.registerActiveTurn(childTS)
 	defer al.activeTurnStates.Delete(childID)
+
+	// The child is now real, discoverable evidence of its own (findable via
+	// GetActiveTurnHookForSession/sessionTurnsStillAlive by transcriptSessionID) —
+	// the pending-spawn marker's whole job was to stand in for that evidence
+	// during the window that just closed. Clear it explicitly, right here,
+	// rather than leaving it for this function's own early-return defer
+	// (above): that defer only fires when registeredForCancel is still
+	// false, so setting it true and clearing now are the same operation
+	// from two angles — mark the marker "no longer needed" and remove it in
+	// the same breath, at the earliest point that is true.
+	registeredForCancel = true
+	al.cancelPreArm.clearPendingSpawn(pendingSpawnKeysForThisCall...)
 
 	// 5. Establish parent-child relationship (thread-safe)
 	parentTS.mu.Lock()
