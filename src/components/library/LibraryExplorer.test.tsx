@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     moveLibraryEntry: vi.fn(),
     copyLibraryEntry: vi.fn(),
     uploadLibraryFiles: vi.fn(),
+    mkdirLibraryEntry: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
   }
 })
@@ -33,6 +34,7 @@ import {
   renameLibraryEntry,
   moveLibraryEntry,
   uploadLibraryFiles,
+  mkdirLibraryEntry,
   ApiError,
 } from '@/lib/api'
 
@@ -43,6 +45,7 @@ const mockedDelete = vi.mocked(deleteLibraryEntry)
 const mockedRename = vi.mocked(renameLibraryEntry)
 const mockedMove = vi.mocked(moveLibraryEntry)
 const mockedUpload = vi.mocked(uploadLibraryFiles)
+const mockedMkdir = vi.mocked(mkdirLibraryEntry)
 
 import { LibraryExplorer } from './LibraryExplorer'
 
@@ -333,8 +336,11 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
     expect(screen.getByTestId('library-rename-dialog')).toBeInTheDocument()
     expect(input.value).toBe('..\\dana-pwned-backslash.txt')
     expect(screen.getByTestId('library-rename-confirm')).toHaveTextContent('Rename')
-    // Same two-channel pattern as the save flow: banner AND toast.
-    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(true)
+    // UAT fix (Dana, re-verified v8): the banner AND a toast used to BOTH
+    // fire for the same error — "two simultaneous displays... is noise".
+    // The dialog's own banner (already visible, right next to the input) is
+    // now the single channel; no toast on top of it.
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
   })
 
   it('rejects a leading "/" in a Move destination instead of silently stripping it before sending', async () => {
@@ -382,7 +388,63 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
     })
     expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument()
     expect(pathInput.value).toBe('archive/report.md')
-    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(true)
+    // UAT fix (Dana, re-verified v8, exact repro): this used to ALSO fire a
+    // toast for the same error at once — "two simultaneous displays... is
+    // noise". The inline banner (right next to the destination input) is
+    // now the single channel.
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
+  })
+
+  // UAT fix (Dana, re-verified v8): the tester's EXACT repro — moving onto a
+  // missing destination parent — got back
+  //   {"error":"destination directory \"dana-missing-folder\" does not
+  //   exist — create it first with POST /library/{workspace_id}/mkdir"}
+  // from the real server, but the SPA showed the generic "The requested
+  // resource was not found." (mapLibraryErr's 404 is a "known" status per
+  // api-error.ts, so ApiError.fromResponse overrides userMessage with the
+  // generic default — see libraryErrorMessage.ts). This reproduces that
+  // EXACT shape (generic userMessage + the raw JSON body ApiError.fromResponse
+  // actually retains) rather than a test-authored userMessage, so it proves
+  // the fix recovers the real server text and reworks the raw API-path
+  // guidance into UI terms without dropping the directory name.
+  it('prefers the server\'s own `error` field over the generic 404 message, and rewords the raw mkdir API path into UI terms — without dropping the directory name', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1', name: 'Website API' })])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'report.md', path: 'report.md' })])
+    mockedMove.mockRejectedValue(
+      new ApiError(404, 'The requested resource was not found.', {
+        body: JSON.stringify({
+          error:
+            'destination directory "dana-missing-folder" does not exist — create it first with POST /library/{workspace_id}/mkdir',
+        }),
+      }),
+    )
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+    await openPreviewAndClick(/move/i)
+
+    await waitFor(() => expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument())
+    const pathInput = screen.getByTestId('library-transfer-path') as HTMLInputElement
+    fireEvent.change(pathInput, { target: { value: 'dana-missing-folder/report.md' } })
+    fireEvent.click(screen.getByTestId('library-transfer-confirm'))
+
+    await waitFor(() => {
+      const banner = screen.getByTestId('library-transfer-error')
+      // The load-bearing part — the specific missing directory name —
+      // must survive.
+      expect(banner).toHaveTextContent('dana-missing-folder')
+      // The raw API path must NOT leak to the end user...
+      expect(banner.textContent).not.toContain('POST /library')
+      expect(banner.textContent).not.toContain('{workspace_id}')
+      // ...but the guidance itself must survive, reworded into UI terms.
+      expect(banner).toHaveTextContent('create it first using New Folder')
+      // And the generic fallback the tester saw twice must be gone.
+      expect(banner.textContent).not.toBe('The requested resource was not found.')
+    })
+    // Single channel only (this dialog's banner) — no duplicate toast.
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
   })
 
   it('a failed upload shows a persistent, dismissible error banner instead of the file just silently never appearing', async () => {
@@ -406,5 +468,265 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 
     fireEvent.click(screen.getByRole('button', { name: /dismiss error/i }))
     expect(screen.queryByTestId('library-upload-error')).not.toBeInTheDocument()
+  })
+})
+
+// UAT fix (Dana, live tester, re-verified v8) — "STILL BLOCKED for a user —
+// only the backend gained a capability nobody can reach." POST
+// /library/{workspace_id}/mkdir worked at the API layer with no reachable
+// affordance anywhere in the explorer. These tests cover the new New Folder
+// toolbar action end to end: it exists, creates in the CURRENT directory,
+// validates client-side (rejecting ".."-prefixed/traversal names before
+// ever submitting), and shows the same single-channel error-banner
+// treatment Rename/Move now use on failure.
+describe('LibraryExplorer — New Folder (mkdir UAT fix)', () => {
+  it('renders a New Folder toolbar action next to Upload, scoped to a workspace', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
+    expect(screen.getByTestId('library-upload-button')).toBeInTheDocument()
+  })
+
+  it('does NOT render the New Folder action at the virtual root (no workspace scoped yet)', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1', name: 'Website API' })])
+
+    renderExplorer(undefined)
+
+    await waitFor(() => expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-new-folder-button')).not.toBeInTheDocument()
+  })
+
+  it('creates a folder in the CURRENT directory and shows it in the listing after invalidation', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValueOnce([makeEntry({ name: 'report.md', path: 'report.md' })])
+    mockedFetchEntries.mockResolvedValueOnce([
+      makeEntry({ name: 'report.md', path: 'report.md' }),
+      makeEntry({ name: 'drafts', path: 'drafts', is_dir: true }),
+    ])
+    mockedMkdir.mockResolvedValue(
+      makeEntry({ name: 'drafts', path: 'drafts', is_dir: true, mime: undefined, is_text_editable: false }),
+    )
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+    const input = screen.getByTestId('library-new-folder-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'drafts' } })
+    fireEvent.click(screen.getByTestId('library-new-folder-confirm'))
+
+    await waitFor(() => expect(mockedMkdir).toHaveBeenCalledWith('ws-1', { path: 'drafts' }))
+    await waitFor(() => expect(screen.queryByTestId('library-new-folder-dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('drafts')).toBeInTheDocument())
+  })
+
+  it('creates a nested folder using the CURRENT drilled-into directory as the parent path', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockImplementation((_wsId, path) =>
+      Promise.resolve(
+        // 'reports' is empty (no existing 'q1' sibling) so the collision
+        // check doesn't get in the way of asserting the parent-path join.
+        path === 'reports' ? [] : [makeEntry({ name: 'reports', path: 'reports', is_dir: true })],
+      ),
+    )
+    mockedMkdir.mockResolvedValue(makeEntry({ name: 'q1', path: 'reports/q1', is_dir: true }))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-reports')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-reports'))
+    await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', 'reports', false))
+
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'q1' } })
+    fireEvent.click(screen.getByTestId('library-new-folder-confirm'))
+
+    await waitFor(() => expect(mockedMkdir).toHaveBeenCalledWith('ws-1', { path: 'reports/q1' }))
+  })
+
+  it('rejects a ".."-prefixed name client-side, before ever submitting', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: '..dana-escape' } })
+
+    expect(screen.getByTestId('library-new-folder-traversal')).toBeInTheDocument()
+    expect(screen.getByTestId('library-new-folder-confirm')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('library-new-folder-confirm'))
+    expect(mockedMkdir).not.toHaveBeenCalled()
+  })
+
+  it('rejects a general traversal ".." anywhere in the name client-side', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'foo/../bar' } })
+
+    // Contains "/" too, but the traversal-specific message should still be
+    // reachable once slash is removed — verify submit stays blocked either way.
+    expect(screen.getByTestId('library-new-folder-confirm')).toBeDisabled()
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'dana..escape' } })
+    expect(screen.getByTestId('library-new-folder-traversal')).toBeInTheDocument()
+    expect(screen.getByTestId('library-new-folder-confirm')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('library-new-folder-confirm'))
+    expect(mockedMkdir).not.toHaveBeenCalled()
+  })
+
+  it('rejects a name colliding with a sibling already visible in the current listing', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'drafts', path: 'drafts', is_dir: true })])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByText('drafts')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'drafts' } })
+
+    expect(screen.getByTestId('library-new-folder-collision')).toBeInTheDocument()
+    expect(screen.getByTestId('library-new-folder-confirm')).toBeDisabled()
+  })
+
+  it('shows the same single-channel error-banner treatment Rename/Move now use on a server rejection — dialog stays open, no duplicate toast', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([])
+    mockedMkdir.mockRejectedValue(new ApiError(409, 'an entry already exists at the destination path'))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'new-dir' } })
+    fireEvent.click(screen.getByTestId('library-new-folder-confirm'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-new-folder-error')).toHaveTextContent(
+        'an entry already exists at the destination path',
+      )
+    })
+    // Dialog stayed open with the input intact — not a silent revert.
+    expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument()
+    expect((screen.getByTestId('library-new-folder-input') as HTMLInputElement).value).toBe('new-dir')
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'error')).toBe(false)
+  })
+
+  it('cancelling the dialog does not call mkdirLibraryEntry', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-button')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-new-folder-button'))
+    await waitFor(() => expect(screen.getByTestId('library-new-folder-dialog')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('library-new-folder-input'), { target: { value: 'drafts' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(screen.queryByTestId('library-new-folder-dialog')).not.toBeInTheDocument())
+    expect(mockedMkdir).not.toHaveBeenCalled()
+  })
+})
+
+// Lower-priority UAT flag: uploading (or now, creating folders) into the
+// reserved work/.library/ directory — the server-managed home for
+// chat-uploaded attachments (library-spec.md D-1) — was silently ACCEPTED,
+// mixing user files into that internal namespace. Decision: block both
+// actions client-side while browsing inside .library or any of its
+// subdirectories, rather than let it through silently. Existing entries
+// inside .library remain fully browsable/renamable/downloadable/deletable —
+// only ADDING new content via these two actions is restricted.
+describe('LibraryExplorer — reserved .library directory guard', () => {
+  it('disables Upload and New Folder while browsing inside work/.library/', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockImplementation((_wsId, _path, includeHidden) =>
+      Promise.resolve(
+        includeHidden
+          ? [makeEntry({ name: '.library', path: '.library', is_dir: true, is_hidden: true, is_text_editable: false })]
+          : [],
+      ),
+    )
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-upload-button')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('library-show-hidden-toggle'))
+    await waitFor(() => expect(screen.getByText('.library')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-.library'))
+
+    await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '.library', true))
+    expect(screen.getByTestId('library-upload-button')).toBeDisabled()
+    expect(screen.getByTestId('library-new-folder-button')).toBeDisabled()
+  })
+
+  it('disables Upload and New Folder inside a SUBdirectory of .library too', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockImplementation((_wsId, path) =>
+      Promise.resolve(
+        path === '.library'
+          ? [makeEntry({ name: 'attachments', path: '.library/attachments', is_dir: true, is_hidden: false })]
+          : [makeEntry({ name: '.library', path: '.library', is_dir: true, is_hidden: true, is_text_editable: false })],
+      ),
+    )
+
+    renderExplorer('ws-1')
+
+    fireEvent.click(screen.getByTestId('library-show-hidden-toggle'))
+    await waitFor(() => expect(screen.getByText('.library')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-.library'))
+    await waitFor(() => expect(screen.getByText('attachments')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-.library/attachments'))
+
+    // includeHidden stays true (state carried over from toggling Show
+    // Hidden on to reach .library in the first place).
+    await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '.library/attachments', true))
+    expect(screen.getByTestId('library-upload-button')).toBeDisabled()
+    expect(screen.getByTestId('library-new-folder-button')).toBeDisabled()
+  })
+
+  it('leaves Upload/New Folder enabled again once navigated back out of .library', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockImplementation((_wsId, path) =>
+      Promise.resolve(
+        path === ''
+          ? [makeEntry({ name: '.library', path: '.library', is_dir: true, is_hidden: true, is_text_editable: false })]
+          : [],
+      ),
+    )
+
+    renderExplorer('ws-1')
+
+    fireEvent.click(screen.getByTestId('library-show-hidden-toggle'))
+    await waitFor(() => expect(screen.getByText('.library')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-.library'))
+    await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '.library', true))
+    expect(screen.getByTestId('library-upload-button')).toBeDisabled()
+
+    // Back out via the workspace breadcrumb crumb.
+    fireEvent.click(screen.getByTestId('library-crumb-workspace'))
+
+    await waitFor(() => expect(screen.getByTestId('library-upload-button')).not.toBeDisabled())
+    expect(screen.getByTestId('library-new-folder-button')).not.toBeDisabled()
   })
 })

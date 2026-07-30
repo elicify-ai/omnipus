@@ -17,30 +17,59 @@
 // simultaneous viewers fight over "who's driving." The Library has no such
 // lock: browsing (or even editing, once D-5 lands) the same workspace's files
 // from two tabs at once is harmless, so keeping both open is strictly more
-// useful than forcing a hand-over. The BroadcastChannel handoff
-// (libraryHandoff.ts) still exists as a SAFETY NET for the case where the
-// user closes the DOCKED panel manually while a pop-out is still open, then
-// later closes that pop-out too — without this, that sequence would leave no
-// Library surface open anywhere. See libraryHandoff.ts's own doc comment.
-import { useEffect } from 'react'
+// useful than forcing a hand-over.
+//
+// UAT fix (Dana, re-verified v8 — "pop-out re-dock STILL does not restore
+// the workspace"): the ORIGINAL version of this re-dock reaction only ever
+// fired when NOTHING was currently docked (a pure safety net). Dana's exact
+// repro — pop out from "My Workspace" (docked panel stays OPEN the whole
+// time), navigate the pop-out to "Dana Workspace B", close it — never hit
+// that branch at all: the docked panel was never null, so the broadcast was
+// treated as a no-op by design, regardless of whether the message plumbing
+// itself worked. That guard, not the BroadcastChannel wiring, was the actual
+// bug. This now applies the pop-out's last-known workspace UNCONDITIONALLY
+// on close — updating an already-docked panel's workspace, not only
+// re-opening a closed one — since the docked and popped-out surfaces are the
+// SAME Library, and the user's last action (navigate in the pop-out, then
+// close it) is what should be reflected back rather than silently discarded.
+//
+// `lastKnownPopoutWorkspaceRef` is fed CONTINUOUSLY by
+// `onLibraryWorkspaceChanged` (every in-tab navigation in the pop-out, not
+// only at teardown — see libraryHandoff.ts's module doc for why relying on
+// a single message posted at `pagehide` is unreliable: BroadcastChannel
+// delivery during unload is asynchronous and may never arrive). By the time
+// `popout-closed` fires, the latest workspace is almost always already
+// known from that continuous stream; the `workspaceId` `popout-closed`
+// itself carries is only a fallback for the (rare, and now much smaller)
+// window where no continuous update was ever received.
+import { useEffect, useRef } from 'react'
 import { useUiStore } from '@/store/ui'
-import { onLibraryPopoutClosed } from '@/lib/libraryHandoff'
+import { onLibraryPopoutClosed, onLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 import { LibraryExplorer } from './LibraryExplorer'
 
 export function LibraryPanel() {
   const libraryPanel = useUiStore((s) => s.libraryPanel)
   const closeLibraryPanel = useUiStore((s) => s.closeLibraryPanel)
+  // `set: false` until the FIRST continuous broadcast arrives, so a
+  // `popout-closed` that beats every `workspace-changed` message (e.g. the
+  // pop-out closed before this listener ever mounted) correctly falls back
+  // to the `popout-closed` payload instead of an undefined "known" value
+  // that would look identical to "the pop-out is at the virtual root".
+  const lastKnownPopoutWorkspaceRef = useRef<{ set: boolean; workspaceId?: string }>({ set: false })
 
-  // Re-dock (open) this panel if a Library pop-out announces closing AND
-  // nothing is currently docked — guarded on fresh store state at delivery
-  // time (not the `libraryPanel` closed over from this render), mirroring
-  // BrowserLivePanel's identical guard, so a stale/duplicate broadcast can
-  // never clobber a panel the user has since reopened for something else.
+  useEffect(() => {
+    return onLibraryWorkspaceChanged((workspaceId) => {
+      lastKnownPopoutWorkspaceRef.current = { set: true, workspaceId }
+    })
+  }, [])
+
+  // Re-target (or re-open) the docked panel to wherever the pop-out was last
+  // viewing, once it closes — see the module doc above for why this is now
+  // unconditional rather than gated on "nothing currently docked".
   useEffect(() => {
     return onLibraryPopoutClosed((workspaceId) => {
-      if (useUiStore.getState().libraryPanel === null) {
-        useUiStore.getState().openLibraryPanel(workspaceId)
-      }
+      const known = lastKnownPopoutWorkspaceRef.current
+      useUiStore.getState().openLibraryPanel(known.set ? known.workspaceId : workspaceId)
     })
   }, [])
 

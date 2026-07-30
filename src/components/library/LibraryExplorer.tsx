@@ -28,6 +28,7 @@ import {
   Files,
   CaretRight,
   UploadSimple,
+  FolderPlus,
   X,
   ArrowSquareOut,
   Tray,
@@ -56,17 +57,19 @@ import {
   moveLibraryEntry,
   copyLibraryEntry,
   uploadLibraryFiles,
+  mkdirLibraryEntry,
   libraryDownloadUrl,
   libraryQueryKeys,
-  getErrorMessage,
 } from '@/lib/api'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode } from '@/lib/api'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
+import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
+import { getLibraryErrorMessage } from './libraryErrorMessage'
 
 export interface LibraryExplorerProps {
   /** undefined = start at the virtual root (D-3 sidebar entry point). */
@@ -115,6 +118,8 @@ export function LibraryExplorer({
   const [transferTarget, setTransferTarget] = useState<{ entry: LibraryEntry; mode: 'move' | 'copy' } | null>(null)
   const [transferError, setTransferError] = useState<string>()
   const [uploadError, setUploadError] = useState<string>()
+  const [newFolderOpen, setNewFolderOpen] = useState(false)
+  const [newFolderError, setNewFolderError] = useState<string>()
 
   useEffect(() => {
     onWorkspaceChange?.(workspaceId)
@@ -166,7 +171,7 @@ export function LibraryExplorer({
       setSelectedEntry((cur) => (cur && cur.path === vars.entryPath ? null : cur))
     },
     onError: (err) => {
-      addToast({ message: getErrorMessage(err, 'Delete failed'), variant: 'error' })
+      addToast({ message: getLibraryErrorMessage(err, 'Delete failed'), variant: 'error' })
     },
   })
 
@@ -185,14 +190,17 @@ export function LibraryExplorer({
     },
     onError: (err) => {
       // Never silently swallowed: the dialog stays open (renameTarget is
-      // untouched here) with a persistent banner AND a toast — same
-      // two-channel pattern the save flow uses (useLibraryFileEditor.ts) —
-      // so a real failure (permissions, transient network, a genuine
-      // collision the client-side check couldn't anticipate) is
-      // indistinguishable from nothing at all.
-      const message = getErrorMessage(err, 'Rename failed')
-      setRenameError(message)
-      addToast({ message, variant: 'error' })
+      // untouched here) with a persistent, actionable banner naming the
+      // server's own reason (permissions, transient network, a genuine
+      // collision the client-side check couldn't anticipate).
+      //
+      // UAT fix (Dana, re-verified v8): this used to ALSO fire a toast for
+      // the same error — "two simultaneous displays... is noise" (the
+      // tester's words, about the identical pattern on Move). The dialog is
+      // already open and the banner sits right next to the input the user
+      // is looking at, so the toast added nothing but noise; picking the
+      // inline surface nearest the input.
+      setRenameError(getLibraryErrorMessage(err, 'Rename failed'))
     },
   })
 
@@ -215,10 +223,16 @@ export function LibraryExplorer({
     },
     onError: (err, vars) => {
       // Dialog stays open (transferTarget untouched) with the destination
-      // fields exactly as typed, plus a persistent banner AND a toast.
-      const message = getErrorMessage(err, `${vars.mode === 'copy' ? 'Copy' : 'Move'} failed`)
-      setTransferError(message)
-      addToast({ message, variant: 'error' })
+      // fields exactly as typed, plus a persistent, actionable banner —
+      // preferring the server's own guidance (getLibraryErrorMessage) over
+      // a generic "not found", e.g. naming the specific missing destination
+      // directory for a 404 rather than swallowing it.
+      //
+      // UAT fix (Dana, re-verified v8, exact repro): moving onto a missing
+      // destination parent used to show the SAME generic message in a toast
+      // AND this banner at once — "two simultaneous displays... is noise".
+      // The banner alone (nearest the input) is now the one channel.
+      setTransferError(getLibraryErrorMessage(err, `${vars.mode === 'copy' ? 'Copy' : 'Move'} failed`))
     },
   })
 
@@ -242,9 +256,30 @@ export function LibraryExplorer({
       // not a form) — the toolbar-level banner (rendered below) is the
       // persistent surface, dismissible since there's no "retry" step that
       // would otherwise clear it.
-      const message = getErrorMessage(err, 'Upload failed')
+      const message = getLibraryErrorMessage(err, 'Upload failed')
       setUploadError(message)
       addToast({ message, variant: 'error' })
+    },
+  })
+
+  const mkdirMutation = useMutation({
+    mutationFn: ({ wsId, dirPath }: { wsId: string; dirPath: string }) => mkdirLibraryEntry(wsId, { path: dirPath }),
+    onMutate: () => {
+      setNewFolderError(undefined)
+    },
+    onSuccess: (_entry, vars) => {
+      invalidateEntries(vars.wsId)
+      invalidateWorkspaces()
+      addToast({ message: 'Folder created.', variant: 'success' })
+      setNewFolderOpen(false)
+      setNewFolderError(undefined)
+    },
+    onError: (err) => {
+      // Same single-channel (banner-only, no toast) treatment as
+      // Rename/Move now use — the dialog stays open with a persistent,
+      // actionable banner naming the server's own reason (e.g. a 409
+      // because a regular FILE already occupies that name).
+      setNewFolderError(getLibraryErrorMessage(err, 'Could not create folder'))
     },
   })
 
@@ -255,6 +290,10 @@ export function LibraryExplorer({
   function openTransferDialog(entry: LibraryEntry, mode: 'move' | 'copy') {
     setTransferError(undefined)
     setTransferTarget({ entry, mode })
+  }
+  function openNewFolderDialog() {
+    setNewFolderError(undefined)
+    setNewFolderOpen(true)
   }
 
   function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
@@ -309,8 +348,24 @@ export function LibraryExplorer({
     uploadMutation.mutate({ wsId: workspaceId, files: Array.from(files), dir: path })
     e.target.value = ''
   }
+  function handleCreateFolder(name: string) {
+    if (!workspaceId) return
+    const dirPath = path ? `${path}/${name}` : name
+    mkdirMutation.mutate({ wsId: workspaceId, dirPath })
+  }
 
   const pathSegments = path ? path.split('/').filter(Boolean) : []
+  // library-spec.md D-1: work/.library/ is the reserved, server-managed home
+  // for chat-uploaded attachments (not user-organized files). Uploading or
+  // creating new folders into it from the explorer itself would silently mix
+  // user files into that internal namespace — flagged by live UAT as
+  // something to deliberately decide on rather than leave as an accident.
+  // Decision: block it client-side (disable Upload/New Folder while inside
+  // .library or any of its subdirectories) rather than let it through
+  // silently; existing entries already inside .library are still fully
+  // browsable/renamable/downloadable/deletable — only adding NEW content via
+  // these two actions is restricted.
+  const isReservedLibraryDir = path === '.library' || path.startsWith('.library/')
 
   return (
     <div className={cn('flex h-full flex-col', className)} data-testid="library-explorer">
@@ -388,6 +443,22 @@ export function LibraryExplorer({
           )}
           {workspaceId !== null && (
             <>
+              <button
+                type="button"
+                tabIndex={0}
+                onClick={openNewFolderDialog}
+                disabled={isReservedLibraryDir}
+                aria-label="New folder"
+                title={
+                  isReservedLibraryDir
+                    ? "Can't create folders inside the reserved .library folder"
+                    : 'New folder'
+                }
+                data-testid="library-new-folder-button"
+                className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+              >
+                <FolderPlus size={16} />
+              </button>
               <input
                 tabIndex={0}
                 ref={fileInputRef}
@@ -401,9 +472,9 @@ export function LibraryExplorer({
                 type="button"
                 tabIndex={0}
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploadMutation.isPending}
+                disabled={uploadMutation.isPending || isReservedLibraryDir}
                 aria-label="Upload files"
-                title="Upload files"
+                title={isReservedLibraryDir ? "Can't upload into the reserved .library folder" : 'Upload files'}
                 data-testid="library-upload-button"
                 className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
               >
@@ -570,6 +641,19 @@ export function LibraryExplorer({
           if (!workspaceId || !renameTarget) return
           renameMutation.mutate({ wsId: workspaceId, from: renameTarget.path, to })
         }}
+      />
+
+      {/* ── New Folder dialog (creates inside the CURRENT directory) ───────── */}
+      <LibraryNewFolderDialog
+        open={newFolderOpen}
+        onOpenChange={(open) => {
+          setNewFolderOpen(open)
+          if (!open) setNewFolderError(undefined)
+        }}
+        siblingNames={new Set(sortedEntries.map((e) => e.name))}
+        isPending={mkdirMutation.isPending}
+        error={newFolderError}
+        onSubmit={handleCreateFolder}
       />
 
       {/* ── Move / Copy dialog (D-9, cross-workspace) ──────────────────────── */}

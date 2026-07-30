@@ -25,13 +25,17 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
-const { mockAnnounceLibraryPopoutClosed, mockLibraryExplorerProps } = vi.hoisted(() => ({
-  mockAnnounceLibraryPopoutClosed: vi.fn(),
-  mockLibraryExplorerProps: vi.fn(),
-}))
+const { mockAnnounceLibraryPopoutClosed, mockAnnounceLibraryWorkspaceChanged, mockLibraryExplorerProps } = vi.hoisted(
+  () => ({
+    mockAnnounceLibraryPopoutClosed: vi.fn(),
+    mockAnnounceLibraryWorkspaceChanged: vi.fn(),
+    mockLibraryExplorerProps: vi.fn(),
+  }),
+)
 
 vi.mock('@/lib/libraryHandoff', () => ({
   announceLibraryPopoutClosed: mockAnnounceLibraryPopoutClosed,
+  announceLibraryWorkspaceChanged: mockAnnounceLibraryWorkspaceChanged,
 }))
 
 vi.mock('@/components/library/LibraryExplorer', () => ({
@@ -57,6 +61,7 @@ const LibraryRoute = (Route as unknown as { component: React.ComponentType }).co
 
 beforeEach(() => {
   mockAnnounceLibraryPopoutClosed.mockClear()
+  mockAnnounceLibraryWorkspaceChanged.mockClear()
   mockLibraryExplorerProps.mockClear()
   mockSearch = {}
 })
@@ -135,5 +140,61 @@ describe('/library pop-out route', () => {
     window.dispatchEvent(new Event('pagehide'))
 
     expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith(undefined)
+  })
+
+  // UAT fix (Dana, re-verified v8 — "pop-out re-dock STILL does not restore
+  // the workspace"): root-causing that regression required checking EVERY
+  // link in the chain rather than re-guessing. This link — does the
+  // callback fire on in-tab navigation, and does it publish CONTINUOUSLY
+  // rather than only at `pagehide` teardown — is the one the first attempt
+  // never actually verified with a test. `pagehide` + BroadcastChannel
+  // delivery is asynchronous and a message posted during unload may never
+  // arrive, so the workspace is now published the moment navigation
+  // happens, not only when the tab is closing.
+  describe('continuous workspace-changed broadcast (not only at pagehide teardown)', () => {
+    it('announces the workspace-changed broadcast on the initial mount', () => {
+      mockSearch = { workspace: 'ws-7' }
+      render(<LibraryRoute />)
+
+      const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
+        onWorkspaceChange?: (workspaceId: string | null) => void
+      }
+      // LibraryExplorer's own effect fires onWorkspaceChange on mount too —
+      // simulate that here since LibraryExplorer itself is mocked.
+      onWorkspaceChange?.('ws-7')
+
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-7')
+    })
+
+    it('announces EACH in-tab navigation immediately, well before any pagehide', () => {
+      mockSearch = { workspace: 'ws-7' }
+      render(<LibraryRoute />)
+
+      const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
+        onWorkspaceChange?: (workspaceId: string | null) => void
+      }
+
+      onWorkspaceChange?.('ws-99')
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-99')
+      // Not waiting for pagehide — the whole point of publishing
+      // continuously is that the docked side already knows before teardown.
+      expect(mockAnnounceLibraryPopoutClosed).not.toHaveBeenCalled()
+
+      onWorkspaceChange?.('ws-other')
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-other')
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledTimes(2)
+    })
+
+    it('announces undefined (virtual root) as a workspace-changed broadcast too', () => {
+      mockSearch = { workspace: 'ws-7' }
+      render(<LibraryRoute />)
+
+      const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
+        onWorkspaceChange?: (workspaceId: string | null) => void
+      }
+      onWorkspaceChange?.(null)
+
+      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(undefined)
+    })
   })
 })

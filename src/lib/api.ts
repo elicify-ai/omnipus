@@ -432,6 +432,7 @@ import type {
   LibraryEntry,
   LibraryContentResponse,
   LibraryContentRequest,
+  LibraryMkdirRequest,
   LibraryRenameRequest,
   LibraryUploadResponse,
   LibraryTransferRequest,
@@ -588,6 +589,7 @@ export type {
   LibraryEntry,
   LibraryContentResponse,
   LibraryContentRequest,
+  LibraryMkdirRequest,
   LibraryRenameRequest,
   LibraryUploadResponse,
   LibraryTransferRequest,
@@ -3560,6 +3562,24 @@ export function fetchLibraryEntries(
     `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
     undefined,
     z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
+  )
+}
+
+/**
+ * Create a directory inside a workspace's work tree (mkdir -p semantics —
+ * intermediate directories along `path` are created too). Idempotent:
+ * resolves normally (200) if a directory already exists at `path`; the
+ * caller cannot distinguish "created" from "already there" from the
+ * response alone, which the New Folder UI doesn't need to (library-spec.md
+ * — UAT fix: without this endpoint being reachable from the UI at all,
+ * `POST /library/{workspace_id}/mkdir` working at the API layer was a
+ * capability nobody could use).
+ */
+export function mkdirLibraryEntry(workspaceId: string, body: LibraryMkdirRequest): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/library/${encodeURIComponent(workspaceId)}/mkdir`,
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryEntrySchema as ZodType<LibraryEntry>,
   )
 }
 

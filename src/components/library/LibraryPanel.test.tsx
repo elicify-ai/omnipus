@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { useUiStore } from '@/store/ui'
-import { announceLibraryPopoutClosed } from '@/lib/libraryHandoff'
+import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 
 const mockLibraryExplorerProps = vi.fn()
 
@@ -127,7 +127,7 @@ describe('LibraryPanel (always-docked)', () => {
     })
   })
 
-  describe('re-docking on pop-out close (safety net)', () => {
+  describe('re-docking / re-targeting on pop-out close', () => {
     it('re-opens the docked panel for the workspace a pop-out announces closing, when nothing is currently docked', async () => {
       render(<LibraryPanel />)
       expect(useUiStore.getState().libraryPanel).toBeNull()
@@ -143,7 +143,15 @@ describe('LibraryPanel (always-docked)', () => {
       expect(screen.getByTestId('library-panel-docked')).toBeInTheDocument()
     })
 
-    it('does NOT clobber an already-docked panel with a pop-out-closed broadcast', async () => {
+    // UAT fix (Dana, re-verified v8): this is the tester's EXACT repro — pop
+    // out from "My Workspace" (docked panel stays open the whole time),
+    // navigate the pop-out to a different workspace, close it. The docked
+    // panel must now re-target to that workspace, not silently keep showing
+    // the stale one. The OLD behaviour ("does NOT clobber an already-docked
+    // panel") was itself the root cause of the bug this fix wave was asked
+    // to root-cause — it made the re-dock a no-op in exactly the scenario
+    // that matters, regardless of whether the message-passing chain worked.
+    it('re-targets an already-docked panel to the workspace a pop-out announces closing', async () => {
       render(<LibraryPanel />)
       act(() => {
         useUiStore.getState().openLibraryPanel('ws-current')
@@ -153,10 +161,70 @@ describe('LibraryPanel (always-docked)', () => {
       act(() => {
         announceLibraryPopoutClosed('ws-other')
       })
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      // Unchanged — both surfaces were legitimately open at once; the
-      // broadcast is a no-op while something is already docked.
-      expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-current' })
+
+      await waitFor(() => {
+        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-other' })
+      })
+    })
+
+    // Verifies the actual root-cause fix rather than just the guard removal:
+    // the continuously-published `workspace-changed` broadcast (posted on
+    // every in-tab navigation — see libraryHandoff.ts) is what the docked
+    // panel actually applies at close time, NOT whatever payload the
+    // `popout-closed` message itself happens to carry. This matters because
+    // `pagehide` + BroadcastChannel is not a reliable delivery moment; the
+    // continuous stream is the real source of truth.
+    it('applies the CONTINUOUSLY-known workspace at close time, even when popout-closed itself carries a different/stale value', async () => {
+      render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openLibraryPanel('ws-current')
+      })
+
+      act(() => {
+        announceLibraryWorkspaceChanged('ws-99')
+      })
+      act(() => {
+        // Simulates a stale/lost payload at the unreliable pagehide moment —
+        // the listener must prefer the continuously-known 'ws-99', not this.
+        announceLibraryPopoutClosed('ws-stale')
+      })
+
+      await waitFor(() => {
+        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-99' })
+      })
+    })
+
+    it('falls back to the popout-closed payload when no continuous workspace-changed broadcast was ever received', async () => {
+      render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openLibraryPanel('ws-current')
+      })
+
+      act(() => {
+        announceLibraryPopoutClosed('ws-42')
+      })
+
+      await waitFor(() => {
+        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-42' })
+      })
+    })
+
+    it('re-targets to the virtual root (undefined) when the pop-out closed there', async () => {
+      render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openLibraryPanel('ws-current')
+      })
+
+      act(() => {
+        announceLibraryWorkspaceChanged(undefined)
+      })
+      act(() => {
+        announceLibraryPopoutClosed(undefined)
+      })
+
+      await waitFor(() => {
+        expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: undefined })
+      })
     })
 
     it('stops listening once unmounted — no re-dock after the panel itself is gone', async () => {

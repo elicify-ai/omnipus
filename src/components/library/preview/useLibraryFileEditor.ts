@@ -14,11 +14,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { putLibraryContent, libraryQueryKeys, getErrorMessage } from '@/lib/api'
+import { putLibraryContent, libraryQueryKeys } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { useUiStore } from '@/store/ui'
 import { setLibraryEditorDirty } from './unsavedGuard'
+import { getLibraryErrorMessage } from '../libraryErrorMessage'
 
 interface UseLibraryFileEditorOptions {
   workspaceId: string
@@ -100,7 +101,7 @@ export function useLibraryFileEditor({
     onError: (err) => {
       // Never silently swallowed: surfaced both in the persistent status
       // indicator (stays 'error' until the next save attempt) AND a toast.
-      const message = getErrorMessage(err, 'Save failed')
+      const message = getLibraryErrorMessage(err, 'Save failed')
       setStatus('error')
       setError(message)
       addToast({ message, variant: 'error' })

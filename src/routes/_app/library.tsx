@@ -13,7 +13,7 @@
 // virtual root", not an error state, unlike /browser-live's session/agent
 // params which ARE required).
 //
-// UAT fix (2026-07): the `workspace` search param only reflects what this
+// UAT fix (2026-07, v1): the `workspace` search param only reflects what this
 // TAB WAS OPENED WITH — LibraryExplorer manages in-tab navigation (drilling
 // into a different workspace from the virtual root, or switching workspaces
 // some other way) as its own internal state, never synced back to the URL.
@@ -23,12 +23,25 @@
 // the wrong place. `currentWorkspaceRef` — kept live via LibraryExplorer's
 // `onWorkspaceChange` — is what's actually announced, so the re-dock always
 // lands on whatever was on screen at close time.
+//
+// UAT fix (2026-07-30, v2 — that first fix did not actually work): Dana's
+// re-verification found the docked panel still didn't update, because (a)
+// the DOCKED side ignored the announcement whenever it was already open
+// (fixed in LibraryPanel.tsx — see its doc comment), and (b) `pagehide` +
+// BroadcastChannel is not a reliable delivery moment (a message posted
+// during unload may never arrive). This route now ALSO calls
+// `announceLibraryWorkspaceChanged` on every `onWorkspaceChange` — i.e.
+// continuously, the moment navigation happens, not only at teardown — so
+// the docked side already knows the latest workspace well before this tab
+// ever closes. The `pagehide` → `announceLibraryPopoutClosed` call stays as
+// the trigger signal (and a same-payload fallback), but is no longer the
+// only carrier of the workspace itself.
 
 import { useEffect, useRef } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { LibraryExplorer } from '@/components/library/LibraryExplorer'
-import { announceLibraryPopoutClosed } from '@/lib/libraryHandoff'
+import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 
 const librarySearchSchema = z.object({
   workspace: z.string().min(1).optional(),
@@ -64,6 +77,7 @@ function LibraryRoute() {
       initialWorkspaceId={workspace}
       onWorkspaceChange={(id) => {
         currentWorkspaceRef.current = id ?? undefined
+        announceLibraryWorkspaceChanged(id ?? undefined)
       }}
       // onClose omitted: closing "the Library" from a standalone tab means
       // closing the tab itself, not returning to some other in-app view —
