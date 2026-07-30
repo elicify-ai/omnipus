@@ -3471,10 +3471,14 @@ export function deleteWorkspace(id: string): Promise<void> {
 
 // ── ADR-051 Rev 4 — Workspace Media Library (Slice H) ─────────────────────────
 //
-// The workspace media library is the persistent home for user uploads
-// (`workspaces/<ws>/media/`). The SPA surface is a workspace Media tab that
-// lists entries (GET /workspaces/{id}/media) + explicit delete (FR-008), and a
-// composer picker that attaches an existing library entry to a chat message by
+// The workspace media library is the blob store behind chat uploads
+// (`workspaces/<ws>/media/`, UUID-keyed with a manifest). NOTE: the standalone
+// workspace "Media" tab that used to surface it was REMOVED when the Library
+// replaced it — the Library is a file explorer over the workspace `work/` tree
+// (see docs/internal/specs/library-spec.md), a different store, so do not
+// reintroduce a UI that lists this manifest as if it were the Library. These
+// endpoints remain live because the composer picker still attaches an existing
+// library entry to a chat message by
 // its `media://workspace/<workspace_id>/<media_id>` ref (FR-022) without
 // re-uploading. Wire types are the generated MediaLibraryEntry /
 // MediaAttachmentRequest (contract-first #8) — never hand-written.

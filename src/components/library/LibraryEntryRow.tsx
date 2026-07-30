@@ -18,7 +18,7 @@ import { formatRelative } from '@/lib/formatRelative'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
 
-/** Format a byte count as a compact human-readable size (mirrors WorkspaceMediaTab's formatBytes). */
+/** Format a byte count as a compact human-readable size. */
 export function formatLibrarySize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—'
   if (bytes < 1024) return `${bytes} B`
