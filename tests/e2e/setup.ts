@@ -13,7 +13,7 @@
  * See CLAUDE.md "SPA Embed Pipeline" and E2E "Known blockers and workarounds".
  */
 
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, execSync, type ChildProcess } from 'child_process';
 import { createServer } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -83,6 +83,13 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
         '  CGO_ENABLED=0 go build -o /tmp/omnipus-ci ./cmd/omnipus/',
     );
   }
+
+  // Kill any stale process holding our port (e.g. a previous shard's gateway
+  // whose globalTeardown didn't run). Without this, the #30 bind-failure fix
+  // makes the gateway abort on boot instead of silently running dead.
+  try {
+    execSync(`fuser -k ${opts.port}/tcp`, { stdio: 'ignore' });
+  } catch { /* port is free or fuser unavailable — either way, proceed */ }
 
   // Create a throwaway OMNIPUS_HOME — unique per startGateway() call.
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-${opts.port}-`));
