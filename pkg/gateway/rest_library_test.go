@@ -436,6 +436,34 @@ func TestLibraryContent_InboundSchemaValidation_MissingField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 }
 
+// TestLibraryContent_ReservedDeviceNameOrIllegalChar_400 proves the
+// pkg/pathsafe cross-platform filename-safety checks reach PUT
+// .../content via CleanRelPath, not only the mkdir endpoint.
+func TestLibraryContent_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	for _, body := range []string{
+		`{"path":"CON.txt","content":"x"}`,
+		`{"path":"bad|name.txt","content":"x"}`,
+		`{"path":"trailing.space ","content":"x"}`,
+	} {
+		w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+	}
+}
+
+// TestLibraryContent_CaseInsensitiveCollision_409 confirms PUT
+// .../content refuses to silently create a duplicate (Linux) or overwrite
+// a different file than the caller named (Windows/macOS) when a
+// case-different sibling already exists.
+func TestLibraryContent_CaseInsensitiveCollision_409(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original"}`).Code)
+
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.txt","content":"new"}`)
+	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+}
+
 // --- POST /library/{id}/upload ---
 
 func TestLibraryUpload_RoundTrip(t *testing.T) {
@@ -463,6 +491,32 @@ func TestLibraryUpload_CollisionDeduplicates(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
 	require.Len(t, resp.Entries, 1)
 	assert.Equal(t, "doc (1).txt", resp.Entries[0].Path)
+}
+
+// TestLibraryUpload_CaseInsensitiveCollisionDeduplicates proves the
+// de-duplication numbering itself is now case-insensitive: uploading
+// "report.txt" after "Report.txt" already exists must NOT silently create
+// a second, differently-cased file — it must be numbered exactly like an
+// exact-case collision would be.
+func TestLibraryUpload_CaseInsensitiveCollisionDeduplicates(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusCreated,
+		libUpload(t, api, "/api/v1/library/"+id+"/upload", map[string]string{"Report.txt": "first"}).Code)
+
+	w2 := libUpload(t, api, "/api/v1/library/"+id+"/upload", map[string]string{"report.txt": "second"})
+	require.Equal(t, http.StatusCreated, w2.Code, "body: %s", w2.Body.String())
+	var resp gen.LibraryUploadResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, "report (1).txt", resp.Entries[0].Path)
+
+	// The original file's content must be untouched.
+	gw := libGet(t, api, "/api/v1/library/"+id+"/content?path=Report.txt")
+	require.Equal(t, http.StatusOK, gw.Code)
+	var contentResp gen.LibraryContentResponse
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &contentResp))
+	require.NotNil(t, contentResp.Content)
+	assert.Equal(t, "first", *contentResp.Content)
 }
 
 func TestLibraryUpload_MissingTargetDir_404(t *testing.T) {
@@ -535,6 +589,39 @@ func TestLibraryMkdir_InvalidPath_400(t *testing.T) {
 		w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", body)
 		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
 	}
+}
+
+// TestLibraryMkdir_ReservedDeviceNameOrIllegalChar_400 proves the app-wide
+// cross-platform filename-safety fix (pkg/pathsafe) is wired all the way
+// through to this endpoint: a Windows reserved device name or an
+// NTFS-illegal character is rejected with 400 on every OS, not only
+// Windows — a workspace created on this (Linux) test/CI machine must never
+// contain a name that would be unusable the moment it is opened on Windows.
+func TestLibraryMkdir_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	for _, body := range []string{
+		`{"path":"CON"}`,
+		`{"path":"nul.txt"}`,
+		`{"path":"notes/COM1"}`,
+		`{"path":"bad<name"}`,
+		`{"path":"trailing."}`,
+	} {
+		w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+	}
+}
+
+func TestLibraryMkdir_CaseInsensitiveExistingDirectory_Idempotent(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusCreated,
+		libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"Folder"}`).Code)
+
+	// "folder" differs only in case from the existing "Folder" — on
+	// Windows/macOS these are literally the same directory, so this must
+	// be the same idempotent 200 an exact-case repeat mkdir already gets,
+	// not a second, colliding directory.
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"folder"}`)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
 
 // TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap reproduces the
@@ -654,6 +741,47 @@ func TestLibraryRename_DotDotPrefixedDestination_400(t *testing.T) {
 	// The source must still exist — the rejected rename must not have
 	// partially applied.
 	gw := libGet(t, api, "/api/v1/library/"+id+"/content?path=a.txt")
+	assert.Equal(t, http.StatusOK, gw.Code)
+}
+
+// TestLibraryRename_CaseInsensitiveCollision_409 is the one gap in this
+// whole feature that can actually lose data (not just fail loudly): an
+// exact-case Stat check alone would MISS a destination sibling that
+// differs only in case on this (case-sensitive, Linux) test machine, but
+// the identical rename would silently overwrite that sibling's content the
+// moment the same workspace is opened on Windows or default macOS. The
+// REST layer must reject it here, not just at the pkg/library unit level.
+func TestLibraryRename_CaseInsensitiveCollision_409(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original"}`).Code)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"draft.txt","content":"draft"}`).Code)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"draft.txt","to":"report.txt"}`)
+	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+
+	// The original, differently-cased file must be untouched.
+	gw := libGet(t, api, "/api/v1/library/"+id+"/content?path=Report.txt")
+	require.Equal(t, http.StatusOK, gw.Code)
+	var resp gen.LibraryContentResponse
+	require.NoError(t, json.Unmarshal(gw.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Content)
+	assert.Equal(t, "original", *resp.Content)
+}
+
+// TestLibraryRename_CaseOnlyRelabel_Allowed confirms the fix above does not
+// overreach: renaming a file to a different case OF ITSELF is a legitimate
+// relabel (e.g. fixing a typo'd case), not a collision, and must succeed.
+func TestLibraryRename_CaseOnlyRelabel_Allowed(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	require.Equal(t, http.StatusOK,
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"hello"}`).Code)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"Report.txt","to":"report.txt"}`)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	gw := libGet(t, api, "/api/v1/library/"+id+"/content?path=report.txt")
 	assert.Equal(t, http.StatusOK, gw.Code)
 }
 

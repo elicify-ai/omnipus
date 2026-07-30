@@ -39,6 +39,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -202,6 +203,20 @@ func CleanRelPath(raw string) (string, error) {
 		if strings.HasPrefix(seg, "..") {
 			return "", ErrInvalidPath
 		}
+		// Cross-platform filename safety (pkg/pathsafe), applied to EVERY
+		// segment — not just the leaf name — so a reserved Windows device
+		// name, an NTFS-illegal character, or a trailing dot/space can
+		// never enter the Library via an intermediate directory either
+		// (e.g. mkdir-ing "CON/report.txt" in one call). See pathsafe's
+		// package doc for why these rules apply unconditionally rather
+		// than only when actually running on Windows — a workspace must
+		// behave identically whichever OS opens it.
+		if err := pathsafe.ValidateComponent(seg); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		}
+	}
+	if err := pathsafe.ValidateRelPathLength(cleaned); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidPath, err)
 	}
 	return cleaned, nil
 }

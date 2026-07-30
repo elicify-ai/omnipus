@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // libraryDirName is the workspace work-tree subdirectory chat uploads are
@@ -128,10 +130,6 @@ func resetUploadWorkPathRegistryForTest() {
 	globalUploadWorkPaths.order = nil
 }
 
-// maxUploadFilenameRunes caps a sanitized upload filename. 256 mirrors
-// pkg/media/library's own normalizeFilename cap (POSIX filename limits).
-const maxUploadFilenameRunes = 256
-
 // SanitizeUploadFilename validates and trims a user-supplied filename for
 // use as a single path COMPONENT (never a path) inside the workspace's
 // .library/ dual-write directory. It duplicates — independently of —
@@ -150,13 +148,22 @@ const maxUploadFilenameRunes = 256
 // created. Rejecting it here closes the gap at both dual-write call sites
 // (pkg/gateway/rest.go's chat upload and rest_library.go's Library upload,
 // the two callers of this shared sanitizer) rather than only at rename.
+//
+// It also runs the result through pkg/pathsafe.ValidateComponent, the
+// shared cross-platform filename-safety check every filename-accepting
+// surface in Omnipus now uses (Windows reserved device names, NTFS-illegal
+// characters, a trailing dot/space Win32 silently strips, and a
+// conservative length cap — see that package's doc for why these rules
+// apply unconditionally rather than only when actually running on
+// Windows). This replaces the previous local length cap
+// (maxUploadFilenameRunes, 256, measured in bytes not runes) with
+// pathsafe.MaxComponentNameLength (100, measured in runes) — a 210-rune
+// filename used to pass here and is now correctly rejected; see
+// pathsafe's doc for the Windows MAX_PATH budget that cap is derived from.
 func SanitizeUploadFilename(name string) (string, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return "", fmt.Errorf("upload filename is empty")
-	}
-	if len(trimmed) > maxUploadFilenameRunes {
-		return "", fmt.Errorf("upload filename exceeds %d characters", maxUploadFilenameRunes)
 	}
 	if strings.ContainsAny(trimmed, `/\`) {
 		return "", fmt.Errorf("upload filename must not contain a path separator")
@@ -168,6 +175,9 @@ func SanitizeUploadFilename(name string) (string, error) {
 		if unicode.IsControl(r) {
 			return "", fmt.Errorf("upload filename contains a control character")
 		}
+	}
+	if err := pathsafe.ValidateComponent(trimmed); err != nil {
+		return "", fmt.Errorf("invalid upload filename: %w", err)
 	}
 	return trimmed, nil
 }

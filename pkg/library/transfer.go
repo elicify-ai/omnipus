@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // Delete removes rel (already-cleaned, non-root). A directory is removed
@@ -64,6 +65,27 @@ func (r *Root) Rename(fromRel, toRel string) (os.FileInfo, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, translateErr(err)
 	}
+	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc):
+	// the exact-case Stat miss above only proves no entry exists with
+	// toRel's EXACT casing — not that no colliding sibling exists. A
+	// destination sibling differing only in case is either (a) the very
+	// file being renamed — a legitimate case-only relabel (e.g.
+	// "Report.txt" -> "report.txt"), which the OS's own Rename call
+	// already handles correctly on every platform Omnipus targets (NTFS
+	// and APFS/HFS+ rename a name to a different case of itself in place;
+	// ext4 sees two genuinely distinct names and performs an ordinary
+	// rename) — or (b) some OTHER file, which must be rejected everywhere
+	// Omnipus runs, not only on filesystems that happen to enforce it
+	// natively.
+	toDir := dirParent(toRel)
+	if _, found, ciErr := r.caseInsensitiveMatch(toDir, path.Base(toRel)); ciErr != nil {
+		return nil, ciErr
+	} else if found {
+		sameEntry := dirParent(fromRel) == toDir && pathsafe.SameName(path.Base(fromRel), path.Base(toRel))
+		if !sameEntry {
+			return nil, ErrAlreadyExists
+		}
+	}
 	if err := r.requireParentDir(toRel); err != nil {
 		return nil, err
 	}
@@ -85,6 +107,15 @@ func (r *Root) Rename(fromRel, toRel string) (os.FileInfo, error) {
 // or via the Library. Uses O_CREATE|O_EXCL in a retry loop rather than
 // Stat-then-Create, closing the TOCTOU window between checking a name is
 // free and claiming it.
+//
+// Each candidate is ALSO checked against its siblings case-insensitively
+// (see caseInsensitiveMatch's doc) before the O_CREATE|O_EXCL attempt: an
+// exact-case create can succeed even when a differently-cased sibling
+// already occupies this "slot" on a case-sensitive host (e.g. uploading
+// "report.txt" once "Report.txt" already exists), which would number two
+// files identically here but collide the instant this same workspace is
+// opened on Windows or default macOS. Checking first keeps the numbering
+// — and which name ultimately wins — identical regardless of host OS.
 func (r *Root) CreateUnique(rel string) (finalRel string, f *os.File, err error) {
 	dir := dirParent(rel)
 	base := path.Base(rel)
@@ -93,22 +124,30 @@ func (r *Root) CreateUnique(rel string) (finalRel string, f *os.File, err error)
 
 	const maxAttempts = 1000
 	candidate := rel
+	candidateBase := base
 	for attempt := 0; ; attempt++ {
-		file, openErr := r.root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if openErr == nil {
-			return candidate, file, nil
-		}
-		if !os.IsExist(openErr) {
-			return "", nil, translateErr(openErr)
+		if _, found, ciErr := r.caseInsensitiveMatch(dir, candidateBase); ciErr != nil {
+			return "", nil, ciErr
+		} else if !found {
+			file, openErr := r.root.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if openErr == nil {
+				return candidate, file, nil
+			}
+			if !os.IsExist(openErr) {
+				return "", nil, translateErr(openErr)
+			}
+			// Exact-case race with a concurrent writer: fall through and
+			// bump the suffix exactly as the case-insensitive-collision
+			// path already does below.
 		}
 		if attempt >= maxAttempts {
 			return "", nil, fmt.Errorf("library: too many filename collisions for %q", base)
 		}
-		name := fmt.Sprintf("%s (%d)%s", stem, attempt+1, ext)
+		candidateBase = fmt.Sprintf("%s (%d)%s", stem, attempt+1, ext)
 		if dir == "" {
-			candidate = name
+			candidate = candidateBase
 		} else {
-			candidate = dir + "/" + name
+			candidate = dir + "/" + candidateBase
 		}
 	}
 }
@@ -133,6 +172,19 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 		return nil, ErrAlreadyExists
 	} else if !os.IsNotExist(statErr) {
 		return nil, translateErr(statErr)
+	}
+	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc).
+	// Unlike Rename, a Copy has no legitimate "same entry" exception: the
+	// whole point of copying is to end up with two distinct filesystem
+	// entries, so ANY case-insensitive sibling match at the destination is
+	// a real collision — even when fromRoot == toRoot and the match
+	// happens to literally BE the source (e.g. copying "Report.txt" onto
+	// "report.txt" in the same directory), which would silently clobber
+	// the very file being copied on a case-insensitive filesystem.
+	if _, found, ciErr := toRoot.caseInsensitiveMatch(dirParent(toRel), path.Base(toRel)); ciErr != nil {
+		return nil, ciErr
+	} else if found {
+		return nil, ErrAlreadyExists
 	}
 	if parentErr := toRoot.requireParentDir(toRel); parentErr != nil {
 		return nil, parentErr

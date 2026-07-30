@@ -18,6 +18,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -233,6 +235,55 @@ func TestSanitizeUploadFilename(t *testing.T) {
 		{"triple leading dot", "...triple-dot.txt", true},
 		// A conventional single-leading-dot dotfile must remain allowed.
 		{"legit single-dot dotfile", ".env", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SanitizeUploadFilename(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotEmpty(t, got)
+		})
+	}
+}
+
+// TestSanitizeUploadFilename_CrossPlatformSafety covers the pkg/pathsafe
+// checks layered onto SanitizeUploadFilename: Windows reserved device
+// names, NTFS-illegal characters, a trailing dot/space, and the new
+// (tighter, rune-based) length cap — see pathsafe's package doc for why
+// every one of these applies unconditionally, not only when actually
+// running on Windows.
+func TestSanitizeUploadFilename_CrossPlatformSafety(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"reserved CON", "CON", true},
+		{"reserved con lowercase", "con", true},
+		{"reserved NUL with extension", "nul.txt", true},
+		{"reserved COM1", "COM1.log", true},
+		{"reserved LPT1", "lpt1", true},
+		{"not reserved: CONsole", "CONsole.txt", false},
+		{"illegal char <", "bad<name.txt", true},
+		{"illegal char pipe", "bad|name.txt", true},
+		{"illegal char question mark", "bad?name.txt", true},
+		{"trailing dot", "report.", true},
+		{"trailing space before extension is fine", "report .txt", false},
+		{"exactly at the new cap", strings.Repeat("a", pathsafe.MaxComponentNameLength), false},
+		{"one over the new cap", strings.Repeat("a", pathsafe.MaxComponentNameLength+1), true},
+		// The whole reason the old 256-rune (byte-measured) cap was
+		// replaced: a 210-char name passed under it, comfortably, while
+		// already being unsafe once nested under a realistic Windows
+		// install path (see pathsafe.MaxComponentNameLength's doc).
+		{"legacy 210-char name now rejected", strings.Repeat("a", 210), true},
+		// Real-world UAT names, including unicode/emoji, must still be
+		// allowed — this feature must not regress ordinary filenames.
+		{"real-world UAT name 1", "Copy of My Deck.pptx", false},
+		{"real-world UAT name 2 (unicode/emoji)", "My Report (final) — résumé 测试 🎉.txt", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // Severity values mirror the Notification.severity contract enum.
@@ -88,6 +89,22 @@ func (s *Store) userFile(recipient string) string {
 
 // sanitize maps a username to a filesystem-safe token, replacing any character
 // outside [A-Za-z0-9._-] with '_'. Empty input maps to "_".
+//
+// This allowlist pass alone already closes the traversal/separator risk (a
+// malicious recipient path-escaping the notifications directory), but it
+// does not know about Windows reserved device names: a recipient literally
+// named "con" or "com1" would pass through unchanged, and userFile's
+// ".json" suffix would then try to address "con.json" — which on Windows
+// names the CON device, not a regular file, not an ordinary username. This
+// is one of the call sites that cannot reject (a username is already
+// authenticated; there is no request to 400 here), so it routes the
+// allowlisted result through pkg/pathsafe.SanitizeComponent — the same
+// shared, cross-platform-safe rewriter every other filename-accepting
+// surface in Omnipus uses — for reserved-name defusal and a conservative
+// length cap. Deliberately does NOT case-fold the token: two users whose
+// names differ only in case (e.g. "Alice" and "alice") are distinct
+// accounts with their own notification histories, not a filename-collision
+// concern this package should silently merge.
 func sanitize(name string) string {
 	if name == "" {
 		return "_"
@@ -103,7 +120,13 @@ func sanitize(name string) string {
 			b = append(b, '_')
 		}
 	}
-	return string(b)
+	allowlisted := string(b)
+	safe, changed := pathsafe.SanitizeComponent(allowlisted)
+	if changed {
+		logger.WarnCF("notifications", "sanitized unsafe recipient token for storage",
+			map[string]any{"recipient": name, "token": safe})
+	}
+	return safe
 }
 
 // loadLocked reads a recipient's notifications. A missing file is an empty list.

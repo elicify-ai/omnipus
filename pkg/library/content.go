@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"time"
 	"unicode/utf8"
 
@@ -132,8 +133,33 @@ func (r *Root) WriteContent(rel string, content []byte) (os.FileInfo, error) {
 	if err := r.requireParentDir(rel); err != nil {
 		return nil, err
 	}
-	if existing, err := r.root.Stat(rel); err == nil && existing.IsDir() {
-		return nil, ErrIsDir
+	if existing, statErr := r.root.Stat(rel); statErr == nil {
+		if existing.IsDir() {
+			return nil, ErrIsDir
+		}
+		// rel names an existing FILE exactly — this is the normal
+		// edit-and-save path (GET .../content returns entries by their
+		// exact on-disk name, and a well-behaved caller echoes that same
+		// name back to PUT), so proceed to the in-place overwrite below
+		// with no case concern.
+	} else if !os.IsNotExist(statErr) {
+		return nil, translateErr(statErr)
+	} else {
+		// No entry exists at rel's EXACT casing. Case-insensitive
+		// collision backstop (see caseInsensitiveMatch's doc): a
+		// differently-cased sibling would mean this exact PUT call
+		// creates a brand-new file on a case-sensitive host (Linux) while
+		// silently overwriting the EXISTING file's content on
+		// Windows/macOS instead — two different outcomes from the same
+		// request depending on which OS happens to be running it. Reject
+		// rather than guess which one the caller wanted; the caller can
+		// resolve it explicitly (write to the existing entry's exact
+		// name, or rename first).
+		if _, found, ciErr := r.caseInsensitiveMatch(dirParent(rel), path.Base(rel)); ciErr != nil {
+			return nil, ciErr
+		} else if found {
+			return nil, ErrAlreadyExists
+		}
 	}
 
 	tmpRel := fmt.Sprintf("%s.tmp-%d-%d", rel, os.Getpid(), time.Now().UnixNano())
