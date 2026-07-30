@@ -169,6 +169,70 @@ function safeMtimeMs(p: string): number {
 // ── Shared helper: switch to Jim and trigger a long-running turn ──────────────
 
 /**
+ * A prompt that reliably produces multi-second, tool-free streaming output.
+ *
+ * Forbidding tools and demanding inline prose: on a bare "write 500 words" prompt,
+ * gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
+ * explicit "allow" policy entry for it), which ends the turn instantly with
+ * zero inline stream and no cancellable window. Forcing long inline prose
+ * keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
+ * The explicit high word count ("700-word essay ... beginning immediately and
+ * continuing without stopping") guarantees hundreds of words of remaining
+ * generation budget once a cancel is fired — see waitForActiveStream's doc
+ * comment for why that headroom is what makes cancel timing deterministic
+ * under load, regardless of how slow the environment is.
+ */
+const LONG_PROSE_PROMPT =
+  'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
+  '700-word essay about renewable energy, beginning immediately and continuing ' +
+  'without stopping until you reach 700 words.'
+
+/**
+ * Wait until a turn is OBSERVABLY ACTIVE: the stop button is visible AND the
+ * live streaming message has accumulated a substantial chunk of real text —
+ * not just the pre-first-token placeholder.
+ *
+ * Why both conditions, and why "substantial text" rather than merely "stop
+ * button rendered": the stop button (and even the streaming-message
+ * placeholder) can appear BEFORE the first token arrives, and under a loaded
+ * shard the WS event that drives the frontend's "isStreaming" state can lag
+ * the true backend state — in either direction, by seconds. A cancel fired
+ * the instant the stop button appears can therefore land in one of two bad
+ * windows:
+ *   (a) zero tokens produced yet — the turn aborts with an empty message and
+ *       nothing is ever marked "(interrupted)" (observed T23 flake: token
+ *       count 0, empty thread).
+ *   (b) the backend turn has ALREADY FINISHED by the time the cancel request
+ *       lands server-side (observed T26 flake under a loaded shard: audit log
+ *       records turn.cancel.attempt with was_fired:false — "no turn was
+ *       active" — the whole run just took ~10x longer than in isolation, so
+ *       by the time Playwright's click reached the backend the short turn
+ *       had already completed).
+ * Requiring a substantial (>80 char) chunk of REAL accumulated text proves the
+ * turn is genuinely mid-generation right now, and — combined with
+ * LONG_PROSE_PROMPT's enforced word count — guarantees hundreds of words of
+ * remaining output, so the turn cannot plausibly finish between this check
+ * and the cancel click landing server-side, no matter how loaded the shard
+ * is. This is a wait-on-condition (page.waitForFunction polls until true, no
+ * fixed sleep), not a race against a timer.
+ */
+async function waitForActiveStream(page: Page): Promise<void> {
+  // Wait for the stop button (request in-flight)…
+  const stopBtn = page.locator('[data-testid="stop-btn"]')
+  await expect(stopBtn).toBeVisible({ timeout: 30_000 })
+
+  // …AND for the assistant to have actually STREAMED real text.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
+      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+      return text.length > 80
+    },
+    { timeout: 30_000 },
+  )
+}
+
+/**
  * Switch the agent picker to Jim (who generates long inline prose) and send
  * a prompt that reliably produces multi-second streaming output.
  * Returns once a message is ACTIVELY streaming (stop button visible AND the live
@@ -192,39 +256,13 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await page.getByRole('menuitem', { name: /Jim/i }).click()
   await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
 
-  // Forbid tools and demand inline prose: on a bare "write 500 words" prompt,
-  // gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
-  // explicit "allow" policy entry for it), which ends the turn instantly with
-  // zero inline stream and no cancellable window. Forcing long inline prose
-  // keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
-  await input.fill(
-    'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
-      '700-word essay about renewable energy, beginning immediately and continuing ' +
-      'without stopping until you reach 700 words.',
-  )
+  await input.fill(LONG_PROSE_PROMPT)
   await input.press('Enter')
 
-  // Wait for the stop button (request in-flight)…
-  const stopBtn = page.locator('[data-testid="stop-btn"]')
-  await expect(stopBtn).toBeVisible({ timeout: 30_000 })
-
-  // …AND for the assistant to have actually STREAMED real text. The stop button
-  // (and even the streaming-message placeholder) appear BEFORE the first token; a
-  // cancel fired in that gap aborts the turn with zero tokens and removes the empty
-  // message, so nothing is ever marked "(interrupted)" (observed T23 flake: token
-  // count 0, empty thread). Waiting until the live streaming message has accumulated
-  // a substantial chunk of text (well beyond the short agent label) guarantees there
-  // is a real, incomplete message to interrupt. The 700-word prompt ensures the
-  // stream keeps going for seconds afterwards, so the cancel lands comfortably
-  // mid-stream.
-  await page.waitForFunction(
-    () => {
-      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
-      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
-      return text.length > 80
-    },
-    { timeout: 30_000 },
-  )
+  // Wait until the turn is observably active (see waitForActiveStream's doc
+  // comment) before returning — a subsequent cancel always has a real,
+  // in-flight turn with hundreds of words of runway left.
+  await waitForActiveStream(page)
 }
 
 // ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ─────────
@@ -788,14 +826,30 @@ test(
     const auditPath = path.join(OMNIPUS_HOME, 'system', 'audit.jsonl')
     const entriesBefore = readJsonl<AuditEntry>(auditPath).length
 
-    await input.fill(
-      'Write exactly 400 words about solar power. Do not call any tool, just write prose.',
-    )
+    // Reuse the same forced-long-prose prompt as T21-T25 (LONG_PROSE_PROMPT) —
+    // not a weaker/shorter ad hoc prompt. See waitForActiveStream's doc comment
+    // for the failure this fixes: this test used to send a short "write exactly
+    // 400 words" prompt and only wait for the stop button to render before
+    // clicking cancel. In isolation that's a wide enough window; under a loaded
+    // shard (this test's whole run measured ~10x slower — 3.6s vs 35.6s) the
+    // frontend's stop-button render can lag the true backend state, so the
+    // click can land AFTER the (short) turn has already fully completed
+    // server-side — recorded as turn.cancel.attempt with was_fired:false ("no
+    // turn was active"), which is exactly the historical failure here. Do not
+    // cancel the instant the stop button appears — wait for the turn to be
+    // OBSERVABLY ACTIVE first.
+    await input.fill(LONG_PROSE_PROMPT)
     await input.press('Enter')
 
-    // Wait for streaming to start.
+    // Wait until the turn is observably active: stop button visible AND a
+    // substantial chunk of real streamed text has accumulated. Combined with
+    // LONG_PROSE_PROMPT's enforced 700-word count, this guarantees hundreds of
+    // words of remaining generation budget at the moment cancel is fired, so
+    // the turn is provably still active server-side no matter how loaded the
+    // shard is — this cannot be true-then-false before the cancel is sent.
+    await waitForActiveStream(page)
+
     const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await expect(stopBtn).toBeVisible({ timeout: 30_000 })
 
     // Cancel the turn.
     await stopBtn.click()
