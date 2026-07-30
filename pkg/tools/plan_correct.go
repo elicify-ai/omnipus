@@ -138,11 +138,14 @@ func (t *PlanCorrectTool) Description() string {
 		"the system automatically carries every acceptance criterion of the superseded member onto " +
 		"your replacement work, so you do not need to know or restate its exact criteria — just " +
 		"describe the real replacement work, and add any further criteria you want it held to), " +
-		"targeted_retry (reset one failed member), and abandon (the honest exit — the Definition of " +
-		"Done is unreachable from here; the plan terminates dod_unreachable with your falsified " +
-		"assumption on the record). The Definition of Done is immutable and cannot be edited by any " +
-		"verb. Member ids are minted by the system, never supplied by you. Corrections consume the " +
-		"plan's existing judge-round budget; they do not get a separate one."
+		"targeted_retry (reset one failed member — REQUIRES retried_member_id), and abandon (the " +
+		"honest exit — the Definition of Done is unreachable from here; the plan terminates " +
+		"dod_unreachable with your falsified assumption on the record). The Definition of Done is " +
+		"immutable and cannot be edited by any verb. NEW tail_members' ids are minted by the system, " +
+		"never supplied by you — but superseded_member_id and retried_member_id name an EXISTING " +
+		"member and MUST be that member's real id from the plan's member list, never a label like " +
+		"\"m2\" or a title. Corrections consume the plan's existing judge-round budget; they do not " +
+		"get a separate one."
 }
 
 func (t *PlanCorrectTool) Parameters() map[string]any {
