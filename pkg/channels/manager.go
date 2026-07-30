@@ -950,10 +950,31 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// bind already succeeded and the common cause is a shutdown-time socket
 	// race, not a startup misconfiguration.
 	if m.httpServer != nil {
-		ln, err := net.Listen("tcp", m.httpServer.Addr)
-		if err != nil {
+		// Bind synchronously so a startup-time failure is fatal to boot
+		// (not silently swallowed as a running-dead process). Retry with a
+		// short backoff: CI test harnesses launch gateways on fixed ports
+		// in quick succession, and a previous shard's gateway may not have
+		// released the port the instant this one starts. 3 attempts × 500ms
+		// tolerates that transition race without masking a genuine conflict.
+		var ln net.Listener
+		var bindErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			ln, bindErr = net.Listen("tcp", m.httpServer.Addr)
+			if bindErr == nil {
+				break
+			}
+			if attempt < 2 {
+				logger.InfoCF("channels", "Shared HTTP server bind retry — port may be in transient use",
+					map[string]any{"addr": m.httpServer.Addr, "attempt": attempt + 1, "error": bindErr.Error()})
+				select {
+				case <-time.After(500 * time.Millisecond):
+				case <-ctx.Done():
+				}
+			}
+		}
+		if bindErr != nil {
 			cancel()
-			return fmt.Errorf("channels: bind shared HTTP server at %s: %w", m.httpServer.Addr, err)
+			return fmt.Errorf("channels: bind shared HTTP server at %s: %w", m.httpServer.Addr, bindErr)
 		}
 		go func() {
 			logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
