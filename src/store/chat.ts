@@ -298,6 +298,27 @@ export interface SessionChatState {
    */
   spanByParentCallId: Record<string, { messageId: string; spanIdx: number }>
   /**
+   * O(1) index from span_id → { messageId, spanIdx }, mirroring
+   * spanByParentCallId above but keyed by the span's OWN id rather than its
+   * parent tool-call id. Added for issue #573 (chat UI freeze under heavy
+   * subagent/delegation activity): the subagent_end handler used to locate
+   * its target span with a backward linear scan over
+   * `messageOrder × spans`, which re-ran on every subagent_end frame for
+   * the whole duration of a long turn. Written by subagent_start alongside
+   * spanByParentCallId; deleted the moment subagent_end consumes it (once a
+   * span is terminal it is never looked up by span_id again — the
+   * subagent_message/subagent_state frames route through
+   * sessionActivityStore, not through this index).
+   *
+   * Optional for the same fixture-compat reason as `toolCallOwnerMessageId`
+   * below: several existing test fixtures construct a SessionChatState-
+   * shaped bucket by hand, pre-dating this field. Every read site
+   * defensively falls back to `{}`/misses-and-falls-back-to-scan, and every
+   * write site (`emptySessionState`, the subagent_start handler) initializes
+   * or populates it.
+   */
+  spanBySpanId?: Record<string, { messageId: string; spanIdx: number }>
+  /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
    * into ANY assistant bubble in this session — independent of which bubble
@@ -402,6 +423,7 @@ function emptySessionState(): SessionChatState {
     cancelStage: null,
     lastReceivedEventTime: null,
     spanByParentCallId: {},
+    spanBySpanId: {},
     mergedReplayMessageIds: {},
     goalStatus: null,
     goalPills: {},
@@ -684,6 +706,15 @@ export function evictMessageFromBucket(
       delete bucket.spanByParentCallId[parentCallId]
     }
   }
+
+  // Evict spanBySpanId entries pointing at this message (mirrors above).
+  if (bucket.spanBySpanId) {
+    for (const [spanId, entry] of Object.entries(bucket.spanBySpanId)) {
+      if (entry.messageId === messageId) {
+        delete bucket.spanBySpanId[spanId]
+      }
+    }
+  }
 }
 
 /**
@@ -701,6 +732,7 @@ function applyMessageArray(
   let textAtToolCallStartPatch: typeof bucket.textAtToolCallStart = { ...bucket.textAtToolCallStart }
   let toolCallOwnerMessageIdPatch: Record<string, string> = { ...bucket.toolCallOwnerMessageId }
   let spanByParentCallIdPatch: typeof bucket.spanByParentCallId = { ...bucket.spanByParentCallId }
+  let spanBySpanIdPatch: typeof bucket.spanBySpanId = { ...(bucket.spanBySpanId ?? {}) }
 
   if (msgs.length > MAX_MESSAGES_PER_SESSION) {
     const evictCount = msgs.length - MAX_MESSAGES_PER_SESSION
@@ -746,6 +778,13 @@ function applyMessageArray(
       if (!evictedMessageIds.has(entry.messageId)) newSpanIndex[parentCallId] = entry
     }
     spanByParentCallIdPatch = newSpanIndex
+
+    // Evict spanBySpanId entries whose message is being evicted (mirrors above).
+    const newSpanIdIndex: typeof bucket.spanBySpanId = {}
+    for (const [spanId, entry] of Object.entries(spanBySpanIdPatch ?? {})) {
+      if (!evictedMessageIds.has(entry.messageId)) newSpanIdIndex[spanId] = entry
+    }
+    spanBySpanIdPatch = newSpanIdIndex
   }
 
   const messagesById: Record<string, ChatMessage> = {}
@@ -764,6 +803,7 @@ function applyMessageArray(
     textAtToolCallStart: textAtToolCallStartPatch,
     toolCallOwnerMessageId: toolCallOwnerMessageIdPatch,
     spanByParentCallId: spanByParentCallIdPatch,
+    spanBySpanId: spanBySpanIdPatch,
   }
 }
 
@@ -785,8 +825,28 @@ interface ChatStore {
   // NOTE: `messages` is the COMPUTED ordered array derived from the active
   // bucket's messagesById + messageOrder. It is synced after every bucket
   // mutation. Consumers should NOT access sessionsById[id].messagesById or
-  // sessionsById[id].messageOrder directly — use getMessages(bucket) instead.
+  // sessionsById[id].messageOrder directly — use getMessages(bucket) instead
+  // (or `messagesById` immediately below, for a single-id lookup).
   messages: ChatMessage[]
+  /**
+   * O(1) per-id lookup companion to `messages` above — the active bucket's
+   * raw messagesById map, projected straight through (not rebuilt) by
+   * bucketToForeground/syncChatForeground. A component that only cares
+   * about ONE message should select `s.messagesById[id]` rather than
+   * `s.messages.find((m) => m.id === id)`: `messages` gets a brand-new
+   * array identity on every bucket mutation (bucketToForeground rebuilds it
+   * via getMessages() every time), so subscribing to it re-renders on every
+   * WS frame regardless of which message changed, and `.find()` re-scans
+   * the whole array every render. `messagesById[id]`, by contrast, keeps
+   * the SAME object reference across mutations that don't touch that
+   * specific message — see VirtualAssistantMessageRow's memo comment for
+   * the Immer structural-sharing guarantee this relies on. Added for issue
+   * #573 (chat UI freeze under heavy subagent/delegation activity):
+   * AssistantMessage and SubagentSpansRenderer both used to subscribe to
+   * the whole `messages` array just to `.find()`/`.filter()` their own
+   * message out of it on every frame.
+   */
+  messagesById: Record<string, ChatMessage>
   isStreaming: boolean
   isReplaying: boolean
   replayCompletedForSession: string | null
@@ -1243,9 +1303,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
     return useSessionStore.getState().activeSessionId ?? FALLBACK_SID
   }
 
-  /** Project a session bucket to foreground ChatStore fields (messagesById+messageOrder → messages[]). */
-  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messagesById' | 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[] } {
-    const { messagesById: _mb, messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, toolCallOwnerMessageId: _tcm, ...rest } = bucket
+  /**
+   * Project a session bucket to foreground ChatStore fields
+   * (messageOrder+messagesById → messages[], and messagesById passed
+   * through as-is for O(1) per-id lookups — see ChatStore.messagesById's
+   * doc comment).
+   */
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[] } {
+    const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = bucket
     return { ...rest, messages: getMessages(bucket) }
   }
 
@@ -1406,10 +1471,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
-    // Note: we spread emptySessionState() here but consumers of messages: ChatMessage[]
-    // expect an array — the ring buffer fields (messagesById/messageOrder) are not
-    // exported on ChatStore; only messages (the derived array) is.
+    // Note: `messages` (the derived ordered array) and `messagesById` (the
+    // raw per-id map, for O(1) lookups) are both exported on ChatStore;
+    // messageOrder itself is not — see bucketToForeground.
     messages: [],
+    messagesById: {},
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
@@ -3831,6 +3897,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (!lastMsg.spans) lastMsg.spans = []
               lastMsg.spans.push(span)
               draft.spanByParentCallId[sf.parent_call_id] = { messageId: lastMsgId, spanIdx }
+              // Issue #573: parallel index keyed by span_id, consumed by the
+              // subagent_end handler below for an O(1) lookup instead of a
+              // backward linear scan.
+              if (!draft.spanBySpanId) draft.spanBySpanId = {}
+              draft.spanBySpanId[sf.span_id] = { messageId: lastMsgId, spanIdx }
             }) as Partial<SessionChatState>
           })
           break
@@ -3841,14 +3912,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const ef = frame as WsSubagentEndFrame
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                const msgId = draft.messageOrder[i]
-                const msg = draft.messagesById[msgId]
-                if (msg.role !== 'assistant' || !msg.spans) continue
-                const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
-                if (spanIdx === -1) continue
-                const existingSpan = msg.spans[spanIdx]
-                const terminalSpan: SubagentSpanTerminal = {
+              // Builds the terminal span record from whichever running span
+              // (indexed or scanned) matched ef.span_id — shared by both
+              // resolution paths below so they can never diverge.
+              function buildTerminalSpan(existingSpan: SubagentSpan): SubagentSpanTerminal {
+                return {
                   spanId: existingSpan.spanId,
                   parentCallId: existingSpan.parentCallId,
                   taskLabel: existingSpan.taskLabel,
@@ -3862,8 +3930,39 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   finalResult: ef.final_result,
                   reason: ef.reason,
                 }
-                msg.spans[spanIdx] = terminalSpan
+              }
+
+              // O(1) lookup first (issue #573; mirrors spanByParentCallId/
+              // hasOpenSpanFast). Re-verify the indexed span's own id still
+              // matches before trusting it — cheap, and guards against any
+              // staleness (e.g. an index entry surviving a code path that
+              // doesn't maintain it) rather than silently mutating the wrong
+              // span.
+              const indexEntry = draft.spanBySpanId?.[ef.span_id]
+              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
+              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
+              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === ef.span_id) {
+                indexedMsg.spans[indexEntry.spanIdx] = buildTerminalSpan(indexedSpan)
+                delete draft.spanByParentCallId[indexedSpan.parentCallId]
+                delete draft.spanBySpanId![ef.span_id]
+                return
+              }
+
+              // Fallback: O(N) scan (legacy path, index miss — e.g. a bucket
+              // built before this index existed, or an out-of-band mutation
+              // that didn't maintain it).
+              console.warn('[chat] subagent_end: span index miss, falling back to O(N) scan', { spanId: ef.span_id })
+              logDiagnostic('chatSubagentEndSpanIndexMiss', { spanId: ef.span_id, sessionId: targetSid })
+              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                const msgId = draft.messageOrder[i]
+                const msg = draft.messagesById[msgId]
+                if (msg.role !== 'assistant' || !msg.spans) continue
+                const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
+                if (spanIdx === -1) continue
+                const existingSpan = msg.spans[spanIdx]
+                msg.spans[spanIdx] = buildTerminalSpan(existingSpan)
                 delete draft.spanByParentCallId[existingSpan.parentCallId]
+                if (draft.spanBySpanId) delete draft.spanBySpanId[existingSpan.spanId]
                 return
               }
               console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
@@ -4513,8 +4612,9 @@ export function syncChatForeground(): void {
   const activeSid = useSessionStore.getState().activeSessionId ?? FALLBACK_SID
   useChatStore.setState((state) => {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-    // Project messagesById+messageOrder → messages for foreground consumers.
-    const { messagesById: _mb, messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, toolCallOwnerMessageId: _tcm, ...rest } = fg
+    // Project messageOrder+messagesById → messages for foreground consumers
+    // (messagesById itself passes through as-is — see bucketToForeground).
+    const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = fg
     return { ...rest, messages: getMessages(fg) }
   })
 }

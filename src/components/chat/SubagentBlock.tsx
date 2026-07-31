@@ -14,6 +14,7 @@
 // remaining consumers once both callers migrated, so it was deleted rather
 // than kept as dead code.
 
+import React from 'react'
 import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
@@ -64,7 +65,26 @@ export interface SubagentBlockProps {
   agentType?: '3p' | 'native'
 }
 
-export function SubagentBlock({ span, agentType }: SubagentBlockProps) {
+/**
+ * Perf (issue #573 — chat UI freeze under heavy subagent/delegation
+ * activity): wrapped in React.memo, matching ChatScreen.tsx's
+ * VirtualAssistantMessageRow. `span` is a safe memo key for the same reason
+ * documented there — the chat store (src/store/chat.ts) replaces a span
+ * object (never mutates in place) whenever that SPECIFIC span changes
+ * (subagent_start pushes a new span, tool_call_start/result attach a step
+ * via a fresh span object at that index, subagent_end replaces the running
+ * span with a terminal one), while every sibling span (and every OTHER
+ * message's spans) keeps its exact prior object reference. The caller
+ * (SubagentSpansRenderer / VirtualAssistantMessageRow's tree) re-renders on
+ * every WS frame that touches the owning message, but without this memo
+ * every already-rendered SubagentBlock row in that message — including
+ * ones for long-finished, terminal spans — was re-rendering (and re-running
+ * its own step/label computations) on every single frame of the entire
+ * turn, the dominant cost during long turns with many delegate spans.
+ * `agentType` is a plain string/undefined, compared by value via
+ * React.memo's default shallow (Object.is per prop) comparison.
+ */
+export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType }: SubagentBlockProps) {
   // Expansion state lives in the UI store so live-render → historical-virtualized-render
   // swap (when streaming ends) preserves user-chosen expanded/collapsed state.
   const expanded = useUiStore((s) => Boolean(s.expandedSpans[span.spanId]))
@@ -203,4 +223,4 @@ export function SubagentBlock({ span, agentType }: SubagentBlockProps) {
       )}
     </div>
   )
-}
+})

@@ -481,7 +481,27 @@ function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'nati
 // useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
 export function SubagentSpansRenderer() {
   const message = useMessage()
-  const messages = useChatStore((s) => s.messages)
+  // Perf (issue #573 — chat UI freeze under heavy subagent/delegation
+  // activity): select the ONE message by id from `messagesById` instead of
+  // subscribing to the whole `messages` array + `.find()`ing it every
+  // render. `messages` gets a brand-new array identity on every WS frame
+  // (bucketToForeground rebuilds it every bucket mutation), so the old
+  // `useChatStore((s) => s.messages)` re-rendered this component on every
+  // frame of the ENTIRE turn, not just frames touching this message; the
+  // `.find()` then re-scanned the whole array on top of that. `messagesById`
+  // returns the SAME object reference across renders unless THIS message
+  // was the one touched by the last mutation (Immer structural sharing —
+  // see ChatStore.messagesById's doc comment), so Zustand's default
+  // Object.is equality correctly skips re-rendering otherwise. The `??`
+  // fallback is a defensive O(N) scan — mirrors attachStepToSpan's
+  // established "O(1) lookup first, O(N) fallback" idiom (src/store/chat.ts)
+  // — for the narrow case of a hand-rolled test fixture that sets `messages`
+  // on the store directly without also setting `messagesById`; real app
+  // flows always keep the two in sync (bucketToForeground derives both from
+  // the same bucket, and getMessages() filters `messages` down to exactly
+  // the ids present in `messagesById`), so this fallback is never reached
+  // outside such fixtures.
+  const storeMsg = useChatStore((s) => s.messagesById[message.id] ?? s.messages.find((m) => m.id === message.id))
   // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
   // thread by default — verbose chat is the only way to bring them back
   // here (shouldRenderSubagentSpan, src/lib/toolVisibility.ts). Selector
@@ -493,7 +513,6 @@ export function SubagentSpansRenderer() {
   // elsewhere) — resolves each span's agentId to native/3p so a running
   // external-CLI delegate's card can show the "no live progress" notice.
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const storeMsg = messages.find((m) => m.id === message.id)
   const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
   if (spans.length === 0) return null
   return (
@@ -1240,7 +1259,19 @@ function AssistantMessage() {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
-  const messages = useChatStore((s) => s.messages)
+  // Perf (issue #573 — chat UI freeze under heavy subagent/delegation
+  // activity): select the ONE message by id from `messagesById` instead of
+  // subscribing to the whole `messages` array + `.find()`ing it every
+  // render — see SubagentSpansRenderer's identical fix above (and
+  // ChatStore.messagesById's doc comment) for the full rationale. This is
+  // the component that renders the live streaming bubble, so it used to
+  // re-render (and re-scan `messages`) on literally every WS frame of the
+  // whole turn regardless of which message the frame actually touched. The
+  // `??` fallback is a defensive O(N) scan for a hand-rolled test fixture
+  // that sets `messages` directly without `messagesById` — see
+  // SubagentSpansRenderer's identical fallback comment for why it's never
+  // reached in real app flows.
+  const storeMsg = useChatStore((s) => s.messagesById[message.id] ?? s.messages.find((m) => m.id === message.id))
   // Fix 3 (2026-07-16): needed to judge tool-call/span emptiness on VISIBLE
   // content only — see the showEmptyPlaceholder computation below.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -1248,7 +1279,6 @@ function AssistantMessage() {
   // Prefer the per-message agentId (set during transcript replay) over the
   // session-level activeAgentId. This makes multi-agent transcripts show the
   // correct per-turn agent label instead of the current session agent.
-  const storeMsg = messages.find((m) => m.id === message.id)
   const messageAgentId = storeMsg?.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   // Fallback to the raw agentId string if the agent isn't in the list yet
