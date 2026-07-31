@@ -333,17 +333,25 @@ function applyVideoSenderConstraints(pc, opts) {
     window.__omnipusState.lastError = msg;
   }
 
-  // contentHint 'motion' (not 'detail'): asks the VP8 encoder to favor
-  // smooth motion over per-frame sharpness -- directly addresses this
-  // fix-wave's reported freeze/choppiness symptoms on real video content.
-  // Tradeoff: text-heavy (non-video) pages may render very slightly softer
-  // under 'motion' than 'detail' would produce. Accepted for now given the
-  // UAT content was video playback; a future per-page-adaptive hint (e.g.
-  // detecting an actively-playing <video> element vs a static page) is
-  // possible but out of scope for this fix. Re-set on every call -- setting
-  // an unchanged value is a harmless no-op, so this needs no context guard.
+  // contentHint 'detail' (REVERSED from 'motion', 2026-07-31 live evidence):
+  // 'motion' tells libwebrtc this is camera-like video, which ENABLES the
+  // quality scaler -- the encoder is allowed to reduce RESOLUTION under
+  // CPU/bandwidth pressure. Measured on UAT v24/v25: the delivered stream sat
+  // pinned at ~tab/2.7 (228px wide against a 615px tab) even with
+  // degradationPreference 'maintain-resolution' + scaleResolutionDownBy 1
+  // applied post-negotiation and a 4Mbps start-bitrate hint -- the scaler
+  // kept winning, and 'motion' is what licenses it. 'detail' marks the track
+  // as screen content whose per-frame legibility matters: libwebrtc disables
+  // resolution scaling and sheds FRAMERATE under pressure instead. That is
+  // the right trade here -- a text page at full resolution and 10fps is
+  // usable; at 228px wide and 30fps it is not, and the original 'motion'
+  // rationale (video-playback smoothness) predates the server-side input
+  // rescale (live.go rescaleInputCoords), which now keeps clicks accurate
+  // regardless. A per-page-adaptive hint remains possible future work.
+  // Re-set on every call -- setting an unchanged value is a harmless no-op,
+  // so this needs no context guard.
   try {
-    videoTrack.contentHint = 'motion';
+    videoTrack.contentHint = 'detail';
   } catch (e) {
     const msg = logPrefix + ': setting contentHint failed: ' + String(e);
     warn(msg, e);
