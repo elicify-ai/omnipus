@@ -22,6 +22,7 @@ const {
   mockSendWebRTCOffer,
   wsCallbacksRef,
   mockMachineSendInput,
+  machineRetryAttemptsRef,
   mockMachineStart,
   mockMachineApplyAnswer,
   mockMachineApplyState,
@@ -47,6 +48,7 @@ const {
       onFallback: null as ((r: string) => void) | null,
     },
   },
+  machineRetryAttemptsRef: { current: 0 },
   // fix-wave (MED): backs the mocked machine's `hasConnectedOnce` getter —
   // BrowserLiveView.tsx reads this to decide whether an 'answer-timeout'
   // fallback is a cold-start false positive (never connected, stay quiet)
@@ -73,6 +75,9 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           sendInput: mockSendInput,
           sendControl: mockSendControl,
           sendTabAction: mockSendTabAction,
+          // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
+          // calls this on mount, so every connection double needs it.
+          sendViewport: vi.fn(() => true),
           sendWebRTCOffer: mockSendWebRTCOffer,
           isConnected: true,
         }
@@ -91,6 +96,13 @@ vi.mock('@/lib/browserWebRTC', () => ({
       sendInput: mockMachineSendInput,
       get hasConnectedOnce() {
         return machineHasConnectedOnceRef.current
+      },
+      // Cold-start toast suppression now also requires this to be 0 (i.e.
+      // the FIRST attempt). Suppressing every retry meant a total WebRTC
+      // failure produced no user-facing explanation at all. 0 keeps this
+      // double on the first-attempt path these tests exercise.
+      get retryAttempts() {
+        return machineRetryAttemptsRef.current
       },
       onStream: (cb: (s: MediaStream) => void) => {
         machineCallbacksRef.current.onStream = cb

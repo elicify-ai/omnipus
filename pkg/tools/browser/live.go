@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -35,6 +36,24 @@ const maxInputEventsPerSecond = 50
 // (wedged/overloaded transport), the worker recovers in bounded time and
 // moves on to the next (coalesced, latest) frame instead of getting stuck.
 const screencastAckTimeout = 5 * time.Second
+
+// viewportSetTimeout bounds the Emulation.setDeviceMetricsOverride round trip
+// in SetViewport. Kept short: a resize arrives on the UI's debounce and a slow
+// or wedged tab must not stall the WS reader goroutine that dispatched it.
+const viewportSetTimeout = 5 * time.Second
+
+// Viewport bounds. Per-field limits mirror BrowserViewportFrame's schema so
+// SetViewport is safe even when gateway.validate_inbound is off (it defaults
+// to false, making this the ONLY check on a default install).
+const (
+	maxViewportDimension   = 8192
+	maxViewportScaleFactor = 3.0
+	// maxViewportPhysicalPixels bounds width*height*dsf^2 — the actual
+	// framebuffer Chromium must allocate. ~33.2M is a generous 8K-class
+	// surface (7680x4320 = 33.2M) while refusing the ~604M that the per-field
+	// maxima alone would permit.
+	maxViewportPhysicalPixels = 33_200_000.0
+)
 
 // LiveFrame is one CDP screencast frame plus the metadata a viewer needs to
 // map its own rendered coordinates back to CSS pixels on the page. Field set
@@ -318,6 +337,75 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 // screencast isn't currently active, or it is already paused. The caller
 // (pkg/tools/browser's CaptureSession.ReconcileScreencast) decides WHEN
 // pausing is appropriate; this method only performs the mechanical stop.
+// SetViewport resizes the captured tab to width x height CSS pixels and
+// renders it at deviceScaleFactor, so the capture's shape and resolution
+// follow the viewer's panel instead of a fixed constant.
+//
+// Why (operator UAT 2026-07-31): the tab was pinned to a hardcoded
+// --window-size=1280,720 (exec_resolver.go) while the docked panel is an
+// arbitrary, resizable shape — measured ~890x1010 (portrait). Since
+// `object-fit: contain` preserves the SOURCE aspect, the page could only ever
+// fill one dimension and the rest of the panel was letterboxed black. No CSS
+// change can correct a source whose shape is wrong. The same report's second
+// half was blur: the managed headless Chrome renders at DPR 1, so a capture
+// displayed larger than its CSS size upscales — deviceScaleFactor fixes that
+// in the same call.
+//
+// This ONLY changes the tab. A capture already in flight keeps its old
+// geometry, because tabCapture constraints are pinned per stream
+// (encoder.js's minWidth/maxWidth) and cannot be renegotiated on a running
+// track. The caller must follow this with CaptureSession.Recapture(), which
+// tears the stream down and re-reads chrome.tabs.get() — see
+// pkg/gateway/browser_ws.go's handleViewport for the ordering.
+//
+// Returns false if no live view exists for sessionID (nothing to resize).
+func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, deviceScaleFactor float64) (bool, error) {
+	sessionID = resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok {
+		return false, nil
+	}
+	lv.mu.Lock()
+	tabCtx := lv.tabCtx
+	lv.mu.Unlock()
+	if tabCtx == nil {
+		return false, nil
+	}
+	// Bounds are also enforced by the wire schema (BrowserViewportFrame), but
+	// re-checked here because this is a public method on the registry and a
+	// future non-WS caller must not be able to hand Chromium a degenerate or
+	// enormous allocation.
+	if width < 1 || height < 1 || width > maxViewportDimension || height > maxViewportDimension {
+		return false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
+	}
+	if deviceScaleFactor < 1 || deviceScaleFactor > maxViewportScaleFactor {
+		// Reject rather than silently clamp (review finding): a caller asking
+		// for dsf 50 got no feedback at all under the old clamp, while an
+		// out-of-range width got an explicit error. Same input class, same
+		// treatment.
+		return false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
+			deviceScaleFactor, maxViewportScaleFactor)
+	}
+	// Combined ceiling. Each dimension and the scale factor are individually
+	// bounded above, but nothing bounded their PRODUCT: 8192x8192 at dsf 3 is
+	// inside every per-field limit and asks Chromium for a ~24576x24576
+	// physical surface — on the order of gigabytes of framebuffer, against the
+	// single shared Chrome backing the agent's browsing.
+	physicalPixels := float64(width) * float64(height) * deviceScaleFactor * deviceScaleFactor
+	if physicalPixels > maxViewportPhysicalPixels {
+		return false, fmt.Errorf(
+			"browser live: viewport %dx%d @%.1fx = %.0f physical pixels, over the %.0f ceiling",
+			width, height, deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
+	}
+	err := runCDPWithTimeout(tabCtx, viewportSetTimeout,
+		emulation.SetDeviceMetricsOverride(int64(width), int64(height), deviceScaleFactor, false),
+	)
+	if err != nil {
+		return false, fmt.Errorf("browser live: set device metrics: %w", err)
+	}
+	return true, nil
+}
+
 func (r *LiveViewRegistry) PauseScreencast(sessionID string) bool {
 	sessionID = resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
@@ -390,6 +478,40 @@ func (r *LiveViewRegistry) TakeControl(sessionID, viewerID string) bool {
 		return false
 	}
 	return r.view(sessionID).takeControl(viewerID)
+}
+
+// EnsureControlForInput grants viewerID control when a human viewer sends
+// input, unless a DIFFERENT, STILL-ATTACHED viewer genuinely holds the lock.
+// Returns whether viewerID holds control afterwards.
+//
+// Product model (operator, 2026-07-30): "the user is driving per default
+// unless the agent is evidently driving, and even then the user can click
+// into the browser to take over." The lock's original design was the
+// inverse — nobody drives until an explicit take frame arrives — which made
+// a human's input silently invalid whenever client and server disagreed
+// about who held it.
+//
+// Two concrete failures this closes, both seen in the 2026-07-30 UAT:
+//
+//  1. STALE LOCK. lv.controller is cleared in detach(), which only runs on a
+//     CLEAN WebSocket close. A mobile/VPN client that vanishes abruptly
+//     leaves its viewerID owning the lock forever, and every later
+//     connection is locked out of a browser nobody is driving. Checking
+//     lv.viewers membership distinguishes a live holder from a ghost.
+//  2. LOST TAKE ACROSS RECONNECT. The client kept believing it was driving
+//     across a WS reconnect, so it never re-sent the take under its NEW
+//     viewerID; the server rejected all 448 of its inputs while the panel
+//     read "You're driving".
+//
+// The agent is not a viewer and never holds this lock (its activity is the
+// separate agent-working axis), so "a different attached viewer" here always
+// means another human — the one case where refusing is correct.
+func (r *LiveViewRegistry) EnsureControlForInput(sessionID, viewerID string) bool {
+	sessionID = resolveSessionID(sessionID)
+	if viewerID == "" {
+		return false
+	}
+	return r.view(sessionID).ensureControlForInput(viewerID)
 }
 
 // ReleaseControl releases viewerID's control of sessionID's live view, if it
@@ -1410,6 +1532,28 @@ func benignInputError(format string, args ...any) error {
 	return &LiveInputError{Kind: LiveInputErrorBenign, err: fmt.Errorf(format, args...)}
 }
 
+// ErrViewerNotController is the specific benign rejection meaning "this
+// viewer sent input but does not hold the session's control lock".
+//
+// 2026-07-30 UAT — why this needs to be distinguishable from every other
+// benign rejection: it is the only one that indicates the CLIENT'S BELIEF IS
+// WRONG rather than that the input was merely unwanted. A rate-limit
+// rejection is self-correcting (slow down and the next event lands); this
+// one never self-corrects, because the client goes on believing it is
+// driving and the server goes on discarding everything it sends. The
+// operator hit exactly that: the panel read "You're driving" while 448
+// consecutive inputs were rejected and silently dropped at debug level.
+// Callers use IsNotControllerLiveInputError to detect it and push the
+// authoritative control state back to that viewer so the UI can correct
+// itself. See pkg/gateway/browser_webrtc.go's data-channel input handler.
+var ErrViewerNotController = errors.New("browser live: viewer does not hold control of this session")
+
+// IsNotControllerLiveInputError reports whether err is the "viewer does not
+// hold control" rejection — see ErrViewerNotController.
+func IsNotControllerLiveInputError(err error) bool {
+	return errors.Is(err, ErrViewerNotController)
+}
+
 func realInputError(format string, args ...any) error {
 	return &LiveInputError{Kind: LiveInputErrorReal, err: fmt.Errorf(format, args...)}
 }
@@ -1431,7 +1575,7 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	lv.mu.Lock()
 	if lv.controller == "" || lv.controller != viewerID {
 		lv.mu.Unlock()
-		return benignInputError("browser live: viewer does not hold control of this session")
+		return &LiveInputError{Kind: LiveInputErrorBenign, err: ErrViewerNotController}
 	}
 	if !lv.allowInputLocked() {
 		lv.mu.Unlock()
@@ -1512,6 +1656,33 @@ func (lv *LiveView) allowInputLocked() bool {
 // connection's display agree with that lock instead of continuing to show
 // stale state. The sinks are dispatched via broadcastControl (no lock held),
 // mirroring deliver().
+// ensureControlForInput is EnsureControlForInput's per-view half — see that
+// method's doc comment for the model and the two failures it closes.
+func (lv *LiveView) ensureControlForInput(viewerID string) bool {
+	lv.mu.Lock()
+	if lv.controller == viewerID {
+		lv.mu.Unlock()
+		return true
+	}
+	if lv.controller != "" {
+		if _, stillAttached := lv.viewers[lv.controller]; stillAttached {
+			// A real, live viewer is driving — refuse. This is the only case
+			// where denying a human's input is correct, and it is what keeps
+			// two simultaneous humans from fighting over the same page.
+			lv.mu.Unlock()
+			return false
+		}
+		// Holder is a ghost: it owns the lock but is no longer attached, so
+		// it can never release it. Steal rather than stay wedged forever.
+	}
+	lv.controller = viewerID
+	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
+	lv.mu.Unlock()
+
+	broadcastControl(otherSinks, true)
+	return true
+}
+
 func (lv *LiveView) takeControl(viewerID string) bool {
 	lv.mu.Lock()
 	if lv.controller != "" && lv.controller != viewerID {

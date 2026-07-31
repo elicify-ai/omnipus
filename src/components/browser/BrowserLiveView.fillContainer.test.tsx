@@ -28,9 +28,10 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 
-const { mockSendControl, mockSendInput, callbacksRef } = vi.hoisted(() => ({
+const { mockSendControl, mockSendInput, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
   mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn((_input?: { kind: string; x: number; y: number }) => true),
+  mockSendViewport: vi.fn((_w?: number, _h?: number, _dpr?: number) => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
 
@@ -48,6 +49,9 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           sendInput: mockSendInput,
           sendControl: mockSendControl,
           sendTabAction: vi.fn(() => true),
+          // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
+          // calls this on mount, so every connection double needs it.
+          sendViewport: mockSendViewport,
           isConnected: true,
         }
       },
@@ -114,7 +118,12 @@ beforeEach(() => {
 })
 
 describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
-  it('defaults to the intrinsic-capped sizing classes when fillContainer is omitted (docked-panel layout unchanged)', () => {
+  // NOTE: this covers the component DEFAULT, not the docked panel. As of
+  // 2026-07-31 BrowserLivePanel passes `fillContainer` explicitly — an
+  // operator UAT measured the page rendering at ~695x343 inside an ~890x1010
+  // panel, too small to interact with, because the capped classes below can
+  // shrink but never grow.
+  it('defaults to the intrinsic-capped sizing classes when fillContainer is omitted', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     emitFirstFrame()
     const classes = classTokens(screen.getByTestId('browser-live-img'))
@@ -137,6 +146,22 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
     // presence is exactly what produced the 639×316-in-1600×880 bug.
     expect(classes.has('h-auto')).toBe(false)
     expect(classes.has('w-auto')).toBe(false)
+    expect(classes.has('max-h-full')).toBe(false)
+    expect(classes.has('max-w-full')).toBe(false)
+  })
+
+  // 2026-07-31: `fillContainer` + `canAnnotate` used to be forbidden together
+  // (annotate's crop math read the raw container rect with no letterbox
+  // correction). finalizeSelection now routes through computeObjectContainRect,
+  // so the docked panel can have both — this pins that the combination renders
+  // the fill sizing rather than silently falling back to the capped classes.
+  it('applies fill sizing when combined with canAnnotate (the docked panel\'s configuration)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+    emitFirstFrame()
+    const classes = classTokens(screen.getByTestId('browser-live-img'))
+    expect(classes.has('h-full')).toBe(true)
+    expect(classes.has('w-full')).toBe(true)
+    expect(classes.has('object-contain')).toBe(true)
     expect(classes.has('max-h-full')).toBe(false)
     expect(classes.has('max-w-full')).toBe(false)
   })
@@ -219,5 +244,52 @@ describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 reve
     // clearly different, wrong value, so this discriminates the fix too.
     expect(sent.x).toBeCloseTo(14.4, 0)
     expect(sent.x).not.toBeCloseTo(83.9, 0)
+  })
+})
+
+
+// Regression for the BLOCKER found in review of the adaptive-viewport feature.
+//
+// The effect that reports the panel geometry reads `containerRef.current` and
+// bails if it is null. But the container div is gated on `frame`, while
+// `connected` flips true from ws.onopen — SECONDS earlier, because the
+// backend's cold capture start can take ~25s. With `[connected]` as the only
+// dependency the effect ran exactly once, against a null ref, and never again:
+// sendViewport was never called on a fresh open, so the capture stayed at its
+// hardcoded 1280x720 and the feature was dead on its primary path.
+//
+// This test reproduces the REAL ordering (connected first, frame later, in
+// SEPARATE acts) rather than the collapsed single-act ordering the other
+// helpers use — which is precisely why the existing suite could not see it.
+describe('BrowserLiveView — adaptive viewport reporting (BLOCKER regression)', () => {
+  it('sends the panel geometry after a frame arrives, even though `connected` fired first', async () => {
+    vi.useFakeTimers()
+    try {
+      mockSendViewport.mockClear()
+      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+
+      // 1. Connection opens. The container does NOT exist yet.
+      act(() => {
+        callbacksRef.current?.onConnected?.()
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(mockSendViewport).not.toHaveBeenCalled()
+
+      // 2. First frame arrives — NOW the container mounts and the effect must
+      //    re-run. Give the element a real box so the send is not skipped.
+      act(() => {
+        emitFirstFrame()
+      })
+      const el = document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement | null
+      if (el) {
+        el.getBoundingClientRect = () =>
+          ({ width: 890, height: 1010, top: 0, left: 0, right: 890, bottom: 1010, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      }
+      await vi.advanceTimersByTimeAsync(500) // past the 400ms debounce
+
+      expect(mockSendViewport).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

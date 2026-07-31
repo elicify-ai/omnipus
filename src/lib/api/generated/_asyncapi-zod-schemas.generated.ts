@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_screencast", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control"]);
 
 export const AuthFrame = z
   .object({
@@ -509,6 +509,17 @@ export const BrowserStatusFrame = z
   })
   .strict();
 
+export const BrowserViewportFrame = z
+  .object({
+    type: z.literal("browser_viewport"),
+    session_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    width: z.number().int().min(1).max(8192),
+    height: z.number().int().min(1).max(8192),
+    device_scale_factor: z.number().min(1).max(3).optional(),
+  })
+  .strict();
+
 export const BrowserTabActionFrame = z
   .object({
     type: z.literal("browser_tab_action"),
@@ -647,6 +658,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserDetachFrame,
   BrowserScreencastFrame,
   BrowserStatusFrame,
+  BrowserViewportFrame,
   BrowserTabActionFrame,
   BrowserTabsFrame,
   BrowserWebRTCOfferFrame,

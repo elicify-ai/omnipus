@@ -157,6 +157,19 @@ type BrowserTabsFrame struct {
 	Type string `json:"type"`
 }
 
+// BrowserViewportFrame — Client → server. Reports the live-browser panel's current render box so the gateway can size the captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest (operator UAT 2026-07-31). device_scale_factor addresses the same report's second half, blur: the managed headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
+type BrowserViewportFrame struct {
+	AgentId *string `json:"agent_id,omitempty"`
+	// Viewer devicePixelRatio, used as Chromium's deviceScaleFactor so the capture renders at display resolution rather than upscaling. Capped at 3 because cost scales with the SQUARE of this value. Omitted means 1.
+	DeviceScaleFactor *float64 `json:"device_scale_factor,omitempty"`
+	// Panel render-box height in CSS pixels.
+	Height    int     `json:"height"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	// Panel render-box width in CSS pixels. Bounded so a malformed or hostile frame cannot ask Chromium for an absurd allocation.
+	Width int `json:"width"`
+}
+
 // BrowserWebRTCAnswerFrame — Server → client. Pion SDP answer to a browser_webrtc_offer, sent once the gateway's relay has created the viewer PeerConnection and gathered its own ICE candidates (non-trickle — the answer is complete, no separate candidate frames follow). See ADR-047 D1/D4.
 type BrowserWebRTCAnswerFrame struct {
 	// Complete SDP answer (application/sdp body) from the gateway's Pion viewer PeerConnection, ICE-gathering-complete (non-trickle).
@@ -623,6 +636,7 @@ const (
 	WsFrameTypeBrowserStatus            WsFrameType = "browser_status"
 	WsFrameTypeBrowserTabAction         WsFrameType = "browser_tab_action"
 	WsFrameTypeBrowserTabs              WsFrameType = "browser_tabs"
+	WsFrameTypeBrowserViewport          WsFrameType = "browser_viewport"
 	WsFrameTypeBrowserWebrtcOffer       WsFrameType = "browser_webrtc_offer"
 	WsFrameTypeBrowserWebrtcAnswer      WsFrameType = "browser_webrtc_answer"
 	WsFrameTypeBrowserWebrtcState       WsFrameType = "browser_webrtc_state"

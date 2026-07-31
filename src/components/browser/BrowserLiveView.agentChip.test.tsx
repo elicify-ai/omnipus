@@ -36,6 +36,9 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           sendInput: vi.fn(),
           sendControl: vi.fn(() => true),
           sendTabAction: vi.fn(() => true),
+          // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
+          // calls this on mount, so every connection double needs it.
+          sendViewport: vi.fn(() => true),
           isConnected: true,
         }
       },

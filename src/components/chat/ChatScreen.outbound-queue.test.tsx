@@ -22,7 +22,7 @@
 // (real <form>/<textarea>/<button> DOM so the `disabled` prop is actually
 // exercised, not just asserted against a mock's props object).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
@@ -187,9 +187,15 @@ function resetStores() {
 }
 
 beforeEach(resetStores)
+// The reconnect-banner debounce (useSettledFlag) needs fake timers in the two
+// tests that assert it; make sure they never leak into the rest of the file.
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('OmnipusComposer — composer usability while reconnecting (#105 offline send queue)', () => {
   it('reconnectPhase "reconnecting" (isConnected:false): textarea and Send stay ENABLED so a message can be queued', () => {
+    vi.useFakeTimers()
     act(() => {
       useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting', reconnectAttempt: 1 })
     })
@@ -197,12 +203,19 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
 
     expect(screen.getByTestId('composer-input')).not.toBeDisabled()
     expect(screen.getByTestId('chat-send')).not.toBeDisabled()
-    // The banner correctly reports the outage at the same time the composer
-    // stays usable — these are not mutually exclusive.
+    // The banner is DEBOUNCED (useSettledFlag, 2s) as of 2026-07-31 so a
+    // sub-second blip never paints a scary banner — it must therefore be
+    // absent immediately and present only once the outage has persisted.
+    // The composer staying usable is independent of that and is immediate.
+    expect(screen.queryByTestId('reconnect-banner')).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(2100)
+    })
     expect(screen.getByTestId('reconnect-banner')).toHaveTextContent(/Reconnecting…\s*\(attempt 1\)/)
   })
 
   it('reconnectPhase "slow" (isConnected:false): textarea and Send stay ENABLED so a message can be queued', () => {
+    vi.useFakeTimers()
     act(() => {
       useConnectionStore.setState({ isConnected: false, reconnectPhase: 'slow', reconnectAttempt: 3 })
     })
@@ -210,6 +223,10 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
 
     expect(screen.getByTestId('composer-input')).not.toBeDisabled()
     expect(screen.getByTestId('chat-send')).not.toBeDisabled()
+    expect(screen.queryByTestId('reconnect-banner')).toBeNull() // debounced — see above
+    act(() => {
+      vi.advanceTimersByTime(2100)
+    })
     expect(screen.getByTestId('reconnect-banner')).toHaveTextContent(/slow retry/)
   })
 

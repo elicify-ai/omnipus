@@ -135,6 +135,21 @@ export function BrowserLivePanel() {
         // JS realm with — the fullscreen pop-out route (browser-live.tsx)
         // omits this so its "Annotate" button doesn't render at all.
         canAnnotate
+        // 2026-07-31 operator UAT: without this the docked panel rendered the
+        // page at its INTRINSIC size — measured ~695x343 inside an ~890x1010
+        // panel, filling neither dimension and leaving most of the panel black.
+        // The capped layout (`h-auto w-auto max-h-full max-w-full`) can shrink
+        // but never grow, so a small capture never scales up to the space
+        // available. It was too small to interact with at all, which blocked
+        // testing the input path entirely.
+        //
+        // Pairing this with `canAnnotate` was previously forbidden (see
+        // BrowserLiveView's `fillContainer` doc comment) because annotate's
+        // crop math read the raw container rect with no letterbox correction.
+        // That precondition is now met: finalizeSelection routes its rect
+        // through computeObjectContainRect, exactly as the pointer/wheel path
+        // already did.
+        fillContainer
         onPopOut={handlePopOut}
       />
     </aside>

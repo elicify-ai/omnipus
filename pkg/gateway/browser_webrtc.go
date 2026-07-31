@@ -683,7 +683,26 @@ var (
 // no-progress tick already implies a dead capture; two ticks costs at most
 // one extra encoderLivenessCheckInterval of latency for the added safety
 // margin.
-const encoderLivenessVideoStallTicks = 2
+//
+// Raised 2 -> 6 (2026-07-30 UAT). The premise quoted above — "VP8 keeps
+// emitting packets on completely static content at ~30fps" — is FALSE for
+// this capture path, and measured live traffic disproves it: on a static
+// Google page the ingest leg forwarded ~2 video packets/sec against ~50
+// audio packets/sec, i.e. exactly the 1 Hz blinking text cursor and nothing
+// else. tabCapture is REPAINT-driven, not clock-driven: a page with nothing
+// animating (no cursor, no video, no spinner) legitimately produces ZERO
+// frames, indefinitely, while the capture is perfectly healthy. At 2 ticks
+// this watchdog would call cs.Stop() on such a page after only 20s and kill
+// a working session — a false positive that reads to the user exactly like
+// the freeze we are fixing. 6 ticks (60s) keeps the wedged-capture-with-
+// live-ping detection this check exists for while making that false
+// positive far less likely. It does NOT eliminate it: a genuinely static
+// page still trips this at 60s. The durable fix is to distinguish "no
+// frames because nothing repainted" from "no frames because the pipeline is
+// wedged" (e.g. an encoder-side frame-production counter rather than an
+// RTP-egress counter), which is out of scope here and is why this remains a
+// tick-count tuning rather than a redesign.
+const encoderLivenessVideoStallTicks = 6
 
 // watchEncoderLiveness runs for the lifetime of one CaptureSession (fix 3),
 // exiting as soon as cs.Done() closes (Stop(), from ANY cause) so at most
@@ -874,6 +893,36 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 		if err := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 			if browser.IsBenignLiveInputError(err) {
 				slog.Debug("browser-webrtc: input rejected (benign)", "error", err, "viewer_id", viewerID)
+				// 2026-07-30 UAT: "benign" must not mean "invisible" for the
+				// not-controller case. Every other benign rejection is
+				// self-correcting; this one is not — the client keeps
+				// believing it is driving and keeps sending input the server
+				// keeps discarding. The operator's panel read "You're
+				// driving" through 448 consecutive rejected inputs, so
+				// clicks and keystrokes did nothing at all with no error
+				// anywhere the user could see. Push the AUTHORITATIVE
+				// control state back to this viewer so its UI corrects
+				// itself and the next click re-takes the wheel properly.
+				if browser.IsNotControllerLiveInputError(err) {
+					// Operator model: the user drives by default. Rather than
+					// discard a human's click because client and server
+					// disagree about who holds the lock, acquire it for this
+					// viewer and dispatch the SAME event — so the very first
+					// click lands instead of being spent re-taking the wheel.
+					// EnsureControlForInput refuses only when a different,
+					// still-attached viewer genuinely holds control.
+					if mgr.Live().EnsureControlForInput(browser.DefaultSessionID, viewerID) {
+						if retryErr := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); retryErr != nil {
+							slog.Debug("browser-webrtc: input still rejected after acquiring control",
+								"error", retryErr, "viewer_id", viewerID)
+						}
+						return
+					}
+					// Another live viewer is driving — the client's "You're
+					// driving" is genuinely wrong, so push the authoritative
+					// state so its UI stops claiming control it doesn't have.
+					h.correctViewerControlState(viewerID)
+				}
 				return
 			}
 			slog.Warn("browser-webrtc: input dispatch failed", "error", err, "viewer_id", viewerID)
@@ -895,6 +944,56 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 // one error frame per event. A no-op if viewerID has no registered
 // connection (e.g. the viewer detached between the DC message arriving and
 // this dispatch completing).
+// correctViewerControlState pushes a browser_status{state:"released"} frame
+// to viewerID's main WS connection after that viewer sent input without
+// holding the control lock (see the call site for the UAT this fixes).
+//
+// "released" is the same frame the explicit release path sends, so the SPA
+// already knows how to handle it: it drops out of you-driving mode. That is
+// precisely the correction needed — with its drive mode reset, the client's
+// next click runs takeWheelIfNeeded and re-acquires the lock properly,
+// instead of skipping the take because it wrongly believed it still held it.
+//
+// Throttled per viewer via the SAME lastErrAt/lastErrMsg window
+// surfaceWebRTCInputError uses: a rejected cursor stream produces hundreds
+// of these per second, and one correction is enough — the client only needs
+// telling once per window that it is not driving.
+func (h *BrowserWSHandler) correctViewerControlState(viewerID string) {
+	v, ok := h.viewerConns.Load(viewerID)
+	if !ok {
+		return
+	}
+	vc, ok := v.(*webrtcViewerConn)
+	if !ok {
+		return
+	}
+
+	const marker = "__control_state_correction__"
+	vc.mu.Lock()
+	now := time.Now()
+	throttled := vc.lastErrMsg == marker && now.Sub(vc.lastErrAt) < minInputErrorInterval
+	if !throttled {
+		vc.lastErrAt = now
+		vc.lastErrMsg = marker
+	}
+	sessionID := vc.sessionID
+	wc := vc.wc
+	vc.mu.Unlock()
+	if throttled || wc == nil {
+		return
+	}
+
+	slog.Warn(
+		"browser-webrtc: viewer sent input without holding control — pushing authoritative released state so its UI corrects",
+		"viewer_id", viewerID,
+	)
+	wc.sendCriticalGen(generated.BrowserStatusFrame{
+		Type:      string(generated.WsFrameTypeBrowserStatus),
+		State:     "released",
+		SessionId: &sessionID,
+	}, dropContext(sessionID, viewerID, "control-state-correction"))
+}
+
 func (h *BrowserWSHandler) surfaceWebRTCInputError(viewerID, kind string, dispatchErr error) {
 	v, ok := h.viewerConns.Load(viewerID)
 	if !ok {

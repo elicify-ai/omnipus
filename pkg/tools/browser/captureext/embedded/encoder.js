@@ -388,7 +388,48 @@ function newPeerConnection() {
 // the initial connect and for a recapture control message — matching
 // wv1-spike-results.md Q3's proven "new PC with fresh SSRCs replaces the
 // old one" recovery pattern rather than incremental same-PC renegotiation.
+// captureInFlight serialises runCaptureAndOffer (2026-07-31, found by review
+// of the adaptive-viewport feature). This function has two awaits before it
+// assigns currentPC/currentStream, and it had NO in-flight guard. That was
+// practically unreachable while the only trigger was an active-tab switch (a
+// rare, effectively serialized event) — but the viewport feature added a
+// second, client-driven, HIGH-FREQUENCY trigger: every panel resize sends
+// browser_viewport, and the gateway answers with a recapture. A CaptureSession
+// is shared per AGENT, so two viewers of the same tab each push their own
+// geometry with no cross-viewer coordination.
+//
+// Two overlapping calls race the same chrome.tabCapture pipeline for one tab.
+// Chrome allows only one active tabCapture stream per tab, so the loser's
+// getUserMedia throws — and handleControlFrame's catch closes the WHOLE ingest
+// WebSocket, tearing down a session that was otherwise fine. Even without a
+// throw, the loser's PeerConnection and MediaStreamTrack are orphaned, because
+// teardownCapture only ever closes whatever the globals currently point at.
+//
+// Coalesce rather than queue: if a recapture arrives while one is running, set
+// a rerun flag and let the in-flight call loop once more when it finishes. The
+// geometry we want is always the LATEST one, so collapsing N pending
+// recaptures into one extra pass is both correct and cheaper.
+let captureInFlight = false;
+let captureRerunRequested = false;
+
 async function runCaptureAndOffer() {
+  if (captureInFlight) {
+    captureRerunRequested = true;
+    record('runCaptureAndOffer: already in flight, coalescing into a rerun');
+    return;
+  }
+  captureInFlight = true;
+  try {
+    do {
+      captureRerunRequested = false;
+      await runCaptureAndOfferOnce();
+    } while (captureRerunRequested);
+  } finally {
+    captureInFlight = false;
+  }
+}
+
+async function runCaptureAndOfferOnce() {
   teardownCapture();
   setStatus('capturing');
 

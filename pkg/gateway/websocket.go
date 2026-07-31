@@ -1145,6 +1145,11 @@ func wsFrameSchemaName(frameType string) string {
 	// rationale as the 4 ADR-038 browser-live frame types above.
 	case string(generated.WsFrameTypeBrowserTabAction):
 		return "BrowserTabActionFrame"
+	// 2026-07-31 adaptive viewport: bounds (1..8192, dsf 1..3) are declared in
+	// the schema, so without this mapping a malformed frame would reach
+	// Emulation.setDeviceMetricsOverride unvalidated.
+	case string(generated.WsFrameTypeBrowserViewport):
+		return "BrowserViewportFrame"
 	// ADR-047 D4 (wave-plan W2-A): the viewer's WebRTC offer, on this same
 	// browser WS. browser_webrtc.go's handleWebRTCOffer is the actual
 	// caller, same rationale as the ADR-038/ADR-041 browser-live frame types
@@ -2598,6 +2603,16 @@ var errSendTimeout = fmt.Errorf("ws: send channel full — replay send timeout")
 // gorilla/websocket requires all writes to happen from the same goroutine.
 // A nil message on sendCh is the sentinel for a ping frame.
 func (h *WSHandler) writePump(wc *wsConn) {
+	// defer close (2026-07-31, found by the sibling instance's reviewers and
+	// verified here): every exit path below is a bare `return`. Without this,
+	// a write failure left the connection WRITE-dead but READ-alive — doneCh
+	// was never closed, so sendFrame/sendCritical kept selecting on a channel
+	// nobody would ever close, and readLoop kept refreshing its deadline from
+	// whatever the client was still sending. The socket was then only reaped
+	// by the CLIENT's own missed-ping self-heal ~60s later. close() is
+	// sync.Once-guarded, so this is safe alongside every other caller.
+	defer wc.close()
+
 	for {
 		select {
 		case msg, ok := <-wc.sendCh:

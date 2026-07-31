@@ -35,11 +35,15 @@
 //     `answerTimeoutMs`)
 //   - ICE connection state 'failed'
 //   - ICE connection state 'disconnected' for longer than `disconnectedGraceMs`
-//     (default 5s) without recovering to 'connected'/'completed'
-// Retry: exactly ONE automatic re-offer `retryDelayMs` (default 15s) after a
-// fallback. If that retry also falls back, no further automatic retry is
-// scheduled — the caller must call `start()` again (a fresh re-attach) to
-// re-arm it. `start()` always resets the one-shot retry budget.
+//     (default 15s) without recovering to 'connected'/'completed'
+// Retry (revised 2026-07-30 UAT — see DEFAULT_MAX_RETRIES): up to
+// `maxRetries` (default 5) CONSECUTIVE automatic re-offers, with exponential
+// backoff starting at `retryDelayMs` (default 15s) and doubling each attempt.
+// The counter RESETS on every successful connect, so only a sustained
+// inability to connect exhausts it; once exhausted the caller must call
+// `start()` again (a fresh re-attach) to re-arm. `start()` always resets the
+// budget. This replaced a one-shot boolean that stranded the panel in the
+// JPEG sink permanently after a single failed re-offer.
 //
 // Answer-timeout duration (fix-wave, MED — reviewer finding 4): the gateway's
 // legitimate COLD START (capture start ~20s + bringToFront ~5s + tracks wait)
@@ -86,11 +90,14 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
    * `answerTimeoutMs` default of 5s). */
   firstAnswerTimeoutMs?: number
   /** ms an ICE `disconnected` state is tolerated before falling back.
-   * Default 5000. */
-  disconnectedGraceMs?: number
-  /** ms to wait after a fallback before the single automatic re-offer.
    * Default 15000. */
+  disconnectedGraceMs?: number
+  /** ms before the FIRST automatic re-offer after a fallback; each further
+   * consecutive retry doubles it. Default 15000. */
   retryDelayMs?: number
+  /** Max CONSECUTIVE failed re-offers before giving up until the next
+   * `start()`. Reset by a successful connect. Default 5. */
+  maxRetries?: number
   /** ms to wait for `RTCPeerConnection.iceGatheringState` to reach
    * 'complete' before giving up and sending the offer with whatever
    * candidates have gathered so far (non-trickle still works with a partial
@@ -121,8 +128,29 @@ interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of
 const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
 const DEFAULT_FIRST_ANSWER_TIMEOUT_MS = 30000
-const DEFAULT_DISCONNECTED_GRACE_MS = 5000
+// DEFAULT_DISCONNECTED_GRACE_MS (2026-07-30 UAT, Batam→Fly over VPN on iPad
+// Safari): was 5000. A 5s grace is far too tight for a high-latency mobile /
+// VPN path, where ICE 'disconnected' is a routine, self-recovering blip. The
+// live evidence: every viewer connection died 2-22s after connecting, the
+// client closed the PeerConnection itself (the gateway logged the SCTP
+// "User Initiated Abort: Close called" from OUR side), and the panel dropped
+// to the JPEG sink. 15s also sits comfortably under the relay's own
+// disconnect eviction (pkg/tools/browser/webrtc/viewer.go's
+// disconnectGracePeriod, raised to 30s in the same fix) so the server no
+// longer evicts a viewer the client is still trying to recover — before,
+// the client (5s) and server (10s) both gave up, in that order, on a link
+// that would have come back.
+const DEFAULT_DISCONNECTED_GRACE_MS = 15000
 const DEFAULT_RETRY_DELAY_MS = 15000
+// DEFAULT_MAX_RETRIES (same UAT): the retry budget used to be a single
+// one-shot boolean (`retriedOnce`) — after ONE failed re-offer the panel was
+// stranded in picture mode for the rest of the session with no way back
+// except a full re-attach. On a flaky mobile link that is precisely the
+// wrong policy: the transport recovers, but nothing ever tries again. The
+// budget is now a counter with exponential backoff, and it RESETS on every
+// successful connection, so only a sustained inability to connect
+// (5 consecutive failures, ~15s/30s/60s/120s/240s apart) gives up for good.
+const DEFAULT_MAX_RETRIES = 5
 const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 3000
 
 function defaultPcFactory(): RTCPeerConnection {
@@ -135,6 +163,7 @@ export class BrowserWebRTCSession {
   private readonly firstAnswerTimeoutMs: number
   private readonly disconnectedGraceMs: number
   private readonly retryDelayMs: number
+  private readonly maxRetries: number
   private readonly iceGatheringTimeoutMs: number
   /** Lifetime flag (never reset once true) — has this session's PC EVER
    * reached ICE 'connected'/'completed', across every attempt this instance
@@ -160,7 +189,9 @@ export class BrowserWebRTCSession {
 
   private _state: BrowserWebRTCState = 'idle'
   private stopped = true
-  private retriedOnce = false
+  /** Consecutive failed re-offer attempts. Reset to 0 by `start()` and by
+   * every successful transition to 'connected' — see DEFAULT_MAX_RETRIES. */
+  private retryCount = 0
 
   private answerTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null
@@ -177,6 +208,7 @@ export class BrowserWebRTCSession {
     this.firstAnswerTimeoutMs = options.firstAnswerTimeoutMs ?? DEFAULT_FIRST_ANSWER_TIMEOUT_MS
     this.disconnectedGraceMs = options.disconnectedGraceMs ?? DEFAULT_DISCONNECTED_GRACE_MS
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS
+    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES
     this.iceGatheringTimeoutMs = options.iceGatheringTimeoutMs ?? DEFAULT_ICE_GATHERING_TIMEOUT_MS
   }
 
@@ -190,6 +222,13 @@ export class BrowserWebRTCSession {
    * exists: BrowserLiveView.tsx reads it to distinguish a cold-start false
    * positive from a genuine stream degradation on an 'answer-timeout'
    * fallback. */
+  /** Consecutive failed re-offers so far. Lets a caller distinguish a first
+   * cold-start attempt (where an answer-timeout is plausibly just a slow
+   * capture start) from a repeated failure that deserves surfacing. */
+  get retryAttempts(): number {
+    return this.retryCount
+  }
+
   get hasConnectedOnce(): boolean {
     return this._hasConnectedOnce
   }
@@ -243,7 +282,7 @@ export class BrowserWebRTCSession {
       this.retryTimer = null
     }
     this.stopped = false
-    this.retriedOnce = false
+    this.retryCount = 0
     this.sendOfferFn = sendOffer
     void this._beginOffer()
   }
@@ -462,6 +501,13 @@ export class BrowserWebRTCSession {
         this._clearDisconnectedTimer()
         this._setState('connected')
         this._hasConnectedOnce = true
+        // Reaching 'connected' proves the path works RIGHT NOW, so the
+        // retry budget starts fresh: a later blip gets its own full set of
+        // attempts rather than inheriting exhaustion from an earlier,
+        // already-recovered one. Without this reset the counter would be a
+        // session-lifetime cap and a long session on a flaky link would
+        // still end up permanently stranded in the JPEG sink.
+        this.retryCount = 0
       } else if (iceState === 'failed') {
         this._fallback('ice-failed')
       } else if (iceState === 'disconnected') {
@@ -520,12 +566,16 @@ export class BrowserWebRTCSession {
     this._setState('fallback')
     this.fallbackCb?.(reason)
     if (this.stopped) return
-    if (this.retriedOnce) return
-    this.retriedOnce = true
+    if (this.retryCount >= this.maxRetries) return
+    // Exponential backoff, capped by the attempt count: a transient blip
+    // recovers on the first retry (retryDelayMs), while a genuinely-down
+    // relay is not hammered every 15s for the life of the panel.
+    const delay = this.retryDelayMs * 2 ** this.retryCount
+    this.retryCount++
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
       if (!this.stopped) void this._beginOffer()
-    }, this.retryDelayMs)
+    }, delay)
   }
 
   private _cleanupPeer(): void {

@@ -25,6 +25,7 @@ import type {
   BrowserScreencastFrame,
   BrowserStatusFrame,
   BrowserTabActionFrame,
+  BrowserViewportFrame,
   BrowserTabsFrame,
   BrowserWebRTCAnswerFrame,
   BrowserWebRTCOfferFrame,
@@ -393,6 +394,39 @@ export class BrowserLiveWsConnection {
       agent_id: this.agentId,
       action,
       ...(index !== undefined ? { index } : {}),
+    }
+    return this._rawSend(frame)
+  }
+
+  /**
+   * Reports this viewer's panel geometry so the backend can size the captured
+   * tab to match, instead of the hardcoded 1280x720 it was pinned to.
+   *
+   * Operator UAT 2026-07-31: the docked panel is an arbitrary resizable shape
+   * (measured ~890x1010, portrait) while the capture was fixed 16:9. Because
+   * `object-fit: contain` preserves the SOURCE aspect, the page could fill
+   * only one dimension and the rest of the panel was letterboxed black — too
+   * small to interact with. `deviceScaleFactor` addresses the same report's
+   * second half (blur): the managed headless Chrome renders at DPR 1, so a
+   * capture displayed larger than its CSS size upscales.
+   *
+   * Caller is responsible for debouncing — the backend applies the metrics and
+   * then forces a capture rebuild, which is a visible (if brief) stream blip,
+   * so this must not be sent per resize event.
+   */
+  sendViewport(width: number, height: number, deviceScaleFactor: number): boolean {
+    const frame: BrowserViewportFrame = {
+      type: 'browser_viewport',
+      session_id: this.sessionId,
+      agent_id: this.agentId,
+      // Integers only — the wire schema declares these as `integer`, and a
+      // fractional CSS size (common on fractional-DPR displays) would fail
+      // server-side schema validation and be dropped.
+      width: Math.max(1, Math.round(width)),
+      height: Math.max(1, Math.round(height)),
+      // Clamped to the schema's 1..3 range. Cost scales with the SQUARE of
+      // this, and some devices report 4+.
+      device_scale_factor: Math.min(3, Math.max(1, deviceScaleFactor)),
     }
     return this._rawSend(frame)
   }

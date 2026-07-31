@@ -48,6 +48,7 @@ export type WsFrameType =
   | "browser_status"
   | "browser_tab_action"
   | "browser_tabs"
+  | "browser_viewport"
   | "browser_webrtc_offer"
   | "browser_webrtc_answer"
   | "browser_webrtc_state"
@@ -458,6 +459,15 @@ export interface BrowserStatusFrame {
   session_id?: string;
 }
 
+export interface BrowserViewportFrame {
+  type: "browser_viewport";
+  session_id?: string;
+  agent_id?: string;
+  width: number;
+  height: number;
+  device_scale_factor?: number;
+}
+
 export interface BrowserTabActionFrame {
   type: "browser_tab_action";
   session_id?: string;
@@ -572,6 +582,7 @@ export type WsFrame =
   | BrowserDetachFrame
   | BrowserScreencastFrame
   | BrowserStatusFrame
+  | BrowserViewportFrame
   | BrowserTabActionFrame
   | BrowserTabsFrame
   | BrowserWebRTCOfferFrame
@@ -634,6 +645,7 @@ export type ServerFrame =
   | NotificationFrame
   | BrowserScreencastFrame
   | BrowserStatusFrame
+  | BrowserViewportFrame
   | BrowserTabActionFrame
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame

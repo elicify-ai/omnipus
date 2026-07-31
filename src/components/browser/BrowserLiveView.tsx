@@ -154,15 +154,18 @@ export interface BrowserLiveViewProps {
    * `mapPointerToDeviceCoords` below — to keep pointer/wheel input landing
    * on the right device pixel regardless.
    *
-   * Deliberately NOT combined with `canAnnotate` by any caller today: the
-   * annotate-selection overlay and crop math (mapClientToFramePixels /
-   * computeCropRect) read `containerRef.getBoundingClientRect()` directly
-   * with no letterbox correction, so pairing `fillContainer` with
-   * `canAnnotate` would misplace the selection box whenever letterboxing is
-   * actually showing. The pop-out already hard-omits `canAnnotate` (FE-4,
-   * this component's `canAnnotate` doc comment) so the two never collide in
-   * practice — a future caller that wants BOTH must first extend
-   * annotate's rect math the same way.
+   * Safe to combine with `canAnnotate` as of 2026-07-31. It previously was
+   * NOT: annotate's crop math (mapClientToFramePixels / computeCropRect) read
+   * `containerRef.getBoundingClientRect()` directly with no letterbox
+   * correction, so pairing the two misplaced the selection whenever bars were
+   * showing. `finalizeSelection` now routes that rect through
+   * `computeObjectContainRect` first — the same correction the pointer/wheel
+   * path always applied — which removes the restriction.
+   *
+   * The docked panel (BrowserLivePanel) now passes BOTH: without
+   * `fillContainer` it rendered the page at intrinsic size inside a much
+   * larger panel (operator UAT measured ~695x343 in ~890x1010), too small to
+   * interact with.
    */
   fillContainer?: boolean
 }
@@ -469,6 +472,12 @@ export function BrowserLiveView({
   // WS means the PC's fate is unknown/stale either way — JPEG is always
   // safe to fall back to, the machine is stopped and re-armed on reconnect).
   const [webrtcStream, setWebrtcStream] = useState<MediaStream | null>(null)
+  // Persistent degraded indicator (review finding). Before this the ONLY
+  // signal that live video had fallen back to still-picture mode was a toast
+  // that auto-dismissed after 4s — look away for five seconds and a broken
+  // video path was indistinguishable from a working one, since the <img> sink
+  // renders identically either way. `null` = not degraded.
+  const [degradedReason, setDegradedReason] = useState<string | null>(null)
   const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
   // WebRTC build (W1-F) — starts MUTED (autoplay-safe: browsers block
   // autoplaying audio without a prior user gesture; the video itself still
@@ -835,7 +844,10 @@ export function BrowserLiveView({
   useEffect(() => {
     const machine = new BrowserWebRTCSession()
     webrtcRef.current = machine
-    machine.onStream((stream) => setWebrtcStream(stream))
+    machine.onStream((stream) => {
+      setWebrtcStream(stream)
+      setDegradedReason(null) // recovered
+    })
     machine.onInputChannelOpen(() => {
       inputChannelOpenRef.current = true
     })
@@ -855,6 +867,7 @@ export function BrowserLiveView({
     // rather than waiting for a stale readyState check to catch up.
     machine.onFallback((reason) => {
       setWebrtcStream(null)
+      setDegradedReason(reason)
       setWebrtcHasAudio(false)
       inputChannelOpenRef.current = false
       // fix-wave B (HIGH): the reason used to be discarded entirely — a
@@ -885,10 +898,26 @@ export function BrowserLiveView({
         // suppressed. Every OTHER reason, and 'answer-timeout' once the
         // stream HAD connected before, still toasts — that's a genuine
         // degradation of a previously-working stream.
-        const coldStartAnswerTimeout = reason === 'answer-timeout' && !machine.hasConnectedOnce
+        // Cold-start suppression is correct for the FIRST attempt (a slow
+        // capture start racing the timeout, which then connects fine on
+        // retry) — but suppressing it for EVERY retry meant a total WebRTC
+        // failure produced no user-facing explanation at all, ever: the panel
+        // just silently looked like plain JPEG (review finding). The
+        // persistent degraded badge now covers the steady state; this keeps
+        // the toast suppressed only while a cold start is still plausibly in
+        // progress, i.e. the first attempt.
+        const coldStartAnswerTimeout =
+          reason === 'answer-timeout' && !machine.hasConnectedOnce && machine.retryAttempts === 0
         if (!coldStartAnswerTimeout) {
           useUiStore.getState().addToast({
-            message: 'Live video degraded to picture mode — audio unavailable.',
+            // The reason is carried IN the toast, not just console.warn'd
+            // above (2026-07-30 UAT): the operator reproduces this on an
+            // iPad, where opening a JS console is impractical, so a bare
+            // "degraded" message left the actual trigger — the one thing
+            // needed to tell an ICE drop from a gateway-side unavailability
+            // from an answer timeout — unobservable on the only device that
+            // reproduces it.
+            message: `Live video degraded to picture mode — audio unavailable. (${reason})`,
             variant: 'warning',
           })
         }
@@ -1161,6 +1190,89 @@ export function BrowserLiveView({
     [mediaStream],
   )
 
+  // ── Adaptive viewport (2026-07-31 operator UAT) ──────────────────────────
+  // Report the panel's render box so the backend can size the CAPTURED TAB to
+  // match. Before this, the tab was pinned to a hardcoded 1280x720 while this
+  // panel is an arbitrary, resizable shape (measured ~890x1010, portrait), and
+  // since `object-fit: contain` preserves the SOURCE aspect the page could
+  // fill only one dimension — the rest was letterboxed black and too small to
+  // interact with. devicePixelRatio is sent as Chromium's deviceScaleFactor,
+  // which fixes the same report's blur (headless Chrome renders at DPR 1, so
+  // anything displayed larger upscales).
+  //
+  // Debounced hard (400ms) and gated on a meaningful delta, because the
+  // backend responds by REBUILDING the capture stream — tabCapture constraints
+  // are pinned per stream and cannot be renegotiated on a running track — and
+  // each rebuild is a brief visible blip. Sending per resize event would make
+  // dragging a window a strobe.
+  const lastSentViewportRef = useRef<{ w: number; h: number; dpr: number } | null>(null)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return undefined
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const push = () => {
+      const box = el.getBoundingClientRect()
+      const w = Math.round(box.width)
+      const h = Math.round(box.height)
+      if (w < 1 || h < 1) return
+      const dpr = window.devicePixelRatio || 1
+      const prev = lastSentViewportRef.current
+      // A rebuild costs a visible blip, so ignore sub-threshold jitter (a
+      // scrollbar appearing, a 1px layout settle). 8px is below what a user
+      // would notice as wrong aspect but well above incidental churn.
+      if (prev && Math.abs(prev.w - w) < 8 && Math.abs(prev.h - h) < 8 && prev.dpr === dpr) return
+      if (wsRef.current?.sendViewport(w, h, dpr)) {
+        lastSentViewportRef.current = { w, h, dpr }
+      }
+    }
+
+    const schedule = () => {
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        push()
+      }, 400)
+    }
+
+    // Initial push once connected — the WS may not be open on first mount, so
+    // `connected` is a dependency and this re-runs when it flips true.
+    if (connected) schedule()
+
+    // ResizeObserver is guarded, not assumed. Adaptive sizing is an
+    // enhancement; an environment without the API (jsdom under test, an old
+    // or locked-down browser) must still get a working panel rather than a
+    // crash that takes the whole live view down — which is exactly what an
+    // unguarded `new ResizeObserver` did when this landed (174 tests, 8
+    // files, all "ResizeObserver is not defined"). Falling back to window
+    // resize still tracks the common case, since the panel is sized by the
+    // viewport; it just misses container-only changes such as the sidebar
+    // being pinned or unpinned.
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', schedule)
+      return () => {
+        if (timer !== null) clearTimeout(timer)
+        window.removeEventListener('resize', schedule)
+      }
+    }
+
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    return () => {
+      if (timer !== null) clearTimeout(timer)
+      ro.disconnect()
+    }
+    // `frame !== null` is load-bearing, not incidental (BLOCKER caught in
+    // review): containerRef is only attached once a frame exists (the
+    // container div is gated on `frame`), but `connected` flips true from
+    // ws.onopen — SECONDS before the first frame arrives, since the backend's
+    // cold capture start can run ~25s. With `[connected]` alone this effect
+    // ran exactly once, while containerRef.current was still null, bailed,
+    // and never re-ran — so sendViewport was NEVER called on a fresh open and
+    // the capture stayed at its hardcoded default. Same dependency shape the
+    // wheel listener below already uses, for the same reason.
+  }, [connected, frame !== null])
+
   // ── Native (non-passive) wheel listener — React's synthetic onWheel is
   // passive by default, so preventDefault() inside a JSX handler would warn
   // and no-op. Attached once; reads live state via refs to avoid re-binding
@@ -1428,8 +1540,26 @@ export function BrowserLiveView({
       // null (byte-identical JPEG-mode behavior).
       const dims = activeFrameDims()
       if (!dims) return fail()
-      const startPx = mapClientToFramePixels(startClient.x, startClient.y, containerRect, dims.width, dims.height)
-      const endPx = mapClientToFramePixels(endClient.x, endClient.y, containerRect, dims.width, dims.height)
+      // Letterbox correction (2026-07-31) — the precondition this component's
+      // `fillContainer` doc comment names for enabling that mode alongside
+      // `canAnnotate`. Under `fillContainer` the media element is `w-full
+      // h-full object-contain`, so it fills the box and REAL letterbox /
+      // pillarbox bars appear whenever the container's aspect ratio differs
+      // from the content's — which is the normal case for the docked panel (a
+      // tall, narrow column showing a wide page). Mapping a client point
+      // against the raw container rect would then treat the bars as part of
+      // the image and skew every crop toward the wrong region.
+      //
+      // The pointer/wheel path already did this (see mapPointerToDeviceCoords);
+      // the annotate path did not, which is precisely why the two could not be
+      // combined. Routing the rect through the same helper removes that
+      // restriction. Degenerate/zero-size boxes are handled inside
+      // computeObjectContainRect, and when aspect ratios happen to match it
+      // returns the box unchanged — so this is a no-op in the non-letterboxed
+      // case rather than a behaviour change.
+      const contentRect = computeObjectContainRect(containerRect, dims.width, dims.height)
+      const startPx = mapClientToFramePixels(startClient.x, startClient.y, contentRect, dims.width, dims.height)
+      const endPx = mapClientToFramePixels(endClient.x, endClient.y, contentRect, dims.width, dims.height)
       if (!startPx || !endPx) return fail()
       const cropRect = computeCropRect(startPx, endPx, dims.width, dims.height)
       if (!cropRect) return fail()
@@ -1932,6 +2062,33 @@ export function BrowserLiveView({
             mode, mutually exclusive with driving: entering it releases control
             (handleToggleAnnotate). Hidden entirely when !canAnnotate (FE-4) —
             see the prop's doc comment. */}
+        {/* Degraded-mode badge + manual retry (review findings). Two gaps this
+            closes: (a) the ONLY prior signal that live video had fallen back
+            to stills was a 4s toast, so a broken path looked identical to a
+            working one to anyone who glanced away; (b) once the retry budget
+            was exhausted the panel was a dead end for the rest of the mount —
+            no affordance to try again, recoverable only by closing and
+            reopening. Clicking re-arms the budget via machine.start(), the
+            same entry point a fresh availability signal uses. */}
+        {degradedReason && (
+          <button
+            type="button"
+            tabIndex={0}
+            data-testid="browser-degraded-badge"
+            onClick={() => {
+              setDegradedReason(null)
+              webrtcRef.current?.start((sdp) => wsRef.current?.sendWebRTCOffer(sdp) ?? false)
+            }}
+            title={`Live video degraded to picture mode (${degradedReason}). Click to retry.`}
+            aria-label={`Live video degraded: ${degradedReason}. Retry live video.`}
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
+              'bg-[var(--color-warning)]/15 text-[var(--color-warning)] hover:bg-[var(--color-warning)]/25',
+            )}
+          >
+            Picture mode — retry
+          </button>
+        )}
         {canAnnotate && (
           <button tabIndex={0}
             type="button"

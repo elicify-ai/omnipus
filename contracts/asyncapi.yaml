@@ -125,6 +125,8 @@ channels:
         $ref: '#/components/messages/BrowserDetachFrame'
       BrowserTabActionFrame:
         $ref: '#/components/messages/BrowserTabActionFrame'
+      BrowserViewportFrame:
+        $ref: '#/components/messages/BrowserViewportFrame'
       BrowserWebRTCOfferFrame:
         $ref: '#/components/messages/BrowserWebRTCOfferFrame'
       ErrorFrame:
@@ -529,6 +531,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/browser/messages/BrowserTabActionFrame'
+  sendBrowserViewport:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    summary: 'Report the panel''s render box so the gateway can size the captured tab to match it. Sent on attach and
+      debounced on resize. The server applies the metrics and triggers a recapture so the encoder rebuilds at the new
+      geometry.
+
+      '
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserViewportFrame'
   receiveBrowserScreencast:
     action: receive
     channel:
@@ -915,6 +928,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserTabActionFrame'
+    BrowserViewportFrame:
+      name: BrowserViewportFrame
+      title: browser_viewport
+      summary: Report the live-browser panel's render box so the capture can match it (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserViewportFrame'
     BrowserScreencastFrame:
       name: BrowserScreencastFrame
       title: browser_screencast
@@ -1039,6 +1059,7 @@ components:
       - browser_status
       - browser_tab_action
       - browser_tabs
+      - browser_viewport
       - browser_webrtc_offer
       - browser_webrtc_answer
       - browser_webrtc_state
@@ -2570,6 +2591,49 @@ components:
             untouched.
         session_id:
           type: string
+    BrowserViewportFrame:
+      title: BrowserViewportFrame
+      description: 'Client → server. Reports the live-browser panel''s current render box so the gateway can size the
+        captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an
+        arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest
+        (operator UAT 2026-07-31). device_scale_factor addresses the same report''s second half, blur: the managed
+        headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and
+        debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so
+        the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
+
+        '
+      type: object
+      required:
+      - type
+      - width
+      - height
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_viewport
+        session_id:
+          type: string
+        agent_id:
+          type: string
+        width:
+          type: integer
+          minimum: 1
+          maximum: 8192
+          description: Panel render-box width in CSS pixels. Bounded so a malformed or hostile frame cannot ask Chromium
+            for an absurd allocation.
+        height:
+          type: integer
+          minimum: 1
+          maximum: 8192
+          description: Panel render-box height in CSS pixels.
+        device_scale_factor:
+          type: number
+          minimum: 1
+          maximum: 3
+          description: Viewer devicePixelRatio, used as Chromium's deviceScaleFactor so the capture renders at display
+            resolution rather than upscaling. Capped at 3 because cost scales with the SQUARE of this value. Omitted
+            means 1.
     BrowserTabActionFrame:
       title: BrowserTabActionFrame
       description: 'Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab,

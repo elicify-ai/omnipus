@@ -43,7 +43,12 @@ import (
 
 func TestInputQueueDropOldest_OverflowHappensButHasNoProductionCounter(t *testing.T) {
 	const viewerID = "backpressure-viewer"
-	const burstSize = 100 // > inputQueueCapacity (64, inputdc.go:18)
+	// Derived, not hardcoded (2026-07-30): this used to be a literal 100 with
+	// the comment "> inputQueueCapacity (64)". When the capacity was raised
+	// the burst silently stopped overflowing and the test hung waiting for
+	// messages that were never dropped. Deriving it keeps the overflow
+	// scenario real whatever the capacity is.
+	burstSize := inputQueueCapacity + 36
 
 	gate := make(chan struct{}) // closed once the whole burst has been enqueued
 	var (
@@ -66,11 +71,15 @@ func TestInputQueueDropOldest_OverflowHappensButHasNoProductionCounter(t *testin
 	sess := NewSession(Config{}, sink, nil)
 	t.Cleanup(func() { _ = sess.Close() })
 
-	queue := make(chan []byte, inputQueueCapacity)
+	queue := newInputQueue()
 	go sess.runInputQueue(viewerID, queue)
 
 	for i := 0; i < burstSize; i++ {
-		sess.enqueueInput("[test]", viewerID, queue, []byte(fmt.Sprintf(`{"seq":%d}`, i)))
+		// kind:"mouse_move" — the flood that actually causes congestion in
+		// production is the cursor stream, and it is the kind the shed policy
+		// is allowed to discard. An untyped payload would now be classified
+		// as DISCRETE (the safe default) and deliberately preserved instead.
+		sess.enqueueInput("[test]", viewerID, queue, []byte(fmt.Sprintf(`{"kind":"mouse_move","seq":%d}`, i)))
 	}
 	close(gate)
 

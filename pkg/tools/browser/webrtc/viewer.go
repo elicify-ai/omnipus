@@ -258,7 +258,14 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 // window, treat it the same as an outright failure. A var (not const) purely
 // as a test seam, mirroring captureGracePeriod's established pattern in the
 // sibling pkg/tools/browser package.
-var disconnectGracePeriod = 10 * time.Second
+// Raised 10s -> 30s (2026-07-30 UAT, Batam->Fly over VPN on iPad Safari).
+// The relay must never evict a viewer the CLIENT is still trying to recover:
+// src/lib/browserWebRTC.ts tolerates an ICE 'disconnected' for
+// DEFAULT_DISCONNECTED_GRACE_MS (raised to 15s in the same fix) before it
+// gives up, so anything below that here makes the server the first to quit
+// and guarantees the client's recovery attempt lands on an already-evicted
+// registration. 30s leaves clear headroom above the client's 15s.
+var disconnectGracePeriod = 30 * time.Second
 
 // scheduleDisconnectEviction arms a one-shot timer for a viewer
 // PeerConnection that just entered the Disconnected state (see

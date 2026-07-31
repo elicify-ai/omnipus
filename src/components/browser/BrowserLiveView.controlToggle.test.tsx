@@ -41,6 +41,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           close: mockClose,
           sendInput: mockSendInput,
           sendControl: mockSendControl,
+          sendViewport: vi.fn(() => true),
           isConnected: true,
         }
       },

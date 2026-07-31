@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useSettledFlag } from '@/hooks/useSettledFlag'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -1451,6 +1452,21 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
   const reconnectAttempt = useConnectionStore((s) => s.reconnectAttempt)
   const reconnect = useConnectionStore((s) => s.reconnect)
+  // Operator report 2026-07-31: a red "Disconnected" banner flashed top-left
+  // for a split second whenever the socket blipped and immediately recovered.
+  // The drop is real (the gateway logs 1006 abnormal closures on the
+  // Batam<->Frankfurt path) but a self-healing sub-second reconnect is not
+  // actionable, and an error-coloured banner for it reads as a fault. Gate
+  // BOTH transient banners — the amber "Reconnecting…" and the red
+  // reconnectPhase===null limbo one — on the disconnect having actually
+  // persisted. Reconnect logic itself is untouched and still fires instantly;
+  // only the rendering waits. A genuine outage still surfaces after 2s, and
+  // the terminal "gave_up" banner below is deliberately NOT gated — that one
+  // is already late by construction and always needs to be seen.
+  const showTransientDisconnect = useSettledFlag(
+    !isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow',
+    2000,
+  )
   const outboundQueue = useChatStore((s) => s.outboundQueue)
   // BUG FIX (2026-07): messages moved out of outboundQueue by drainOutboundQueue
   // are sent one at a time (see maybeDrainNext in store/chat.ts) rather than all
@@ -1914,7 +1930,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           </button>
         </div>
       )}
-      {(reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
+      {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
         <div
           data-testid="reconnect-banner"
           className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
@@ -1925,7 +1941,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             : `Reconnecting… (attempt ${reconnectAttempt})`}
         </div>
       )}
-      {!isConnected && reconnectPhase === null && (
+      {showTransientDisconnect && !isConnected && reconnectPhase === null && (
         <div data-testid="reconnect-banner" className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
           Disconnected — reconnecting...
