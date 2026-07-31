@@ -2313,10 +2313,28 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 		if in.Key == "" && in.Code == "" {
 			return nil, fmt.Errorf("browser live: key_down input requires a key or code")
 		}
-		return input.DispatchKeyEvent(input.KeyRawDown).
+		// CDP dispatches two keydown variants and the split is what decides
+		// whether the browser PERFORMS the key: "keyDown" runs text processing
+		// and default actions (Enter submits the focused form, inserts a
+		// newline in a textarea); "rawKeyDown" delivers the DOM event only.
+		// Live UAT 2026-07-31: typing into a remote page's search box then
+		// pressing Enter did nothing, because every key_down went out as
+		// rawKeyDown with empty text — the virtual key code alone never
+		// triggers form submission. Mirror Puppeteer's convention exactly:
+		// synthesize text "\r" for Enter when the client sent none, and use
+		// keyDown whenever text is present, rawKeyDown otherwise.
+		text := in.Text
+		if text == "" && in.Key == "Enter" {
+			text = "\r"
+		}
+		keyType := input.KeyRawDown
+		if text != "" {
+			keyType = input.KeyDown
+		}
+		return input.DispatchKeyEvent(keyType).
 			WithKey(in.Key).
 			WithCode(in.Code).
-			WithText(in.Text).
+			WithText(text).
 			WithWindowsVirtualKeyCode(int64(in.KeyCode)).
 			WithNativeVirtualKeyCode(int64(in.KeyCode)).
 			WithModifiers(mods), nil

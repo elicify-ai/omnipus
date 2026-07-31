@@ -850,6 +850,43 @@ func TestBuildInputAction_KeyEventCarriesVirtualKeyCode(t *testing.T) {
 	}
 }
 
+// TestBuildInputAction_KeyDown_EnterPerformsDefaultAction — live UAT
+// 2026-07-31: typing into a remote search box then pressing Enter did
+// nothing, because key_down always dispatched CDP "rawKeyDown" with empty
+// text. rawKeyDown delivers the DOM event only; "keyDown" with text is what
+// runs text processing and default actions (form submit). Mirrors
+// Puppeteer's convention: Enter synthesizes text "\r" and upgrades to
+// keyDown; textless keys stay rawKeyDown; key_up is unaffected.
+func TestBuildInputAction_KeyDown_EnterPerformsDefaultAction(t *testing.T) {
+	// Enter with no client-supplied text: synthesized "\r", type keyDown.
+	action, err := buildInputAction(LiveInput{Kind: "key_down", Key: "Enter", Code: "Enter", KeyCode: 13})
+	require.NoError(t, err)
+	p := action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyDown, p.Type, "Enter must dispatch as keyDown, not rawKeyDown")
+	require.Equal(t, "\r", p.Text, "Enter must carry the CR text that triggers default actions")
+
+	// Client-supplied text also upgrades to keyDown, verbatim.
+	action, err = buildInputAction(LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", KeyCode: 65, Text: "a"})
+	require.NoError(t, err)
+	p = action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyDown, p.Type)
+	require.Equal(t, "a", p.Text)
+
+	// A textless non-Enter key stays rawKeyDown (no text processing to run).
+	action, err = buildInputAction(LiveInput{Kind: "key_down", Key: "ArrowDown", Code: "ArrowDown", KeyCode: 40})
+	require.NoError(t, err)
+	p = action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyRawDown, p.Type)
+	require.Empty(t, p.Text)
+
+	// key_up never synthesizes text, even for Enter.
+	action, err = buildInputAction(LiveInput{Kind: "key_up", Key: "Enter", Code: "Enter", KeyCode: 13})
+	require.NoError(t, err)
+	p = action.(*input.DispatchKeyEventParams)
+	require.Equal(t, input.KeyUp, p.Type)
+	require.Empty(t, p.Text)
+}
+
 // TestRescaleInputCoords covers the pure-math half of the root-cause doc's
 // Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
 // mapping a viewer's capture-frame pixel coordinates into the tab's CSS
