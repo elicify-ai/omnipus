@@ -603,6 +603,8 @@ export const BrowserCaptureControlFrame = z
     type: z.literal("browser_capture_control"),
     action: z.enum(["recapture", "shutdown", "ping"]),
     reason: z.string().max(512).optional(),
+    expected_width: z.number().int().min(1).max(16384).optional(),
+    expected_height: z.number().int().min(1).max(16384).optional(),
   })
   .strict();
 

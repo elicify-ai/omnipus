@@ -532,6 +532,8 @@ export interface BrowserCaptureControlFrame {
   type: "browser_capture_control";
   action: "recapture" | "shutdown" | "ping";
   reason?: string;
+  expected_width?: number;
+  expected_height?: number;
 }
 
 export interface ErrorPayload {
