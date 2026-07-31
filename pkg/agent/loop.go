@@ -1746,6 +1746,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeBackground,
+					agentExistsChecker(registry),
 				),
 			)
 			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
@@ -1757,7 +1758,9 @@ func registerSharedTools(
 			delegateTool.SetDelegationDenyCheckerAwait(
 				// ForDelegate bakes in exempt=false: same reasoning as the background
 				// gate — a self-targeted await delegate() is real delegation, graph-gated.
-				buildDelegationDenyCheckerForDelegate(currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait),
+				buildDelegationDenyCheckerForDelegate(
+					currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(registry),
+				),
 			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 			// gates above just authorized against into spawnSubTurn's own
@@ -1794,6 +1797,17 @@ func registerSharedTools(
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
 			taskCreate.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
+			// ADR-052 FR-002 / issue #578: wire the plan store so the optional
+			// plan_id linkage arg can be validated (validateTaskPlanLinkage,
+			// pkg/tools/plan.go) instead of failing closed with "plan store is
+			// not configured" on every call. al.GetPlanStore() may still be nil
+			// on this very first registerSharedTools pass (it runs inside
+			// NewAgentLoop, before the gateway's setupAndStartServices
+			// constructs the real plan.Store) — that is fine, SetPlanStore's
+			// per-agent loop below re-wires this tool with the real store once
+			// it exists, exactly like wirePlanToolsForAgent's own create_plan/
+			// execute_plan late-binding discipline.
+			taskCreate.SetPlanStore(al.GetPlanStore())
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -1806,6 +1820,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeTask,
+					agentExistsChecker(registry),
 				),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
@@ -1866,6 +1881,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeTask,
+					agentExistsChecker(registry),
 				),
 			)
 			// Same rationale as taskCreate above: the subagent_3p reassignment
@@ -2420,6 +2436,23 @@ func currentDelegationDepth(ctx context.Context) int {
 	return 0
 }
 
+// agentExistsChecker builds the read-only registry existence probe threaded
+// through the delegation-deny checkers (issue #588 N7) so a denial can say
+// "agent not found" instead of the generic trust-set message when the named
+// target was never a real agent at all. Consulted for message text ONLY —
+// never for the allow/deny decision. A nil registry (should not happen in
+// production; defensive only) makes the probe report every id as
+// nonexistent, which still just changes which denial message a caller sees.
+func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
+	return func(id string) bool {
+		if registry == nil {
+			return false
+		}
+		_, ok := registry.GetAgent(id)
+		return ok
+	}
+}
+
 // resolveEffectiveWorkspaceID resolves the workspace whose delegation graph
 // governs the current turn. Every delegation check resolves to exactly one
 // workspace:
@@ -2460,12 +2493,30 @@ func resolveEffectiveWorkspaceID(ctx context.Context, targetAgentID string) (str
 // of a caller→target edge all DENY (trust_set). The graph is read per-call, so an
 // edit to the workspace graph takes effect on the next turn with no agent rebuild.
 //
+// agentExists is an OPTIONAL trailing arg (variadic so the many pre-existing
+// call sites — production and test — that predate issue #588 keep compiling
+// unchanged), consulted ONLY to distinguish the no-edge denial's MESSAGE
+// (finding N7: the batched UAT re-run found that delegating to an agent that
+// exists but has no trust edge, and delegating to a genuinely nonexistent
+// agent, both returned byte-identical denial text, making a typo'd agent_id
+// indistinguishable from a real permissions gap). It never changes the
+// allow/deny OUTCOME — both cases still deny with Policy: DenyTrustSet — it
+// only selects which of the two messages below is returned. Omitting it (or
+// passing nil) falls back to the pre-existing generic "not permitted"
+// message — every production wiring site (registerSharedTools,
+// NewSysagentDelegationDeny, both in loop.go) passes a real checker.
+//
 // Returns (edge, nil) when an authorizing edge exists; (nil, denial) otherwise.
 func findDelegationEdge(
 	ctx context.Context,
 	callerAgentID, targetAgentID string,
 	mode config.DelegationMode,
+	agentExists ...func(id string) bool,
 ) (*workspace.DelegationEdge, *tools.DelegationDenial) {
+	var exists func(string) bool
+	if len(agentExists) > 0 {
+		exists = agentExists[0]
+	}
 	wsID, denial := resolveEffectiveWorkspaceID(ctx, targetAgentID)
 	if denial != nil {
 		return nil, denial
@@ -2496,12 +2547,23 @@ func findDelegationEdge(
 		}
 	}
 
+	if exists != nil && !exists(targetAgentID) {
+		logger.WarnCF("agent", "delegation denied: target agent does not exist", map[string]any{
+			"agent_id": callerAgentID, "target": targetAgentID, "workspace_id": wsID, "mode": string(mode),
+		})
+		return nil, &tools.DelegationDenial{
+			Reason:        fmt.Sprintf("agent %q does not exist", targetAgentID),
+			Policy:        tools.DenyTrustSet,
+			TargetAgentID: targetAgentID,
+		}
+	}
+
 	logger.WarnCF("agent", "delegation denied: no edge in workspace graph", map[string]any{
 		"agent_id": callerAgentID, "target": targetAgentID, "workspace_id": wsID, "mode": string(mode),
 	})
 	return nil, &tools.DelegationDenial{
 		Reason: fmt.Sprintf(
-			"agent %q is not allowed as a delegation target in this workspace",
+			"delegation to agent %q is not permitted in this workspace",
 			targetAgentID,
 		),
 		Policy:        tools.DenyTrustSet,
@@ -2722,11 +2784,17 @@ func errString(err error) string {
 // defaults is only consulted for its SubTurn.MaxDepth global depth cap — there
 // is no per-agent config.DelegationPolicy to read anymore (ADR-037); the
 // per-workspace graph is the sole authority.
+//
+// agentExists is an optional trailing arg (variadic, same rationale as
+// findDelegationEdge's own doc comment) forwarded to findDelegationEdge
+// purely to distinguish the no-edge denial's message (issue #588 N7) — it
+// plays no part in the allow/deny decision itself.
 func buildDelegationDenyChecker(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
 	selfAssignmentExempt bool,
+	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	globalDepthCap := defaults.SubTurn.MaxDepth
 
@@ -2759,7 +2827,7 @@ func buildDelegationDenyChecker(
 		if targetAgentID != "" {
 			// Targeted delegation: require an authorizing edge, then enforce its
 			// modes + depth.
-			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode)
+			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
 			if denial != nil {
 				return denial
 			}
@@ -2778,12 +2846,20 @@ func buildDelegationDenyChecker(
 // delegate(agent_id=self) spawns a real sub-turn instance, so it IS delegation and a
 // self-target is ALWAYS denied. Use this — never the raw core with a literal false —
 // so the security-critical exempt value can never be flipped wrong at a call site.
+// agentExists (issue #588 N7) is an optional trailing arg (variadic — see
+// findDelegationEdge's doc comment for why): a read-only existence probe
+// against the live agent registry, consulted only to distinguish "target
+// agent doesn't exist" from "target agent exists but has no trust edge" in
+// the denial MESSAGE — it never affects the allow/deny outcome. Omit it only
+// in tests that don't care about the distinction; every production wiring
+// site passes a real checker (see registerSharedTools / NewSysagentDelegationDeny).
 func buildDelegationDenyCheckerForDelegate(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false)
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false, agentExists...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
@@ -2792,12 +2868,17 @@ func buildDelegationDenyCheckerForDelegate(
 // It bakes in selfAssignmentExempt=true: reassigning a task to the agent that already
 // owns it is NOT delegation (no new instance is spawned), so a self-target is allowed
 // without consulting the graph. Non-self targets are still fully graph-gated.
+//
+// agentExists: see buildDelegationDenyCheckerForDelegate's doc comment — same
+// optional-trailing-arg, message-only distinction (issue #588 N7), same "pass
+// a real checker in production" expectation.
 func buildDelegationDenyCheckerForTaskReassignment(
 	currentAgentID string,
 	defaults config.AgentDefaults,
 	mode config.DelegationMode,
+	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true)
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true, agentExists...)
 }
 
 // evalUntargetedDelegation gates an untargeted delegation (no explicit target)
@@ -2902,7 +2983,9 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		// ForTaskReassignment (exempt=true): these are the cross-workspace TASK tools
 		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
 		// no-op task reassignment, not delegation (also short-circuited above).
-		gate := buildDelegationDenyCheckerForTaskReassignment(callerAgentID, defaults, config.DelegationModeTask)
+		gate := buildDelegationDenyCheckerForTaskReassignment(
+			callerAgentID, defaults, config.DelegationModeTask, agentExistsChecker(al.GetRegistry()),
+		)
 		return gate(ctx, targetAgentID)
 	}
 }
@@ -4375,6 +4458,25 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 			continue
 		}
 		al.wirePlanToolsForAgent(inst, store)
+
+		// Issue #578: create_task is NOT part of the wirePlanToolsForAgent
+		// surface (that function's own doc comment enumerates create_plan/
+		// execute_plan/run_task/inspect_session/plan_correct/stop_plan only) —
+		// it is constructed separately in registerSharedTools's "Task tools"
+		// block. Re-wire its plan store here too, on the same late-binding
+		// pass, so create_task(plan_id=...) stops failing closed with "plan
+		// store is not configured" once the real store exists. A missing or
+		// wrong-typed tool is not an error here — task tools are gated behind
+		// al.taskStore != nil in registerSharedTools, so an agent with no task
+		// store never registered create_task at all.
+		if inst.Tools == nil {
+			continue
+		}
+		if raw, ok := inst.Tools.Get("create_task"); ok {
+			if taskCreate, ok := raw.(*tools.TaskCreateTool); ok {
+				taskCreate.SetPlanStore(store)
+			}
+		}
 	}
 }
 
@@ -4700,17 +4802,11 @@ func (n agentLoopJobAgentNamer) AgentDisplayName(agentID string) (string, bool) 
 // SetPlanStore's re-wire loop the way the plan surface is: the adapters above
 // read every store live, so there is nothing for a later pass to re-bind.
 //
-// Three of this tool's seven setters are left UNWIRED because the
+// Two of this tool's seven setters are left UNWIRED because the
 // implementations they need do not exist yet. Each omission degrades honestly
 // and is listed here so the gap is visible at the wiring site rather than
 // inferred from behaviour:
 //
-//   - SetSessionResolver — needs a BATCH tools.JobSessionResolver over the
-//     delegate tool's in-memory session index (DelegateTool has no
-//     ResolvableSessionIDs method). Unwired, no subagent row is reported
-//     actionable, which is what the tool documents as the honest answer.
-//     Resolving per-row against the delegate mutex is explicitly forbidden
-//     (FR-028) — the replacement must be batch.
 //   - SetCapSnapshotSource — needs PlanEngine.CapSnapshot, a LOCK-FREE reader
 //     over values the engine already published from inside its own admission
 //     path. It must never be faked from Admit (which takes the engine mutex
@@ -4748,6 +4844,29 @@ func (al *AgentLoop) wireJobRosterForAgent(agent *AgentInstance) {
 	listJobs.SetConfig(func() *config.Config { return al.GetConfig() })
 	listJobs.SetAgentNamer(func() tools.JobAgentNamer {
 		return agentLoopJobAgentNamer{al: al}
+	})
+	// #583: SetSessionResolver over THIS agent's own *tools.DelegateTool
+	// (now that it implements tools.JobSessionResolver via
+	// ResolvableSessionIDs). A LIVE closure, same discipline as SetConfig/
+	// SetAgentNamer above — it re-resolves agent.Tools.Get("delegate") on
+	// every list_jobs call rather than capturing a value at wiring time, so
+	// wiring order relative to the delegate tool's own registration in this
+	// same per-agent pass does not matter, and a hot-reload that replaces
+	// the delegate tool instance is picked up automatically. A missing or
+	// wrong-typed "delegate" registration (an agent with no delegate tool at
+	// all) resolves to a nil JobSessionResolver, which collectSubagentRows
+	// already treats as "nothing resolves" — the same honest degradation
+	// this setter's absence used to produce, not a new failure mode.
+	listJobs.SetSessionResolver(func() tools.JobSessionResolver {
+		raw, ok := agent.Tools.Get("delegate")
+		if !ok {
+			return nil
+		}
+		delegateTool, ok := raw.(*tools.DelegateTool)
+		if !ok {
+			return nil
+		}
+		return delegateTool
 	})
 	// RegisterReplacing, not Register: registerSharedTools re-runs on every hot
 	// reload, so a same-name re-registration is EXPECTED and must not log a

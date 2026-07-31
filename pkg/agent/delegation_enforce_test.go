@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -79,6 +80,69 @@ func TestDelegationDenyChecker_DeniedWhenTargetNotTrusted(t *testing.T) {
 	}
 	if denial.Policy != tools.DenyTrustSet {
 		t.Fatalf("expected trust_set policy, got: %q (%s)", denial.Policy, denial.Reason)
+	}
+}
+
+// TestDelegationDenyChecker_DistinguishesNotFoundFromNotTrusted proves issue
+// #588 finding N7 is fixed: the batched UAT re-run found that delegating to
+// an agent that EXISTS but has no trust edge from the caller, and delegating
+// to a genuinely NONEXISTENT agent, returned byte-identical generic denial
+// text. Both cases must still DENY with the SAME Policy (DenyTrustSet) — this
+// test is a message-clarity check ONLY, never a deny/allow-logic check — but
+// the Reason text must now let a caller tell "not trusted" apart from
+// "doesn't exist".
+func TestDelegationDenyChecker_DistinguishesNotFoundFromNotTrusted(t *testing.T) {
+	// Same fixture as TestDelegationDenyChecker_DeniedWhenTargetNotTrusted
+	// (graph only authorizes Mia→Ray), but this test ALSO wires an
+	// agentExists probe so it can exercise both denial paths.
+	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("mia", "ray", []string{"direct"}, nil),
+	})
+
+	// registered stands in for the live agent registry: "ava" is a real,
+	// addressable agent that simply has no trust edge from "mia";
+	// "nonexistent-agent" is not registered at all.
+	registered := map[string]bool{"mia": true, "ray": true, "ava": true}
+	agentExists := func(id string) bool { return registered[id] }
+
+	check := buildDelegationDenyCheckerForDelegate(
+		"mia", config.AgentDefaults{}, config.DelegationModeBackground, agentExists,
+	)
+
+	// Case 1: target EXISTS but has no trust edge from mia — "not trusted".
+	notTrustedDenial := check(ctxWS(testWS, 0), "ava")
+	if notTrustedDenial == nil {
+		t.Fatal("expected delegation denied for un-edged (but real) target, got allow")
+	}
+	if notTrustedDenial.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set policy, got: %q (%s)", notTrustedDenial.Policy, notTrustedDenial.Reason)
+	}
+	if strings.Contains(notTrustedDenial.Reason, "does not exist") {
+		t.Errorf("target %q IS a real agent — denial must not claim it doesn't exist, got %q",
+			"ava", notTrustedDenial.Reason)
+	}
+	if !strings.Contains(notTrustedDenial.Reason, "not permitted") {
+		t.Errorf("expected a 'not permitted in this workspace' denial for a real-but-untrusted target, got %q",
+			notTrustedDenial.Reason)
+	}
+
+	// Case 2: target does NOT exist at all — must read differently from case 1.
+	notFoundDenial := check(ctxWS(testWS, 0), "nonexistent-agent")
+	if notFoundDenial == nil {
+		t.Fatal("expected delegation denied for nonexistent target, got allow")
+	}
+	if notFoundDenial.Policy != tools.DenyTrustSet {
+		t.Fatalf("expected trust_set policy, got: %q (%s)", notFoundDenial.Policy, notFoundDenial.Reason)
+	}
+	if !strings.Contains(notFoundDenial.Reason, "does not exist") {
+		t.Errorf("expected a 'does not exist' denial for a genuinely nonexistent target, got %q",
+			notFoundDenial.Reason)
+	}
+
+	// The exact regression N7 reported: the two messages must differ.
+	if notTrustedDenial.Reason == notFoundDenial.Reason {
+		t.Fatalf("N7 regression: 'exists but untrusted' and 'does not exist' produced the SAME denial text: %q",
+			notTrustedDenial.Reason)
 	}
 }
 

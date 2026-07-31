@@ -246,19 +246,68 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 		t.Fatalf("plan must remain draft after the empty-plan rejection, got state=%v err=%v", unchanged, err)
 	}
 
-	// Attach a member task carrying an acceptance criterion directly via
-	// the real task store (create_task's own plan_id/blocked_by linkage is
-	// a DIFFERENT wave's slice — FR-002 — this test only needs a
-	// criteria-complete member so execute_plan's FR-004 gate passes).
-	taskStore := GetTaskStore(al)
-	member := &task.Task{
-		ID: "member-1", Title: "do the thing", AgentID: "planner-agent",
-		WorkspaceID: testHarnessWorkspaceMembershipID, PlanID: createPayload.PlanID,
-		Status:   task.StatusNext,
-		Criteria: []task.AcceptanceCriterion{proseCriterion("c1", "did it")},
+	// Attach a member task via the REAL create_task tool, plan_id and all
+	// (issue #578 closed the "plan store never wired to create_task" gap —
+	// TaskCreateTool.SetPlanStore is now called both at construction and
+	// from AgentLoop.SetPlanStore's per-agent re-wiring loop, loop.go). This
+	// replaces the former direct taskStore.Create bypass that a comment here
+	// used to flag as "a DIFFERENT wave's slice — FR-002": that gap is closed,
+	// so the wiring test now exercises create_task's own plan_id linkage
+	// end-to-end instead of working around it.
+	//
+	// agent_id is the caller's own id ("planner-agent"): self-assignment is
+	// exempt from the delegation-graph trust-set gate (ForTaskReassignment,
+	// buildDelegationDenyCheckerForTaskReassignment), so this needs no
+	// workspace delegation edges — this minimal harness (newPlanToolWiringTestLoop)
+	// seeds none. The workspace must be bound explicitly on ctx: create_task
+	// resolves it via tools.ToolWorkspaceID(ctx), falling back to the
+	// is_default workspace on disk, and this test harness's shared seed file
+	// (testHarnessWorkspaceMembershipID) is never flagged is_default.
+	taskCreateCtx := tools.WithWorkspaceID(ctx, testHarnessWorkspaceMembershipID)
+	createTaskResult := agentInst.Tools.Execute(taskCreateCtx, "create_task", map[string]any{
+		"title":    "do the thing",
+		"prompt":   "do the thing",
+		"agent_id": "planner-agent",
+		"plan_id":  createPayload.PlanID,
+		"criteria": []any{map[string]any{"kind": "prose", "text": "did it"}},
+	})
+	if createTaskResult == nil || createTaskResult.IsError {
+		t.Fatalf("create_task(plan_id=%q) must succeed now that the plan store is wired, got %+v",
+			createPayload.PlanID, createTaskResult)
 	}
-	if err := taskStore.Create(member); err != nil {
-		t.Fatalf("create member task: %v", err)
+	var createTaskPayload struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal([]byte(createTaskResult.ForLLM), &createTaskPayload); err != nil {
+		t.Fatalf("could not parse create_task result %q: %v", createTaskResult.ForLLM, err)
+	}
+	if createTaskPayload.TaskID == "" {
+		t.Fatal("create_task result carries no task_id")
+	}
+
+	// Confirm the task really landed as a plan member: read it back directly
+	// through the task store (not through the tool) and check PlanID.
+	taskStore := GetTaskStore(al)
+	member, err := taskStore.Get(createTaskPayload.TaskID)
+	if err != nil {
+		t.Fatalf("could not load the created member task %q: %v", createTaskPayload.TaskID, err)
+	}
+	if member.PlanID != createPayload.PlanID {
+		t.Fatalf("member task PlanID = %q, want %q — create_task did not attach the plan_id linkage",
+			member.PlanID, createPayload.PlanID)
+	}
+
+	// Confirm execute_plan's own member-lookup (task.Filter{PlanID: ...},
+	// pkg/tools/plan.go) now sees a NON-ZERO member count for this plan —
+	// the exact query the FR-030 empty-plan gate above rejected on before
+	// create_task ever attached a member.
+	members, lerr := taskStore.List(task.Filter{PlanID: createPayload.PlanID})
+	if lerr != nil {
+		t.Fatalf("could not list plan members: %v", lerr)
+	}
+	if len(members) == 0 {
+		t.Fatal("execute_plan's member query still sees zero members after create_task(plan_id=...) — " +
+			"the #578 plan_id linkage did not actually attach")
 	}
 
 	execResult := agentInst.Tools.Execute(ctx, "execute_plan", map[string]any{"plan_id": createPayload.PlanID})
