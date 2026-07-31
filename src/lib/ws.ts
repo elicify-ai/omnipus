@@ -495,7 +495,17 @@ export class WsConnection {
     // Flush any pending batch before tearing down so callers don't lose frames
     // queued just before disconnect() was called.
     this._flushBatch()
-    this.ws?.close(1000, 'User disconnected')
+    try {
+      this.ws?.close(1000, 'User disconnected')
+    } catch (err) {
+      // Same failure shape as the ping-timeout force-close (see
+      // _startHeartbeat): a throwing close() must not escape — it would abort
+      // the caller's teardown AND skip the ws-null below, leaving the class
+      // pointing at a half-dead socket it believes it released. intentionalClose
+      // is already true, so no synthetic _handleClose is needed here — the
+      // nulling below is the entire remaining cleanup for an intentional close.
+      console.warn('[ws] close() threw during disconnect — continuing teardown', err)
+    }
     this.ws = null
   }
 
@@ -918,8 +928,16 @@ export class WsConnection {
       if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
         try {
           this.ws.close(1000, 'offline')
-        } catch {
-          // ignore — onclose will run regardless
+        } catch (err) {
+          // close() can throw, and when it does onclose does NOT run — the
+          // old comment here claimed otherwise and left the connection frozen
+          // with no log and no reconnect, exactly the ping-timeout bug (see
+          // _startHeartbeat's catch). Drive the close path by hand with a
+          // synthetic event; detach onclose first so a late real close event
+          // on the dying socket can't run the handler twice.
+          console.warn('[ws] close() threw during offline force-close — synthesizing close', err)
+          if (this.ws) this.ws.onclose = null
+          this._handleClose({ code: 1000, reason: 'offline (close() threw)' })
         }
       }
     }

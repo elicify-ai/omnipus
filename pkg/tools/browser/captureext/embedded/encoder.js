@@ -62,6 +62,14 @@ window.__omnipusState = {
   reconnectAttempts: 0,
   videoTracks: null,
   audioTracks: null,
+  // senderConstraints is set only by a POST-negotiation
+  // applyVideoSenderConstraints re-apply (see that function) whose
+  // setParameters() call actually resolved -- i.e. it is the external,
+  // outside-the-page proof (read via CDP Runtime.evaluate) that the
+  // degradationPreference/maxBitrate/scaleResolutionDownBy encoding
+  // constraints genuinely stuck on a settled sender, not just that this file
+  // attempted to set them. Stays null until the first such success.
+  senderConstraints: null,
   history: [],
 };
 
@@ -198,16 +206,57 @@ function clearOfferAnswerTimeout() {
 }
 
 // applyVideoSenderConstraints (fix-wave finding 4) caps the video sender's
-// bitrate and sets encoding hints AFTER pc.addTrack has created its
-// RTCRtpSender for videoTrack. Errors are logged, not thrown -- a failed
-// setParameters/contentHint assignment should degrade to "uncapped
-// bitrate", not abort the whole capture/offer flow.
-function applyVideoSenderConstraints(pc, videoTrack) {
-  const sender = pc.getSenders().find((s) => s.track === videoTrack);
+// bitrate and sets encoding hints on the video track's RTCRtpSender. Errors
+// are logged, not thrown -- a failed setParameters/contentHint assignment
+// should degrade to "uncapped bitrate", not abort the whole capture/offer
+// flow.
+//
+// Called THREE times per capture cycle (UAT v24 finding,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2,
+// fix-wave follow-up): once from runCaptureAndOfferOnce right after
+// pc.addTrack (context='pre-negotiation'), again once the
+// browser_capture_answer has been applied via setRemoteDescription
+// (context='post-answer'), and again on the PC's first transition to
+// connectionState 'connected' (context='post-connected'). The
+// pre-negotiation call is the one that shipped first and it is NOT enough
+// on its own: RTCRtpSender.getParameters()/setParameters() is a
+// transactional read-modify-write keyed to the sender's current transport
+// state, and calling it before setLocalDescription/setRemoteDescription has
+// completed negotiation commonly rejects with InvalidStateError or
+// InvalidModificationError on a sender whose transport isn't settled yet.
+// Live evidence: even after this function landed with
+// degradationPreference='maintain-resolution' + scaleResolutionDownBy=1 + a
+// 6 Mbps cap, UAT v24 still measured the delivered stream sitting at
+// 228x246 for 60s before stepping to 307x328 (exactly tab/2) and holding --
+// the resolution scaler was still active, meaning the pre-negotiation
+// setParameters call had almost certainly been silently rejected the whole
+// time (its .catch only warn()s, invisible in a headless run). Re-invoking
+// this function (idempotent -- same params, same sender) once the
+// transceiver has actually settled is what makes the constraints stick;
+// the pre-negotiation call is kept anyway as a best-effort "in case this
+// browser's sender accepts it early" no-op-on-failure attempt, now that
+// failure is no longer invisible (see the lastError writes below).
+//
+// Each call site is naturally idempotent against re-invocation without any
+// extra bookkeeping: the pre-negotiation and post-answer calls each fire at
+// most once per capture cycle from their respective call sites, and the
+// post-connected call is gated by the connectedConstraintsApplied flag
+// newPeerConnection closes over -- so this never "stacks" repeated
+// setParameters calls onto a single connectionstatechange listener.
+function applyVideoSenderConstraints(pc, opts) {
+  opts = opts || {};
+  const context = opts.context || 'pre-negotiation';
+  const recordSuccess = opts.recordSuccess === true;
+  const logPrefix = 'applyVideoSenderConstraints[' + context + ']';
+
+  const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) {
-    warn('applyVideoSenderConstraints: no RTCRtpSender found for the video track');
+    const msg = logPrefix + ': no RTCRtpSender found for the video track';
+    warn(msg);
+    window.__omnipusState.lastError = msg;
     return;
   }
+  const videoTrack = sender.track;
 
   const cfg = window.__omnipusCapture || {};
   const maxBitrate =
@@ -229,17 +278,25 @@ function applyVideoSenderConstraints(pc, videoTrack) {
     // the (then 2 Mbps) bitrate cap let VP8 trade resolution away under CPU
     // pressure, and it kept doing so far below anything a viewer would
     // accept. That downscale is (a) the reported blur -- 319x158 upscaled
-    // ~2x into a ~561x587 panel -- and, more importantly, (b) silently
-    // breaks the SPA's input coordinate mapping, which assumes capture
-    // pixels track the page's CSS viewport 1:1 (wave-plan key-decision-8).
-    // A resolution collapse the viewer merely finds blurry is a UX
-    // regression; the same collapse feeding mapPointerToDeviceCoords makes
-    // every click land ~4x off target -- clicks and keystrokes silently do
-    // nothing. Resolution is load-bearing for INPUT CORRECTNESS here, not
-    // just sharpness, so framerate is the acceptable casualty under
-    // pressure, not resolution. Paired with the raised bitrate ceiling
-    // below (6 Mbps) to give VP8 headroom before it needs to degrade at
-    // all.
+    // ~2x into a ~561x587 panel -- and (b) was ORIGINALLY thought to be
+    // load-bearing for the SPA's input coordinate mapping too, on the
+    // assumption that capture pixels track the page's CSS viewport 1:1
+    // (wave-plan key-decision-8). That input-correctness argument no longer
+    // holds this fix up: the same fix-wave that raised this bitrate ceiling
+    // also made the server independently rescale every pointer event from
+    // whatever capture-frame size the client actually reports into the
+    // tab's real CSS pixel space -- see pkg/tools/browser/live.go's
+    // dispatchInput (which now rescales x/y per-event via
+    // rescaleToCSSViewport/rescaleInputCoords using the client's reported
+    // CaptureWidth/CaptureHeight, not an assumed 1:1). So a resolution
+    // collapse here is no longer a click-goes-nowhere bug -- it is now
+    // purely a sharpness/UX regression, handled as a second, independent
+    // line of defense. 'maintain-resolution' is kept because blurry video
+    // is still worth avoiding, and because avoiding a collapse in the first
+    // place is simpler than trusting every input-consuming surface to
+    // rescale correctly, not because input correctness depends on it.
+    // Paired with the raised bitrate ceiling below (6 Mbps) to give VP8
+    // headroom before it needs to degrade at all.
     params.degradationPreference = 'maintain-resolution';
     // Belt-and-braces against any lingering per-encoding down-scale --
     // degradationPreference governs the encoder's *runtime* trade-off, but
@@ -247,11 +304,33 @@ function applyVideoSenderConstraints(pc, videoTrack) {
     // pin it to 1 so nothing above this layer is quietly resizing the
     // output out from under the resolution guarantee just established.
     params.encodings[0].scaleResolutionDownBy = 1;
-    sender.setParameters(params).catch((e) => {
-      warn('applyVideoSenderConstraints: setParameters failed', e);
-    });
+    sender
+      .setParameters(params)
+      .then(() => {
+        record(logPrefix + ': setParameters applied');
+        if (recordSuccess) {
+          // The exit-proof probe (CDP Runtime.evaluate) reads this back to
+          // verify the constraints ACTUALLY stuck on a settled sender, not
+          // merely that this file attempted to set them -- see the
+          // window.__omnipusState.senderConstraints doc comment above.
+          window.__omnipusState.senderConstraints = {
+            degradationPreference: params.degradationPreference,
+            maxBitrate: maxBitrate,
+            scaleResolutionDownBy: params.encodings[0].scaleResolutionDownBy,
+            appliedAt: Date.now(),
+            context: context,
+          };
+        }
+      })
+      .catch((e) => {
+        const msg = logPrefix + ': setParameters failed: ' + String(e);
+        warn(msg, e);
+        window.__omnipusState.lastError = msg;
+      });
   } catch (e) {
-    warn('applyVideoSenderConstraints: getParameters/setParameters failed', e);
+    const msg = logPrefix + ': getParameters/setParameters failed: ' + String(e);
+    warn(msg, e);
+    window.__omnipusState.lastError = msg;
   }
 
   // contentHint 'motion' (not 'detail'): asks the VP8 encoder to favor
@@ -261,12 +340,107 @@ function applyVideoSenderConstraints(pc, videoTrack) {
   // under 'motion' than 'detail' would produce. Accepted for now given the
   // UAT content was video playback; a future per-page-adaptive hint (e.g.
   // detecting an actively-playing <video> element vs a static page) is
-  // possible but out of scope for this fix.
+  // possible but out of scope for this fix. Re-set on every call -- setting
+  // an unchanged value is a harmless no-op, so this needs no context guard.
   try {
     videoTrack.contentHint = 'motion';
   } catch (e) {
-    warn('applyVideoSenderConstraints: setting contentHint failed', e);
+    const msg = logPrefix + ': setting contentHint failed: ' + String(e);
+    warn(msg, e);
+    window.__omnipusState.lastError = msg;
   }
+}
+
+// mungeVideoStartBitrate appends libwebrtc's VP8 bitrate-hint fmtp
+// parameters (x-google-start-bitrate/min-bitrate/max-bitrate, kbps) to the
+// video m-section's VP8 fmtp line of a freshly-created offer, BEFORE it is
+// handed to setLocalDescription.
+//
+// Live evidence (UAT v24, 2026-07-31,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2,
+// fix-wave follow-up): even with the applyVideoSenderConstraints re-apply
+// fix above landed, the delivered stream still sat at 228x246 for a full
+// 60s before stepping to 307x328 (exactly tab/2, tab is 615x657) and
+// holding there -- a textbook conservative bandwidth-estimation cold-start
+// ramp, not the resolution-collapse-under-pressure symptom that fix
+// addresses. This encoder's PeerConnection talks to the gateway's pion
+// ingest over LOOPBACK -- there is no real, lossy network path to probe
+// caution against, so spending 60+ seconds ramping up is pure waste on this
+// deployment topology. x-google-start-bitrate tells libwebrtc's VP8 encoder
+// to skip the slow-start climb and begin at the given rate; the paired
+// min/max hints bound the adaptive range it can move within afterward --
+// the RTCRtpSender.maxBitrate set in applyVideoSenderConstraints remains
+// the authoritative hard ceiling regardless.
+//
+// These are libwebrtc-specific SDP fmtp hints (Chrome's own dialect) --
+// harmless everywhere else, since a non-libwebrtc VP8 implementation on the
+// other end simply ignores fmtp parameters it doesn't recognize rather than
+// rejecting them.
+function mungeVideoStartBitrate(sdp) {
+  const START_KBPS = 4000;
+  const MIN_KBPS = 1000;
+  const MAX_KBPS = 6000;
+  const HINTS = 'x-google-start-bitrate=' + START_KBPS + ';x-google-min-bitrate=' + MIN_KBPS + ';x-google-max-bitrate=' + MAX_KBPS;
+
+  const lines = sdp.split('\r\n');
+
+  // Payload type numbers are only unique WITHIN an m-section, not across
+  // the whole SDP, so the video m-section's boundaries must be located
+  // first -- otherwise a VP8 payload type that happens to collide with an
+  // unrelated audio payload type number could get the wrong line munged.
+  let videoStart = -1;
+  let videoEnd = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (videoStart === -1 && lines[i].indexOf('m=video') === 0) {
+      videoStart = i;
+      continue;
+    }
+    if (videoStart !== -1 && lines[i].indexOf('m=') === 0) {
+      videoEnd = i;
+      break;
+    }
+  }
+  if (videoStart === -1) {
+    warn('mungeVideoStartBitrate: no m=video section found, leaving SDP untouched');
+    return sdp;
+  }
+
+  // Find the VP8 payload type via its rtpmap line within the video section
+  // only.
+  const rtpmapRe = /^a=rtpmap:(\d+) VP8\/90000/i;
+  let vp8Pt = null;
+  let rtpmapIdx = -1;
+  for (let i = videoStart; i < videoEnd; i++) {
+    const m = lines[i].match(rtpmapRe);
+    if (m) {
+      vp8Pt = m[1];
+      rtpmapIdx = i;
+      break;
+    }
+  }
+  if (!vp8Pt) {
+    warn('mungeVideoStartBitrate: no VP8 payload type found in offer, leaving SDP untouched');
+    return sdp;
+  }
+
+  // Append to an existing a=fmtp line for this payload type if present,
+  // otherwise insert a fresh one directly after the rtpmap line.
+  const fmtpPrefix = 'a=fmtp:' + vp8Pt + ' ';
+  let fmtpIdx = -1;
+  for (let i = videoStart; i < videoEnd; i++) {
+    if (lines[i].indexOf(fmtpPrefix) === 0) {
+      fmtpIdx = i;
+      break;
+    }
+  }
+
+  if (fmtpIdx !== -1) {
+    lines[fmtpIdx] = lines[fmtpIdx] + ';' + HINTS;
+  } else {
+    lines.splice(rtpmapIdx + 1, 0, fmtpPrefix + HINTS);
+  }
+
+  return lines.join('\r\n');
 }
 
 function teardownCapture() {
@@ -392,6 +566,13 @@ function resolveIceServers() {
 
 function newPeerConnection() {
   const pc = new RTCPeerConnection({ iceServers: resolveIceServers() });
+  // connectedConstraintsApplied is closed over per-PC (a fresh PC is created
+  // for every capture/recapture cycle, see runCaptureAndOfferOnce), so this
+  // guards only the FIRST 'connected' transition of THIS pc -- re-applying
+  // applyVideoSenderConstraints on every later connectionstatechange
+  // fluctuation (e.g. a transient disconnected->connected blip) would be
+  // harmless (setParameters is idempotent) but pointless, so it's skipped.
+  let connectedConstraintsApplied = false;
   pc.oniceconnectionstatechange = () => {
     window.__omnipusState.iceState = pc.iceConnectionState;
     record('ice state -> ' + pc.iceConnectionState);
@@ -402,6 +583,13 @@ function newPeerConnection() {
   pc.onconnectionstatechange = () => {
     window.__omnipusState.connState = pc.connectionState;
     record('connection state -> ' + pc.connectionState);
+    // Second post-negotiation re-apply point (see applyVideoSenderConstraints's
+    // doc comment) -- by 'connected' the transceiver is fully settled, so
+    // this is the most reliable point for setParameters to actually stick.
+    if (pc.connectionState === 'connected' && !connectedConstraintsApplied) {
+      connectedConstraintsApplied = true;
+      applyVideoSenderConstraints(pc, { context: 'post-connected', recordSuccess: true });
+    }
   };
   return pc;
 }
@@ -468,13 +656,17 @@ async function runCaptureAndOfferOnce() {
 
   // Fix-wave finding 4: cap bitrate + set encoding hints on the video
   // sender now that addTrack has created it. Video-only (audio/Opus has no
-  // equivalent overdrive risk here).
+  // equivalent overdrive risk here). This pre-negotiation call is
+  // best-effort -- see applyVideoSenderConstraints's doc comment for why
+  // the post-answer/post-connected re-applies below are the ones that
+  // actually matter.
   const videoTrack = stream.getVideoTracks()[0];
   if (videoTrack) {
-    applyVideoSenderConstraints(pc, videoTrack);
+    applyVideoSenderConstraints(pc, { context: 'pre-negotiation' });
   }
 
   const offer = await pc.createOffer();
+  offer.sdp = mungeVideoStartBitrate(offer.sdp);
   await pc.setLocalDescription(offer);
   await waitIceGatheringComplete(pc);
 
@@ -572,6 +764,14 @@ async function handleWsMessage(raw) {
         setStatus('connected');
         lastGoodIceTime = Date.now();
         record('applied browser_capture_answer, PC connecting');
+        // First post-negotiation re-apply point (see
+        // applyVideoSenderConstraints's doc comment): the remote answer is
+        // now applied, so the transceiver's direction/codecs are settled
+        // even though ICE/DTLS may still be finishing up. A second
+        // re-apply follows at pc.connectionState === 'connected'
+        // (newPeerConnection's onconnectionstatechange) for whichever
+        // browser needs the transport fully up before setParameters sticks.
+        applyVideoSenderConstraints(currentPC, { context: 'post-answer', recordSuccess: true });
       } catch (e) {
         window.__omnipusState.lastError = String(e);
         record('setRemoteDescription(answer) FAILED: ' + e);
