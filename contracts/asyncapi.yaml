@@ -2953,6 +2953,18 @@ components:
           type: string
           maxLength: 512
           description: Optional human-readable context for the action (e.g. shutdown cause).
+        expected_width:
+          type: integer
+          minimum: 1
+          maximum: 16384
+          description: 'recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized
+            to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale
+            size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.'
+        expected_height:
+          type: integer
+          minimum: 1
+          maximum: 16384
+          description: 'recapture only: expected CSS viewport height. See expected_width.'
     ErrorPayload:
       title: ErrorPayload
       description: Structured payload for a live error frame.

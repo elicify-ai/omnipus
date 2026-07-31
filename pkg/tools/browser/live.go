@@ -814,6 +814,35 @@ func (r *LiveViewRegistry) AttachedViewerIDs(sessionID string) []string {
 	return out
 }
 
+// CSSViewport returns sessionID's cached CSS layout viewport — SetViewport's
+// Page.getLayoutMetrics read-back (including its at-most-one chrome-delta
+// compensation re-read), the CDP-verified truth of the tab's actual size
+// (see SetViewport's mechanism doc comment). ok is false when no live view
+// exists for sessionID, or the cache is unset/invalidated (zero — either
+// SetViewport has never run for this session, or its last read-back failed
+// or came back degenerate; see invalidateCSSViewportCache).
+//
+// Follow-up to
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md (measured
+// 2026-07-31): the gateway's browser_ws.go handleViewport calls this right
+// after a successful SetViewport so it can thread the verified dimensions
+// through to CaptureSession.RecaptureAt — without them, the encoder's own
+// chrome.tabs.get-based resolution can race the OS window reflow and pin
+// the WebRTC stream to a stale tab size.
+func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
+	sessionID = resolveSessionID(sessionID)
+	lv, exists := r.lookup(sessionID)
+	if !exists {
+		return 0, 0, false
+	}
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if lv.cssViewportW <= 0 || lv.cssViewportH <= 0 {
+		return 0, 0, false
+	}
+	return lv.cssViewportW, lv.cssViewportH, true
+}
+
 // Input dispatches a viewer input event via CDP, but ONLY when viewerID
 // currently holds control of sessionID (ADR-038 D6). Returns an error
 // (nothing is applied) when the viewer doesn't hold control, no live view is

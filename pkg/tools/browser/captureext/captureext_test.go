@@ -313,6 +313,7 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 var versionContentHashes = map[string]string{
 	"1.0.1": "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",
 	"1.0.2": "366cea35b3775142c81c0a5d922b1a30db750731d4d277876303075a0b4b2d28",
+	"1.0.3": "58cc11f1bbeac2bfdcf98917fd163aef577873b349630d880560ff46a2f1a0b5",
 }
 
 func embeddedContentHash(t *testing.T) string {

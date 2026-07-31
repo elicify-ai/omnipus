@@ -416,7 +416,7 @@ func TestCaptureSession_BindIngestSupersedesPreviousConnection(t *testing.T) {
 
 	firstClosed := false
 	_, epoch1 := cs.BindIngest(
-		func(string, *string) error { return nil },
+		func(string, *string, int, int) error { return nil },
 		func() { firstClosed = true },
 	)
 	if epoch1 == 0 {
@@ -424,7 +424,7 @@ func TestCaptureSession_BindIngestSupersedesPreviousConnection(t *testing.T) {
 	}
 
 	prevClose, epoch2 := cs.BindIngest(
-		func(string, *string) error { return nil },
+		func(string, *string, int, int) error { return nil },
 		func() {},
 	)
 	if epoch2 == epoch1 {
@@ -466,10 +466,12 @@ func TestCaptureSession_RecapturePropagatesToRelayAndIngest(t *testing.T) {
 	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(&calls, nil))
 
 	var gotAction string
+	var gotW, gotH int
 	var mu sync.Mutex
-	cs.BindIngest(func(action string, _ *string) error {
+	cs.BindIngest(func(action string, _ *string, expectedW, expectedH int) error {
 		mu.Lock()
 		gotAction = action
+		gotW, gotH = expectedW, expectedH
 		mu.Unlock()
 		return nil
 	}, func() {})
@@ -483,6 +485,47 @@ func TestCaptureSession_RecapturePropagatesToRelayAndIngest(t *testing.T) {
 	defer mu.Unlock()
 	if gotAction != "recapture" {
 		t.Fatalf("ingest send action = %q, want \"recapture\"", gotAction)
+	}
+	if gotW != 0 || gotH != 0 {
+		t.Fatalf("Recapture() (no dims) sent expected %dx%d, want 0x0 (absent)", gotW, gotH)
+	}
+}
+
+// TestCaptureSession_RecaptureAtPropagatesExpectedDims proves the
+// dimension-carrying path this task adds: RecaptureAt must thread its
+// expectedW/expectedH straight through to the ingest send callback, so the
+// gateway's browser_ws.go handleViewport can hand the encoder the
+// CDP-verified CSS viewport instead of leaving it to race the OS window
+// reflow via its own chrome.tabs.get poll (see RecaptureAt's doc comment,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md follow-up).
+func TestCaptureSession_RecaptureAtPropagatesExpectedDims(t *testing.T) {
+	relay := &fakeRelay{}
+	var calls int32
+	cs := newTestCaptureSession(t, relay, fakeEncoderStarter(&calls, nil))
+
+	var gotAction string
+	var gotW, gotH int
+	var mu sync.Mutex
+	cs.BindIngest(func(action string, _ *string, expectedW, expectedH int) error {
+		mu.Lock()
+		gotAction = action
+		gotW, gotH = expectedW, expectedH
+		mu.Unlock()
+		return nil
+	}, func() {})
+
+	cs.RecaptureAt(615, 744)
+
+	if got := relay.recaptureCount(); got != 1 {
+		t.Fatalf("relay.SignalRecapture called %d times, want 1", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAction != "recapture" {
+		t.Fatalf("ingest send action = %q, want \"recapture\"", gotAction)
+	}
+	if gotW != 615 || gotH != 744 {
+		t.Fatalf("RecaptureAt(615, 744) sent expected %dx%d, want 615x744", gotW, gotH)
 	}
 }
 
@@ -511,7 +554,7 @@ func TestCaptureSession_StopSendsShutdownClosesViewersAndRelay(t *testing.T) {
 
 	var gotAction string
 	var reasonSet bool
-	cs.BindIngest(func(action string, reason *string) error {
+	cs.BindIngest(func(action string, reason *string, _, _ int) error {
 		gotAction = action
 		reasonSet = reason != nil
 		return nil

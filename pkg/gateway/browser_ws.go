@@ -1427,8 +1427,20 @@ func (h *BrowserWSHandler) handleViewport(wc *browserWSConn, state *browserConnS
 		"viewer_id", viewerID, "width", frame.Width, "height", frame.Height, "device_scale_factor", dsf)
 
 	// Rebuild the WebRTC capture at the new geometry. peek (not take) — this
-	// must not detach the viewer as a side effect of a resize.
+	// must not detach the viewer as a side effect of a resize. Thread the
+	// CDP-verified CSS viewport SetViewport just cached through to
+	// RecaptureAt (follow-up to
+	// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
+	// 2026-07-31: a recapture racing this very resize otherwise pins the
+	// WebRTC stream to a stale tab size, because the encoder's own
+	// chrome.tabs.get-based resolution lags the OS window reflow). Falls
+	// back to the no-hint Recapture() if the cache came back empty (e.g.
+	// SetViewport's own read-back was invalidated).
 	if att := state.peekWebRTCAttachment(); att != nil && att.capture != nil {
-		att.capture.Recapture()
+		if w, h, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+			att.capture.RecaptureAt(w, h)
+		} else {
+			att.capture.Recapture()
+		}
 	}
 }

@@ -21,8 +21,18 @@
 //   -> {type: 'browser_capture_hello',   token, ext_version}
 //   -> {type: 'browser_capture_offer',   sdp}
 //   <- {type: 'browser_capture_answer',  sdp}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown, reason?}  (server -> client)
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown, reason?, expected_width?, expected_height?}  (server -> client)
 //   ->  {type: 'browser_capture_control', action: ping}                        (client -> server)
+//
+// expected_width/expected_height (2026-07-31 follow-up,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md): on a
+// recapture triggered by a viewport resize, the gateway has already read
+// back the tab's ACTUAL CSS viewport via CDP's Page.getLayoutMetrics — the
+// one piece of CDP-VERIFIED truth that exists at that moment — and threads
+// it through here so captureActiveTabStream can converge on a KNOWN target
+// instead of merely polling chrome.tabs.get until two reads agree with each
+// other (which two STALE reads can also satisfy). Absent on a recapture with
+// no such measurement to offer (e.g. an active-tab switch).
 //
 // browser_capture_hello is CLIENT -> SERVER ONLY — the gateway never sends
 // one back. Per the schema doc: "the gateway audits any hello with a
@@ -141,6 +151,17 @@ let reconnectDelayMs = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const ICE_BAD_GRACE_MS = 10000;
 const PING_BEACON_INTERVAL_MS = 15000;
+
+// expectedCaptureDims (2026-07-31 follow-up,
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md) carries the
+// CDP-verified {w, h} a viewport-resize-triggered recapture wants
+// captureActiveTabStream to converge on, or null when the incoming recapture
+// carried no such hint (e.g. an active-tab switch — see
+// handleControlFrame). Set just before runCaptureAndOffer is kicked off for
+// a recapture and consumed (then cleared) by captureActiveTabStream's own
+// polling logic below, so it is never stale across a LATER recapture that
+// omits the fields.
+let expectedCaptureDims = null;
 
 // DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
 // per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
@@ -511,31 +532,113 @@ async function captureActiveTabStream() {
   // --window-size default.
   let capW = 1280;
   let capH = 720;
-  try {
-    // Poll until two consecutive reads agree (bounded). A recapture fires
-    // right after SetViewport, and the chrome-delta COMPENSATION step there
-    // (live.go, 2026-07-31) applies window bounds twice in quick succession —
-    // a single chrome.tabs.get here can catch the tab mid-reflow and pin the
-    // whole stream to a transitional size (measured live: capture stuck at
-    // 615x766 while the settled, CDP-verified viewport was 615x744). Two
-    // agreeing reads 150ms apart mean the reflow has settled.
-    let prevW = 0;
-    let prevH = 0;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const tab = await chrome.tabs.get(tabId);
-      if (tab && tab.width && tab.height) {
-        if (tab.width === prevW && tab.height === prevH) {
+
+  // expectedCaptureDims (2026-07-31 follow-up,
+  // docs/internal/browser-viewport-input-rootcause-2026-07-31.md): consumed
+  // and cleared here, exactly once per capture cycle. A viewport-resize
+  // recapture carries the gateway's own CDP-verified Page.getLayoutMetrics
+  // read-back through CaptureSession.RecaptureAt -> browser_capture_control
+  // {expected_width, expected_height} -- the ONLY truth that actually proves
+  // what the tab's CSS viewport is at this instant (see live.go's
+  // SetViewport doc comment). Two independent failure modes measured live on
+  // 2026-07-31 motivate polling against this KNOWN target instead of the
+  // plain "two consecutive reads agree with EACH OTHER" strategy the `else`
+  // branch below still uses when no such hint is available:
+  //   (1) mid-reflow race: a single chrome.tabs.get read during the
+  //       window-bounds reflow can catch a transitional size (measured:
+  //       stream stuck at 615x766 while the settled, CDP-verified viewport
+  //       was already 615x744).
+  //   (2) two-agreeing-STALE-reads: the "poll until two consecutive reads
+  //       agree" strategy is fooled when chrome.tabs.get simply LAGS the
+  //       real window resize entirely -- two stale reads agree with each
+  //       other just as readily as two settled ones, so that poll exits
+  //       "successfully" pinned to the OLD geometry (measured: capture stuck
+  //       at the 1278x632 launch size while the tab was CDP-verified at
+  //       615x744 in the SAME second).
+  // Converging chrome.tabs.get onto the expected value closes both; if it
+  // never gets there within the poll budget, the CDP-verified expected
+  // value is trusted directly rather than whatever (possibly still-stale)
+  // size chrome.tabs.get last reported.
+  const expected = expectedCaptureDims;
+  expectedCaptureDims = null;
+
+  if (expected) {
+    const TOLERANCE_PX = 8;
+    const MAX_TRIES = 16;
+    const POLL_INTERVAL_MS = 150;
+    let converged = false;
+    try {
+      for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
+        const tab = await chrome.tabs.get(tabId);
+        if (
+          tab &&
+          tab.width &&
+          tab.height &&
+          Math.abs(tab.width - expected.w) <= TOLERANCE_PX &&
+          Math.abs(tab.height - expected.h) <= TOLERANCE_PX
+        ) {
+          capW = tab.width;
+          capH = tab.height;
+          converged = true;
           break;
         }
-        prevW = tab.width;
-        prevH = tab.height;
-        capW = tab.width;
-        capH = tab.height;
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       }
-      await new Promise((resolve) => setTimeout(resolve, 150));
+    } catch (e) {
+      warn(
+        'captureActiveTabStream: chrome.tabs.get failed while converging on expected dims, using expected values directly',
+        e
+      );
     }
-  } catch (e) {
-    warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
+    if (!converged) {
+      // Timeout (or a thrown chrome.tabs.get): the CDP-verified expected
+      // values are still the best truth available -- use them directly
+      // rather than whatever stale/transitional size chrome.tabs.get last
+      // reported.
+      warn(
+        'captureActiveTabStream: chrome.tabs.get did not converge on expected ' +
+          expected.w +
+          'x' +
+          expected.h +
+          ' within ' +
+          MAX_TRIES +
+          ' tries, using the expected (CDP-verified) values directly'
+      );
+      capW = expected.w;
+      capH = expected.h;
+    }
+  } else {
+    try {
+      // Poll until two consecutive reads agree (bounded) — the fallback
+      // strategy for a recapture with no CDP-verified hint (e.g. an
+      // active-tab switch, live.go's onTabsChanged -> cs.Recapture()). A
+      // recapture fires right after SetViewport, and the chrome-delta
+      // COMPENSATION step there (live.go, 2026-07-31) applies window bounds
+      // twice in quick succession — a single chrome.tabs.get here can catch
+      // the tab mid-reflow and pin the whole stream to a transitional size
+      // (measured live: capture stuck at 615x766 while the settled,
+      // CDP-verified viewport was 615x744). Two agreeing reads 150ms apart
+      // mean the reflow has settled. See the expected-dims branch above for
+      // why mere self-agreement is NOT good enough once a verified target
+      // exists to poll against instead.
+      let prevW = 0;
+      let prevH = 0;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab && tab.width && tab.height) {
+          if (tab.width === prevW && tab.height === prevH) {
+            break;
+          }
+          prevW = tab.width;
+          prevH = tab.height;
+          capW = tab.width;
+          capH = tab.height;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    } catch (e) {
+      warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
+    }
   }
   record('captureActiveTabStream: capture size ' + capW + 'x' + capH);
 
@@ -720,6 +823,16 @@ async function handleControlFrame(msg) {
   record('control frame: action=' + action + (msg.reason ? ' reason=' + msg.reason : ''));
 
   if (action === 'recapture') {
+    // Read expected_width/expected_height off the frame BEFORE kicking off
+    // runCaptureAndOffer -- captureActiveTabStream (called from inside that
+    // chain) is what actually consumes and clears expectedCaptureDims. Both
+    // fields must be present and numeric; anything else (either omitted, or
+    // an older/malformed server) means "no CDP-verified hint" and this
+    // recapture falls back to the historical two-agreeing-reads poll.
+    expectedCaptureDims =
+      typeof msg.expected_width === 'number' && typeof msg.expected_height === 'number'
+        ? { w: msg.expected_width, h: msg.expected_height }
+        : null;
     const forWs = ws;
     try {
       await runCaptureAndOffer();

@@ -263,9 +263,17 @@ type CaptureSession struct {
 	// or failure) — see IsStarting's doc comment for why the gateway's
 	// ADR-048 condition-2 fence needs to distinguish this from both "never
 	// started" and "fully started."
-	starting    bool
-	stopped     bool
-	ingestSend  func(action string, reason *string) error
+	starting bool
+	stopped  bool
+	// ingestSend additionally carries the CDP-verified expected CSS viewport
+	// dimensions for a recapture (expectedW, expectedH; 0,0 = absent) — see
+	// RecaptureAt's doc comment for the race this closes: a recapture racing
+	// a viewport resize otherwise pins the WebRTC stream to a stale tab size
+	// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md
+	// follow-up, measured 2026-07-31 — stream stuck at 1278x632 launch
+	// geometry while the tab was CDP-verified at 615x744 in the same
+	// second).
+	ingestSend  func(action string, reason *string, expectedW, expectedH int) error
 	ingestClose func()
 	// ingestEpoch increments on every BindIngest call — UnbindIngest only
 	// clears ingestSend/ingestClose if the epoch it was handed still matches
@@ -752,11 +760,14 @@ func (cs *CaptureSession) TokenHex() string {
 // epoch, which the caller must pass back to UnbindIngest so a stale
 // (already-superseded) connection's teardown can never clobber a NEWER
 // connection's callbacks. send pushes a browser_capture_control frame's
-// {action, reason} to the encoder over the raw ingest WS (NOT a WebRTC data
-// channel — recapture/shutdown are signaled on the signaling connection
-// itself, independent of whether media has even connected yet).
+// {action, reason, expected_width?, expected_height?} to the encoder over
+// the raw ingest WS (NOT a WebRTC data channel — recapture/shutdown are
+// signaled on the signaling connection itself, independent of whether media
+// has even connected yet). expectedW/expectedH (0,0 = absent) carry the
+// CDP-verified CSS viewport RecaptureAt wants the encoder to converge on —
+// see that method's doc comment for why this exists.
 func (cs *CaptureSession) BindIngest(
-	send func(action string, reason *string) error,
+	send func(action string, reason *string, expectedW, expectedH int) error,
 	closeConn func(),
 ) (previousClose func(), epoch uint64) {
 	cs.mu.Lock()
@@ -1080,32 +1091,72 @@ func (cs *CaptureSession) CleanupViewerOffer(handle *ViewerAttachHandle) {
 }
 
 // Recapture signals both halves of the recapture path (wave-plan W2-A item
+// 5) with no expected-geometry hint. Delegates to RecaptureAt(0, 0) (0,0 =
+// absent, mirroring ingestSend's convention) — kept as its own method
+// because most callers (e.g. live.go's onTabsChanged, on an active-tab
+// switch) have no CDP-verified viewport measurement to offer, so the
+// encoder falls back to its own chrome.tabs.get-based stability poll. See
+// RecaptureAt's doc comment for the dimension-carrying variant a caller
+// should prefer whenever one IS available (a viewport resize).
+func (cs *CaptureSession) Recapture() {
+	cs.RecaptureAt(0, 0)
+}
+
+// RecaptureAt signals both halves of the recapture path (wave-plan W2-A item
 // 5): a browser_capture_control{recapture} frame is pushed to the encoder
-// over the ingest WS (if currently bound) so it re-binds
-// chrome.tabCapture to the newly-active tab, AND the relay's
-// SignalRecapture() primes attached viewers for the resulting brief gap
-// with an immediate + bursted PLI so playback recovers as fast as possible.
+// over the ingest WS (if currently bound) so it re-binds chrome.tabCapture
+// to the newly-active tab, AND the relay's SignalRecapture() primes attached
+// viewers for the resulting brief gap with an immediate + bursted PLI so
+// playback recovers as fast as possible. expectedW/expectedH (0,0 = absent)
+// additionally carry the CDP-verified CSS viewport the encoder should
+// converge on.
+//
+// Why this exists (follow-up to
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
+// 2026-07-31): a viewport resize (pkg/gateway/browser_ws.go's
+// handleViewport) calls LiveViewRegistry.SetViewport, which reads back the
+// tab's ACTUAL CSS viewport via Page.getLayoutMetrics immediately after
+// applying it — the one piece of CDP-VERIFIED truth that exists at that
+// moment — then triggers a recapture so the WebRTC stream follows the new
+// size. Without threading that measurement through, the encoder's own
+// chrome.tabs.get-based resolution (encoder.js's captureActiveTabStream)
+// races the OS window reflow: chrome.tabs.get lags behind the CDP-verified
+// layout, so a recapture landing mid-reflow pins the stream to a STALE tab
+// size. Live evidence: the stream stuck at the 1278x632 launch geometry
+// while the SAME tab was already CDP-verified at 615x744 in the same
+// second — encoder.js's old "two agreeing chrome.tabs.get reads" stability
+// poll is fooled by this, because two STALE reads can agree with each other
+// just as readily as two settled ones. Passing the verified dimensions lets
+// the encoder poll chrome.tabs.get against a KNOWN target and fall back to
+// that known-good value on a poll timeout, instead of trusting mere
+// agreement between reads — see encoder.js's captureActiveTabStream for the
+// convergence logic this drives.
+//
 // Safe to call with no ingest connection bound (a no-op send) or no relay
 // tracks yet (SignalRecapture is itself a no-op then, per its doc comment).
-func (cs *CaptureSession) Recapture() {
-	cs.requestControl("recapture", nil)
+func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
+	cs.requestControl("recapture", nil, expectedW, expectedH)
 	cs.relay.SignalRecapture()
 }
 
-// requestControl pushes a browser_capture_control{action, reason} frame to
-// the bound ingest connection, if any. Errors are logged, not returned —
-// every call site (Recapture, Stop) is best-effort: the encoder's own
-// reconnect watchdog (encoder.js) and this session's own Stop() teardown are
-// what actually guarantee termination, not a successfully-delivered control
+// requestControl pushes a browser_capture_control{action, reason,
+// expected_width?, expected_height?} frame to the bound ingest connection,
+// if any. expectedW/expectedH carry the CDP-verified CSS viewport a
+// recapture should converge on (0,0 = absent — see RecaptureAt's doc
+// comment); Stop's shutdown call always passes 0,0, since there is no
+// geometry to convey on teardown. Errors are logged, not returned — every
+// call site (RecaptureAt, Stop) is best-effort: the encoder's own reconnect
+// watchdog (encoder.js) and this session's own Stop() teardown are what
+// actually guarantee termination, not a successfully-delivered control
 // frame.
-func (cs *CaptureSession) requestControl(action string, reason *string) {
+func (cs *CaptureSession) requestControl(action string, reason *string, expectedW, expectedH int) {
 	cs.mu.Lock()
 	send := cs.ingestSend
 	cs.mu.Unlock()
 	if send == nil {
 		return
 	}
-	if err := send(action, reason); err != nil {
+	if err := send(action, reason, expectedW, expectedH); err != nil {
 		cs.logf("capture[%s]: send control %s failed: %v", cs.agentID, action, err)
 	}
 }
@@ -1309,7 +1360,7 @@ func (cs *CaptureSession) Stop() {
 	cs.mu.Unlock()
 
 	shutdownReason := "capture session stopping"
-	cs.requestControl("shutdown", &shutdownReason)
+	cs.requestControl("shutdown", &shutdownReason, 0, 0)
 
 	for _, id := range viewerIDs {
 		cs.relay.CloseViewer(id)

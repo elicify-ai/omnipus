@@ -1208,12 +1208,28 @@ func (h *captureIngestWSHandler) serveConn(conn *websocket.Conn, remoteAddr stri
 	cs.RecordExtVersion(hello.ExtVersion)
 
 	ic := &captureIngestConn{conn: conn}
-	send := func(action string, reason *string) error {
-		return ic.sendJSON(generated.BrowserCaptureControlFrame{
+	// send additionally carries expectedW/expectedH — the CDP-verified CSS
+	// viewport CaptureSession.RecaptureAt wants the encoder to converge on
+	// (follow-up to
+	// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
+	// 2026-07-31). 0 means "absent" (RecaptureAt's convention, mirrored by
+	// Recapture()'s own 0,0 call), so ExpectedWidth/ExpectedHeight are only
+	// set on the wire frame when the corresponding value is actually
+	// positive — an absent field, not a literal 0, is what tells the encoder
+	// there is no hint to converge on.
+	send := func(action string, reason *string, expectedW, expectedH int) error {
+		frame := generated.BrowserCaptureControlFrame{
 			Type:   string(generated.WsFrameTypeBrowserCaptureControl),
 			Action: action,
 			Reason: reason,
-		})
+		}
+		if expectedW > 0 {
+			frame.ExpectedWidth = &expectedW
+		}
+		if expectedH > 0 {
+			frame.ExpectedHeight = &expectedH
+		}
+		return ic.sendJSON(frame)
 	}
 	var closeOnce sync.Once
 	closeConn := func() {

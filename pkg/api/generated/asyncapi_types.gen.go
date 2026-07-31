@@ -54,6 +54,10 @@ type BrowserCaptureAnswerFrame struct {
 // BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound, the onTabsChanged/rebindScreencast analog for the WebRTC path, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
 type BrowserCaptureControlFrame struct {
 	Action string `json:"action"`
+	// recapture only: expected CSS viewport height. See expected_width.
+	ExpectedHeight *int `json:"expected_height,omitempty"`
+	// recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.
+	ExpectedWidth *int `json:"expected_width,omitempty"`
 	// Optional human-readable context for the action (e.g. shutdown cause).
 	Reason *string `json:"reason,omitempty"`
 	Type   string  `json:"type"`
