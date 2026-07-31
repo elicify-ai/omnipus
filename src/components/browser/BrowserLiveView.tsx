@@ -1240,6 +1240,17 @@ export function BrowserLiveView({
     if (!el) return undefined
     let timer: ReturnType<typeof setTimeout> | null = null
 
+    // Cold-start race (live UAT 2026-07-31, fresh machine): the attach-time
+    // viewport frame can reach the gateway BEFORE the live view exists —
+    // handleViewport drops it (applied=false) — and with the panel size never
+    // changing again, the sub-threshold gate below suppressed every future
+    // send, pinning the capture to launch geometry forever. This effect
+    // re-runs when `frame` flips non-null (media now exists server-side), so
+    // clearing the sent-marker here forces exactly one re-send at a moment
+    // the server can actually apply it. Worst case is one duplicate frame,
+    // which the server-side throttle absorbs.
+    lastSentViewportRef.current = null
+
     const push = () => {
       const box = el.getBoundingClientRect()
       const w = Math.round(box.width)
