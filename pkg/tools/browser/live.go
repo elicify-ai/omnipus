@@ -483,6 +483,19 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 	if tabCtx == nil {
 		return false, nil
 	}
+	// Serialize the whole apply→compensate→read-back→cache sequence per
+	// LiveView (live UAT 2026-07-31, pop-out): two viewers may legally send
+	// viewport frames near-simultaneously while the tab is uncontrolled (the
+	// docked panel's first-frame re-send racing the pop-out's attach frame).
+	// Interleaved, one caller's raw bounds-write lands in the middle of the
+	// other's compensation and the window ends at a hybrid neither asked for
+	// (measured: outer bounds stuck at the pop-out's UNcompensated first
+	// apply, tab pinned 86px short, self-heal correctly seeing "no drift"
+	// against a genuinely wrong tab). NOT lv.mu — this holds across several
+	// CDP round trips, and lv.mu must never be held across a CDP call
+	// (ADR-038 discipline).
+	lv.viewportMu.Lock()
+	defer lv.viewportMu.Unlock()
 	// Bounds are also enforced by the wire schema (BrowserViewportFrame), but
 	// re-checked here because this is a public method on the registry and a
 	// future non-WS caller must not be able to hand Chromium a degenerate or
@@ -997,6 +1010,11 @@ type LiveView struct {
 	// than an empty one, since it passes rescaleToCSSViewport's cache-hit
 	// guard and silently mis-maps input by the old/new ratio.
 	cssViewportW, cssViewportH int
+
+	// viewportMu serializes SetViewport's multi-round-trip
+	// apply→compensate→read-back sequence (see SetViewport). Separate from mu
+	// because it is held across CDP calls, which mu never may be.
+	viewportMu sync.Mutex
 
 	// nextFetchAfter backs off rescaleToCSSViewport's cache-miss fetch after
 	// a failure (2026-07-31 fix wave, item 3): zero until the first fetch
