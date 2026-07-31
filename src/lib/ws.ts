@@ -767,52 +767,60 @@ export class WsConnection {
       this.callbacks.onError(`Connection error reaching ${getWsUrl()} — will retry`)
     }
 
-    this.ws.onclose = (event: CloseEvent) => {
-      // Drop this socket from the test-visible registry before nulling.
-      if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
-        const w = window as unknown as { __ws_instances?: WebSocket[] }
-        if (w.__ws_instances && this.ws) {
-          const idx = w.__ws_instances.indexOf(this.ws)
-          if (idx >= 0) w.__ws_instances.splice(idx, 1)
-        }
-      }
+    this.ws.onclose = (event: CloseEvent) => this._handleClose(event)
+  }
 
-      // Flush frames already queued before the drop so callers don't lose them.
-      // Chat reducers are idempotent on replay, so flushing on unintentional
-      // close is safe. Also clear any in-flight worker entries whose responses
-      // will never arrive so they don't pile up against the next connection.
-      this._flushBatch()
-      this._workerPending.clear()
-      this._workerNextExpected = this._nextWorkerId
-
-      this.ws = null
-      this._stopHeartbeat()
-      this.callbacks.onDisconnected()
-      // Any non-intentional close should reconnect. The persistent banner is
-      // driven by isConnected=false in the connection store (set by
-      // onDisconnected above) — ChatScreen renders the reconnect-banner div
-      // for the entire disconnected interval. We surface a richer onError
-      // message for unexpected close codes (≠ 1000 / 1001) so the user sees a
-      // diagnostic toast as well; for clean-but-unintentional 1000/1001 the
-      // banner alone is sufficient.
-      if (!this.intentionalClose) {
-        // Close code 1008 = policy violation / auth failure. The server rejected
-        // the token. Reconnecting with the same dead token will loop forever —
-        // route through the shared forceLogout() path (same debounce as the
-        // QueryClient 401 handler, so a simultaneous 401 + 1008 fires teardown once).
-        if (event.code === 1008) {
-          forceLogout()
-          return
-        }
-        if (event.code !== 1000 && event.code !== 1001) {
-          const codeLabel = event.code ? ` code ${event.code}` : ''
-          const reasonLabel = event.reason ? `: ${event.reason}` : ''
-          this.callbacks.onError(
-            `Disconnected from gateway —${codeLabel}${reasonLabel || ' connection lost'}. Reconnecting…`
-          )
-        }
-        this._scheduleReconnect()
+  // Extracted from the inline this.ws.onclose assignment (2026-07-31 review
+  // finding) so the missed-ping force-close path below can drive the same
+  // teardown/reconnect logic manually when WebSocket.close() itself throws —
+  // in that case the browser never fires onclose, so nothing here would
+  // otherwise run and the connection would sit dead with no reconnect
+  // scheduled and no user-visible signal beyond a single stale console.warn.
+  private _handleClose(event: CloseEvent): void {
+    // Drop this socket from the test-visible registry before nulling.
+    if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
+      const w = window as unknown as { __ws_instances?: WebSocket[] }
+      if (w.__ws_instances && this.ws) {
+        const idx = w.__ws_instances.indexOf(this.ws)
+        if (idx >= 0) w.__ws_instances.splice(idx, 1)
       }
+    }
+
+    // Flush frames already queued before the drop so callers don't lose them.
+    // Chat reducers are idempotent on replay, so flushing on unintentional
+    // close is safe. Also clear any in-flight worker entries whose responses
+    // will never arrive so they don't pile up against the next connection.
+    this._flushBatch()
+    this._workerPending.clear()
+    this._workerNextExpected = this._nextWorkerId
+
+    this.ws = null
+    this._stopHeartbeat()
+    this.callbacks.onDisconnected()
+    // Any non-intentional close should reconnect. The persistent banner is
+    // driven by isConnected=false in the connection store (set by
+    // onDisconnected above) — ChatScreen renders the reconnect-banner div
+    // for the entire disconnected interval. We surface a richer onError
+    // message for unexpected close codes (≠ 1000 / 1001) so the user sees a
+    // diagnostic toast as well; for clean-but-unintentional 1000/1001 the
+    // banner alone is sufficient.
+    if (!this.intentionalClose) {
+      // Close code 1008 = policy violation / auth failure. The server rejected
+      // the token. Reconnecting with the same dead token will loop forever —
+      // route through the shared forceLogout() path (same debounce as the
+      // QueryClient 401 handler, so a simultaneous 401 + 1008 fires teardown once).
+      if (event.code === 1008) {
+        forceLogout()
+        return
+      }
+      if (event.code !== 1000 && event.code !== 1001) {
+        const codeLabel = event.code ? ` code ${event.code}` : ''
+        const reasonLabel = event.reason ? `: ${event.reason}` : ''
+        this.callbacks.onError(
+          `Disconnected from gateway —${codeLabel}${reasonLabel || ' connection lost'}. Reconnecting…`
+        )
+      }
+      this._scheduleReconnect()
     }
   }
 
@@ -948,9 +956,26 @@ export class WsConnection {
               `[ws] ${this.missedPingCount} consecutive pings with no server response — forcing reconnect`
             )
             try {
-              this.ws.close(1006, 'ping timeout')
-            } catch {
-              // ignore — onclose will fire regardless
+              // 4000 is an application-defined close code in the RFC 6455
+              // 3000-4999 range. 1006 (abnormal closure) is RESERVED — it may
+              // only ever be *reported* by the browser (e.g. as event.code
+              // when the connection drops without a close frame), never
+              // passed to WebSocket.close(), which throws InvalidAccessError
+              // for any code outside 1000 or 3000-4999. 4000 is valid, so
+              // close() succeeds and onclose fires normally, driving the
+              // reconnect via _scheduleReconnect below.
+              this.ws.close(4000, 'ping timeout')
+            } catch (err) {
+              // 2026-07-31 review finding: close() with a valid code should
+              // not throw, but if some environment does throw here (a
+              // browser extension monkey-patching WebSocket.prototype.close,
+              // a non-standard WebView) onclose never fires, so nothing
+              // schedules a reconnect and the connection sits frozen with no
+              // further trace than this one log line. Drive the same
+              // teardown/reconnect path manually instead of relying on
+              // onclose, which this environment has just proven unreliable.
+              console.error('[ws] close(4000) unexpectedly threw — forcing reconnect manually', err)
+              this._handleClose({ code: 4000, reason: 'ping timeout (close() threw)' } as CloseEvent)
             }
             return
           }

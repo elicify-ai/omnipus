@@ -540,6 +540,31 @@ func (h *WSHandler) Wait() {
 	h.activeConns.Wait()
 }
 
+// WS keepalive/backpressure timing constants. Kept in one place so the
+// invariant is easy to audit: wsPingPeriod < wsPongWait < the reverse proxy's
+// idle timeout (Fly's is ~60s). The keepalive ping must be both frequent
+// enough to beat the proxy's idle timeout AND non-blockable — a ping or any
+// other frame write that stalls (slow/unresponsive client, TCP
+// back-pressure) must fail fast via wsWriteWait rather than hang the single
+// writePump goroutine forever, which would silently starve the ping and let
+// the proxy kill the TCP connection with no close frame (browser sees code
+// 1006).
+const (
+	// wsWriteWait is the deadline for a single WriteMessage call (ping or
+	// data frame). A write that can't complete within this window fails
+	// fast so writePump can tear the connection down and the client can
+	// reconnect, instead of blocking indefinitely.
+	wsWriteWait = 10 * time.Second
+	// wsPongWait is how long we wait for a pong (or any client frame, which
+	// also re-arms this deadline in readLoop) before considering the
+	// connection dead.
+	wsPongWait = 60 * time.Second
+	// wsPingPeriod is how often the server sends a keepalive ping. Must be
+	// well under wsPongWait so pings arrive before the read deadline would
+	// otherwise expire.
+	wsPingPeriod = 30 * time.Second
+)
+
 // ServeHTTP handles the WebSocket upgrade and full connection lifecycle.
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.activeConns.Add(1)
@@ -571,9 +596,9 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(_ string) error {
-		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
 
 	// Create wsConn before auth so authenticateWS can set the role on it.
@@ -605,8 +630,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// pkg/agent/loop.go's CheckGrantOrRequestApproval doc comment.
 
 	// Subscribe to agent-loop events so we can forward tool_call_start/result
-	// frames to the browser in real time.
-	eventSub := h.agentLoop.SubscribeEvents(32)
+	// frames to the browser in real time. 256 (not 32) to match wc.sendCh's own
+	// buffer above: a burst of concurrent subagent dispatches (confirmed live at
+	// 24 in ~0.3s, each firing spawn/end plus its own tool-call events) can
+	// enqueue far more events than the old 32-slot buffer while eventForwarder
+	// is still marshaling+writing the previous one; sizing to sendCh keeps this
+	// stage no more likely to overflow than the outbound path it feeds.
+	eventSub := h.agentLoop.SubscribeEvents(256)
 	eventDone := make(chan struct{})
 	go h.eventForwarder(wc, chatID, eventSub, eventDone)
 
@@ -703,7 +733,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 
 	if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
 		wc.userID = user.Username // FR-073: needed for session_state user scoping
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		return true
 	}
 	// SFH-1: surface "cookie present but invalid" (replay/probe/stale
@@ -742,7 +772,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
 		wc.userID = user.Username // FR-073: needed for session_state user scoping
 		wc.isCLIToken = viaCLIToken
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		return true
 	}
 
@@ -768,7 +798,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
 			// Dev mode: allow without auth.
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(wsPongWait))
 			return true
 		}
 		// No auth configured — deny by default (fail closed), matching HTTP auth path.
@@ -793,7 +823,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 		)
 		return false
 	}
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	return true
 }
 
@@ -847,7 +877,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			return
 		}
 
-		if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(wsPongWait)); err != nil {
 			slog.Warn("ws: SetReadDeadline failed, exiting readLoop", "chat_id", chatID, "error", err)
 			return
 		}
@@ -2573,6 +2603,19 @@ var errSendTimeout = fmt.Errorf("ws: send channel full — replay send timeout")
 // gorilla/websocket requires all writes to happen from the same goroutine.
 // A nil message on sendCh is the sentinel for a ping frame.
 func (h *WSHandler) writePump(wc *wsConn) {
+	// 2026-07-31 review finding (mirrors the same fix in browser_ws.go's
+	// writePump): returning here on a write-side stall used to leave the
+	// connection write-dead but read-alive — nothing else in this function
+	// called wc.close(), so pingPump/sendRawFrameBytes kept selecting on a
+	// doneCh that was never closed, and readLoop's own read deadline kept
+	// getting refreshed by whatever the client was still sending (including
+	// the client's own app-level ping). The SetWriteDeadline calls below only
+	// bound how long ONE write blocks; without this, the connection was still
+	// only actually reaped by the client's independent missed-ping self-heal
+	// (ws.ts), not by anything server-side. wc.close() is sync.Once-guarded,
+	// so signalling here the moment the writer dies is safe to call alongside
+	// whatever else already calls it.
+	defer wc.close()
 	for {
 		select {
 		case msg, ok := <-wc.sendCh:
@@ -2581,11 +2624,28 @@ func (h *WSHandler) writePump(wc *wsConn) {
 			}
 			if msg == nil {
 				// nil sentinel: send a WebSocket ping frame.
+				//
+				// SetWriteDeadline before every write (including this
+				// keepalive ping) so a slow/back-pressured client can't
+				// stall this single writer goroutine indefinitely — without
+				// it, a blocked write here would silently starve the
+				// keepalive ping, and the reverse proxy would eventually
+				// reset the TCP connection with no close frame (browser
+				// sees code 1006) instead of the deadline firing and
+				// tearing the connection down cleanly within wsWriteWait.
+				if err := wc.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+					slog.Debug("ws: SetWriteDeadline failed for ping", "error", err)
+					return
+				}
 				if err := wc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					slog.Debug("ws: ping write error", "error", err)
 					return
 				}
 				continue
+			}
+			if err := wc.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+				slog.Debug("ws: SetWriteDeadline failed", "error", err)
+				return
 			}
 			if err := wc.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				slog.Debug("ws: write error", "error", err)
@@ -2600,7 +2660,7 @@ func (h *WSHandler) writePump(wc *wsConn) {
 // pingPump enqueues a nil sentinel onto sendCh every 30 s for keep-alive pings.
 // All writes go through writePump, satisfying gorilla's single-writer requirement.
 func (h *WSHandler) pingPump(wc *wsConn) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(wsPingPeriod)
 	defer ticker.Stop()
 	for {
 		select {
@@ -2822,6 +2882,13 @@ func sendGenWSFrame(conn *websocket.Conn, frame any) {
 	data, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal frame failed", "error", err)
+		return
+	}
+	// Bound the write so a slow/back-pressured client can't block this
+	// direct write indefinitely (same invariant as writePump's per-write
+	// deadline — see wsWriteWait's doc comment).
+	if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+		slog.Debug("ws: SetWriteDeadline failed", "error", err)
 		return
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {

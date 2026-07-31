@@ -408,6 +408,12 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 // writeCloseAuthFailed sends the WS close control frame used by every
 // authentication failure branch, matching authenticateWS's behavior exactly.
 func writeCloseAuthFailed(conn *websocket.Conn) {
+	// Same invariant as writePump below: a close frame to an unresponsive
+	// client must not block this goroutine forever.
+	if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+		slog.Debug("browser-ws: SetWriteDeadline failed for close frame", "error", err)
+		return
+	}
 	if err := conn.WriteMessage(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
@@ -420,10 +426,43 @@ func writeCloseAuthFailed(conn *websocket.Conn) {
 // connection. gorilla/websocket requires all writes to happen from the same
 // goroutine. A nil message on sendCh is the sentinel for a ping frame.
 func (h *BrowserWSHandler) writePump(wc *browserWSConn) {
+	// 2026-07-31 review finding: writePump returning on a write-side stall
+	// used to leave the connection write-dead but read-alive — nothing else
+	// here calls wc.close(), so pingPump/sendFrame/sendCritical kept selecting
+	// on a doneCh that was never closed, and readLoop's own deadline kept
+	// getting refreshed by whatever the client was still sending (including
+	// the client's own app-level heartbeat). The SetWriteDeadline fix above
+	// only bounds how long ONE write blocks; without this, the connection was
+	// still only actually reaped by the client's independent ~60s
+	// missed-ping self-heal (ws.ts), not by anything server-side. wc.close()
+	// is sync.Once-guarded (idempotent with the same call in the connection's
+	// main handler), so signalling here the moment the writer dies is safe.
+	defer wc.close()
 	for {
 		select {
 		case msg, ok := <-wc.sendCh:
 			if !ok {
+				return
+			}
+			// SetWriteDeadline before EVERY write, ping included (2026-07-31).
+			// This socket had none at all, while the chat socket
+			// (websocket.go's writePump, wsWriteWait) has had them for some
+			// time — the same invariant, applied to only one of the two.
+			//
+			// Without a deadline, WriteMessage blocks INDEFINITELY once the
+			// client's TCP receive window fills, wedging this single writer
+			// goroutine for good: no further frames, and — worse — no further
+			// keepalive pings. The peer then hits its own read timeout and
+			// tears the connection down, which is what surfaces as the
+			// abnormal `close 1006` the operator has been seeing. This socket
+			// carries the high-volume JPEG screencast stream, so it is by far
+			// the most likely of the two to fill a window in the first place.
+			//
+			// With the deadline, a stalled write fails fast and this pump
+			// exits (see the defer wc.close() above for why that now tears
+			// the whole connection down immediately, not just this goroutine).
+			if err := wc.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+				slog.Debug("browser-ws: SetWriteDeadline failed", "error", err)
 				return
 			}
 			if msg == nil {
