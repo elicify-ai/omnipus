@@ -163,6 +163,21 @@ const PING_BEACON_INTERVAL_MS = 15000;
 // omits the fields.
 let expectedCaptureDims = null;
 
+// lastPinnedCapDims records what captureActiveTabStream actually pinned the
+// running stream to, and selfHealDone guards the one-shot post-connect
+// verification below (2026-07-31 live UAT, pop-out): multiple recaptures can
+// overlap during a panel spin-up (attach-time corrective recapture, the
+// viewport apply's own recapture, the chrome-delta compensation's second
+// window reflow) and the LAST capture to win can pin a mid-compensation size
+// (measured: 1586x730 pinned while the settled viewport was 1586x816). Racing
+// orderings are unwinnable one by one — instead, ~1.2s after each capture
+// connects, re-read chrome.tabs.get once and self-recapture ONCE if the
+// pinned size drifted more than 8px from the settled tab. Bounded: the flag
+// resets per capture cycle, and a self-heal recapture that still mismatches
+// does not re-arm itself.
+let lastPinnedCapDims = null;
+let selfHealDone = false;
+
 // DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
 // per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
 // the tabCapture MediaStream has no bandwidth ceiling of its own, so an
@@ -640,6 +655,7 @@ async function captureActiveTabStream() {
       warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
     }
   }
+  lastPinnedCapDims = { w: capW, h: capH };
   record('captureActiveTabStream: capture size ' + capW + 'x' + capH);
 
   // Self-consume: no processing constraints needed — tabCapture's defaults
@@ -833,6 +849,9 @@ async function handleControlFrame(msg) {
       typeof msg.expected_width === 'number' && typeof msg.expected_height === 'number'
         ? { w: msg.expected_width, h: msg.expected_height }
         : null;
+    // Each SERVER-initiated recapture gets one post-connect self-heal check;
+    // a self-heal's own recapture deliberately does not re-arm this (no loop).
+    selfHealDone = false;
     const forWs = ws;
     try {
       await runCaptureAndOffer();
@@ -902,6 +921,27 @@ async function handleWsMessage(raw) {
         setStatus('connected');
         lastGoodIceTime = Date.now();
         record('applied browser_capture_answer, PC connecting');
+        if (!selfHealDone) {
+          selfHealDone = true;
+          const healPC = currentPC;
+          setTimeout(async () => {
+            if (currentPC !== healPC || shuttingDown || !lastPinnedCapDims) return;
+            try {
+              const tabId = await findActiveTargetTab();
+              const tab = await chrome.tabs.get(tabId);
+              if (
+                tab && tab.width && tab.height &&
+                (Math.abs(tab.width - lastPinnedCapDims.w) > 8 || Math.abs(tab.height - lastPinnedCapDims.h) > 8)
+              ) {
+                record('self-heal: pinned ' + lastPinnedCapDims.w + 'x' + lastPinnedCapDims.h + ' drifted from tab ' + tab.width + 'x' + tab.height + ' — recapturing once');
+                expectedCaptureDims = { w: tab.width, h: tab.height };
+                await runCaptureAndOffer();
+              }
+            } catch (e) {
+              warn('self-heal check failed', e);
+            }
+          }, 1200);
+        }
         // First post-negotiation re-apply point (see
         // applyVideoSenderConstraints's doc comment): the remote answer is
         // now applied, so the transceiver's direction/codecs are settled
