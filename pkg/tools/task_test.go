@@ -1298,14 +1298,24 @@ func TestTaskUpdate_NotFound(t *testing.T) {
 	}
 }
 
-// TestTaskUpdate_OwnershipRejection proves a caller who is NOT the assignee is
-// rejected — mirrors TestTaskDelete_OwnershipRejection /
-// TestTaskAddDependency_OwnershipRejection. task_update's gate is assignee-only
-// (it does NOT allow the creator, unlike delete/add_dependency).
+// TestTaskUpdate_OwnershipRejection proves a caller who is NEITHER the
+// assignee NOR the (agent-namespaced) creator is rejected — mirrors
+// TestTaskDelete_OwnershipRejection / TestTaskAddDependency_OwnershipRejection.
+//
+// task_update's gate is now the SAME union check delete_task uses (#584):
+// assignee OR agent-namespaced creator (CreatedByAgentID, via
+// task.Task.CreatedByAgent). The "creator-a" sub-case below is still rejected
+// here, but NOT because creators are disallowed in general — seedTask stamps
+// its createdBy into the MIXED-NAMESPACE Task.CreatedBy field only (never
+// CreatedByAgentID), so "creator-a" carries no agent-namespaced attribution on
+// this task and is exercising the same namespace-safety property
+// TestTaskDelete_MixedNamespaceCreatorRejected proves for delete_task. The
+// legitimate agent-creator-can-update case (CreatedByAgentID set via
+// Store.CreateByAgent) is covered by TestTaskUpdate_AgentCreatorAllowed below.
 func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
-	// Task assigned to agent-owner, created by creator-a.
+	// Task assigned to agent-owner, created by creator-a (mixed-namespace only).
 	tk := seedTask(t, store, "agent-owner", "creator-a", "ws-1")
 
 	tool := NewTaskUpdateTool(store)
@@ -1318,20 +1328,21 @@ func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected ownership rejection for an unrelated caller")
 	}
-	if !strings.Contains(res.ForLLM, "you can only update tasks assigned to you") {
+	if !strings.Contains(res.ForLLM, "you can only update tasks you own or are assigned") {
 		t.Errorf("unexpected rejection message: %s", res.ForLLM)
 	}
 
-	// The creator (who is NOT the assignee) must ALSO be rejected — task_update
-	// is assignee-only, unlike delete/add_dependency which allow the creator.
+	// A caller matching only the MIXED-NAMESPACE created_by (not
+	// CreatedByAgentID) must ALSO be rejected — see the namespace-safety note
+	// in the doc comment above.
 	resCreator := tool.Execute(WithAgentID(context.Background(), "creator-a"), map[string]any{
 		"task_id": tk.ID,
 		"status":  updStatusInProg,
 	})
 	if !resCreator.IsError {
-		t.Fatal("expected rejection when the creator (non-assignee) calls task_update")
+		t.Fatal("expected rejection for a caller matching only the mixed-namespace created_by")
 	}
-	if !strings.Contains(resCreator.ForLLM, "you can only update tasks assigned to you") {
+	if !strings.Contains(resCreator.ForLLM, "you can only update tasks you own or are assigned") {
 		t.Errorf("unexpected creator rejection message: %s", resCreator.ForLLM)
 	}
 
@@ -1339,6 +1350,45 @@ func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	got, _ := store.Get(tk.ID)
 	if got.Status != task.StatusNext {
 		t.Errorf("status must be unchanged after rejected updates, got %q", got.Status)
+	}
+}
+
+// TestTaskUpdate_AgentCreatorAllowed proves the #584 fix: an agent that
+// created a task through the AGENT path (Store.CreateByAgent, which stamps
+// the agent-id-namespaced CreatedByAgentID) can update it even though it is
+// assigned to a different agent — mirroring TestTaskDelete_AgentCreatorAllowed
+// (task_scope_test.go) for update_task's now-matching union check.
+func TestTaskUpdate_AgentCreatorAllowed(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+
+	tk := &task.Task{
+		Title: "DELEGATED", Action: task.ActionLLM, Status: task.StatusNext,
+		WorkspaceID: "ws-1", AgentID: "agent-owner",
+	}
+	if err := store.CreateByAgent(tk, "creator-a"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	res := tool.Execute(WithAgentID(context.Background(), "creator-a"), map[string]any{
+		"task_id":  tk.ID,
+		"priority": float64(1),
+	})
+	if res.IsError {
+		t.Fatalf("the agent that created the task must still be able to update it: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get after update: %v", err)
+	}
+	if got.Priority != 1 {
+		t.Errorf("expected priority update to persist, got %d", got.Priority)
+	}
+	// The assignee (agent-owner) must be untouched by this creator-initiated update.
+	if got.AgentID != "agent-owner" {
+		t.Errorf("creator update must not reassign the task, got agent_id %q", got.AgentID)
 	}
 }
 

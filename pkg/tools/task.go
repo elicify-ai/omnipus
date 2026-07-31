@@ -402,6 +402,10 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"maximum":     5,
 				"description": "Priority 1 (highest) to 5 (lowest); default 3",
 			},
+			"due": map[string]any{
+				"type":        "string",
+				"description": "Due date/time in RFC 3339 format (optional)",
+			},
 			"parent_task_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the parent task (optional) — set when this is a subtask of another task",
@@ -669,6 +673,19 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		priority = int(p)
 	}
 
+	// Optional due date (RFC 3339), mirroring update_task's own validation
+	// (N6, UAT batched-rerun 2026-07-31): due is a general task attribute, not
+	// gated behind plan_id the way write_set/stream/is_join are, so its absence
+	// here (while create_task_in_workspace and update_task both accept it) was
+	// a genuine schema-consistency gap rather than a deliberate restriction.
+	var due string
+	if d, ok := args["due"].(string); ok && d != "" {
+		if _, pErr := time.Parse(time.RFC3339, d); pErr != nil {
+			return ErrorResult(fmt.Sprintf("invalid due date %q (must be RFC 3339): %v", d, pErr))
+		}
+		due = d
+	}
+
 	parentTaskID, _ := args["parent_task_id"].(string)
 
 	wsID, err := t.resolveWorkspaceID(ctx)
@@ -686,6 +703,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		AgentID:         agentID,
 		CreatedBy:       callerID,
 		Priority:        priority,
+		Due:             due,
 		ParentTaskID:    parentTaskID,
 		WorkspaceID:     wsID,
 		Status:          task.StatusNext,
@@ -827,7 +845,7 @@ func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
+	return "Update a task assigned to you or that you created. Mark status (in_progress/done/failed) and optionally edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -912,8 +930,18 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
 	}
 
-	if existing.AgentID != callerID {
-		return ErrorResult("you can only update tasks assigned to you")
+	// CreatedByAgent, never CreatedBy — same rationale as delete_task's
+	// ownership gate above (task.go, TaskDeleteTool.Execute): Task.CreatedBy is
+	// MIXED-NAMESPACE (a human username on the REST path, an agent id on the
+	// tool path) and its own doc comment forbids using it as an ownership
+	// predicate. CreatedByAgent reads the agent-id-namespaced
+	// CreatedByAgentID and fails closed on both sides, so a task's creator
+	// (the delegator) can update it even when it is assigned to a different
+	// agent, matching delete_task's union check — reassignment of the
+	// assignee itself still routes through the separate delegationDeny gate
+	// below.
+	if existing.AgentID != callerID && !existing.CreatedByAgent(callerID) {
+		return ErrorResult("you can only update tasks you own or are assigned")
 	}
 
 	patch := task.Patch{}

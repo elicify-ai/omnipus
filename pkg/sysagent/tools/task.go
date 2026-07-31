@@ -162,7 +162,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done)."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, in_progress, blocked, done, failed — defaults to inbox), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -176,6 +176,12 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			"agent_id":     map[string]any{"type": "string"},
 			"status":       map[string]any{"type": "string"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
+			"priority": map[string]any{
+				"type":        "integer",
+				"minimum":     1,
+				"maximum":     5,
+				"description": "Priority 1 (highest) to 5 (lowest); default 3 (unset)",
+			},
 			"plan_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
@@ -346,6 +352,21 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		tk.Due = v
 	}
 
+	// Optional priority (N6, UAT batched-rerun 2026-07-31): priority is a
+	// general task attribute, not gated behind plan_id, so its absence here
+	// (while the plain create_task tool accepts it) was a genuine
+	// schema-consistency gap rather than a deliberate restriction. Unset (0)
+	// is treated as 3 on read (task.Task.EffectivePriority), matching
+	// create_task's own default.
+	if v, ok := args["priority"].(float64); ok {
+		pr := int(v)
+		if pr < 1 || pr > 5 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				fmt.Sprintf("priority must be between 1 and 5, got %d", pr), "priority"))
+		}
+		tk.Priority = pr
+	}
+
 	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
 	// (validateTaskPlanLinkageWorkspace above). A call with no plan_id is
 	// entirely unaffected — the check is a no-op for planID == "".
@@ -450,7 +471,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "update_task_in_workspace" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/in_progress/blocked/done/failed), due (RFC 3339), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run."
+	return "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/in_progress/blocked/done/failed), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -465,6 +486,12 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"agent_id":     map[string]any{"type": "string"},
 			"workspace_id": map[string]any{"type": "string"},
 			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
+			"priority": map[string]any{
+				"type":        "integer",
+				"minimum":     1,
+				"maximum":     5,
+				"description": "Priority 1 (highest) to 5 (lowest)",
+			},
 			"result": map[string]any{
 				"type": "string",
 				"description": "Summary of what was accomplished (used as the judge's claim text when " +
@@ -638,6 +665,15 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if v, ok := args["due"].(string); ok {
 		patch.Due = &v
 		updated = append(updated, "due")
+	}
+	// Optional priority (N6, UAT batched-rerun 2026-07-31) — parity with the
+	// plain update_task tool. Range validation (1-5) is enforced by
+	// store.Update (pkg/task/store.go), whose error surfaces via the generic
+	// INVALID_INPUT mapping below.
+	if v, ok := args["priority"].(float64); ok {
+		pr := int(v)
+		patch.Priority = &pr
+		updated = append(updated, "priority")
 	}
 	if rawDeps, ok := args["blocked_by"].([]any); ok {
 		deps := make([]string, 0, len(rawDeps))
