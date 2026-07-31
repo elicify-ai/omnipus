@@ -196,3 +196,114 @@ func TestSubTurnKeyReuseRace_CancelStillReachesSurvivingGeneration(t *testing.T)
 		"this is the flag runTurn's turnLoop checks every iteration (loop.go) to stop calling tools "+
 		"(e.g. a stuck recall_conversation loop) and finalize the turn")
 }
+
+// TestSubTurnKeyReuseRace_SpawnSubTurnSideCompareAndDelete covers the SECOND
+// activeTurnStates cleanup site — subturn.go's deferred
+// `clearActiveTurnStateEntry(childID, childTS)` (subturn.go:1136) — which the
+// sibling test above does NOT exercise (it drives clearActiveTurn, the
+// runTurn-side cleanup at turn.go). The two are independent lines of code; a
+// regression limited to the spawnSubTurn defer alone would not be caught by
+// the sibling test.
+//
+// Rather than stand up a full delegation dispatch (the sibling test's
+// rationale for not reaching into spawnSubTurn's private closure), this test
+// drives the factored-out helper that subturn.go's defer now calls —
+// clearActiveTurnStateEntry — against the exact interleaving a native
+// `delegate follow_up` warm-resume produces, and asserts a subsequent
+// RequestCancel still reaches the surviving generation.
+func TestSubTurnKeyReuseRace_SpawnSubTurnSideCompareAndDelete(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              tmpDir,
+				ModelName:         "key-reuse-race-test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(func() { msgBus.Close() })
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(al.Close)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
+	chatSessionID := meta.ID
+	require.NotEmpty(t, chatSessionID)
+
+	const childID = "delegate-session-key-reuse-race-subturn-side"
+
+	// Generation 1: the original child. spawnSubTurn registers it via
+	// registerActiveTurn; here we register it directly to isolate the
+	// cleanup-site under test (the spawn-side defer) from spawnSubTurn's
+	// own dispatch machinery.
+	gen1 := &turnState{
+		turnID:              "gen1-spawnside",
+		sessionKey:          childID,
+		transcriptSessionID: chatSessionID,
+		depth:               1,
+		parentTurnID:        "root-turn",
+		finishedChan:        make(chan struct{}),
+	}
+	al.registerActiveTurn(gen1)
+	require.Same(t, gen1, al.getActiveTurnState(childID))
+
+	// gen1 finishes its turnLoop but spawnSubTurn's post-runTurn re-Store
+	// (subturn.go's "Re-register childTS in activeTurnStates") puts gen1
+	// BACK under childID for its up-to-~935ms cleanup window.
+	al.activeTurnStates.Store(childID, gen1)
+
+	// A native `delegate follow_up` sees gen1 as terminal and reuses childID
+	// verbatim for generation 2 (spawnCorrectiveFollowUp).
+	gen2 := &turnState{
+		turnID:              "gen2-spawnside",
+		sessionKey:          childID,
+		transcriptSessionID: chatSessionID,
+		depth:               1,
+		parentTurnID:        "root-turn",
+		finishedChan:        make(chan struct{}),
+	}
+	al.registerActiveTurn(gen2)
+	require.Same(t, gen2, al.getActiveTurnState(childID),
+		"generation 2 must have overwritten the stale generation-1 re-Store")
+
+	// Generation 1's spawnSubTurn defer finally fires. This is the production
+	// primitive under test — subturn.go's
+	// `defer al.clearActiveTurnStateEntry(childID, childTS)` — invoked here
+	// against gen1 (the finished child) while gen2 (the live, reused-key
+	// generation) is the current entry under childID. If this helper ever
+	// regresses to a bare Delete(childID), gen2 is erased.
+	al.clearActiveTurnStateEntry(childID, gen1)
+
+	require.Same(t, gen2, al.getActiveTurnState(childID),
+		"generation 2 must survive generation 1's spawnSubTurn-side cleanup")
+
+	// Causal-chain proof: a "Stop generation" (RequestCancel against the
+	// shared chat session id) must still find and signal the surviving gen2.
+	hook := al.GetActiveTurnHookForSession(chatSessionID)
+	require.NotNil(t, hook, "cancel turn lookup must find a live turn for the chat session")
+	assert.Equal(t, "gen2-spawnside", hook.TurnID(),
+		"the cancel must resolve to the SURVIVING generation, not the erased/stale one")
+
+	outcome, err := al.RequestCancel(
+		context.Background(),
+		CancelScope{SessionID: chatSessionID},
+		CancelCanceller{UserID: "test-user", Channel: "web"},
+		CancelHooks{},
+	)
+	require.NoError(t, err)
+	assert.True(t, outcome.Fired, "RequestCancel must fire against the surviving generation")
+	assert.Contains(t, outcome.Descendants, "gen2-spawnside",
+		"generation 2 must be in the canceled descendants list")
+
+	graceful, _ := gen2.gracefulInterruptRequested()
+	assert.True(t, graceful, "generation 2's turnState must receive the graceful-interrupt signal")
+}

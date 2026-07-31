@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -571,10 +572,10 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 // clearActiveTurn key it by ts.sessionKey) — a direct point lookup, not the
 // transcriptSessionID-filtered Range that InterruptSession performs.
 //
-// Fix for #577: a delegated sub-turn has two independent identity
-// namespaces. transcriptSessionID is deliberately set equal to the PARENT's
-// shared transcript id (subturn.go's FR-6a) so a chat-wide "Stop" cascades to
-// every turn in that chat via InterruptSession/InterruptSessionHard. sessionKey
+// A delegated sub-turn has two independent identity namespaces.
+// transcriptSessionID is deliberately set equal to the PARENT's shared
+// transcript id (subturn.go's FR-6a) so a chat-wide "Stop" cascades to every
+// turn in that chat via InterruptSession/InterruptSessionHard. sessionKey
 // (== delegateSessionID, minted by pkg/tools/delegate.go and returned to the
 // caller for all subsequent status/steer/respond/cancel/peek calls) is the
 // unique per-delegation address. `steer`/`respond` already address the
@@ -618,6 +619,14 @@ func (al *AgentLoop) InterruptBySessionKey(sessionKey, hint string) (descendants
 	}
 	ts, ok := val.(*turnState)
 	if !ok || ts == nil {
+		// A Load hit but the value is not a *turnState: activeTurnStates is
+		// keyed by sessionKey and every Store puts a *turnState in it
+		// (turn.go registerActiveTurn / clearActiveTurnStateEntry), so a
+		// non-conforming value means the registry is corrupted. Log the
+		// invariant violation at Error and still return the no-op/no-error
+		// contract callers rely on — there is no live turn to interrupt.
+		slog.Error("activeTurnStates contains non-*turnState value",
+			"session_key", sessionKey, "value_type", fmt.Sprintf("%T", val))
 		return nil, nil
 	}
 
@@ -646,8 +655,8 @@ func (al *AgentLoop) InterruptBySessionKey(sessionKey, hint string) (descendants
 // abort for EXACTLY the one turn registered under sessionKey in
 // activeTurnStates — the sessionKey-scoped counterpart to
 // InterruptSessionHard, mirroring InterruptBySessionKey's direct-lookup
-// change (see its doc comment for the full #577 rationale). Called at t=3s
-// after InterruptBySessionKey per the same grace-window escalation
+// change (see its doc comment for the full dual-namespace rationale). Called
+// at t=3s after InterruptBySessionKey per the same grace-window escalation
 // InterruptSession/InterruptSessionHard use (also invoked directly for
 // `delegate cancel(hard=true)`).
 //
@@ -664,6 +673,11 @@ func (al *AgentLoop) InterruptBySessionKeyHard(sessionKey, hint string) (descend
 	}
 	ts, ok := val.(*turnState)
 	if !ok || ts == nil {
+		// See the equivalent branch in InterruptBySessionKey: a Load hit with a
+		// non-*turnState value means activeTurnStates is corrupted. Log at
+		// Error but preserve the no-op/no-error contract callers rely on.
+		slog.Error("activeTurnStates contains non-*turnState value",
+			"session_key", sessionKey, "value_type", fmt.Sprintf("%T", val))
 		return nil, nil
 	}
 
@@ -697,8 +711,8 @@ func (al *AgentLoop) InterruptBySessionKeyHard(sessionKey, hint string) (descend
 // InterruptSessionHard/collectDescendantTurnIDs use) that has NOT yet
 // finished (turnState.IsAlive()).
 //
-// Root cause this closes (delegation-cancel bug, UAT persona "Alex"):
-// RequestCancel's PHASE B/C escalation timers (pkg/agent/cancel.go) used to
+// Root cause this closes: RequestCancel's PHASE B/C escalation timers
+// (pkg/agent/cancel.go) used to
 // gate hard-abort escalation on `activeTurn.IsAlive()` alone, where
 // activeTurn is the SINGLE hook resolved once via GetActiveTurnHookForSession
 // — which always prefers the ROOT turn when one exists (see that method's
@@ -793,8 +807,7 @@ func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
 // paragraph below). Returns false for an empty ID or when no matching
 // turnState is found in activeTurnStates.
 //
-// Root cause this closes (reload/replay fabricated-status bug, live UAT
-// re-verification 2026-07): async delegation (DelegateTool.executeAsync)
+// Root cause this closes: async delegation (DelegateTool.executeAsync)
 // persists a placeholder ack — Status="success", DurationMS≈0 — on the
 // spawning ToolCall record the instant the tool call itself returns, well
 // before the delegate's own sub-turn actually finishes (see

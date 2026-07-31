@@ -915,8 +915,8 @@ func spawnSubTurn(
 	// target (agent.ID == targetAgent.ID, the real delegate).
 	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
 
-	// FR-H-006 REVERSAL (live UAT, 2026-07-12): "delegate" is NO LONGER excluded
-	// from the child's registry. Note: distinct from the identity-swap
+	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
+	// registry. Note: distinct from the identity-swap
 	// load_tool bug documented just above (ID/ContextBuilder, ~line 663) —
 	// that one was wrong AGENT IDENTITY (an unswapped childTS.agentID made
 	// canLoad resolve the PARENT's policy instead of the child's own); this
@@ -1112,12 +1112,12 @@ func spawnSubTurn(
 	// map-delete-guarded no-op when no latch is armed, so a turn spawned with
 	// no pending cancel behaves identically to the old bare Store.
 	al.registerActiveTurn(childTS)
-	// #586 fix: CompareAndDelete, not a bare Delete. A native `follow_up`
-	// warm-resume reuses childID VERBATIM for its next generation once this
-	// generation's LifecycleRecord reaches a terminal state (see
-	// spawnCorrectiveFollowUp's doc comment, pkg/tools/delegate.go) — and this
-	// generation's own tail (the re-Store below plus the cleanup defer's
-	// up-to-~935ms updateToolCallStatusWithRetry backoff) can still be
+	// CompareAndDelete via clearActiveTurnStateEntry, not a bare Delete. A
+	// native `follow_up` warm-resume reuses childID VERBATIM for its next
+	// generation once this generation's LifecycleRecord reaches a terminal
+	// state (see spawnCorrectiveFollowUp's doc comment, pkg/tools/delegate.go)
+	// — and this generation's own tail (the re-Store below plus the cleanup
+	// defer's up-to-~935ms updateToolCallStatusWithRetry backoff) can still be
 	// in flight when that happens. If follow_up's registerActiveTurn(childTS2)
 	// lands in that window, a bare `Delete(childID)` here would unconditionally
 	// erase whatever is CURRENTLY stored under childID when this defer finally
@@ -1126,14 +1126,13 @@ func spawnSubTurn(
 	// unreachable to GetActiveTurnHookForSession/InterruptSession/
 	// sessionTurnsStillAlive for the rest of its life: no cancel (graceful,
 	// hard, or detach) can ever find it again, and it runs unchecked until its
-	// own MaxIterations ceiling — the root cause of #586's "Stop generation
-	// doesn't terminate the backend loop" (confirmed via server-log evidence:
-	// a session's recall_conversation loop outliving Stop by 26+ minutes).
-	// CompareAndDelete only removes the entry if it is STILL this exact
-	// childTS, so a since-registered newer generation is left untouched —
-	// mirrors the identical guard orphan_watch.go already uses for
-	// al.orphanWatches (fireOrphanForegroundTurnWatch's CompareAndDelete).
-	defer al.activeTurnStates.CompareAndDelete(childID, childTS)
+	// own MaxIterations ceiling. clearActiveTurnStateEntry only removes the
+	// entry if it is STILL this exact childTS, so a since-registered newer
+	// generation is left untouched — mirrors the identical guard
+	// orphan_watch.go already uses for al.orphanWatches
+	// (fireOrphanForegroundTurnWatch's CompareAndDelete) and clearActiveTurn
+	// uses for the parent's own ts.sessionKey.
+	defer al.clearActiveTurnStateEntry(childID, childTS)
 
 	// The child is now real, discoverable evidence of its own (findable via
 	// GetActiveTurnHookForSession/sessionTurnsStillAlive by transcriptSessionID) —

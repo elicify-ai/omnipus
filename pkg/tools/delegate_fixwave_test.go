@@ -479,8 +479,8 @@ func TestDelegateTool_Cancel_NonTerminal_StillSucceeds(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	tool.SetLifecycleStore(lc)
 	tool.SetCancelHooks(
-		func(sessionID, hint string) ([]string, error) { return nil, nil },
-		func(sessionID, hint string) ([]string, error) { return nil, nil },
+		func(sessionID, hint string) ([]string, error) { return []string{"child-still-running"}, nil },
+		func(sessionID, hint string) ([]string, error) { return []string{"child-still-running"}, nil },
 	)
 
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -499,4 +499,106 @@ func TestDelegateTool_Cancel_NonTerminal_StillSucceeds(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "hard-cancelled") {
 		t.Errorf("expected the normal hard-cancel success message, got: %s", result.ForLLM)
 	}
+}
+
+// TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage covers the
+// TOCTOU window in executeCancel BETWEEN the rec.Terminal() pre-check (which
+// passes — the session is still running at that instant) and the cancelSoft/
+// cancelHard hook call: the session terminates in that gap, so
+// InterruptBySessionKey(Hard) finds no live turnState and returns
+// (nil descendants, nil error) — the documented no-op contract. The pre-fix
+// executeCancel discarded the descendants return and STILL reported the
+// success-shaped "cooperatively cancelled" / "hard-cancelled immediately"
+// message, so a cancel that landed nothing looked identical to one that
+// actually interrupted. This test asserts that when the hook reports a miss
+// (len(descendants)==0, no error), executeCancel returns the explicit
+// "terminated between the terminal check and the cancel hook" message instead
+// of false success — for BOTH the hard and soft paths.
+func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T) {
+	t.Run("hard", func(t *testing.T) {
+		tool := NewDelegateTool("test-model", 0, 0)
+		tool.SetSessionMessagingEnabled(func() bool { return true })
+		lc := session.NewLifecycleStore(t.TempDir())
+		tool.SetLifecycleStore(lc)
+
+		var hardCalled bool
+		// Simulate the TOCTOU miss: cancelHard is wired to
+		// InterruptBySessionKeyHard, which returns (nil, nil) when no live
+		// turnState is registered under sessionKey — the exact signal the
+		// target terminated between the pre-check and the hook.
+		tool.SetCancelHooks(
+			func(sessionID, hint string) ([]string, error) { return nil, nil },
+			func(sessionID, hint string) ([]string, error) { hardCalled = true; return nil, nil },
+		)
+
+		if err := lc.Persist(&session.LifecycleRecord{
+			SessionID: "child-racing", State: session.LifecycleRunning,
+			OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+			WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		}); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+
+		ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+		result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-racing", "hard": true})
+		if !result.IsError {
+			t.Fatalf("expected an explicit terminal-miss error, got success-shaped result: %s", result.ForLLM)
+		}
+		if !strings.Contains(result.ForLLM, "terminated between the terminal check and the cancel hook") {
+			t.Errorf("expected the TOCTOU terminal-miss message, got: %s", result.ForLLM)
+		}
+		if strings.Contains(result.ForLLM, "hard-cancelled immediately") {
+			t.Errorf("must not return the success-shaped hard-cancel message on a descendants miss, got: %s", result.ForLLM)
+		}
+		if !hardCalled {
+			t.Error("expected the hard cancel hook to be invoked (the pre-check passed; the miss happens at the hook)")
+		}
+
+		// The lifecycle record must NOT be transitioned to cancelled — the
+		// hook landed nothing, so transitionLifecycle was skipped.
+		rec, err := lc.Load("child-racing")
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if rec.State != session.LifecycleRunning {
+			t.Errorf("state = %q, want unchanged %q (no cancel landed)", rec.State, session.LifecycleRunning)
+		}
+	})
+
+	t.Run("soft", func(t *testing.T) {
+		tool := NewDelegateTool("test-model", 0, 0)
+		tool.SetSessionMessagingEnabled(func() bool { return true })
+		tool.SetCancelGrace(50 * time.Millisecond) // keep the backstop goroutine bounded for the test
+		lc := session.NewLifecycleStore(t.TempDir())
+		tool.SetLifecycleStore(lc)
+
+		var softCalled bool
+		tool.SetCancelHooks(
+			func(sessionID, hint string) ([]string, error) { softCalled = true; return nil, nil },
+			func(sessionID, hint string) ([]string, error) { return nil, nil },
+		)
+
+		if err := lc.Persist(&session.LifecycleRecord{
+			SessionID: "child-racing-soft", State: session.LifecycleRunning,
+			OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+			WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		}); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+
+		ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+		result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-racing-soft"})
+		if !result.IsError {
+			t.Fatalf("expected an explicit terminal-miss error, got success-shaped result: %s", result.ForLLM)
+		}
+		if !strings.Contains(result.ForLLM, "terminated between the terminal check and the cancel hook") {
+			t.Errorf("expected the TOCTOU terminal-miss message, got: %s", result.ForLLM)
+		}
+		if strings.Contains(result.ForLLM, "cooperatively cancelled") {
+			t.Errorf("must not return the success-shaped soft-cancel message on a descendants miss, got: %s", result.ForLLM)
+		}
+		if !softCalled {
+			t.Error("expected the soft cancel hook to be invoked (the pre-check passed; the miss happens at the hook)")
+		}
+	})
 }

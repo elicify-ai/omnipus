@@ -370,13 +370,13 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 			mu.Lock()
 			softCalled = true
 			mu.Unlock()
-			return nil, nil
+			return []string{"child-cancel"}, nil
 		},
 		func(sessionID, hint string) ([]string, error) {
 			mu.Lock()
 			hardCalled = true
 			mu.Unlock()
-			return nil, nil
+			return []string{"child-cancel"}, nil
 		},
 	)
 	tool.SetCancelGrace(20 * time.Millisecond)
@@ -424,7 +424,7 @@ func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
 			t.Fatal("soft hook must not be called for hard=true")
 			return nil, nil
 		},
-		func(sessionID, hint string) ([]string, error) { hardCalled = true; return nil, nil },
+		func(sessionID, hint string) ([]string, error) { hardCalled = true; return []string{"child-hard"}, nil },
 	)
 
 	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-hard", "hard": true})

@@ -351,10 +351,10 @@ func (al *AgentLoop) registerActiveTurn(ts *turnState) {
 }
 
 func (al *AgentLoop) clearActiveTurn(ts *turnState) {
-	// #586 fix: CompareAndDelete, not a bare Delete. A sessionKey CAN be
-	// reused by a later, unrelated turn while this one's own cleanup is still
-	// unwinding (the concrete case: a native `delegate follow_up` warm-resume
-	// reuses its childID verbatim once the prior generation's LifecycleRecord
+	// CompareAndDelete, not a bare Delete. A sessionKey CAN be reused by a
+	// later, unrelated turn while this one's own cleanup is still unwinding
+	// (the concrete case: a native `delegate follow_up` warm-resume reuses
+	// its childID verbatim once the prior generation's LifecycleRecord
 	// reaches a terminal state — see spawnCorrectiveFollowUp, pkg/tools/
 	// delegate.go — and spawnSubTurn deliberately re-Stores the finished
 	// childTS under that same key for a further ~935ms after THIS function
@@ -368,14 +368,11 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// then becomes permanently unreachable to GetActiveTurnHookForSession/
 	// InterruptSession/InterruptSessionHard/sessionTurnsStillAlive: no Stop
 	// click (graceful, hard-abort, or detach) can ever find it again, and it
-	// runs unchecked until its own MaxIterations ceiling — the root cause of
-	// #586 ("Stop generation" not reliably terminating a chat turn's backend
-	// loop; confirmed via server-log evidence of a recall_conversation loop
-	// outliving Stop by 26+ minutes). CompareAndDelete only removes the entry
-	// if it is STILL this exact ts, so a since-registered newer turn sharing
-	// the same key is left untouched — mirrors the identical guard
-	// orphan_watch.go already uses for al.orphanWatches
-	// (fireOrphanForegroundTurnWatch's CompareAndDelete).
+	// runs unchecked until its own MaxIterations ceiling. CompareAndDelete
+	// only removes the entry if it is STILL this exact ts, so a
+	// since-registered newer turn sharing the same key is left untouched —
+	// mirrors the identical guard orphan_watch.go already uses for
+	// al.orphanWatches (fireOrphanForegroundTurnWatch's CompareAndDelete).
 	al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
 	// Design-flaw fix (cancel_prearm.go, turnImminentForIdentity): record
 	// that a turn JUST cleared for this identity so a still-true
@@ -391,6 +388,27 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// the same suppression. No-op when al.cancelPreArm is nil (bare
 	// turnState-only unit tests that never went through NewAgentLoop).
 	al.cancelPreArm.markSettled(time.Now(), preArmKeysForTurn(ts)...)
+}
+
+// clearActiveTurnStateEntry performs the compare-and-delete of a turnState
+// entry registered under sessionKey: the entry is removed ONLY if it is still
+// the given ts, so a newer turnState reusing the same key (a native
+// `delegate follow_up` warm-resume — see spawnCorrectiveFollowUp,
+// pkg/tools/delegate.go) is left untouched.
+//
+// This is the spawnSubTurn-side cleanup seam (subturn.go's deferred
+// `clearActiveTurnStateEntry(childID, childTS)`), factored out so the
+// invariant is testable in isolation: spawnSubTurn's defer is otherwise locked
+// inside a function whose full execution requires a delegation dispatch.
+// clearActiveTurn (above) performs the SAME compare-and-delete for the
+// parent's own ts.sessionKey plus the cancelPreArm bookkeeping that only
+// applies to a finished whole turn — use THIS helper when you only need the
+// bare map-entry guard (a deferred child cleanup) and clearActiveTurn when you
+// are retiring a turn that ran to completion. Mirrors the identical guard
+// orphan_watch.go uses for al.orphanWatches (fireOrphanForegroundTurnWatch's
+// CompareAndDelete).
+func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState) {
+	al.activeTurnStates.CompareAndDelete(sessionKey, ts)
 }
 
 func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {

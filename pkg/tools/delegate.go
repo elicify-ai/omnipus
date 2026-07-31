@@ -347,13 +347,21 @@ type DelegateTool struct {
 	// steering-queue scope (generalizes pkg/agent/steering.go's existing
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
-	// cancelSoft/cancelHard mirror pkg/agent's AgentLoop.InterruptSession /
-	// InterruptSessionHard signatures exactly (sessionID, hint) ->
-	// (descendant turn IDs, error) — injected to avoid a tools<->agent
-	// import cycle, matching every other AgentLoop capability this tool
-	// already consumes via a setter (SetSpawner, etc.).
-	cancelSoft func(sessionID, hint string) ([]string, error)
-	cancelHard func(sessionID, hint string) ([]string, error)
+	// cancelSoft/cancelHard hold AgentLoop.InterruptBySessionKey /
+	// InterruptBySessionKeyHard respectively (wired in
+	// pkg/agent/session_messaging_wire.go), keyed by the delegate's
+	// sessionKey (== delegateSessionID). Same signature as the legacy
+	// InterruptSession/InterruptSessionHard pair, but a direct
+	// activeTurnStates.Load(sessionKey) instead of a transcriptSessionID
+	// Range — see SetCancelHooks for why the implementer choice is
+	// load-bearing. Injected to avoid a tools<->agent import cycle, matching
+	// every other AgentLoop capability this tool already consumes via a
+	// setter (SetSpawner, etc.). Returns the canceled turn's ID as a
+	// single-element descendants slice on a hit, nil descendants on a miss
+	// (target already terminated) — executeCancel uses that miss signal to
+	// detect a TOCTOU window.
+	cancelSoft func(sessionKey, hint string) ([]string, error)
+	cancelHard func(sessionKey, hint string) ([]string, error)
 	// cancelGrace is the cooperative-stop grace window before the hard
 	// RequestCancel backstop fires (session_messaging.cancel_grace,
 	// FR-195). Defaults to defaultCancelGrace.
@@ -542,11 +550,28 @@ func isSessionMessagingAction(action string) bool {
 }
 
 // SetCancelHooks installs the soft (cooperative) and hard (RequestCancel
-// backstop) cancel functions, mirroring AgentLoop.InterruptSession /
-// InterruptSessionHard's exact signatures.
+// backstop) cancel functions. The canonical implementers are AgentLoop's
+// InterruptBySessionKey (soft) and InterruptBySessionKeyHard (hard), wired in
+// pkg/agent/session_messaging_wire.go — NOT InterruptSession/InterruptSession
+// Hard. The two pairs share the same Go signature
+// (func(string, string) ([]string, error)) so the compiler cannot catch a
+// re-wire: a future maintainer "fixing consistency" by switching back to
+// InterruptSession/InterruptSessionHard would silently reintroduce the
+// dual-namespace bug where every delegate.cancel no-op'd against
+// transcriptSessionID while still reporting success.
+//
+// WARNING — the hook MUST be invoked with the delegate's sessionKey
+// (== delegateSessionID, the caller-facing id this tool returns from run and
+// accepts on every subsequent cancel/steer/respond/peek), NEVER the parent
+// chat's transcriptSessionID. The two namespaces are deliberately distinct
+// for a delegated sub-turn (subturn.go's FR-6a sets transcriptSessionID equal
+// to the PARENT's shared chat id so a chat-wide Stop cascades via
+// InterruptSession's transcriptSessionID Range; sessionKey is the unique
+// per-delegation address). executeCancel passes its session_id argument here
+// verbatim — that argument IS the delegateSessionID by contract.
 func (t *DelegateTool) SetCancelHooks(
-	soft func(sessionID, hint string) ([]string, error),
-	hard func(sessionID, hint string) ([]string, error),
+	soft func(sessionKey, hint string) ([]string, error),
+	hard func(sessionKey, hint string) ([]string, error),
 ) {
 	t.cancelSoft = soft
 	t.cancelHard = hard
@@ -923,7 +948,7 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 
 	label, _ := args["label"].(string)
 
-	// #587: agent_id is OPTIONAL (omit it to run a generic subagent under the
+	// agent_id is OPTIONAL (omit it to run a generic subagent under the
 	// caller's own agent), but when the caller DOES supply the key, it must
 	// not be blank — an empty string used to be silently accepted and
 	// treated identically to "omitted", spawning a generic/default subagent
@@ -952,8 +977,8 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		async = b
 	}
 
-	// #580: timeout_seconds was documented in the schema but never actually
-	// read anywhere — every delegated sub-turn silently used the hardcoded
+	// timeout_seconds was documented in the schema but never actually read
+	// anywhere — every delegated sub-turn silently used the hardcoded
 	// defaultSubTurnTimeout (5 minutes, pkg/agent/subturn.go) regardless of
 	// what the caller requested. 0/absent means "no override — use the
 	// spawner's own default", matching the schema's "0 = default (5 min)"
@@ -1165,7 +1190,7 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 }
 
 // minDelegateTimeoutSeconds/maxDelegateTimeoutSeconds bound a caller-supplied
-// timeout_seconds override (#580). Mirrors pkg/tools/shell.go's
+// timeout_seconds override. Mirrors pkg/tools/shell.go's
 // minTimeoutSeconds/maxTimeoutSeconds bounds-checking style/values for
 // consistency across the tool surface.
 const (
@@ -1174,8 +1199,8 @@ const (
 )
 
 // resolveDelegateTimeoutSeconds parses args["timeout_seconds"] for
-// action="run" (#580). Absent/nil/explicit 0 all resolve to 0 (time.Duration
-// zero value), meaning "no override — use the spawner's own default
+// action="run". Absent/nil/explicit 0 all resolve to 0 (time.Duration zero
+// value), meaning "no override — use the spawner's own default
 // (defaultSubTurnTimeout)", matching the schema's documented "0 = default
 // (5 min)". A nonzero value is bounds-checked against
 // [minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds] and REJECTED —
@@ -2052,7 +2077,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(err.Error())
 	}
 
-	// #581 (TOCTOU race): a plain Load() followed by a branch on
+	// TOCTOU race guard: a plain Load() followed by a branch on
 	// rec.Terminal() was a check-then-act race against the concurrent
 	// atomic terminal transition in pkg/agent/task_executor.go
 	// (session.TransitionSession) — if that transition landed in the window
@@ -2297,16 +2322,29 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
 	}
 
-	// #588 (N9): cancelling an already-terminal session doesn't corrupt any
-	// state (cancelSoft/cancelHard against a session with no live turn are
+	// Cancelling an already-terminal session doesn't corrupt any state
+	// (cancelSoft/cancelHard against a session with no live turn are
 	// harmless no-ops), but it used to return the same success-shaped
 	// "cooperatively cancelled" / "hard-cancelled immediately" message as a
 	// genuine cancel — misleading a caller into believing an action was
-	// taken. This is a plain check-then-return, not a check-then-act race
-	// (unlike #581's steer fix): a terminal session never leaves that state
+	// taken. The rec.Terminal() check below is a plain check-then-return,
+	// not a check-then-act race: a terminal session never leaves that state
 	// (L-3 immutable-terminal invariant), so there's nothing for a
 	// concurrent writer to race here — an explicit "already terminal" error
 	// is returned instead of a false success.
+	//
+	// There is, however, a TOCTOU window BETWEEN this check and the
+	// cancelSoft/cancelHard call below: a non-terminal session can terminate
+	// in that gap, in which case InterruptBySessionKey(Hard) finds no live
+	// turnState and returns (nil descendants, nil error) — a documented
+	// no-op. The pre-fix code discarded the descendants return and STILL
+	// reported the success-shaped message, so a cancel that landed nothing
+	// looked identical to one that actually interrupted. The cancelSoft/
+	// cancelHard calls below now capture descendants and return the same
+	// explicit "terminal — nothing to cancel" shape when len(descendants)==0
+	// and cerr==nil, closing the window. (L-3 makes the miss terminal for
+	// good — there is no follow-up state to race once the descendants-miss
+	// path fires.)
 	if rec.Terminal() {
 		return ErrorResult(fmt.Sprintf(
 			"delegate: cancel: session %s is already terminal (%s) — nothing to cancel", sessionID, rec.State,
@@ -2317,8 +2355,15 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		if t.cancelHard == nil {
 			return ErrorResult("delegate: no hard-cancel hook configured")
 		}
-		if _, cerr := t.cancelHard(sessionID, "delegate cancel(hard=true)"); cerr != nil {
+		descendants, cerr := t.cancelHard(sessionID, "delegate cancel(hard=true)")
+		if cerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
+		}
+		if len(descendants) == 0 {
+			return ErrorResult(fmt.Sprintf(
+				"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+				sessionID,
+			))
 		}
 		t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
 		return NewToolResult(fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID))
@@ -2327,8 +2372,15 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if t.cancelSoft == nil {
 		return ErrorResult("delegate: no soft-cancel hook configured")
 	}
-	if _, cerr := t.cancelSoft(sessionID, "delegate cancel(hard=false)"); cerr != nil {
+	softDescendants, cerr := t.cancelSoft(sessionID, "delegate cancel(hard=false)")
+	if cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
+	}
+	if len(softDescendants) == 0 {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+			sessionID,
+		))
 	}
 
 	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
@@ -2347,8 +2399,18 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 					return // cooperative stop already landed — no backstop needed
 				}
 			}
-			if _, cerr := t.cancelHard(sessionID, "delegate cancel(hard=false): grace elapsed"); cerr != nil {
+			// The descendants return closes the same TOCTOU window the
+			// synchronous path above guards: if the session terminated
+			// between the terminal check and this hard-cancel call,
+			// cancelHard returns (nil, nil) and there is nothing left to
+			// transition — skip transitionLifecycle rather than stamping a
+			// redundant LifecycleCancelled onto an already-terminal record.
+			backstopDescendants, cerr := t.cancelHard(sessionID, "delegate cancel(hard=false): grace elapsed")
+			if cerr != nil {
 				slog.Warn("delegate: cancel: hard-cancel backstop failed", "session_id", sessionID, "error", cerr)
+				return
+			}
+			if len(backstopDescendants) == 0 {
 				return
 			}
 			t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
@@ -2374,7 +2436,7 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 		return ErrorResult(err.Error())
 	}
 
-	// #579: follow_up's own schema documents "text" as the instruction field
+	// follow_up's own schema documents "text" as the instruction field
 	// (grouped with steer/respond everywhere the schema/description mentions
 	// them together — e.g. session_id's own description lists "steer/
 	// respond/cancel/follow_up/peek" as one family), but this action used to
@@ -2397,6 +2459,18 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", verr))
 	}
+	// NOTE: this is a naked Load+Terminal check, NOT the LifecycleStore.Mutate
+	// RMW that executeSteer/executeRespond use to close their check-then-act
+	// TOCTOU window. The polarity is inverted here: follow_up RESUMES a
+	// terminal session (executeAsync re-queues it as a new generation), so
+	// the gate is `!rec.Terminal() -> reject`, and the immutable-terminal
+	// invariant (L-3) means a session that is terminal at this Load STAYS
+	// terminal — there is no concurrent transition that can flip it back to
+	// non-terminal under us and race the branch. spawnCorrectiveFollowUp
+	// below performs its OWN Persist under the lifecycle store's per-session
+	// striped lock to mint the new generation; this read only decides whether
+	// to enter that path. Do not "fix" this toward Mutate to match steer —
+	// it would be a no-op lock acquisition on an immutable predicate.
 	if !rec.Terminal() {
 		return ErrorResult(fmt.Sprintf(
 			"delegate: follow_up: session %s is not terminal (state=%s) — follow_up only resumes a finished session",
@@ -2407,10 +2481,10 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 	return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, instruction, cb)
 }
 
-// followUpInstructionArg resolves the new instruction for action="follow_up"
-// (#579): "text" is the documented field, "task" is a deprecated back-compat
-// alias consulted only when "text" is absent/blank. Returns an error naming
-// the missing field when neither yields a non-blank string — no silent
+// followUpInstructionArg resolves the new instruction for action="follow_up":
+// "text" is the documented field, "task" is a deprecated back-compat alias
+// consulted only when "text" is absent/blank. Returns an error naming the
+// missing field when neither yields a non-blank string — no silent
 // placeholder substitution.
 func followUpInstructionArg(args map[string]any) (string, error) {
 	if rawText, present := args["text"]; present && rawText != nil {
@@ -2484,7 +2558,8 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 
 	// timeout: 0 (use the spawner's default) — a follow_up resume does not
 	// carry forward any original timeout_seconds override from the prior
-	// generation; #580's fix scope is the initial `run` dispatch only.
+	// generation; the timeout_seconds thread-through is scoped to the
+	// initial `run` dispatch only.
 	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, cb)
 }
 

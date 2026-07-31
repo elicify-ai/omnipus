@@ -150,9 +150,9 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// next tool boundary exactly like a chat interrupt (INV-3).
 			dt.SetSteeringSink(al)
 			// Cancel hooks: soft = graceful stop, hard = escalate after the
-			// cancel_grace window. #577: these MUST be keyed by the caller-
-			// facing delegateSessionID (== sessionKey in activeTurnStates),
-			// not transcriptSessionID — InterruptSession/InterruptSessionHard
+			// cancel_grace window. These MUST be keyed by the caller-facing
+			// delegateSessionID (== sessionKey in activeTurnStates), not
+			// transcriptSessionID — InterruptSession/InterruptSessionHard
 			// match on transcriptSessionID, which for a delegated sub-turn is
 			// deliberately the PARENT's shared chat id (subturn.go's FR-6a),
 			// never equal to delegateSessionID. Wiring those here meant every
