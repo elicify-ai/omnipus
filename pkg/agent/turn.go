@@ -351,7 +351,32 @@ func (al *AgentLoop) registerActiveTurn(ts *turnState) {
 }
 
 func (al *AgentLoop) clearActiveTurn(ts *turnState) {
-	al.activeTurnStates.Delete(ts.sessionKey)
+	// #586 fix: CompareAndDelete, not a bare Delete. A sessionKey CAN be
+	// reused by a later, unrelated turn while this one's own cleanup is still
+	// unwinding (the concrete case: a native `delegate follow_up` warm-resume
+	// reuses its childID verbatim once the prior generation's LifecycleRecord
+	// reaches a terminal state — see spawnCorrectiveFollowUp, pkg/tools/
+	// delegate.go — and spawnSubTurn deliberately re-Stores the finished
+	// childTS under that same key for a further ~935ms after THIS function
+	// already ran once during runTurn's own unwind, specifically so
+	// IsSubTurnActiveForSpawnCall can still find it — see subturn.go's
+	// "Re-register childTS in activeTurnStates" comment). If a new
+	// generation's registerActiveTurn lands in that window, a bare
+	// Delete(ts.sessionKey) here would unconditionally erase whichever
+	// turnState is CURRENTLY stored under that key — which may by then be the
+	// new generation's own live, running turnState, not this one. That turn
+	// then becomes permanently unreachable to GetActiveTurnHookForSession/
+	// InterruptSession/InterruptSessionHard/sessionTurnsStillAlive: no Stop
+	// click (graceful, hard-abort, or detach) can ever find it again, and it
+	// runs unchecked until its own MaxIterations ceiling — the root cause of
+	// #586 ("Stop generation" not reliably terminating a chat turn's backend
+	// loop; confirmed via server-log evidence of a recall_conversation loop
+	// outliving Stop by 26+ minutes). CompareAndDelete only removes the entry
+	// if it is STILL this exact ts, so a since-registered newer turn sharing
+	// the same key is left untouched — mirrors the identical guard
+	// orphan_watch.go already uses for al.orphanWatches
+	// (fireOrphanForegroundTurnWatch's CompareAndDelete).
+	al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
 	// Design-flaw fix (cancel_prearm.go, turnImminentForIdentity): record
 	// that a turn JUST cleared for this identity so a still-true
 	// sessionWorker.inTurn (session_worker.go's processTurn stays "in turn"
