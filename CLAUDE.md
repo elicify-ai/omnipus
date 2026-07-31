@@ -149,13 +149,6 @@ You (the lead) orchestrate all work by spawning subagents via the Agent tool (no
 
 Runs **twice**: after EACH feature (before its PR merges to base) AND on the WHOLE epic diff before the final `→ main` PR. All seven must be clean or each finding explicitly deferred with a tracked issue. Hard release rule, on par with Constraint #7.
 
-### Which subagents to spawn per task type
-- **Frontend-only work:** frontend-lead → qa-lead
-- **Backend-only work:** backend-lead → qa-lead
-- **Security work:** security-lead + backend-lead → qa-lead
-- **Full-stack features:** frontend-lead + backend-lead (parallel) → qa-lead
-- **Design questions:** architect
-
 ## Quality Gates
 
 Verify all applicable gates before reporting work done:
@@ -280,17 +273,14 @@ Run codegen: `make gen-contracts` (lints both specs, regenerates all; idempotent
 
 GitNexus replaced graphify on 2026-07-25. `graphify`, its `graphify-out/` indexes (8 dirs, ~1.15 GB), its 23 skill dirs, and its two PreToolUse hooks were removed system-wide. Do **not** reintroduce graphify or any `graphify-out/` directory.
 
-Operating notes that the auto-generated block below does not cover:
+Operating notes the auto-generated block below does not cover:
 
-- **Falling back to direct Read/Grep is correct and expected** whenever the graph doesn't cover a file, or the question is about exact lines rather than structure. That is normal use, not non-compliance. (The old graphify convention framed grep as a violation; it isn't.)
+- **Falling back to direct Read/Grep is correct and expected** whenever the graph doesn't cover a file, or the question is about exact lines rather than structure — normal use, not non-compliance.
 - The index lives in `.gitnexus/` (gitignored, ~760 MB), never in the repo tree.
-- **Disk is the binding constraint on this pod.** `/home/dev` is a 40 GB volume that has hit 100% and killed an index mid-run. Check `df -h /home/dev` — *not* `df -h /`, which reports an unrelated 7.8 GB root overlay — before re-indexing. `~/.cache/go-build` is the usual reclaim target.
-- **GitNexus does NOT manage git worktrees or branches.** It only pins an index to a branch (`analyze --branch <name>`) and names a default branch for generated examples (`--default-branch`). Worktree/branch workflow stays plain `git worktree` plus this project's own conventions.
-- The 9 tool skills are installed globally in `~/.claude/skills/` (available in every session and to every subagent). The 20 per-area skills referenced in the table below live in `.claude/skills/generated/` and are **gitignored** — a fresh clone won't have them until someone runs `gitnexus analyze --skills`. That is expected; the table's links are for local use.
-- **Routine re-index: `gitnexus analyze --skills --skip-agents-md`.** That combination leaves the working tree completely clean.
-  - `--skills` is required: a bare `gitnexus analyze` rewrites the generated block below and silently drops all 20 per-area rows, orphaning the skill files. The PostToolUse staleness nag tempts you into the bare form; don't take it.
-  - `--skip-agents-md` is required because **the clustering is non-deterministic**: indexing the *same commit* twice yielded 167,451 vs 167,453 relationships, Audit 190/55 vs 191/56, Security 185 vs 184. Without the flag those jittering counts rewrite `CLAUDE.md` + `AGENTS.md` on every single run.
-  - Drop `--skip-agents-md` only when you deliberately want to refresh the block (e.g. after a large structural change), and expect the counts to move slightly for no real reason.
+- **Disk is the binding constraint on this pod.** `/home/dev` is a 40 GB volume that has hit 100% and killed an index mid-run. Check `df -h /home/dev` (not `df -h /`, an unrelated 7.8 GB root overlay) before re-indexing; `~/.cache/go-build` is the usual reclaim target.
+- **GitNexus does NOT manage git worktrees or branches** — it only pins an index to a branch (`analyze --branch <name>`) and names a default branch for examples (`--default-branch`). Worktree/branch workflow stays plain `git worktree` plus this project's own conventions.
+- The 9 tool skills are global in `~/.claude/skills/`. The 20 per-area skills below live in `.claude/skills/generated/` (**gitignored** — a fresh clone lacks them until `gitnexus analyze --skills`; the table's links are local-use).
+- **Routine re-index: `gitnexus analyze --skills --skip-agents-md`** — leaves the working tree clean. `--skills` is required (a bare `analyze` rewrites the generated block and silently drops all 20 per-area rows, orphaning the skills). `--skip-agents-md` is required because **clustering is non-deterministic** (same commit re-indexed: 167,451 vs 167,453 relationships) and would rewrite `CLAUDE.md`/`AGENTS.md` every run. Drop `--skip-agents-md` only to deliberately refresh the block (expect counts to jitter slightly).
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
