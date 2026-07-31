@@ -478,6 +478,22 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	}
 	h.registerWebRTCViewerConn(viewerID, wc, sessID)
 
+	// Cold-start ordering fix (live UAT 2026-07-31): the panel's viewport
+	// frame routinely applies BEFORE this attachment exists — handleViewport's
+	// recapture is gated on peekWebRTCAttachment and silently skips — so the
+	// capture spins up at launch geometry and nothing ever corrects it (the
+	// SPA won't re-send an unchanged size). If a CDP-verified viewport is
+	// already cached for the live tab, issue the corrective recapture NOW,
+	// with those dims, so the stream the viewer is about to receive is built
+	// at the panel's real shape. Warm path cost: one extra rebuild during
+	// attach churn when the capture was already correct — accepted; the
+	// encoder converges on the expected dims either way.
+	if state.mgr != nil {
+		if w, hgt, ok := state.mgr.Live().CSSViewport(browser.DefaultSessionID); ok {
+			cs.RecaptureAt(w, hgt)
+		}
+	}
+
 	stats := cs.Stats()
 	wc.sendCriticalGen(generated.BrowserWebRTCAnswerFrame{
 		Type:      string(generated.WsFrameTypeBrowserWebrtcAnswer),
