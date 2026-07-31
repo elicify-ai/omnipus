@@ -1,11 +1,15 @@
 package captureext
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -294,5 +298,71 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 		if strings.HasPrefix(e.Name(), ".seed-captureext-") {
 			t.Fatalf("stray staging dir left behind: %s", e.Name())
 		}
+	}
+}
+
+// versionContentHashes pins the sha256 of the embedded extension's full
+// content per released Version. TestEmbeddedAssetsRequireVersionBump fails
+// whenever an embedded asset changes without a matching Version bump — the
+// exact omission that shipped three successive encoder.js fixes to a
+// persistent-volume install (UAT, 2026-07-31) where Seed's already-seeded
+// gate kept the OLD extension loading forever while every layer reported
+// success. When this fails: bump Version in captureext.go AND
+// embedded/manifest.json's "version" together, then ADD a new entry here —
+// never edit an existing entry, the history is the point.
+var versionContentHashes = map[string]string{
+	"1.0.1": "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",
+}
+
+func embeddedContentHash(t *testing.T) string {
+	t.Helper()
+	var paths []string
+	if err := fs.WalkDir(embeddedExt, embeddedRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			paths = append(paths, p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk embedded FS: %v", err)
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		b, err := fs.ReadFile(embeddedExt, p)
+		if err != nil {
+			t.Fatalf("read embedded %s: %v", p, err)
+		}
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+		h.Write(b)
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func TestEmbeddedAssetsRequireVersionBump(t *testing.T) {
+	got := embeddedContentHash(t)
+	want, ok := versionContentHashes[Version]
+	if !ok {
+		t.Fatalf("no pinned content hash for Version %q — add {%q: %q} to versionContentHashes (and confirm the Version bump is real)", Version, Version, got)
+	}
+	if got != want {
+		t.Fatalf("embedded extension content changed but Version is still %q (hash %s, pinned %s) — bump Version in captureext.go AND embedded/manifest.json, then add the new entry to versionContentHashes", Version, got, want)
+	}
+	// The manifest's own version string must ride along, or Chrome sees a
+	// stale extension version even after a reseed.
+	var doc manifestKeyDoc
+	raw, err := fs.ReadFile(embeddedExt, embeddedRoot+"/manifest.json")
+	if err != nil {
+		t.Fatalf("read embedded manifest: %v", err)
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse embedded manifest: %v", err)
+	}
+	if doc.Version != Version {
+		t.Fatalf("embedded/manifest.json version %q != captureext.Version %q — they must be bumped together", doc.Version, Version)
 	}
 }

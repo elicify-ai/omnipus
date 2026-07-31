@@ -50,7 +50,16 @@ const ExtensionID = "nibcmjlmohchocjndnbajhmlhkeldobo"
 
 // Version is the extension's manifest version string. It also names the
 // versioned seed subdirectory: <destRoot>/captureext/<Version>/.
-const Version = "1.0.0"
+//
+// MUST be bumped (together with embedded/manifest.json's "version") whenever
+// ANY embedded asset changes. Seed is gated on this directory existing, and
+// on an install whose data dir persists across upgrades (e.g. the UAT Fly
+// volume) an unbumped Version means the new binary keeps loading the OLD
+// extension from disk forever — three successive encoder.js fixes shipped to
+// UAT 2026-07-31 and none of them ran, while every layer reported success.
+// TestEmbeddedAssetsRequireVersionBump pins the embedded content hash to
+// this constant so that omission is now a test failure, not a silent no-op.
+const Version = "1.0.1"
 
 // manifestKeyDoc is the minimal shape needed to read the "key" field back
 // out of the embedded manifest.json for ID verification. It is not a wire
