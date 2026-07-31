@@ -164,7 +164,7 @@ const PING_BEACON_INTERVAL_MS = 15000;
 let expectedCaptureDims = null;
 
 // lastPinnedCapDims records what captureActiveTabStream actually pinned the
-// running stream to, and selfHealDone guards the one-shot post-connect
+// running stream to, and selfHealBudget bounds the post-connect
 // verification below (2026-07-31 live UAT, pop-out): multiple recaptures can
 // overlap during a panel spin-up (attach-time corrective recapture, the
 // viewport apply's own recapture, the chrome-delta compensation's second
@@ -176,7 +176,13 @@ let expectedCaptureDims = null;
 // resets per capture cycle, and a self-heal recapture that still mismatches
 // does not re-arm itself.
 let lastPinnedCapDims = null;
-let selfHealDone = false;
+// Budget of 3 (not a one-shot flag): live UAT showed overlapping spin-up
+// cycles consume a single-shot guard before the WINNING capture connects,
+// leaving a drifted stream unhealed (pop-out pinned 1586x730 vs settled
+// 816 while a sibling run converged fine). Each server-initiated recapture
+// (and the initial capture) grants 3 post-connect checks; self-heal
+// recaptures spend from the same budget — bounded convergence, no churn.
+let selfHealBudget = 3;
 
 // DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
 // per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
@@ -851,7 +857,7 @@ async function handleControlFrame(msg) {
         : null;
     // Each SERVER-initiated recapture gets one post-connect self-heal check;
     // a self-heal's own recapture deliberately does not re-arm this (no loop).
-    selfHealDone = false;
+    selfHealBudget = 3;
     const forWs = ws;
     try {
       await runCaptureAndOffer();
@@ -921,8 +927,8 @@ async function handleWsMessage(raw) {
         setStatus('connected');
         lastGoodIceTime = Date.now();
         record('applied browser_capture_answer, PC connecting');
-        if (!selfHealDone) {
-          selfHealDone = true;
+        if (selfHealBudget > 0) {
+          selfHealBudget--;
           const healPC = currentPC;
           setTimeout(async () => {
             if (currentPC !== healPC || shuttingDown || !lastPinnedCapDims) return;

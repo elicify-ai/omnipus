@@ -315,6 +315,7 @@ var versionContentHashes = map[string]string{
 	"1.0.2": "366cea35b3775142c81c0a5d922b1a30db750731d4d277876303075a0b4b2d28",
 	"1.0.3": "58cc11f1bbeac2bfdcf98917fd163aef577873b349630d880560ff46a2f1a0b5",
 	"1.0.4": "b4452db3f20ccb56f733ea645f0d56f8142b6707fa5182df0298bc9f0b144575",
+	"1.0.5": "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
 }
 
 func embeddedContentHash(t *testing.T) string {
