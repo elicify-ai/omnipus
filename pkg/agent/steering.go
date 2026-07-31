@@ -566,6 +566,132 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 	return descendants, nil
 }
 
+// InterruptBySessionKey gracefully cancels EXACTLY the one turn registered
+// under sessionKey in activeTurnStates (turn.go's registerActiveTurn /
+// clearActiveTurn key it by ts.sessionKey) — a direct point lookup, not the
+// transcriptSessionID-filtered Range that InterruptSession performs.
+//
+// Fix for #577: a delegated sub-turn has two independent identity
+// namespaces. transcriptSessionID is deliberately set equal to the PARENT's
+// shared transcript id (subturn.go's FR-6a) so a chat-wide "Stop" cascades to
+// every turn in that chat via InterruptSession/InterruptSessionHard. sessionKey
+// (== delegateSessionID, minted by pkg/tools/delegate.go and returned to the
+// caller for all subsequent status/steer/respond/cancel/peek calls) is the
+// unique per-delegation address. `steer`/`respond` already address the
+// correct namespace (EnqueueSteeringMessage(scope, ...) where scope ==
+// delegateSessionID); `cancel` did not — it called InterruptSession/
+// InterruptSessionHard with delegateSessionID, which can never match any
+// turnState's transcriptSessionID (a fresh UUID, never equal to the parent's
+// shared transcript id), so the cancel silently no-op'd 100% of the time
+// while still reporting success (zero matches is documented as a non-error
+// no-op, see InterruptSession's doc comment).
+//
+// This function is intentionally scoped to ONE turn: cascading via the
+// shared transcriptSessionID (i.e. reusing InterruptSession as-is) would also
+// interrupt the delegating parent's own live turn and any sibling
+// delegations sharing that chat session — far broader than what a
+// per-delegation cancel is supposed to do.
+//
+// It reuses InterruptSession's actual cancellation mechanism verbatim (fire
+// providerCancel first so the in-flight LLM/provider HTTP call aborts
+// immediately per FR-12a, then requestGracefulInterrupt) — only HOW the
+// target turnState is found differs.
+//
+// Returns the target's turn ID as a single-element descendants slice (kept as
+// a slice, not a bare string, so this drops into the existing
+// func(sessionID, hint string) ([]string, error) cancel-hook signature
+// DelegateTool.cancelSoft/cancelHard already expects — see
+// session_messaging_wire.go's SetCancelHooks call). Returns an error only
+// when sessionKey is empty. No turn registered under sessionKey (already
+// finished, unknown ID) is not an error — mirrors InterruptSession's no-match
+// contract: the caller (delegate's executeCancel) has already verified caller
+// ownership via the lifecycle store before reaching here, so a miss here just
+// means the target has already terminated.
+func (al *AgentLoop) InterruptBySessionKey(sessionKey, hint string) (descendants []string, err error) {
+	if sessionKey == "" {
+		return nil, fmt.Errorf("empty session_key")
+	}
+
+	val, ok := al.activeTurnStates.Load(sessionKey)
+	if !ok {
+		return nil, nil // no active turn registered under this key — treat as a no-op, not an error
+	}
+	ts, ok := val.(*turnState)
+	if !ok || ts == nil {
+		return nil, nil
+	}
+
+	// FR-12a: call providerCancel first so the in-flight HTTP stream is
+	// aborted immediately, before the graceful-interrupt flag is polled.
+	ts.mu.Lock()
+	pc := ts.providerCancel
+	ts.mu.Unlock()
+	if pc != nil {
+		pc()
+	}
+	if ts.requestGracefulInterrupt(hint) {
+		al.emitEvent(
+			EventKindInterruptReceived,
+			ts.eventMeta("InterruptBySessionKey", "turn.interrupt.received"),
+			InterruptReceivedPayload{
+				Kind:    InterruptKindGraceful,
+				HintLen: len(hint),
+			},
+		)
+	}
+	return []string{ts.turnID}, nil
+}
+
+// InterruptBySessionKeyHard escalates a previously-graceful cancel to a hard
+// abort for EXACTLY the one turn registered under sessionKey in
+// activeTurnStates — the sessionKey-scoped counterpart to
+// InterruptSessionHard, mirroring InterruptBySessionKey's direct-lookup
+// change (see its doc comment for the full #577 rationale). Called at t=3s
+// after InterruptBySessionKey per the same grace-window escalation
+// InterruptSession/InterruptSessionHard use (also invoked directly for
+// `delegate cancel(hard=true)`).
+//
+// Returns the target's turn ID as a single-element descendants slice, or nil
+// descendants (not an error) when no turn is registered under sessionKey.
+func (al *AgentLoop) InterruptBySessionKeyHard(sessionKey, hint string) (descendants []string, err error) {
+	if sessionKey == "" {
+		return nil, fmt.Errorf("empty session_key")
+	}
+
+	val, ok := al.activeTurnStates.Load(sessionKey)
+	if !ok {
+		return nil, nil
+	}
+	ts, ok := val.(*turnState)
+	if !ok || ts == nil {
+		return nil, nil
+	}
+
+	// requestHardAbort sets hardAbort and fires providerCancel+turnCancel
+	// atomically (turn.go). The else branch executes only when hardAbort was
+	// already true — meaning a concurrent caller already flipped the flag and
+	// fired providerCancel. Re-fire it here defensively in case its
+	// providerCancel pointer was reset between the two calls (e.g. a new turn
+	// started on the same turnState slot) — mirrors InterruptSessionHard's own
+	// defensive re-fire.
+	if !ts.requestHardAbort() {
+		ts.mu.Lock()
+		pc := ts.providerCancel
+		ts.mu.Unlock()
+		if pc != nil {
+			pc()
+		}
+	}
+	al.emitEvent(
+		EventKindInterruptReceived,
+		ts.eventMeta("InterruptBySessionKeyHard", "turn.interrupt.received"),
+		InterruptReceivedPayload{
+			Kind: InterruptKindHard,
+		},
+	)
+	return []string{ts.turnID}, nil
+}
+
 // sessionTurnsStillAlive returns every turnState matching sessionID
 // (transcriptSessionID equality — the same predicate InterruptSession/
 // InterruptSessionHard/collectDescendantTurnIDs use) that has NOT yet

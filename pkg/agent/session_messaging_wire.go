@@ -149,11 +149,21 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// a chat steer uses, so a parent->child steer lands at the child's
 			// next tool boundary exactly like a chat interrupt (INV-3).
 			dt.SetSteeringSink(al)
-			// Cancel hooks: soft = graceful cascade (InterruptSession), hard =
-			// escalate after the cancel_grace window (InterruptSessionHard).
-			// Both are session-scoped (transcriptSessionID match) and cascade
-			// to descendants — the exact semantics delegate.cancel requires.
-			dt.SetCancelHooks(al.InterruptSession, al.InterruptSessionHard)
+			// Cancel hooks: soft = graceful stop, hard = escalate after the
+			// cancel_grace window. #577: these MUST be keyed by the caller-
+			// facing delegateSessionID (== sessionKey in activeTurnStates),
+			// not transcriptSessionID — InterruptSession/InterruptSessionHard
+			// match on transcriptSessionID, which for a delegated sub-turn is
+			// deliberately the PARENT's shared chat id (subturn.go's FR-6a),
+			// never equal to delegateSessionID. Wiring those here meant every
+			// delegate.cancel silently no-op'd (zero Range matches, which
+			// InterruptSession treats as a non-error no-op) while still
+			// reporting success. InterruptBySessionKey/InterruptBySessionKeyHard
+			// (steering.go) do a direct activeTurnStates.Load(sessionKey)
+			// instead, targeting EXACTLY the named delegate and nothing else —
+			// see their doc comments for the full rationale on why cascading
+			// via the shared transcriptSessionID would be too broad here.
+			dt.SetCancelHooks(al.InterruptBySessionKey, al.InterruptBySessionKeyHard)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.
