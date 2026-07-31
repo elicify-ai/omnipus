@@ -512,10 +512,27 @@ async function captureActiveTabStream() {
   let capW = 1280;
   let capH = 720;
   try {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab && tab.width && tab.height) {
-      capW = tab.width;
-      capH = tab.height;
+    // Poll until two consecutive reads agree (bounded). A recapture fires
+    // right after SetViewport, and the chrome-delta COMPENSATION step there
+    // (live.go, 2026-07-31) applies window bounds twice in quick succession —
+    // a single chrome.tabs.get here can catch the tab mid-reflow and pin the
+    // whole stream to a transitional size (measured live: capture stuck at
+    // 615x766 while the settled, CDP-verified viewport was 615x744). Two
+    // agreeing reads 150ms apart mean the reflow has settled.
+    let prevW = 0;
+    let prevH = 0;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab && tab.width && tab.height) {
+        if (tab.width === prevW && tab.height === prevH) {
+          break;
+        }
+        prevW = tab.width;
+        prevH = tab.height;
+        capW = tab.width;
+        capH = tab.height;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
   } catch (e) {
     warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
