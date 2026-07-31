@@ -228,7 +228,7 @@ var (
 		// RLIMIT_NPROC in hardened_exec_linux.go is the kernel-layer
 		// backstop for any shape that still slips through.
 		regexp.MustCompile(`(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`),
-		// NOTE (#582): the blanket `\$\([^)]+\)` rule that used to sit here —
+		// NOTE: the blanket `\$\([^)]+\)` rule that used to sit here —
 		// "reject ANY command substitution" — was removed. It blocked benign
 		// substitutions (`$(seq 1 5)`, `$(date)`, `$(pwd)`), making bounded
 		// `for` loops unusable, and it made the four `$(cat|curl|wget|which `
@@ -641,7 +641,7 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 
 // guardCommand applies, in order: (1) the hardcoded baseline (FR-B4,
 // unconditional) — both its regex half (defaultDenyPatterns) and its structural
-// half (substitutionGuard, #582) — (2) the opt-in operator-extensible layer,
+// half (substitutionGuard) — (2) the opt-in operator-extensible layer,
 // and (3) a legacy defense-in-depth scan for absolute paths referenced in the
 // command TEXT (independent of the cwd parameter guard above), gated on
 // restrictToWorkspace exactly as the pre-consolidation exec tool did.

