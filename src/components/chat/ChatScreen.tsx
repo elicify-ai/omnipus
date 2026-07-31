@@ -481,7 +481,7 @@ function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'nati
 // useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
 export function SubagentSpansRenderer() {
   const message = useMessage()
-  // Perf (issue #573 — chat UI freeze under heavy subagent/delegation
+  // Perf (chat UI freeze under heavy subagent/delegation
   // activity): select the ONE message by id from `messagesById` instead of
   // subscribing to the whole `messages` array + `.find()`ing it every
   // render. `messages` gets a brand-new array identity on every WS frame
@@ -1259,7 +1259,7 @@ function AssistantMessage() {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
-  // Perf (issue #573 — chat UI freeze under heavy subagent/delegation
+  // Perf (chat UI freeze under heavy subagent/delegation
   // activity): select the ONE message by id from `messagesById` instead of
   // subscribing to the whole `messages` array + `.find()`ing it every
   // render — see SubagentSpansRenderer's identical fix above (and
@@ -2665,9 +2665,20 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const setMessages = useChatStore((s) => s.setMessages)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
-  // For the ARIA live region: track the last assistant message id for screen reader announcements
+  // For the ARIA live region: track the last assistant message id for screen reader announcements.
+  // Select the pre-derived single id from the store (companion to `messagesById`)
+  // rather than subscribing to the whole `messages` array + reversing/scanning it per
+  // frame — the id only changes when the LAST assistant message itself changes (e.g. a
+  // new turn starts), not on every WS frame of the turn. The full message object (for
+  // the status read below) is then looked up via `messagesById[id]` — the same
+  // O(1)-lookup idiom AssistantMessage/SubagentSpansRenderer use.
   const messages = useChatStore((s) => s.messages)
-  const lastAssistantMessage = [...messages].reverse().find((m) => m.role === 'assistant')
+  const lastAssistantMessageId = useChatStore((s) => s.lastAssistantMessageId)
+  const lastAssistantMessage = useChatStore((s) =>
+    lastAssistantMessageId === null
+      ? undefined
+      : s.messagesById[lastAssistantMessageId] ?? s.messages.find((m) => m.id === lastAssistantMessageId),
+  )
   const lastAnnouncedIdRef = useRef<string | null>(null)
   const shouldAnnounce = lastAssistantMessage?.id != null && lastAssistantMessage.id !== lastAnnouncedIdRef.current
 

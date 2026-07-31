@@ -300,8 +300,8 @@ export interface SessionChatState {
   /**
    * O(1) index from span_id → { messageId, spanIdx }, mirroring
    * spanByParentCallId above but keyed by the span's OWN id rather than its
-   * parent tool-call id. Added for issue #573 (chat UI freeze under heavy
-   * subagent/delegation activity): the subagent_end handler used to locate
+   * parent tool-call id. Added to address chat UI freeze under heavy
+   * subagent/delegation activity: the subagent_end handler used to locate
    * its target span with a backward linear scan over
    * `messageOrder × spans`, which re-ran on every subagent_end frame for
    * the whole duration of a long turn. Written by subagent_start alongside
@@ -673,6 +673,58 @@ export function makeBucketMessages(msgs: ChatMessage[]): Pick<SessionChatState, 
 }
 
 /**
+ * Filter a single span-index map (typed shape `{ messageId: string }`),
+ * returning a NEW map with all entries whose `messageId` is in
+ * `evictedMessageIds` removed. Used by `evictSpanIndexEntries` below to
+ * centralise the lockstep filtering of `spanByParentCallId` and
+ * `spanBySpanId`; not exported — call `evictSpanIndexEntries` instead.
+ *
+ * Returns the SAME reference (no allocation) when `index` is undefined so
+ * callers whose `spanBySpanId` was never populated (older test fixtures)
+ * stay undefined rather than being implicitly upgraded to `{}`.
+ */
+function filterSpanIndexByMessageId<T extends { messageId: string }>(
+  index: Record<string, T> | undefined,
+  evictedMessageIds: Set<string>,
+): Record<string, T> | undefined {
+  if (index === undefined) return undefined
+  const next: Record<string, T> = {}
+  for (const [k, v] of Object.entries(index)) {
+    if (!evictedMessageIds.has(v.messageId)) next[k] = v
+  }
+  return next
+}
+
+/**
+ * Filter BOTH span-index maps in lockstep, dropping entries whose
+ * `messageId` is in `evictedMessageIds`. The two maps
+ * (`spanByParentCallId` keyed by parent tool-call id, `spanBySpanId`
+ * keyed by the span's own id) must always be filtered by the SAME
+ * messageId set on every eviction path: each entry in either map points
+ * at a `messageId` in `messagesById`, and a dangling pointer — one map
+ * referencing an evicted message while the other has forgotten it — is a
+ * silent invariant break (the subagent_end handler's O(1) lookup reads
+ * `spanBySpanId` while the rest of the code reads `spanByParentCallId`,
+ * so they cannot drift). Centralising the filter here means a new
+ * eviction path cannot forget one of the two maps; the unit test
+ * `removes spanBySpanId entries pointing at the evicted message` locks
+ * the invariant end-to-end.
+ */
+function evictSpanIndexEntries(
+  spanByParentCallId: SessionChatState['spanByParentCallId'],
+  spanBySpanId: SessionChatState['spanBySpanId'] | undefined,
+  evictedMessageIds: Set<string>,
+): {
+  spanByParentCallId: SessionChatState['spanByParentCallId']
+  spanBySpanId: SessionChatState['spanBySpanId'] | undefined
+} {
+  return {
+    spanByParentCallId: filterSpanIndexByMessageId(spanByParentCallId, evictedMessageIds)!,
+    spanBySpanId: filterSpanIndexByMessageId(spanBySpanId, evictedMessageIds),
+  }
+}
+
+/**
  * Evict one message from a bucket, purging all dependent maps.
  *
  * Removes the message from messagesById/messageOrder, evicts its tool calls
@@ -700,21 +752,16 @@ export function evictMessageFromBucket(
     bucket.toolCallOrder = bucket.toolCallOrder.filter((id) => !evictedCallIds.has(id))
   }
 
-  // Evict spanByParentCallId entries pointing at this message.
-  for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
-    if (entry.messageId === messageId) {
-      delete bucket.spanByParentCallId[parentCallId]
-    }
-  }
-
-  // Evict spanBySpanId entries pointing at this message (mirrors above).
-  if (bucket.spanBySpanId) {
-    for (const [spanId, entry] of Object.entries(bucket.spanBySpanId)) {
-      if (entry.messageId === messageId) {
-        delete bucket.spanBySpanId[spanId]
-      }
-    }
-  }
+  // Evict BOTH span-index maps in lockstep via the shared helper — the
+  // two maps must always be filtered together (see evictSpanIndexEntries'
+  // doc comment for the invariant).
+  const filtered = evictSpanIndexEntries(
+    bucket.spanByParentCallId,
+    bucket.spanBySpanId,
+    new Set([messageId]),
+  )
+  bucket.spanByParentCallId = filtered.spanByParentCallId
+  bucket.spanBySpanId = filtered.spanBySpanId
 }
 
 /**
@@ -771,20 +818,13 @@ function applyMessageArray(
       toolCallOwnerMessageIdPatch = newOwner
     }
 
-    // Evict spanByParentCallId entries whose message is being evicted.
+    // Evict BOTH span-index maps in lockstep via the shared helper — the
+    // two maps must always be filtered together (see evictSpanIndexEntries'
+    // doc comment for the invariant).
     const evictedMessageIds = new Set(evicted.map((m) => m.id))
-    const newSpanIndex: typeof bucket.spanByParentCallId = {}
-    for (const [parentCallId, entry] of Object.entries(spanByParentCallIdPatch)) {
-      if (!evictedMessageIds.has(entry.messageId)) newSpanIndex[parentCallId] = entry
-    }
-    spanByParentCallIdPatch = newSpanIndex
-
-    // Evict spanBySpanId entries whose message is being evicted (mirrors above).
-    const newSpanIdIndex: typeof bucket.spanBySpanId = {}
-    for (const [spanId, entry] of Object.entries(spanBySpanIdPatch ?? {})) {
-      if (!evictedMessageIds.has(entry.messageId)) newSpanIdIndex[spanId] = entry
-    }
-    spanBySpanIdPatch = newSpanIdIndex
+    const filtered = evictSpanIndexEntries(spanByParentCallIdPatch, spanBySpanIdPatch, evictedMessageIds)
+    spanByParentCallIdPatch = filtered.spanByParentCallId
+    spanBySpanIdPatch = filtered.spanBySpanId
   }
 
   const messagesById: Record<string, ChatMessage> = {}
@@ -840,13 +880,30 @@ interface ChatStore {
    * the whole array every render. `messagesById[id]`, by contrast, keeps
    * the SAME object reference across mutations that don't touch that
    * specific message — see VirtualAssistantMessageRow's memo comment for
-   * the Immer structural-sharing guarantee this relies on. Added for issue
-   * #573 (chat UI freeze under heavy subagent/delegation activity):
+   * the Immer structural-sharing guarantee this relies on. Added to address
+   * chat UI freeze under heavy subagent/delegation activity:
    * AssistantMessage and SubagentSpansRenderer both used to subscribe to
    * the whole `messages` array just to `.find()`/`.filter()` their own
    * message out of it on every frame.
    */
   messagesById: Record<string, ChatMessage>
+  /**
+   * The id of the most recent assistant message in the active session's
+   * bucket (null when none exists), derived by bucketToForeground via
+   * findLastAssistantMessageId. Companion to `messagesById` for any
+   * consumer that previously did `[...messages].reverse().find((m) => m.role === 'assistant')`
+   * — the ARIA live-region hook in ChatScreen used to do exactly that on
+   * every WS frame: it subscribed to the whole `messages` array (which
+   * gets a brand-new array identity on every bucket mutation) and then
+   * allocated a reversed copy + linear scan per render. Selecting this
+   * single id instead skips both the per-frame re-render (the id only
+   * changes when the LAST assistant message itself changes — e.g. a new
+   * turn starts — not on every frame of the turn) and the array work.
+   * The full message object (for status reads) is then looked up via
+   * `messagesById[id]` — the same O(1)-lookup idiom AssistantMessage and
+   * SubagentSpansRenderer use.
+   */
+  lastAssistantMessageId: string | null
   isStreaming: boolean
   isReplaying: boolean
   replayCompletedForSession: string | null
@@ -1307,11 +1364,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
    * Project a session bucket to foreground ChatStore fields
    * (messageOrder+messagesById → messages[], and messagesById passed
    * through as-is for O(1) per-id lookups — see ChatStore.messagesById's
-   * doc comment).
+   * doc comment). Also derives `lastAssistantMessageId` (see
+   * ChatStore.lastAssistantMessageId's doc comment) — a backward linear
+   * scan with early-exit, strictly dominated by the getMessages() O(N)
+   * build already happening here.
    */
-  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[] } {
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
     const { messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, spanBySpanId: _ssid, toolCallOwnerMessageId: _tcm, ...rest } = bucket
-    return { ...rest, messages: getMessages(bucket) }
+    return {
+      ...rest,
+      messages: getMessages(bucket),
+      lastAssistantMessageId: findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById),
+    }
   }
 
   /** Find or lazily create a bucket for sid. No-op if sid is null. */
@@ -1476,6 +1540,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // messageOrder itself is not — see bucketToForeground.
     messages: [],
     messagesById: {},
+    lastAssistantMessageId: null,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
@@ -3897,7 +3962,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (!lastMsg.spans) lastMsg.spans = []
               lastMsg.spans.push(span)
               draft.spanByParentCallId[sf.parent_call_id] = { messageId: lastMsgId, spanIdx }
-              // Issue #573: parallel index keyed by span_id, consumed by the
+              // Parallel index keyed by span_id, consumed by the
               // subagent_end handler below for an O(1) lookup instead of a
               // backward linear scan.
               if (!draft.spanBySpanId) draft.spanBySpanId = {}
@@ -3932,7 +3997,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }
               }
 
-              // O(1) lookup first (issue #573; mirrors spanByParentCallId/
+              // O(1) lookup first (mirrors spanByParentCallId/
               // hasOpenSpanFast). Re-verify the indexed span's own id still
               // matches before trusting it — cheap, and guards against any
               // staleness (e.g. an index entry surviving a code path that

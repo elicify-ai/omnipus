@@ -66,7 +66,7 @@ export interface SubagentBlockProps {
 }
 
 /**
- * Perf (issue #573 — chat UI freeze under heavy subagent/delegation
+ * Perf (chat UI freeze under heavy subagent/delegation
  * activity): wrapped in React.memo, matching ChatScreen.tsx's
  * VirtualAssistantMessageRow. `span` is a safe memo key for the same reason
  * documented there — the chat store (src/store/chat.ts) replaces a span
