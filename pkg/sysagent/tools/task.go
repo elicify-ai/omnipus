@@ -352,12 +352,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		tk.Due = v
 	}
 
-	// Optional priority (N6, UAT batched-rerun 2026-07-31): priority is a
-	// general task attribute, not gated behind plan_id, so its absence here
-	// (while the plain create_task tool accepts it) was a genuine
-	// schema-consistency gap rather than a deliberate restriction. Unset (0)
-	// is treated as 3 on read (task.Task.EffectivePriority), matching
-	// create_task's own default.
+	// Optional priority: priority is a general task attribute, not gated
+	// behind plan_id, so its absence here (while the plain create_task tool
+	// accepts it) was a genuine schema-consistency gap rather than a
+	// deliberate restriction. Unset (0) is treated as 3 on read
+	// (task.Task.EffectivePriority), matching create_task's own default.
 	if v, ok := args["priority"].(float64); ok {
 		pr := int(v)
 		if pr < 1 || pr > 5 {
@@ -666,10 +665,9 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		patch.Due = &v
 		updated = append(updated, "due")
 	}
-	// Optional priority (N6, UAT batched-rerun 2026-07-31) — parity with the
-	// plain update_task tool. Range validation (1-5) is enforced by
-	// store.Update (pkg/task/store.go), whose error surfaces via the generic
-	// INVALID_INPUT mapping below.
+	// Optional priority — parity with the plain update_task tool. Range
+	// validation (1-5) is enforced by store.Update (pkg/task/store.go),
+	// whose error surfaces via the generic INVALID_INPUT mapping below.
 	if v, ok := args["priority"].(float64); ok {
 		pr := int(v)
 		patch.Priority = &pr

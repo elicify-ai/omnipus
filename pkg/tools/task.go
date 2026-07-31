@@ -673,11 +673,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		priority = int(p)
 	}
 
-	// Optional due date (RFC 3339), mirroring update_task's own validation
-	// (N6, UAT batched-rerun 2026-07-31): due is a general task attribute, not
-	// gated behind plan_id the way write_set/stream/is_join are, so its absence
-	// here (while create_task_in_workspace and update_task both accept it) was
-	// a genuine schema-consistency gap rather than a deliberate restriction.
+	// Optional due date (RFC 3339), mirroring update_task's own validation:
+	// due is a general task attribute, not gated behind plan_id the way
+	// write_set/stream/is_join are, so its absence here (while
+	// create_task_in_workspace and update_task both accept it) was a genuine
+	// schema-consistency gap rather than a deliberate restriction.
 	var due string
 	if d, ok := args["due"].(string); ok && d != "" {
 		if _, pErr := time.Parse(time.RFC3339, d); pErr != nil {
@@ -930,16 +930,15 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("could not load task: %v", err))
 	}
 
-	// CreatedByAgent, never CreatedBy — same rationale as delete_task's
-	// ownership gate above (task.go, TaskDeleteTool.Execute): Task.CreatedBy is
-	// MIXED-NAMESPACE (a human username on the REST path, an agent id on the
-	// tool path) and its own doc comment forbids using it as an ownership
-	// predicate. CreatedByAgent reads the agent-id-namespaced
-	// CreatedByAgentID and fails closed on both sides, so a task's creator
-	// (the delegator) can update it even when it is assigned to a different
-	// agent, matching delete_task's union check — reassignment of the
-	// assignee itself still routes through the separate delegationDeny gate
-	// below.
+	// CreatedByAgent, never CreatedBy. Task.CreatedBy is MIXED-NAMESPACE
+	// (a human username on the REST path, an agent id on the tool path) and
+	// its own doc comment on Task.CreatedBy / Task.CreatedByAgent forbids
+	// using CreatedBy as an ownership predicate. CreatedByAgent reads the
+	// agent-id-namespaced CreatedByAgentID and fails closed on both sides,
+	// so a task's creator (the delegator) can update it even when it is
+	// assigned to a different agent — the same union check delete_task's
+	// gate applies. Reassignment of the assignee itself still routes
+	// through the separate delegationDeny gate below.
 	if existing.AgentID != callerID && !existing.CreatedByAgent(callerID) {
 		return ErrorResult("you can only update tasks you own or are assigned")
 	}

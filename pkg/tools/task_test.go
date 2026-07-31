@@ -1251,6 +1251,115 @@ func TestTaskUpdate_DueInvalidRFC3339(t *testing.T) {
 	}
 }
 
+// TestTaskCreate_DueRoundTrip proves create_task accepts and persists an RFC 3339
+// due date: the schema-consistency gap that previously gated `due` behind
+// update_task only is closed on the create path too. The two cases use two
+// different valid RFC 3339 inputs (differentiation — catches a hardcoded
+// response that ignores the field).
+func TestTaskCreate_DueRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		due  string
+	}{
+		{"utc", "2026-08-15T09:30:00Z"},
+		{"with_offset", "2026-08-16T14:00:00-05:00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tool := NewTaskCreateTool(store)
+			// create_task's concern here is the `due` arg, not the
+			// delegation-policy gate — wire a permissive deny-checker so the
+			// (fail-closed per the 7-reviewer-gate fix) gate does not mask the
+			// assertion under test.
+			tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+
+			ctx := WithAgentID(context.Background(), "caller")
+			ctx = WithWorkspaceID(ctx, "ws-1")
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":    "with due",
+				"prompt":   "do it",
+				"agent_id": "agent-b",
+				"due":      tc.due,
+				"criteria": validCriteriaArg(),
+			})
+			if res.IsError {
+				t.Fatalf("create_task with valid due %q failed: %s", tc.due, res.ForLLM)
+			}
+
+			var created struct {
+				TaskID string `json:"task_id"`
+			}
+			if err := json.Unmarshal([]byte(res.ForLLM), &created); err != nil {
+				t.Fatalf("parse result %q: %v", res.ForLLM, err)
+			}
+			got, err := store.Get(created.TaskID)
+			if err != nil {
+				t.Fatalf("get created task: %v", err)
+			}
+			if got.Due != tc.due {
+				t.Errorf("expected due %q persisted, got %q", tc.due, got.Due)
+			}
+		})
+	}
+}
+
+// TestTaskCreate_DueInvalidRFC3339 mirrors TestTaskUpdate_DueInvalidRFC3339 for
+// the create path: an invalid due date is rejected at create time too, and the
+// task must NOT be persisted. Differentiation: two different invalid inputs both
+// reject (not silently accepted).
+func TestTaskCreate_DueInvalidRFC3339(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		due  string
+	}{
+		{"not-a-date", "not-a-date"},
+		{"invalid-month-day", "2026-13-99T00:00:00Z"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			tool := NewTaskCreateTool(store)
+			// create_task's concern here is `due` validation, not the
+			// delegation-policy gate — wire a permissive checker so the
+			// rejection this test asserts on genuinely comes from the due-date
+			// validator, not an (fail-closed) unwired delegation gate
+			// short-circuiting first for the wrong reason.
+			tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+
+			ctx := WithAgentID(context.Background(), "caller")
+			ctx = WithWorkspaceID(ctx, "ws-1")
+
+			res := tool.Execute(ctx, map[string]any{
+				"title":    "bad due",
+				"prompt":   "do it",
+				"agent_id": "agent-b",
+				"due":      tc.due,
+				"criteria": validCriteriaArg(),
+			})
+			if !res.IsError {
+				t.Fatalf("expected error for invalid due %q", tc.due)
+			}
+			if !strings.Contains(res.ForLLM, "invalid due date") {
+				t.Errorf("expected 'invalid due date' in error, got: %s", res.ForLLM)
+			}
+
+			// Nothing must have been persisted for the rejected create.
+			all, _ := store.List(task.Filter{WorkspaceID: "ws-1"})
+			if len(all) != 0 {
+				t.Fatalf("expected zero tasks persisted after rejected create, got %d: %+v", len(all), all)
+			}
+		})
+	}
+}
+
 // TestTaskUpdate_InvalidStatus proves a bogus status string is rejected.
 func TestTaskUpdate_InvalidStatus(t *testing.T) {
 	t.Parallel()
@@ -1302,8 +1411,8 @@ func TestTaskUpdate_NotFound(t *testing.T) {
 // assignee NOR the (agent-namespaced) creator is rejected — mirrors
 // TestTaskDelete_OwnershipRejection / TestTaskAddDependency_OwnershipRejection.
 //
-// task_update's gate is now the SAME union check delete_task uses (#584):
-// assignee OR agent-namespaced creator (CreatedByAgentID, via
+// task_update's gate is now the SAME union check delete_task uses: assignee
+// OR agent-namespaced creator (CreatedByAgentID, via
 // task.Task.CreatedByAgent). The "creator-a" sub-case below is still rejected
 // here, but NOT because creators are disallowed in general — seedTask stamps
 // its createdBy into the MIXED-NAMESPACE Task.CreatedBy field only (never
@@ -1353,11 +1462,12 @@ func TestTaskUpdate_OwnershipRejection(t *testing.T) {
 	}
 }
 
-// TestTaskUpdate_AgentCreatorAllowed proves the #584 fix: an agent that
-// created a task through the AGENT path (Store.CreateByAgent, which stamps
-// the agent-id-namespaced CreatedByAgentID) can update it even though it is
-// assigned to a different agent — mirroring TestTaskDelete_AgentCreatorAllowed
-// (task_scope_test.go) for update_task's now-matching union check.
+// TestTaskUpdate_AgentCreatorAllowed proves the legitimate creator case: an
+// agent that created a task through the AGENT path (Store.CreateByAgent, which
+// stamps the agent-id-namespaced CreatedByAgentID) can update it even though
+// it is assigned to a different agent — mirroring
+// TestTaskDelete_AgentCreatorAllowed (task_scope_test.go) for update_task's
+// now-matching union check.
 func TestTaskUpdate_AgentCreatorAllowed(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())

@@ -379,3 +379,33 @@ func TestUpdateTaskInWorkspace_AgentCreatorStillAllowed(t *testing.T) {
 	})
 	require.False(t, res.IsError, "the dispatching agent must still be able to update: %s", res.ForLLM)
 }
+
+// TestDeleteTaskInWorkspace_AgentCreatorStillAllowed is the delete-path twin of
+// the update test above. The ownership union gate at pkg/sysagent/tools/task.go
+// (the delete tool's `existing.AgentID != "" && existing.AgentID != caller &&
+// !existing.CreatedByAgent(caller)` predicate) shares the exact same
+// task.Task.CreatedByAgent helper as the update path, so the legitimate creator
+// case must survive on delete too: an agent that dispatched a task through the
+// AGENT path can delete it even when delegation policy denies it access to the
+// assignee. Mirrors pkg/tools TestTaskUpdate_AgentCreatorAllowed /
+// TestTaskDelete_AgentCreatorAllowed (task_scope_test.go) for the privileged
+// cross-workspace surface.
+func TestDeleteTaskInWorkspace_AgentCreatorStillAllowed(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	seedWorkspace(t, home, testWorkspaceID)
+	deps.DelegationDeny = denyDelegationTo("ray")
+
+	writeTask(t, home, task.Task{
+		ID: "01JXCREATOR_DEL_ALLOWED1", Title: "Dispatched by jim", Status: task.StatusNext,
+		WorkspaceID: testWorkspaceID, AgentID: "ray", CreatedByAgentID: "jim",
+	})
+
+	res := systools.NewTaskDeleteTool(deps).Execute(callerCtx("jim"), map[string]any{
+		"id": "01JXCREATOR_DEL_ALLOWED1", "confirm": true,
+	})
+	require.False(t, res.IsError, "the dispatching agent must still be able to delete: %s", res.ForLLM)
+
+	_, statErr := os.Stat(filepath.Join(home, "tasks", "01JXCREATOR_DEL_ALLOWED1.json"))
+	assert.True(t, os.IsNotExist(statErr),
+		"a creator-allowed delete must remove the task file, got statErr=%v", statErr)
+}
