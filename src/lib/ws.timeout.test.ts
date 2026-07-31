@@ -152,4 +152,45 @@ describe('WsConnection — heartbeat liveness self-heal (ping timeout force-clos
     conn.disconnect()
     vi.useRealTimers()
   })
+
+  it('synthesizes the close path when close() throws even for a VALID code', () => {
+    // Regression for the follow-up defect (browser-viewport-input-rootcause
+    // 2026-07-31, related-open-item): the catch around close(4000) used to be
+    // empty, so ANY throw from close() — not just the fixed reserved-code
+    // case — left the connection frozen: no onclose, no log, no reconnect.
+    // _handleClose is now driven by hand with a synthetic event from the catch.
+    vi.useFakeTimers()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    const throwingWs = lastWsInstance
+    const wsCallsBeforeTimeout = MockWebSocket.mock.calls.length
+
+    // Make close() throw unconditionally — modeling a browser/embedder quirk
+    // outside the reserved-code rule the other tests cover. onclose must NOT
+    // fire from the mock (a real throwing close() closes nothing).
+    throwingWs.close.mockImplementation(() => {
+      throw new DOMException('close failed', 'InvalidStateError')
+    })
+
+    // Two missed-ping ticks (60s) reach the force-close, whose close() throws.
+    expect(() => vi.advanceTimersByTime(60_000)).not.toThrow()
+
+    // The synthetic path must have run the full close handling: disconnected
+    // callback, an error surfaced with the synthetic reason, and the handler
+    // detached from the dead socket so a late real close can't double-fire.
+    expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
+    expect(throwingWs.onclose).toBeNull()
+    expect(cbs.onError).toHaveBeenCalledWith(expect.stringContaining('ping timeout (close() threw)'))
+
+    // And a reconnect must be scheduled — the frozen-connection symptom is gone.
+    vi.advanceTimersByTime(5_000)
+    expect(MockWebSocket.mock.calls.length).toBeGreaterThan(wsCallsBeforeTimeout)
+
+    conn.disconnect()
+    warnSpy.mockRestore()
+    vi.useRealTimers()
+  })
 })

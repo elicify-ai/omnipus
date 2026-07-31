@@ -773,52 +773,60 @@ export class WsConnection {
       this.callbacks.onError(`Connection error reaching ${getWsUrl()} — will retry`)
     }
 
-    this.ws.onclose = (event: CloseEvent) => {
-      // Drop this socket from the test-visible registry before nulling.
-      if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
-        const w = window as unknown as { __ws_instances?: WebSocket[] }
-        if (w.__ws_instances && this.ws) {
-          const idx = w.__ws_instances.indexOf(this.ws)
-          if (idx >= 0) w.__ws_instances.splice(idx, 1)
-        }
-      }
+    this.ws.onclose = (event: CloseEvent) => this._handleClose(event)
+  }
 
-      // Flush frames already queued before the drop so callers don't lose them.
-      // Chat reducers are idempotent on replay, so flushing on unintentional
-      // close is safe. Also clear any in-flight worker entries whose responses
-      // will never arrive so they don't pile up against the next connection.
-      this._flushBatch()
-      this._workerPending.clear()
-      this._workerNextExpected = this._nextWorkerId
-
-      this.ws = null
-      this._stopHeartbeat()
-      this.callbacks.onDisconnected()
-      // Any non-intentional close should reconnect. The persistent banner is
-      // driven by isConnected=false in the connection store (set by
-      // onDisconnected above) — ChatScreen renders the reconnect-banner div
-      // for the entire disconnected interval. We surface a richer onError
-      // message for unexpected close codes (≠ 1000 / 1001) so the user sees a
-      // diagnostic toast as well; for clean-but-unintentional 1000/1001 the
-      // banner alone is sufficient.
-      if (!this.intentionalClose) {
-        // Close code 1008 = policy violation / auth failure. The server rejected
-        // the token. Reconnecting with the same dead token will loop forever —
-        // route through the shared forceLogout() path (same debounce as the
-        // QueryClient 401 handler, so a simultaneous 401 + 1008 fires teardown once).
-        if (event.code === 1008) {
-          forceLogout()
-          return
-        }
-        if (event.code !== 1000 && event.code !== 1001) {
-          const codeLabel = event.code ? ` code ${event.code}` : ''
-          const reasonLabel = event.reason ? `: ${event.reason}` : ''
-          this.callbacks.onError(
-            `Disconnected from gateway —${codeLabel}${reasonLabel || ' connection lost'}. Reconnecting…`
-          )
-        }
-        this._scheduleReconnect()
+  // _handleClose is the entire close path, extracted from the onclose handler
+  // so the heartbeat's force-close catch below can drive it with a synthetic
+  // event when close() itself throws — otherwise a throwing close() means
+  // onclose never fires, nothing is logged, and the connection sits frozen
+  // with no reconnect (see _startHeartbeat). Takes only the two fields it
+  // reads, so a synthetic {code, reason} literal is a legal argument.
+  private _handleClose(event: Pick<CloseEvent, 'code' | 'reason'>): void {
+    // Drop this socket from the test-visible registry before nulling.
+    if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
+      const w = window as unknown as { __ws_instances?: WebSocket[] }
+      if (w.__ws_instances && this.ws) {
+        const idx = w.__ws_instances.indexOf(this.ws)
+        if (idx >= 0) w.__ws_instances.splice(idx, 1)
       }
+    }
+
+    // Flush frames already queued before the drop so callers don't lose them.
+    // Chat reducers are idempotent on replay, so flushing on unintentional
+    // close is safe. Also clear any in-flight worker entries whose responses
+    // will never arrive so they don't pile up against the next connection.
+    this._flushBatch()
+    this._workerPending.clear()
+    this._workerNextExpected = this._nextWorkerId
+
+    this.ws = null
+    this._stopHeartbeat()
+    this.callbacks.onDisconnected()
+    // Any non-intentional close should reconnect. The persistent banner is
+    // driven by isConnected=false in the connection store (set by
+    // onDisconnected above) — ChatScreen renders the reconnect-banner div
+    // for the entire disconnected interval. We surface a richer onError
+    // message for unexpected close codes (≠ 1000 / 1001) so the user sees a
+    // diagnostic toast as well; for clean-but-unintentional 1000/1001 the
+    // banner alone is sufficient.
+    if (!this.intentionalClose) {
+      // Close code 1008 = policy violation / auth failure. The server rejected
+      // the token. Reconnecting with the same dead token will loop forever —
+      // route through the shared forceLogout() path (same debounce as the
+      // QueryClient 401 handler, so a simultaneous 401 + 1008 fires teardown once).
+      if (event.code === 1008) {
+        forceLogout()
+        return
+      }
+      if (event.code !== 1000 && event.code !== 1001) {
+        const codeLabel = event.code ? ` code ${event.code}` : ''
+        const reasonLabel = event.reason ? `: ${event.reason}` : ''
+        this.callbacks.onError(
+          `Disconnected from gateway —${codeLabel}${reasonLabel || ' connection lost'}. Reconnecting…`
+        )
+      }
+      this._scheduleReconnect()
     }
   }
 
@@ -963,10 +971,17 @@ export class WsConnection {
               // close() succeeds and onclose fires normally, driving the
               // reconnect via _scheduleReconnect below.
               this.ws.close(4000, 'ping timeout')
-            } catch {
-              // ignore — close() with a valid code should not throw, but
-              // guard defensively; if it somehow does, onclose won't fire
-              // and we rely on the next liveness check / user action.
+            } catch (err) {
+              // close() with a valid code should not throw — but if it does,
+              // onclose never fires, so without this branch nothing is logged,
+              // no reconnect is scheduled, and the connection sits frozen
+              // until the user notices (the next 30s tick would just throw
+              // again). Drive the close path by hand with a synthetic event:
+              // detach onclose first so a late real close event on the dying
+              // socket can't run the handler a second time.
+              console.warn('[ws] close() threw during ping-timeout force-close — synthesizing close', err)
+              if (this.ws) this.ws.onclose = null
+              this._handleClose({ code: 4000, reason: 'ping timeout (close() threw)' })
             }
             return
           }
