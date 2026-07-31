@@ -425,6 +425,9 @@ type DelegateTool struct {
 // Compile-time check: DelegateTool implements AsyncExecutor.
 var _ AsyncExecutor = (*DelegateTool)(nil)
 
+// Compile-time check: DelegateTool implements JobSessionResolver (#583).
+var _ JobSessionResolver = (*DelegateTool)(nil)
+
 // NewDelegateTool constructs a DelegateTool. defaultModel/maxTokens/temperature
 // mirror the values the retired SubagentManager used to carry for its callers
 // (agent.Model / agent.MaxTokens / agent.Temperature at the call site).
@@ -740,8 +743,10 @@ func (t *DelegateTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"task": map[string]any{
-				"type":        "string",
-				"description": "The task for the subagent to complete. Required when action is \"run\" (the default).",
+				"type": "string",
+				"description": "The task for the subagent to complete. Required when action is \"run\" (the " +
+					"default). DEPRECATED alias for \"text\" under action=\"follow_up\" — \"text\" wins when " +
+					"both are present.",
 			},
 			"label": map[string]any{
 				"type":        "string",
@@ -829,8 +834,9 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "Optional (action=\"inbox\" only): maximum messages to return.",
 			},
 			"text": map[string]any{
-				"type":        "string",
-				"description": "Required for action=\"steer\"/\"respond\": the instruction/answer text.",
+				"type": "string",
+				"description": "Required for action=\"steer\"/\"respond\"/\"follow_up\": the instruction/answer/" +
+					"new-instruction text (for follow_up, \"task\" is accepted as a deprecated alias).",
 			},
 			"correlation_id": map[string]any{
 				"type":        "string",
@@ -916,7 +922,26 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	}
 
 	label, _ := args["label"].(string)
-	agentID, _ := args["agent_id"].(string)
+
+	// #587: agent_id is OPTIONAL (omit it to run a generic subagent under the
+	// caller's own agent), but when the caller DOES supply the key, it must
+	// not be blank — an empty string used to be silently accepted and
+	// treated identically to "omitted", spawning a generic/default subagent
+	// instead of the (presumably named) target the caller intended. Mirrors
+	// the "task is required and must be a non-empty string" / shell.go's
+	// "command is required and must be a non-empty string" validation style,
+	// adapted for an optional field: only PRESENT-but-blank is rejected.
+	var agentID string
+	if rawAgentID, present := args["agent_id"]; present && rawAgentID != nil {
+		s, ok := rawAgentID.(string)
+		if !ok {
+			return ErrorResult("agent_id must be a string")
+		}
+		if strings.TrimSpace(s) == "" {
+			return ErrorResult("agent_id must be a non-empty string when provided; omit it to run a generic subagent")
+		}
+		agentID = s
+	}
 
 	async := true
 	if rawAsync, present := args["async"]; present && rawAsync != nil {
@@ -925,6 +950,18 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 			return ErrorResult("async must be a boolean")
 		}
 		async = b
+	}
+
+	// #580: timeout_seconds was documented in the schema but never actually
+	// read anywhere — every delegated sub-turn silently used the hardcoded
+	// defaultSubTurnTimeout (5 minutes, pkg/agent/subturn.go) regardless of
+	// what the caller requested. 0/absent means "no override — use the
+	// spawner's own default", matching the schema's "0 = default (5 min)"
+	// wording; a nonzero value is bounds-checked and threaded into
+	// SubTurnConfig.Timeout below.
+	timeout, timeoutErr := resolveDelegateTimeoutSeconds(args)
+	if timeoutErr != nil {
+		return ErrorResult(timeoutErr.Error())
 	}
 
 	// ADR-053 §5.1 launch profile — two published legal profiles; anything
@@ -1122,9 +1159,56 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	}
 
 	if async {
-		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, snap, cb)
+		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, cb)
 	}
-	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, snap)
+	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap)
+}
+
+// minDelegateTimeoutSeconds/maxDelegateTimeoutSeconds bound a caller-supplied
+// timeout_seconds override (#580). Mirrors pkg/tools/shell.go's
+// minTimeoutSeconds/maxTimeoutSeconds bounds-checking style/values for
+// consistency across the tool surface.
+const (
+	minDelegateTimeoutSeconds = 1
+	maxDelegateTimeoutSeconds = 3600
+)
+
+// resolveDelegateTimeoutSeconds parses args["timeout_seconds"] for
+// action="run" (#580). Absent/nil/explicit 0 all resolve to 0 (time.Duration
+// zero value), meaning "no override — use the spawner's own default
+// (defaultSubTurnTimeout)", matching the schema's documented "0 = default
+// (5 min)". A nonzero value is bounds-checked against
+// [minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds] and REJECTED —
+// never silently clamped or ignored — when out of range, mirroring
+// shell.go's resolveTimeoutSeconds.
+func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
+	raw, present := args["timeout_seconds"]
+	if !present || raw == nil {
+		return 0, nil
+	}
+	var v int64
+	switch n := raw.(type) {
+	case float64:
+		v = int64(n)
+	case int:
+		v = int64(n)
+	case int32:
+		v = int64(n)
+	case int64:
+		v = n
+	default:
+		return 0, fmt.Errorf("timeout_seconds must be a number")
+	}
+	if v == 0 {
+		return 0, nil
+	}
+	if v < minDelegateTimeoutSeconds || v > maxDelegateTimeoutSeconds {
+		return 0, fmt.Errorf(
+			"timeout_seconds must be between %d and %d when non-zero (got %d); 0 means use the default",
+			minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds, v,
+		)
+	}
+	return time.Duration(v) * time.Second, nil
 }
 
 // transitionLifecycle is a small helper that atomically transitions
@@ -1173,6 +1257,7 @@ func (t *DelegateTool) executeAsync(
 	task, label, agentID string,
 	resolvedMaxDepth *int,
 	delegateSessionID string,
+	timeout time.Duration,
 	snap *ContextSnapshot,
 	cb AsyncCallback,
 ) *ToolResult {
@@ -1290,6 +1375,7 @@ func (t *DelegateTool) executeAsync(
 			Temperature:       t.temperature,
 			Async:             true,
 			Critical:          true,
+			Timeout:           timeout,
 			TaskLabel:         label,
 			ResolvedMaxDepth:  resolvedMaxDepth,
 			ContextSnapshot:   snap,
@@ -1398,6 +1484,7 @@ func (t *DelegateTool) executeSync(
 	task, label, agentID string,
 	resolvedMaxDepth *int,
 	delegateSessionID string,
+	timeout time.Duration,
 	snap *ContextSnapshot,
 ) *ToolResult {
 	if t.spawner == nil {
@@ -1415,6 +1502,7 @@ func (t *DelegateTool) executeSync(
 		MaxTokens:         t.maxTokens,
 		Temperature:       t.temperature,
 		Async:             false,
+		Timeout:           timeout,
 		ResolvedMaxDepth:  resolvedMaxDepth,
 		ContextSnapshot:   snap,
 		DelegateSessionID: delegateSessionID,
@@ -1470,6 +1558,32 @@ func (t *DelegateTool) executeSync(
 		Interrupted: result.Interrupted,
 		Async:       false,
 	}
+}
+
+// ResolvableSessionIDs implements tools.JobSessionResolver (#583): it reports
+// which of the given delegate session ids (ADR-053 durable session_id, the
+// same id space as DelegateTaskState.DelegateSessionID/t.sessionIndex's keys)
+// are still resolvable in THIS process's in-memory delegate index — the
+// signal list_jobs uses to decide whether a subagent row's session_id can
+// actually be acted on right now (status/inbox/steer/respond/cancel/
+// follow_up/peek) rather than failing on use. A durable LifecycleRecord can
+// survive a process restart while this in-memory index does not; such a
+// session is correctly reported unresolvable here (FR-011).
+//
+// Single lock acquisition for the WHOLE batch (FR-028, matching the
+// JobSessionResolver interface's own doc comment): the underlying index is
+// guarded by t.mu, the same mutex every delegate status/inbox/steer/respond/
+// cancel call already takes, so resolving one id per row would put a
+// read-only visibility tool in contention with the live dispatch path.
+func (t *DelegateTool) ResolvableSessionIDs(ids []string) map[string]bool {
+	out := make(map[string]bool, len(ids))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, id := range ids {
+		_, ok := t.sessionIndex[id]
+		out[id] = ok
+	}
+	return out
 }
 
 // executeStatus implements action:"status". It resolves against the exact
@@ -1938,16 +2052,45 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(err.Error())
 	}
 
-	rec, lerr := t.lifecycle.Load(sessionID)
-	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
+	// #581 (TOCTOU race): a plain Load() followed by a branch on
+	// rec.Terminal() was a check-then-act race against the concurrent
+	// atomic terminal transition in pkg/agent/task_executor.go
+	// (session.TransitionSession) — if that transition landed in the window
+	// between this Load and EnqueueSteeringMessage below, a stale
+	// non-terminal snapshot passed the check and the steering message got
+	// queued for a session with no live consumer left to read it (orphaned
+	// permanently — pkg/agent/steering.go's queue has no liveness check).
+	// The sibling action executeRespond already avoids this by routing
+	// through LifecycleStore.Mutate, the atomic read-modify-write primitive
+	// that holds the per-session striped lock across the whole read+decide
+	// (pkg/session/lifecycle.go's own docs: "a naked Load+Persist races a
+	// concurrent transition on the same session_id"). Doing the same here —
+	// ownership and terminal checks both evaluated INSIDE the Mutate
+	// closure, under the SAME lock the terminal-transition writer uses —
+	// closes the window; a transition landing just before we take the lock
+	// is now guaranteed visible, and one landing just after must wait for us
+	// to release it. This performs no actual field mutation on the non-error
+	// path (steer delivery is a separate side channel, not a lifecycle
+	// field) — Mutate persisting an unchanged copy of the tail record is a
+	// harmless, deliberate byproduct of reusing the RMW primitive purely for
+	// its locking guarantee.
+	var rec *session.LifecycleRecord
+	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil {
+			return session.ErrLifecycleNotFound
+		}
+		if verr := verifyCallerOwnsSession(ctx, cur); verr != nil {
+			return verr
+		}
+		if cur.Terminal() {
+			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
+		}
+		rec = cur
+		return nil
+	}); merr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", merr))
 	}
-	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
-	}
-	if rec.Terminal() {
-		return ErrorResult(fmt.Sprintf("delegate: steer: session %s is terminal (%s) and cannot be steered", sessionID, rec.State))
-	}
+
 	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 	}
@@ -2154,6 +2297,22 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
 	}
 
+	// #588 (N9): cancelling an already-terminal session doesn't corrupt any
+	// state (cancelSoft/cancelHard against a session with no live turn are
+	// harmless no-ops), but it used to return the same success-shaped
+	// "cooperatively cancelled" / "hard-cancelled immediately" message as a
+	// genuine cancel — misleading a caller into believing an action was
+	// taken. This is a plain check-then-return, not a check-then-act race
+	// (unlike #581's steer fix): a terminal session never leaves that state
+	// (L-3 immutable-terminal invariant), so there's nothing for a
+	// concurrent writer to race here — an explicit "already terminal" error
+	// is returned instead of a false success.
+	if rec.Terminal() {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: cancel: session %s is already terminal (%s) — nothing to cancel", sessionID, rec.State,
+		))
+	}
+
 	if hard {
 		if t.cancelHard == nil {
 			return ErrorResult("delegate: no hard-cancel hook configured")
@@ -2214,7 +2373,22 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	task, _ := args["task"].(string)
+
+	// #579: follow_up's own schema documents "text" as the instruction field
+	// (grouped with steer/respond everywhere the schema/description mentions
+	// them together — e.g. session_id's own description lists "steer/
+	// respond/cancel/follow_up/peek" as one family), but this action used to
+	// read ONLY args["task"], silently falling back to a generic "Continue
+	// the previous task." placeholder whenever a caller passed "text" per
+	// the documented sibling-action convention — dropping the caller's real
+	// instruction with no error at all. "task" survives as a deprecated
+	// back-compat alias (text wins when both are present); an instruction
+	// that is blank after trimming both is now a validation error, never a
+	// silent placeholder substitution.
+	instruction, ierr := followUpInstructionArg(args)
+	if ierr != nil {
+		return ErrorResult(ierr.Error())
+	}
 
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
@@ -2230,10 +2404,36 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 		))
 	}
 
-	if task == "" {
-		task = "Continue the previous task."
+	return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, instruction, cb)
+}
+
+// followUpInstructionArg resolves the new instruction for action="follow_up"
+// (#579): "text" is the documented field, "task" is a deprecated back-compat
+// alias consulted only when "text" is absent/blank. Returns an error naming
+// the missing field when neither yields a non-blank string — no silent
+// placeholder substitution.
+func followUpInstructionArg(args map[string]any) (string, error) {
+	if rawText, present := args["text"]; present && rawText != nil {
+		s, ok := rawText.(string)
+		if !ok {
+			return "", fmt.Errorf("text must be a string")
+		}
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			return trimmed, nil
+		}
 	}
-	return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, task, cb)
+	if rawTask, present := args["task"]; present && rawTask != nil {
+		s, ok := rawTask.(string)
+		if !ok {
+			return "", fmt.Errorf("task must be a string")
+		}
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			return trimmed, nil
+		}
+	}
+	return "", fmt.Errorf(
+		`text is required and must be a non-empty string for action="follow_up" (the new instruction to resume the session with; "task" is accepted as a deprecated alias)`,
+	)
 }
 
 // spawnCorrectiveFollowUp is the shared mechanics behind `follow_up` (native
@@ -2282,7 +2482,10 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
 	}
 
-	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, nil, cb)
+	// timeout: 0 (use the spawner's default) — a follow_up resume does not
+	// carry forward any original timeout_seconds override from the prior
+	// generation; #580's fix scope is the initial `run` dispatch only.
+	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, cb)
 }
 
 func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *ToolResult {

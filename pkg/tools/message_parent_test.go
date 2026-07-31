@@ -62,8 +62,23 @@ func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.Lifec
 	return tool, lc, inbox, waker
 }
 
+// withChildContext is a shortcut that stamps the SAME id as both the shared
+// parent/child transcript session id AND the child's own ADR-053 durable
+// delegate session id. Real production child contexts carry two DIFFERENT
+// values for these (see pkg/agent/subturn.go's spawnSubTurn: the transcript
+// id is inherited from the parent for cascade-cancel matching, while the
+// delegate session id is a fresh per-child UUID) — this helper deliberately
+// keeps both keys populated (post-#576) so tests using it exercise
+// message_parent.go's real ToolDelegateSessionID(ctx) lookup against
+// whatever LifecycleRecord they seeded under this SAME id, without asserting
+// anything about the (here-identical) transcript id. Tests that need to
+// prove the two ids are correctly kept SEPARATE (the #576 regression itself)
+// must not use this shortcut — see
+// TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent in
+// pkg/agent, which drives the real spawnSubTurn context construction.
 func withChildContext(sessionID string) context.Context {
-	return WithTranscriptSessionID(context.Background(), sessionID)
+	ctx := WithTranscriptSessionID(context.Background(), sessionID)
+	return WithDelegateSessionID(ctx, sessionID)
 }
 
 func TestMessageParentTool_Progress_AppendsToInbox(t *testing.T) {

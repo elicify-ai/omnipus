@@ -378,7 +378,15 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		return ErrorResult("kind is required: one of progress, checkpoint, artifact, blocker, question, handback")
 	}
 
-	childSessionID := strings.TrimSpace(ToolTranscriptSessionID(ctx))
+	// #576: the durable LifecycleRecord is persisted keyed by the child's OWN
+	// ADR-053 durable session_id (ToolDelegateSessionID — see
+	// pkg/tools/delegate.go:1043,1104-1119), which is distinct from the
+	// shared parent/child transcript session id (ToolTranscriptSessionID,
+	// deliberately inherited by the child per pkg/agent/subturn.go's FR-6a
+	// cascade-cancel matching). Looking this up under the transcript id was
+	// a 100%-reproducible miss: a freshly minted UUID delegate session id
+	// can never coincidentally equal the parent's transcript id.
+	childSessionID := strings.TrimSpace(ToolDelegateSessionID(ctx))
 	if childSessionID == "" {
 		return ErrorResult("message_parent: no session context available for this call")
 	}
