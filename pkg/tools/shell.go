@@ -228,7 +228,16 @@ var (
 		// RLIMIT_NPROC in hardened_exec_linux.go is the kernel-layer
 		// backstop for any shape that still slips through.
 		regexp.MustCompile(`(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`),
-		regexp.MustCompile(`\$\([^)]+\)`),
+		// NOTE (#582): the blanket `\$\([^)]+\)` rule that used to sit here —
+		// "reject ANY command substitution" — was removed. It blocked benign
+		// substitutions (`$(seq 1 5)`, `$(date)`, `$(pwd)`), making bounded
+		// `for` loops unusable, and it made the four `$(cat|curl|wget|which `
+		// rules below it unreachable. Command substitutions are now judged
+		// STRUCTURALLY by substitutionGuard (shell_subst_guard.go), which is
+		// applied on this same unconditional baseline path in guardCommand and
+		// preserves every dangerous shape the blanket rule caught. Do not
+		// reinstate a blanket rule here without reading that file's threat
+		// notes first.
 		regexp.MustCompile(`\$\{[^}]+\}`),
 		regexp.MustCompile("`[^`]+`"),
 		regexp.MustCompile(`\|\s*sh\b`),
@@ -237,6 +246,11 @@ var (
 		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
 		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
 		regexp.MustCompile(`<<\s*EOF`),
+		// The four substitution rules below are now ALSO covered by
+		// substitutionGuard's R2 (which additionally handles `$(/bin/cat …)`,
+		// `$(FOO=1 curl …)` and mid-pipeline positions). They are retained
+		// verbatim as literal, cheap redundancy: if the structural scanner ever
+		// regresses, these still fire.
 		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
 		regexp.MustCompile(`\$\(\s*wget\s+`),
@@ -626,12 +640,19 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 // --- deny-pattern guard ------------------------------------------------------
 
 // guardCommand applies, in order: (1) the hardcoded baseline (FR-B4,
-// unconditional), (2) the opt-in operator-extensible layer, and (3) a legacy
-// defense-in-depth scan for absolute paths referenced in the command TEXT
-// (independent of the cwd parameter guard above), gated on restrictToWorkspace
-// exactly as the pre-consolidation exec tool did.
+// unconditional) — both its regex half (defaultDenyPatterns) and its structural
+// half (substitutionGuard, #582) — (2) the opt-in operator-extensible layer,
+// and (3) a legacy defense-in-depth scan for absolute paths referenced in the
+// command TEXT (independent of the cwd parameter guard above), gated on
+// restrictToWorkspace exactly as the pre-consolidation exec tool did.
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	if msg := applyDenyPatterns(command, t.denyPatterns, nil); msg != "" {
+		return msg
+	}
+	// FR-B4, structural half: command substitutions are judged by what they
+	// run and where they sit, not by their mere presence. Unconditional and
+	// not disableable, exactly like the regex baseline above.
+	if msg := substitutionGuard(command); msg != "" {
 		return msg
 	}
 	if t.enableOperatorDenyPatterns {
