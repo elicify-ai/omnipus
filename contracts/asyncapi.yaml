@@ -2406,7 +2406,8 @@ components:
       title: BrowserInputFrame
       description: 'Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured
         while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast
-        frame.
+        frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the
+        server rescales them into the tab''s real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 
         '
       type: object
@@ -2435,6 +2436,18 @@ components:
           type: number
         y:
           type: number
+        capture_width:
+          type: number
+          minimum: 1
+          maximum: 16384
+          description: Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in
+            WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP
+            dispatch. Absent (older client) means x/y are already CSS pixels.
+        capture_height:
+          type: number
+          minimum: 1
+          maximum: 16384
+          description: Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
         button:
           type: string
           enum:

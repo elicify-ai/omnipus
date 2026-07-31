@@ -134,17 +134,26 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 const ICE_BAD_GRACE_MS = 10000;
 const PING_BEACON_INTERVAL_MS = 15000;
 
-// DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"): the
-// tabCapture MediaStream has no bandwidth ceiling of its own, so an
+// DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
+// per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
+// the tabCapture MediaStream has no bandwidth ceiling of its own, so an
 // unconstrained VP8 encoder will burn as much CPU/bandwidth as the content
-// demands -- a major contributor to the reported pod-CPU-saturation/choppy-
-// input UAT symptom under heavy (video-playing) pages. 2 Mbps is generous
-// for a 1280x720 browsing UI (comfortably covers text and moving video
-// alike) while giving the encoder a real ceiling to degrade against.
+// demands -- a real contributor to pod-CPU-saturation/choppy-input symptoms
+// under heavy (video-playing) pages, which is why a cap exists at all. The
+// original 2 Mbps cap was set with that CPU-saturation risk in mind, but
+// live UAT showed it was actually the PRESSURE that triggered the
+// resolution collapse this file's degradationPreference fix (see
+// applyVideoSenderConstraints) addresses: paired with 'balanced' degradation,
+// 2 Mbps was tight enough that VP8 gave up resolution to stay under it,
+// producing a 319x158 stream at panel-sized (~561x587) geometry -- both
+// visibly blurry and, worse, wrong for input mapping. 6 Mbps gives VP8
+// headroom to hold full panel-sized geometry without hitting the ceiling
+// under normal browsing content, while 'maintain-resolution' now means any
+// remaining pressure is spent on framerate instead of resolution.
 // Overridable per-install via window.__omnipusCapture.maxVideoBitrate
 // (bits/sec) for future config -- see the file header for the
 // injection mechanism; unset/invalid falls back to this default.
-const DEFAULT_MAX_VIDEO_BITRATE_BPS = 2000000;
+const DEFAULT_MAX_VIDEO_BITRATE_BPS = 6000000;
 
 // OFFER_ANSWER_TIMEOUT_MS (fix-wave finding 4, review-flagged gap): before
 // this fix, a browser_capture_offer whose browser_capture_answer never
@@ -210,18 +219,34 @@ function applyVideoSenderConstraints(pc, videoTrack) {
       params.encodings = [{}];
     }
     params.encodings[0].maxBitrate = maxBitrate;
-    // degradationPreference 'balanced' (not 'maintain-framerate' or
-    // 'maintain-resolution'): the captured tab can be anything from a
-    // text-heavy page (wants resolution to stay legible) to video playback
-    // (wants framerate to stay smooth) -- committing to either extreme
-    // permanently sacrifices the other content type. 'balanced' lets the
-    // encoder trade resolution/framerate against CURRENT conditions instead
-    // of a fixed bias, which pairs with this bitrate cap and the gateway's
-    // screencast-pause fix (ADR-047 fix-wave finding 3, which removes the
-    // competing CDP JPEG screencast's CPU draw while WebRTC is active) to
-    // keep the CPU/bandwidth budget under control without a permanent
-    // quality cliff for whichever content type ISN'T currently on screen.
-    params.degradationPreference = 'balanced';
+    // degradationPreference 'maintain-resolution' (previously 'balanced' --
+    // see docs/internal/browser-viewport-input-rootcause-2026-07-31.md,
+    // fault 2). The original rationale for 'balanced' was that the captured
+    // tab can be anything from a text-heavy page to video playback, and
+    // committing to either extreme permanently sacrifices the other content
+    // type. That reasoning undersold the cost: live UAT measured the
+    // delivered stream at 319x158 on a shared-cpu-2x box -- 'balanced' plus
+    // the (then 2 Mbps) bitrate cap let VP8 trade resolution away under CPU
+    // pressure, and it kept doing so far below anything a viewer would
+    // accept. That downscale is (a) the reported blur -- 319x158 upscaled
+    // ~2x into a ~561x587 panel -- and, more importantly, (b) silently
+    // breaks the SPA's input coordinate mapping, which assumes capture
+    // pixels track the page's CSS viewport 1:1 (wave-plan key-decision-8).
+    // A resolution collapse the viewer merely finds blurry is a UX
+    // regression; the same collapse feeding mapPointerToDeviceCoords makes
+    // every click land ~4x off target -- clicks and keystrokes silently do
+    // nothing. Resolution is load-bearing for INPUT CORRECTNESS here, not
+    // just sharpness, so framerate is the acceptable casualty under
+    // pressure, not resolution. Paired with the raised bitrate ceiling
+    // below (6 Mbps) to give VP8 headroom before it needs to degrade at
+    // all.
+    params.degradationPreference = 'maintain-resolution';
+    // Belt-and-braces against any lingering per-encoding down-scale --
+    // degradationPreference governs the encoder's *runtime* trade-off, but
+    // scaleResolutionDownBy is a separate, persistent per-encoding factor;
+    // pin it to 1 so nothing above this layer is quietly resizing the
+    // output out from under the resolution guarantee just established.
+    params.encodings[0].scaleResolutionDownBy = 1;
     sender.setParameters(params).catch((e) => {
       warn('applyVideoSenderConstraints: setParameters failed', e);
     });

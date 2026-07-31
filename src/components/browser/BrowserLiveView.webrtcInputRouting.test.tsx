@@ -349,6 +349,129 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
   })
 })
 
+// Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+// the video sink's intrinsic size can silently drift from the page's real CSS
+// pixel space once the encoder downscales under load (measured 319x158 vs
+// ~1280 page) — coordinate-carrying input frames must report the capture
+// geometry they were mapped into so the server can rescale instead of
+// assuming videoWidth == page pixels. JPEG mode is unaffected (its page_scale
+// handling already produces CSS pixels) and must omit both fields.
+describe('BrowserLiveView — capture_width/capture_height on coordinate-carrying input (Fault 3 fix)', () => {
+  it('video mode: mouse_down carries capture_width/capture_height equal to the mocked video sink intrinsic size', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame()
+    act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+    const container = stubFrameRect()
+    stubVideoDims() // videoWidth/videoHeight 1280/720
+    ackDriving(container)
+
+    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
+
+    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
+    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
+    expect(payload).toEqual(
+      expect.objectContaining({ kind: 'mouse_down', capture_width: 1280, capture_height: 720 }),
+    )
+  })
+
+  it('JPEG mode (no mediaStream): mouse_down omits capture_width/capture_height entirely', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const container = stubFrameRect()
+
+    fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
+
+    expect(mockSendInput).toHaveBeenCalledTimes(1)
+    const payload = (mockSendInput.mock.calls[0] as unknown[])[0] as Record<string, unknown>
+    expect(payload.kind).toBe('mouse_down')
+    expect(payload).not.toHaveProperty('capture_width')
+    expect(payload).not.toHaveProperty('capture_height')
+  })
+
+  it('video mode: wheel frames also carry capture_width/capture_height', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame()
+    act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+    const container = stubFrameRect()
+    stubVideoDims()
+    ackDriving(container)
+
+    fireEvent.wheel(container, { deltaX: 0, deltaY: 120, clientX: 10, clientY: 10 })
+
+    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
+    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
+    expect(payload).toEqual(
+      expect.objectContaining({ kind: 'wheel', capture_width: 1280, capture_height: 720 }),
+    )
+  })
+
+  it('video mode: key_down frames never carry capture_width/capture_height (no x/y to correct)', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame()
+    act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+    const container = stubFrameRect()
+    stubVideoDims()
+    ackDriving(container)
+
+    // A non-printable key (length > 1) takes the `key_down` branch, not the
+    // one-shot `text` insert isPrintableKey routes single characters to.
+    fireEvent.keyDown(container, { key: 'Tab' })
+
+    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
+    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string) as Record<string, unknown>
+    expect(payload.kind).toBe('key_down')
+    expect(payload).not.toHaveProperty('capture_width')
+    expect(payload).not.toHaveProperty('capture_height')
+  })
+
+  // Coalesced mouse_move is the one dispatch site that doesn't send
+  // synchronously — the capture dims must be captured at the pointermove
+  // event that computed x/y, not re-read from the (possibly-since-drifted)
+  // live video element when the deferred flush actually fires. Forces the
+  // setTimeout(0) fallback (document hidden) the same way
+  // BrowserLiveView.mouseMoveThrottle.test.tsx does, since jsdom's RAF isn't
+  // deterministically triggerable via fake timers.
+  it('video mode: a coalesced mouse_move flush still carries the capture dims read at the ORIGINAL pointermove, even if the video sink has since resized', () => {
+    // Local, not restoreAllMocks — this file's `vi.fn(() => true)` doubles
+    // (mockSendInput et al.) are shared module-level state across every test
+    // in this file; restoreAllMocks would strip their default implementation
+    // and break every test that runs after this one.
+    const visibilitySpy = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectAndFrame()
+      act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+      const container = stubFrameRect()
+      const video = stubVideoDims()
+      ackDriving(container)
+
+      act(() => {
+        fireEvent.pointerMove(container, { clientX: 10, clientY: 10 })
+      })
+      // The encoder rebuilds the stream mid-gesture (Fault 2/3) — the live
+      // element now reports a different intrinsic size before the coalesced
+      // flush fires.
+      Object.defineProperty(video, 'videoWidth', { value: 320, configurable: true })
+      Object.defineProperty(video, 'videoHeight', { value: 160, configurable: true })
+
+      act(() => {
+        vi.runAllTimers()
+      })
+
+      expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
+      const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
+      expect(payload).toEqual(
+        expect.objectContaining({ kind: 'mouse_move', capture_width: 1280, capture_height: 720 }),
+      )
+    } finally {
+      vi.useRealTimers()
+      visibilitySpy.mockRestore()
+    }
+  })
+})
+
 describe('BrowserLiveView — WebRTC signaling wiring (WebRTC build W2-B)', () => {
   it('calls machine.start on browser_webrtc_state{available:true}, and the sendOffer callback it receives sends the SDP over WS as browser_webrtc_offer', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)

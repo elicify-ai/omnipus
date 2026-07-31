@@ -214,6 +214,21 @@ function computeDriveMode(state: {
   return 'idle'
 }
 
+/**
+ * Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md)
+ * — builds the `capture_width`/`capture_height` keys for a coordinate-
+ * carrying `BrowserInputFrame`, or an empty object in JPEG mode. A plain
+ * `capture_width: undefined` field would survive property-existence checks
+ * (and any consumer reading the object before it hits `JSON.stringify`,
+ * which is the only place `undefined` values actually vanish) — spreading
+ * this return value keeps the keys genuinely absent, not merely undefined,
+ * matching the legacy JPEG-mode wire shape exactly.
+ */
+function captureDimsFields(dims: { captureWidth?: number; captureHeight?: number }): { capture_width?: number; capture_height?: number } {
+  if (dims.captureWidth === undefined || dims.captureHeight === undefined) return {}
+  return { capture_width: dims.captureWidth, capture_height: dims.captureHeight }
+}
+
 // The visible border/frame around the browser panel is REMOVED per operator
 // direction. The header chip (agent identity + drive-status) is the sole
 // driving-state signal. The data-visual-state attribute on the (invisible)
@@ -461,7 +476,11 @@ export function BrowserLiveView({
   // this can flood the server's input rate limiter at is one frame's worth
   // of paint cadence — never the native pointermove rate (60-120Hz+, higher
   // on gaming mice/some trackpads).
-  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number } | null>(null)
+  // captureWidth/captureHeight travel with x/y (not re-read at flush time) —
+  // see handlePointerMove's own comment on why the capture dims must be the
+  // SAME ones the position was mapped against, not whatever is live when the
+  // coalesced flush eventually fires.
+  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number; captureWidth?: number; captureHeight?: number } | null>(null)
   const moveFlushScheduledRef = useRef(false)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
@@ -1116,7 +1135,7 @@ export function BrowserLiveView({
   // (activeFrameDims's fallback branch reads the identical frameRef fields),
   // preserving byte-identical JPEG-mode behavior.
   const mapPointerToDeviceCoords = useCallback(
-    (clientX: number, clientY: number, rect: RectLike): DeviceCoords | null => {
+    (clientX: number, clientY: number, rect: RectLike): (DeviceCoords & { captureWidth?: number; captureHeight?: number }) | null => {
       const dims = activeFrameDims()
       if (!dims) return null
       // BUG 1 fix — `fillContainer` layouts (the pop-out route) let the media
@@ -1129,8 +1148,18 @@ export function BrowserLiveView({
       // here, so this stays correct even if a future container size doesn't
       // match its content for some other reason.
       const contentRect = computeObjectContainRect(rect, dims.width, dims.height)
-      if (dims.video) return mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
-      return mapClientToDevice(clientX, clientY, contentRect, dims.width, dims.height, dims.pageScale)
+      const coords = dims.video
+        ? mapClientToDeviceVideo(clientX, clientY, contentRect, dims.width, dims.height)
+        : mapClientToDevice(clientX, clientY, contentRect, dims.width, dims.height, dims.pageScale)
+      if (!coords) return null
+      // Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+      // the video sink's intrinsic size can silently drift from the page's CSS
+      // pixel space (measured 319x158 vs ~1280 page — the encoder downscales
+      // under load), which broke the server's old "videoWidth == page pixels"
+      // assumption. Report the SAME `dims` this call just mapped into, so the
+      // server can rescale instead of assuming. JPEG mode omits both — its
+      // page_scale handling already produces CSS pixels, nothing to correct.
+      return dims.video ? { ...coords, captureWidth: dims.width, captureHeight: dims.height } : coords
     },
     [activeFrameDims],
   )
@@ -1298,6 +1327,10 @@ export function BrowserLiveView({
         delta_x: e.deltaX,
         delta_y: e.deltaY,
         modifiers: computeModifiers(e),
+        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+        // captureDimsFields's doc comment for why this is a spread, not a
+        // direct assignment.
+        ...captureDimsFields(device),
       })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -1330,7 +1363,15 @@ export function BrowserLiveView({
     // forceWs while the implicit-take gesture is still open — see
     // dispatchInput's own doc comment (WS/DC ordering).
     dispatchInput(
-      { kind: 'mouse_move', x: pending.x, y: pending.y, modifiers: pending.modifiers },
+      {
+        kind: 'mouse_move',
+        x: pending.x,
+        y: pending.y,
+        modifiers: pending.modifiers,
+        // Carried from handlePointerMove's own mapping call, not re-derived
+        // here — see pendingMoveRef's and captureDimsFields's doc comments.
+        ...captureDimsFields(pending),
+      },
       { forceWs: implicitDriveRef.current },
     )
   }, [canDispatchInput, dispatchInput])
@@ -1698,7 +1739,19 @@ export function BrowserLiveView({
     // pointer at full native resolution.
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    pendingMoveRef.current = { x: device.x, y: device.y, modifiers: computeModifiers(e) }
+    // captureWidth/captureHeight are captured HERE, at the same event that
+    // computed x/y, and ride through to the coalesced flush unchanged — not
+    // re-read from activeFrameDims() at flush time. The stream geometry can
+    // drift between this event and the next animation frame (encoder rebuild
+    // mid-gesture); re-reading at flush would report a capture size that no
+    // longer matches the x/y that were already mapped against the old one.
+    pendingMoveRef.current = {
+      x: device.x,
+      y: device.y,
+      modifiers: computeModifiers(e),
+      captureWidth: device.captureWidth,
+      captureHeight: device.captureHeight,
+    }
     scheduleMoveFlush()
   }, [scheduleMoveFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
 
@@ -1786,6 +1839,9 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
+        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+        // captureDimsFields's doc comment.
+        ...captureDimsFields(device),
       },
       { forceWs: implicitDriveRef.current },
     )
@@ -1827,6 +1883,9 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
+        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+        // captureDimsFields's doc comment.
+        ...captureDimsFields(device),
       },
       { forceWs: wasImplicitDrive },
     )

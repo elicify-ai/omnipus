@@ -415,6 +415,8 @@ export interface BrowserInputFrame {
   kind: "mouse_move" | "mouse_down" | "mouse_up" | "wheel" | "key_down" | "key_up" | "text" | "navigate" | "navigate_back" | "reload";
   x?: number;
   y?: number;
+  capture_width?: number;
+  capture_height?: number;
   button?: "none" | "left" | "middle" | "right" | "back" | "forward";
   delta_x?: number;
   delta_y?: number;

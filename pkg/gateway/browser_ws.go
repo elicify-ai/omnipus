@@ -1040,6 +1040,19 @@ func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.Liv
 	if frame.Modifiers != nil {
 		in.Modifiers = *frame.Modifiers
 	}
+	// CaptureWidth/CaptureHeight (contracts/components/schemas/BrowserInputFrame.yaml):
+	// the intrinsic pixel size of the capture frame the client mapped X/Y
+	// into. Absent (older client, or a kind with no coordinates) leaves both
+	// at their zero value, which dispatchInput's rescale gate
+	// (CaptureWidth > 0 && CaptureHeight > 0) treats as "dispatch X/Y
+	// unscaled" — see root-cause doc Fault 3
+	// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md).
+	if frame.CaptureWidth != nil {
+		in.CaptureWidth = *frame.CaptureWidth
+	}
+	if frame.CaptureHeight != nil {
+		in.CaptureHeight = *frame.CaptureHeight
+	}
 	return in
 }
 

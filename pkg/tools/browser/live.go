@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
@@ -108,6 +109,22 @@ type LiveInput struct {
 	// split into a real discriminated union, preserve this invariant.
 	URL       string
 	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
+
+	// CaptureWidth/CaptureHeight are the intrinsic pixel size of the capture
+	// frame the client mapped X/Y into (0/0 = absent, meaning an older
+	// client already sent X/Y in CSS pixels — mirrors
+	// generated.BrowserInputFrame.CaptureWidth's doc comment). When both are
+	// present for a pointer-position kind (mouse_move/mouse_down/mouse_up/
+	// wheel), dispatchInput rescales X/Y from this space into the tab's
+	// actual CSS viewport before CDP dispatch — root-cause doc Fault 3
+	// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md): with
+	// adaptive resize/encoder downscaling, the capture's pixel size can
+	// differ from the page's CSS pixel space by several times (measured
+	// 319x158 capture vs ~1280 page), so a raw 1:1 mapping lands clicks far
+	// from their intended target. Never rescaled for wheel's DeltaX/DeltaY
+	// (scroll deltas, not positions) or for key/text kinds (no coordinates
+	// at all).
+	CaptureWidth, CaptureHeight float64
 }
 
 // FrameSink receives screencast frames for one attached viewer. Implementations
@@ -337,6 +354,7 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 // screencast isn't currently active, or it is already paused. The caller
 // (pkg/tools/browser's CaptureSession.ReconcileScreencast) decides WHEN
 // pausing is appropriate; this method only performs the mechanical stop.
+
 // SetViewport resizes the captured tab to width x height CSS pixels and
 // renders it at deviceScaleFactor, so the capture's shape and resolution
 // follow the viewer's panel instead of a fixed constant.
@@ -351,12 +369,46 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 // displayed larger than its CSS size upscales — deviceScaleFactor fixes that
 // in the same call.
 //
+// Mechanism (rewritten 2026-07-31 — root-caused via live measurement, not
+// hypothetical, see docs/internal/browser-viewport-input-rootcause-2026-07-31.md
+// Fault 1): this USED TO call only
+// Emulation.setDeviceMetricsOverride(width, height, dsf, false). That
+// override is real inside the CDP/renderer world — the page's own CSS media
+// queries and layout genuinely see the new size — but it is NOT reflected in
+// what the extension-side capture reads: encoder.js's
+// captureActiveTabStream sizes the tabCapture stream from
+// chrome.tabs.get(tabId).width/height, which is the tab's real OS window
+// size and stays put regardless of the emulation override. Every layer
+// (this method, CaptureSession.Recapture, runCaptureAndOffer) logged success
+// while the captured stream never actually reshaped — confirmed live: stream
+// aspect stuck at 2.02 against a 0.96 panel, three consecutive "viewport
+// applied" log lines notwithstanding. Textbook silent failure.
+//
+// Fixed by driving the actual OS-level browser window via
+// Browser.getWindowForTarget + Browser.setWindowBounds, which DOES change
+// what chrome.tabs.get() reports, so the extension's capture follows.
+// Emulation.setDeviceMetricsOverride is kept, but ONLY for
+// deviceScaleFactor now — passing width/height 0 to it means "no size
+// override" to CDP, so it can never fight the window-bounds resize above.
+//
 // This ONLY changes the tab. A capture already in flight keeps its old
 // geometry, because tabCapture constraints are pinned per stream
 // (encoder.js's minWidth/maxWidth) and cannot be renegotiated on a running
 // track. The caller must follow this with CaptureSession.Recapture(), which
 // tears the stream down and re-reads chrome.tabs.get() — see
 // pkg/gateway/browser_ws.go's handleViewport for the ordering.
+//
+// After applying, this reads back the tab's ACTUAL CSS layout viewport via
+// Page.getLayoutMetrics — the only thing that can prove the resize really
+// took effect, per the root-cause doc's "Exit proof" section — and caches it
+// on the LiveView (cssViewportW/H, guarded by lv.mu). That cache is the
+// source of truth dispatchInput's rescaleToCSSViewport uses to map a
+// viewer's capture-space input coordinates into CSS pixels (Fault 3). A
+// requested/actual gap over 8px in either dimension is logged at WARN,
+// explicitly saying the window resize was not fully reflected — this is
+// what would have caught Fault 1 instead of every layer silently reporting
+// success. A partial resize still returns applied=true; it is not treated
+// as a failure, only flagged loudly.
 //
 // Returns false if no live view exists for sessionID (nothing to resize).
 func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, deviceScaleFactor float64) (bool, error) {
@@ -397,12 +449,108 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 			"browser live: viewport %dx%d @%.1fx = %.0f physical pixels, over the %.0f ceiling",
 			width, height, deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
 	}
-	err := runCDPWithTimeout(tabCtx, viewportSetTimeout,
-		emulation.SetDeviceMetricsOverride(int64(width), int64(height), deviceScaleFactor, false),
-	)
-	if err != nil {
-		return false, fmt.Errorf("browser live: set device metrics: %w", err)
+
+	// Step 1: actually reshape the OS-level browser window (Fault 1 fix —
+	// see the mechanism section above). GetWindowForTarget resolves the
+	// current tab's own window with no explicit target ID because it is
+	// called "as a part of the session" — tabCtx IS that session. Bundled
+	// with the deviceScaleFactor call below into one CDP round trip/one
+	// timeout budget, since both are cheap, sequential, and either failing
+	// makes the other pointless.
+	var windowID browser.WindowID
+	actions := []chromedp.Action{
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			wid, _, werr := browser.GetWindowForTarget().Do(ctx)
+			if werr != nil {
+				return fmt.Errorf("get window for target: %w", werr)
+			}
+			windowID = wid
+			return nil
+		}),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return browser.SetWindowBounds(windowID, &browser.Bounds{
+				Width:  int64(width),
+				Height: int64(height),
+			}).Do(ctx)
+		}),
 	}
+	// Step 2: deviceScaleFactor only (see the mechanism section above for
+	// why width/height are 0 here, not width/height again). dsf==1 clears
+	// any stale override instead of setting a no-op one, so a viewer moving
+	// from a 2x display to a 1x one doesn't leave Chromium still rendering
+	// at the old scale.
+	if deviceScaleFactor > 1 {
+		actions = append(actions, emulation.SetDeviceMetricsOverride(0, 0, deviceScaleFactor, false))
+	} else {
+		actions = append(actions, emulation.ClearDeviceMetricsOverride())
+	}
+	if err := runCDPWithTimeout(tabCtx, viewportSetTimeout, actions...); err != nil {
+		return false, fmt.Errorf("browser live: resize viewport: %w", err)
+	}
+
+	// Step 3: read back what ACTUALLY happened — see the mechanism section
+	// above. A failure here does not undo the resize above (best-effort:
+	// the resize itself already succeeded), so this is logged and swallowed
+	// rather than turned into an error return.
+	var actualW, actualH int64
+	readErr := runCDPWithTimeout(tabCtx, viewportSetTimeout,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			_, _, _, cssLayout, _, _, lerr := page.GetLayoutMetrics().Do(ctx)
+			if lerr != nil {
+				return lerr
+			}
+			if cssLayout != nil {
+				actualW = cssLayout.ClientWidth
+				actualH = cssLayout.ClientHeight
+			}
+			return nil
+		}),
+	)
+	if readErr != nil {
+		logger.WarnCF("browser", "live view: set viewport applied but could not read back the actual CSS viewport to verify it", map[string]any{
+			"error":            readErr.Error(),
+			"session_id":       sessionID,
+			"requested_width":  width,
+			"requested_height": height,
+		})
+		return true, nil
+	}
+
+	deltaW := width - int(actualW)
+	if deltaW < 0 {
+		deltaW = -deltaW
+	}
+	deltaH := height - int(actualH)
+	if deltaH < 0 {
+		deltaH = -deltaH
+	}
+	fields := map[string]any{
+		"session_id":          sessionID,
+		"requested_width":     width,
+		"requested_height":    height,
+		"actual_width":        actualW,
+		"actual_height":       actualH,
+		"device_scale_factor": deviceScaleFactor,
+	}
+	if deltaW > 8 || deltaH > 8 {
+		// The silent-success failure mode the root-cause doc documents:
+		// every prior layer reported success while the capture never
+		// actually reshaped. Loud enough here that it can't be missed the
+		// way it was during the 2026-07-31 UAT.
+		logger.WarnCF("browser", "live view: set viewport — window resize not fully reflected in the tab's CSS viewport", fields)
+	} else {
+		logger.InfoCF("browser", "live view: viewport applied", fields)
+	}
+
+	// Only cache a sane, non-degenerate readback — a 0-valued cache would
+	// poison rescaleToCSSViewport's division in rescaleInputCoords.
+	if actualW > 0 && actualH > 0 {
+		lv.mu.Lock()
+		lv.cssViewportW = int(actualW)
+		lv.cssViewportH = int(actualH)
+		lv.mu.Unlock()
+	}
+
 	return true, nil
 }
 
@@ -589,6 +737,19 @@ type LiveView struct {
 	// (which never comes on an idle page). Guarded by mu.
 	lastFrame  *LiveFrame
 	controller string // viewerID holding control; "" = uncontrolled
+
+	// cssViewportW/cssViewportH cache the tab's actual CSS layout viewport
+	// (Page.getLayoutMetrics' cssLayoutViewport ClientWidth/ClientHeight),
+	// read back after every successful SetViewport call — that read-back is
+	// the source of truth dispatchInput's rescaleToCSSViewport uses to map a
+	// viewer's capture-space input coordinates into CSS pixels (root-cause
+	// doc Fault 3). Zero until the first SetViewport call, or the first
+	// input event that needs it and finds the cache empty, populates it.
+	// Nothing else resizes the managed headless Chrome tab (SetViewport is
+	// the only mutator of window bounds/device metrics in this file), so a
+	// successful SetViewport is the ONLY event that can invalidate this
+	// cache — no other invalidation path is needed.
+	cssViewportW, cssViewportH int
 
 	// pausedForWebRTC (ADR-047 fix-wave finding 3, pod-CPU-saturation UAT:
 	// "inputs feel dead / choppy under heavy video") is true when the CDP
@@ -1588,6 +1749,20 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 		return realInputError("browser live: session is not attached")
 	}
 
+	// Root-cause doc Fault 3: x/y arrive in the CLIENT's capture-frame pixel
+	// space, which is no longer guaranteed to equal the tab's CSS pixel
+	// space now that SetViewport (Fault 1 fix, above) can resize the tab
+	// independently of what the encoder's downscaling happens to produce.
+	// Only pointer-position kinds carry a meaningful position to rescale —
+	// wheel's DeltaX/DeltaY are scroll deltas, not positions, and key/text
+	// carry no coordinates at all.
+	switch in.Kind {
+	case "mouse_move", "mouse_down", "mouse_up", "wheel":
+		if in.HasXY && in.CaptureWidth > 0 && in.CaptureHeight > 0 {
+			in.X, in.Y = lv.rescaleToCSSViewport(tabCtx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
+		}
+	}
+
 	action, err := buildInputAction(in)
 	if err != nil {
 		return realInputError("%w", err)
@@ -1631,6 +1806,66 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 		return realInputError("browser live: input dispatch failed: %w", err)
 	}
 	return nil
+}
+
+// rescaleToCSSViewport maps (x, y) from the client's capture-frame pixel
+// space (capW x capH) into the tab's actual CSS pixel space, using the
+// cssViewportW/H cache SetViewport maintains (root-cause doc Fault 3). Called
+// with no LiveView lock held, per the ADR-038 CDP-call discipline this file
+// observes everywhere else.
+//
+// If nothing has populated the cache yet (no SetViewport call this
+// session), this fetches it once via Page.getLayoutMetrics — bounded by
+// viewportSetTimeout, reusing the same short timeout SetViewport's own
+// read-back uses, since this is exactly the same CDP call for exactly the
+// same reason. On fetch failure, this dispatches the input UNSCALED rather
+// than dropping it: a slightly-off click still beats a completely dead
+// panel, and the failure is logged so it isn't silently invisible.
+func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, capH float64) (float64, float64) {
+	lv.mu.Lock()
+	cssW, cssH := lv.cssViewportW, lv.cssViewportH
+	lv.mu.Unlock()
+
+	if cssW <= 0 || cssH <= 0 {
+		var w, h int64
+		err := lv.runCDP(tabCtx, viewportSetTimeout,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				_, _, _, cssLayout, _, _, lerr := page.GetLayoutMetrics().Do(ctx)
+				if lerr != nil {
+					return lerr
+				}
+				if cssLayout != nil {
+					w = cssLayout.ClientWidth
+					h = cssLayout.ClientHeight
+				}
+				return nil
+			}),
+		)
+		if err != nil || w <= 0 || h <= 0 {
+			logger.WarnCF("browser", "live view: input rescale — could not read the tab's CSS viewport, dispatching unscaled", map[string]any{
+				"session_id": lv.sessionID,
+			})
+			return x, y
+		}
+		lv.mu.Lock()
+		lv.cssViewportW, lv.cssViewportH = int(w), int(h)
+		lv.mu.Unlock()
+		cssW, cssH = int(w), int(h)
+	}
+
+	return rescaleInputCoords(x, y, capW, capH, float64(cssW), float64(cssH))
+}
+
+// rescaleInputCoords maps (x, y) from the capture frame's pixel space
+// (capW x capH) into the tab's CSS pixel space (cssW x cssH). Pure math, no
+// CDP — factored out of rescaleToCSSViewport so it is unit-testable without
+// a real Chromium (root-cause doc Fault 3: the assumption that
+// videoWidth/videoHeight == page CSS pixels is false whenever the encoder
+// downscales, e.g. the measured 319x158 capture against a ~1280-wide page).
+// Callers must guard against capW/capH <= 0 themselves — this function does
+// not, so it can stay a trivial, allocation-free ratio computation.
+func rescaleInputCoords(x, y, capW, capH, cssW, cssH float64) (float64, float64) {
+	return x * cssW / capW, y * cssH / capH
 }
 
 // allowInputLocked applies a simple fixed-window rate limiter. Must be called

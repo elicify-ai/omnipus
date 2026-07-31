@@ -87,13 +87,17 @@ type BrowserDetachFrame struct {
 	Type      string  `json:"type"`
 }
 
-// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame.
+// BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the screencast frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 type BrowserInputFrame struct {
-	Button *string  `json:"button,omitempty"`
-	Code   *string  `json:"code,omitempty"`
-	DeltaX *float64 `json:"delta_x,omitempty"`
-	DeltaY *float64 `json:"delta_y,omitempty"`
-	Key    *string  `json:"key,omitempty"`
+	Button *string `json:"button,omitempty"`
+	// Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
+	CaptureHeight *float64 `json:"capture_height,omitempty"`
+	// Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP dispatch. Absent (older client) means x/y are already CSS pixels.
+	CaptureWidth *float64 `json:"capture_width,omitempty"`
+	Code         *string  `json:"code,omitempty"`
+	DeltaX       *float64 `json:"delta_x,omitempty"`
+	DeltaY       *float64 `json:"delta_y,omitempty"`
+	Key          *string  `json:"key,omitempty"`
 	// Windows virtual key code for key_down/key_up (DOM KeyboardEvent.keyCode) — required for CDP to perform editing/nav key actions and modifier shortcuts. See ADR-039.
 	KeyCode   *int     `json:"key_code,omitempty"`
 	Kind      string   `json:"kind"`

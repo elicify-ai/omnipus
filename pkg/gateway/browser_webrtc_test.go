@@ -556,6 +556,35 @@ func TestBrowserInputFrameToLiveInput_TableParity(t *testing.T) {
 			frame: generated.BrowserInputFrame{Kind: "mouse_move", X: f64(0), Y: f64(0)},
 			want:  browser.LiveInput{Kind: "mouse_move", X: 0, Y: 0, HasXY: true},
 		},
+		{
+			// Root-cause doc Fault 3
+			// (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+			// capture_width/capture_height carry the intrinsic pixel size of
+			// the capture frame the client mapped x/y into, so
+			// dispatchInput can rescale into the tab's real CSS viewport.
+			name: "mouse_move with capture_width/capture_height set",
+			frame: generated.BrowserInputFrame{
+				Kind: "mouse_move", X: f64(100), Y: f64(79),
+				CaptureWidth: f64(319), CaptureHeight: f64(158),
+			},
+			want: browser.LiveInput{
+				Kind: "mouse_move", X: 100, Y: 79, HasXY: true,
+				CaptureWidth: 319, CaptureHeight: 158,
+			},
+		},
+		{
+			// Omitted capture_width/capture_height (older client, or a
+			// server that never populated them) must convert to the zero
+			// value, not some sentinel — dispatchInput's rescale gate
+			// (CaptureWidth > 0 && CaptureHeight > 0) relies on exactly
+			// this to mean "dispatch unscaled".
+			name:  "mouse_down with capture_width/capture_height omitted",
+			frame: generated.BrowserInputFrame{Kind: "mouse_down", X: f64(5), Y: f64(6), Button: str("left")},
+			want: browser.LiveInput{
+				Kind: "mouse_down", X: 5, Y: 6, HasXY: true, Button: "left",
+				CaptureWidth: 0, CaptureHeight: 0,
+			},
+		},
 	}
 
 	for _, tc := range cases {

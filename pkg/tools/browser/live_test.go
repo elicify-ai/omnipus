@@ -850,6 +850,61 @@ func TestBuildInputAction_KeyEventCarriesVirtualKeyCode(t *testing.T) {
 	}
 }
 
+// TestRescaleInputCoords covers the pure-math half of the root-cause doc's
+// Fault 3 fix (docs/internal/browser-viewport-input-rootcause-2026-07-31.md):
+// mapping a viewer's capture-frame pixel coordinates into the tab's CSS
+// pixel space. No CDP/Chromium involved — see rescaleInputCoords's doc
+// comment for why the math is factored out on its own.
+func TestRescaleInputCoords(t *testing.T) {
+	tests := []struct {
+		name         string
+		x, y         float64
+		capW, capH   float64
+		cssW, cssH   float64
+		wantX, wantY float64
+	}{
+		{
+			name: "identity when capture size equals CSS viewport size",
+			x:    100, y: 200,
+			capW: 1280, capH: 720,
+			cssW: 1280, cssH: 720,
+			wantX: 100, wantY: 200,
+		},
+		{
+			// The exact root-cause doc measurement: a 319x158 capture stream
+			// against a real ~1280x720 page — clicks were landing ~4x off.
+			name: "root-cause scenario: 319x158 capture vs 1280x720 css",
+			x:    100, y: 79, // roughly mid-frame in capture space
+			capW: 319, capH: 158,
+			cssW: 1280, cssH: 720,
+			wantX: 100 * 1280.0 / 319.0, wantY: 79 * 720.0 / 158.0,
+		},
+		{
+			// DPR-style: capture delivered at 2x the CSS viewport (a
+			// high-DPI capture path), so coordinates must be halved.
+			name: "capture at 2x css (DPR-style downscale)",
+			x:    400, y: 300,
+			capW: 2560, capH: 1440,
+			cssW: 1280, cssH: 720,
+			wantX: 200, wantY: 150,
+		},
+		{
+			name: "zero origin stays at zero origin regardless of scale",
+			x:    0, y: 0,
+			capW: 319, capH: 158,
+			cssW: 1280, cssH: 720,
+			wantX: 0, wantY: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotX, gotY := rescaleInputCoords(tc.x, tc.y, tc.capW, tc.capH, tc.cssW, tc.cssH)
+			require.InDelta(t, tc.wantX, gotX, 0.0001, "x")
+			require.InDelta(t, tc.wantY, gotY, 0.0001, "y")
+		})
+	}
+}
+
 // TestIsBenignLiveInputError verifies the benign/real classification
 // (ADR-038 finding #4) that browser_ws.go's handleInput relies on to decide
 // whether a dispatchInput failure is worth a browser_status(error) frame.

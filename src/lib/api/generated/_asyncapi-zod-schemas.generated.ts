@@ -456,6 +456,8 @@ export const BrowserInputFrame = z
     kind: z.enum(["mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text", "navigate", "navigate_back", "reload"]),
     x: z.number().optional(),
     y: z.number().optional(),
+    capture_width: z.number().min(1).max(16384).optional(),
+    capture_height: z.number().min(1).max(16384).optional(),
     button: z.enum(["none", "left", "middle", "right", "back", "forward"]).optional(),
     delta_x: z.number().optional(),
     delta_y: z.number().optional(),
