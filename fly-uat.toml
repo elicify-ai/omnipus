@@ -54,5 +54,10 @@ primary_region = "fra"
   destination = "/home/omnipus/.omnipus"
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "2048mb"
+  # shared-cpu-4x: 2 shared vCPUs starved the software VP8 encoder into
+  # collapsing the WebRTC capture to 319x158 (root cause 2026-07-31, fault 2 —
+  # docs/internal/browser-viewport-input-rootcause-2026-07-31.md). The encoder
+  # now holds resolution (maintain-resolution), which trades CPU pressure into
+  # framerate instead; 4 vCPUs keeps that trade tolerable.
+  size = "shared-cpu-4x"
+  memory = "4096mb"
