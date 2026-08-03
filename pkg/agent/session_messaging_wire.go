@@ -119,9 +119,11 @@ func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
 // logic. The delegate tool keeps its own action handlers; message_parent
 // keeps its own kind switch. We inject: the inbox + lifecycle stores, the
 // steering sink (= the AgentLoop itself, via EnqueueSteeringMessage), the
-// cancel hooks (InterruptSession / InterruptSessionHard), the waker (the
-// process-wide asyncNotifier, which implements tools.MessageParentWaker), and
-// the content-egress filter (the config's SensitiveDataReplacer, N-10).
+// cancel hooks (ADR-057 FR-041's collapsed Interrupt / InterruptSessionHard,
+// called with ScopeSelfOnly — see the delegate-tool wiring block below for
+// why), the waker (the process-wide asyncNotifier, which implements
+// tools.MessageParentWaker), and the content-egress filter (the config's
+// SensitiveDataReplacer, N-10).
 func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	if agent == nil || agent.Tools == nil {
 		return
@@ -138,11 +140,40 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	// re-wires the real stores in place once they exist). ---
 	if tool, ok := agent.Tools.Get("delegate"); ok {
 		if dt, dtOk := tool.(*tools.DelegateTool); dtOk && dt != nil {
+			// ADR-057 FR-021/W7b (fail-closed wiring): propagate BOTH the wire
+			// and the un-wire, not just the wire. The pre-ADR-057 code only
+			// called SetLifecycleStore/SetMessageInbox when the value was
+			// non-nil, so a store that was successfully wired by an earlier
+			// SetSessionMessagingStores call and then became unavailable (a
+			// later reload where store construction failed, or an operator
+			// intentionally tearing it down) left the delegate tool holding a
+			// STALE non-nil reference forever — the opposite of fail-closed,
+			// and the reason a "no lifecycle store" refusal (BDD-20) could
+			// stop firing after having correctly fired once.
+			//
+			// The explicit nil branches below are deliberate, not
+			// stylistic: dt.SetLifecycleStore(lifecycle) when the LOCAL
+			// variable lifecycle is a nil *session.LifecycleStore would box
+			// that typed-nil pointer into the MessageParentLifecycleStore
+			// interface parameter, producing a NON-nil interface wrapping a
+			// nil pointer. Every one of delegate.go's existing
+			// "t.lifecycle == nil" fail-closed checks (executeInbox,
+			// executeSteer, executeRespond, executeCancel, executeFollowUp,
+			// executePeek — each returning the operator-visible "delegate: no
+			// lifecycle store configured" ErrorResult) would then evaluate
+			// false and the call would panic on a nil-pointer method call
+			// instead of refusing cleanly. Passing the untyped nil literal
+			// through SetLifecycleStore(nil)/SetMessageInbox(nil) is the only
+			// safe way to make t.lifecycle/t.inbox a genuine nil interface.
 			if lifecycle != nil {
 				dt.SetLifecycleStore(lifecycle)
+			} else {
+				dt.SetLifecycleStore(nil)
 			}
 			if inbox != nil {
 				dt.SetMessageInbox(inbox)
+			} else {
+				dt.SetMessageInbox(nil)
 			}
 			// The AgentLoop satisfies tools.DelegateSteeringSink via its
 			// exported EnqueueSteeringMessage wrapper (steering.go) — same sink
@@ -152,18 +183,34 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// Cancel hooks: soft = graceful stop, hard = escalate after the
 			// cancel_grace window. These MUST be keyed by the caller-facing
 			// delegateSessionID (== sessionKey in activeTurnStates), not
-			// transcriptSessionID — InterruptSession/InterruptSessionHard
-			// match on transcriptSessionID, which for a delegated sub-turn is
-			// deliberately the PARENT's shared chat id (subturn.go's FR-6a),
-			// never equal to delegateSessionID. Wiring those here meant every
+			// routingSessionID — Interrupt/InterruptSessionHard's whole-chat
+			// Range fallback matches on routingSessionID, which for a
+			// delegated sub-turn is deliberately the PARENT's shared chat id
+			// (subturn.go's FR-011 inheritance), never equal to
+			// delegateSessionID. Wiring those here unscoped meant every
 			// delegate.cancel silently no-op'd (zero Range matches, which
-			// InterruptSession treats as a non-error no-op) while still
-			// reporting success. InterruptBySessionKey/InterruptBySessionKeyHard
-			// (steering.go) do a direct activeTurnStates.Load(sessionKey)
-			// instead, targeting EXACTLY the named delegate and nothing else —
-			// see their doc comments for the full rationale on why cascading
-			// via the shared transcriptSessionID would be too broad here.
-			dt.SetCancelHooks(al.InterruptBySessionKey, al.InterruptBySessionKeyHard)
+			// Interrupt treats as a non-error no-op) while still reporting
+			// success. Calling Interrupt/InterruptSessionHard with
+			// ScopeSelfOnly instead routes through resolveInterruptAnchors'
+			// point-lookup half (a direct activeTurnStates.Load(sessionKey)),
+			// targeting EXACTLY the named delegate and nothing else —
+			// byte-identical to the retired InterruptBySessionKey/
+			// InterruptBySessionKeyHard's point-lookup-only semantics
+			// (ADR-057 FR-041 collapse). ScopeSubtree would additionally walk
+			// the target's own LIVE descendants via the in-memory
+			// parentTurnID chain — the wrong widening for a per-delegation
+			// cancel, which must reach exactly the named child and never a
+			// sibling or the parent (see InterruptScope's doc comment,
+			// steering.go, and TestSetCancelHooks_ScopeSelfOnlyNotSubtree,
+			// session_messaging_wire_adr057_test.go, for the red/green proof).
+			dt.SetCancelHooks(
+				func(sessionKey, hint string) ([]string, error) {
+					return al.Interrupt(sessionKey, ScopeSelfOnly, hint)
+				},
+				func(sessionKey, hint string) ([]string, error) {
+					return al.InterruptSessionHard(sessionKey, ScopeSelfOnly, hint)
+				},
+			)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.
