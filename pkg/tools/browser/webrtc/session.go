@@ -65,14 +65,19 @@ type Session struct {
 	sink  InputSink
 	logfn func(string, ...any)
 
-	mu         sync.Mutex
-	closed     bool
-	ingestPC   *webrtc.PeerConnection
-	videoTrack *webrtc.TrackLocalStaticRTP
-	audioTrack *webrtc.TrackLocalStaticRTP
-	videoSSRC  webrtc.SSRC
-	videoCodec string
-	audioCodec string
+	mu     sync.Mutex
+	closed bool
+	// onIngestLost is invoked (in its own goroutine, no lock held) when the
+	// installed ingest connection dies — see the OnConnectionStateChange
+	// handler in ingest.go. The owner uses it to ask the encoder for a fresh
+	// capture; nil is a valid no-op.
+	onIngestLost func()
+	ingestPC     *webrtc.PeerConnection
+	videoTrack   *webrtc.TrackLocalStaticRTP
+	audioTrack   *webrtc.TrackLocalStaticRTP
+	videoSSRC    webrtc.SSRC
+	videoCodec   string
+	audioCodec   string
 
 	viewersMu sync.Mutex
 	viewers   map[string]*viewerConn
@@ -199,6 +204,17 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 }
 
 // log writes a structured log line if a logf was supplied to NewSession.
+// SetOnIngestLost registers cb, invoked when the installed ingest connection
+// dies (failed/closed/disconnected). The owner uses it to ask the encoder for a
+// fresh capture — without it a dead ingest is never noticed and every later PLI
+// write fails against a closed pipe, freezing the stream on its last frame.
+// Safe to call at any time; pass nil to unregister.
+func (s *Session) SetOnIngestLost(cb func()) {
+	s.mu.Lock()
+	s.onIngestLost = cb
+	s.mu.Unlock()
+}
+
 func (s *Session) logf(format string, args ...any) {
 	if s.logfn != nil {
 		s.logfn(format, args...)

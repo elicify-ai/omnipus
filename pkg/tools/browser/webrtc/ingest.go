@@ -119,6 +119,42 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	})
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
 		s.logf("%s peer connection state -> %s", prefix, st.String())
+
+		// Clear a DEAD ingest connection instead of only logging it
+		// (live-diagnosed 2026-08-03). Previously this handler was
+		// log-only, so s.ingestPC kept pointing at a closed connection
+		// forever: every subsequent recapture called sendPLI ->
+		// WriteRTCP -> "io: read/write on closed pipe", no keyframe ever
+		// arrived, and the panel stayed frozen on whatever frame it last
+		// received — the operator saw the start page persist while the tab
+		// title and URL bar advanced through several real sites.
+		//
+		// Only the CURRENTLY-INSTALLED connection is cleared: a late state
+		// change from a connection that a newer offer already replaced must
+		// not wipe its healthy successor.
+		switch st {
+		case webrtc.PeerConnectionStateFailed,
+			webrtc.PeerConnectionStateClosed,
+			webrtc.PeerConnectionStateDisconnected:
+			s.mu.Lock()
+			cleared := s.ingestPC == pc
+			if cleared {
+				s.ingestPC = nil
+			}
+			notify := s.onIngestLost
+			s.mu.Unlock()
+			if !cleared {
+				return
+			}
+			s.logf("%s ingest connection %s — cleared; a fresh capture is required", prefix, st.String())
+			// Ask the owner (CaptureSession) to re-establish capture. Without
+			// this the session sits with no ingest at all and nothing ever
+			// asks the encoder to reconnect, which is indistinguishable to
+			// the user from a hung browser.
+			if notify != nil {
+				go notify()
+			}
+		}
 	})
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		go s.attachIngestTrack(prefix, track, receiver)

@@ -170,6 +170,22 @@ type viewerRemover interface {
 	SetOnViewerRemoved(fn func(viewerID string, handle any))
 }
 
+// ingestLossNotifier is the optional RelaySession capability for being told
+// that the ingest connection died (live-diagnosed 2026-08-03).
+//
+// Why it matters: the relay used to only LOG a dead ingest peer connection, so
+// its ingestPC kept pointing at a closed connection forever. Every later
+// recapture's keyframe request then failed with "io: read/write on closed
+// pipe", no new frame ever arrived, and the panel stayed frozen on whatever it
+// last received — the operator watched the start page persist while the tab
+// title and URL bar advanced through several real sites.
+//
+// Detected via type assertion, same discipline (and same lite-stub/test-fake
+// reasons) as viewerRemover above.
+type ingestLossNotifier interface {
+	SetOnIngestLost(fn func())
+}
+
 // viewerOfferHandler is the optional RelaySession capability for
 // supersede-safe viewer-offer handling -- see webrtc.Session.
 // HandleViewerOfferHandle and CloseViewerIfCurrent's doc comments for the
@@ -390,7 +406,29 @@ func newCaptureSessionWithDeps(
 	if oh, ok := relay.(viewerOfferHandler); ok {
 		cs.offerHandler = oh
 	}
+	if il, ok := relay.(ingestLossNotifier); ok {
+		// A dead ingest means the encoder is gone; ask it to re-capture so the
+		// stream recovers on its own. Without this the session sits with no
+		// ingest at all and nothing ever asks for a new one, which is
+		// indistinguishable to the user from a hung browser.
+		il.SetOnIngestLost(cs.onIngestLost)
+	}
 	return cs
+}
+
+// onIngestLost re-requests capture after the relay reports its ingest
+// connection died. Best-effort: Recapture is itself a no-op when no ingest
+// connection is currently bound (the encoder reconnects on its own watchdog in
+// that case), so a spurious call is harmless.
+func (cs *CaptureSession) onIngestLost() {
+	cs.mu.Lock()
+	stopped := cs.stopped
+	cs.mu.Unlock()
+	if stopped {
+		return
+	}
+	cs.logf("capture[%s]: ingest connection lost — requesting a fresh capture", cs.agentID)
+	cs.Recapture()
 }
 
 // captureInjectPayload is the exact shape encoder.js's readConfig() expects

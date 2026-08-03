@@ -47,6 +47,7 @@ type fakeRelay struct {
 	// disconnect-grace timeout) via triggerViewerRemoved below, exactly the
 	// contract the real webrtc.Session honors from its own removeViewer.
 	onViewerRemoved func(viewerID string, handle any)
+	onIngestLost    func()
 }
 
 // SetOnViewerRemoved implements the viewerRemover optional capability (see
@@ -76,6 +77,27 @@ func (f *fakeRelay) triggerViewerRemoved(viewerID string) {
 	f.mu.Unlock()
 	if fn != nil {
 		fn(viewerID, nil)
+	}
+}
+
+// SetOnIngestLost implements the ingestLossNotifier optional capability (see
+// capture_session.go) so tests can exercise CaptureSession's wiring of it
+// without a real Pion PeerConnection dying.
+func (f *fakeRelay) SetOnIngestLost(fn func()) {
+	f.mu.Lock()
+	f.onIngestLost = fn
+	f.mu.Unlock()
+}
+
+// triggerIngestLost simulates the relay's ingest peer connection dying —
+// exactly the SetOnIngestLost contract the real webrtc.Session honors from its
+// OnConnectionStateChange handler.
+func (f *fakeRelay) triggerIngestLost() {
+	f.mu.Lock()
+	fn := f.onIngestLost
+	f.mu.Unlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -1206,5 +1228,67 @@ func TestCaptureSession_CleanupViewerOffer_EarlyFailureMustNotClobberLiveSibling
 	cs.CleanupViewerOffer(handleB)
 	if relay.isCurrentlyRegistered(viewerID, fakeHandleB) {
 		t.Fatal("setup sanity: B's own cleanup should remove its own registration")
+	}
+}
+
+// --- ingest death recovery ----------------------------------------------------
+//
+// Regression coverage for the operator-reported "nothing loads" failure
+// (0803 (2)(1).mov, UAT v41): the tab title and URL bar advanced through
+// several real sites while the rendered frame stayed frozen on the start page
+// for the whole session.
+//
+// Cause: webrtc/ingest.go's OnConnectionStateChange only LOGGED the state and
+// never cleared s.ingestPC, so after the encoder's peer connection died the
+// session kept a CLOSED connection installed. Every later recapture's keyframe
+// request failed with "io: read/write on closed pipe" (observed repeating every
+// ~3s in the gateway log), no keyframe ever arrived, and the stream froze on
+// its last received frame. Only a successful NEW offer resets ingestPC — which
+// never came, because nothing noticed the death.
+
+func TestCaptureSession_IngestLoss_TriggersRecapture(t *testing.T) {
+	relay := &fakeRelay{}
+	_ = newTestCaptureSession(t, relay, nil)
+
+	before := relay.recaptureCount()
+	relay.triggerIngestLost()
+
+	if got := relay.recaptureCount(); got != before+1 {
+		t.Fatalf("a lost ingest connection must trigger a fresh capture: recaptures = %d, want %d; "+
+			"without this the session keeps a dead connection and the stream stays frozen forever", got, before+1)
+	}
+}
+
+// TestCaptureSession_IngestLoss_AfterStopIsInert — a death notification racing
+// teardown must not resurrect work on a stopped session.
+func TestCaptureSession_IngestLoss_AfterStopIsInert(t *testing.T) {
+	relay := &fakeRelay{}
+	cs := newTestCaptureSession(t, relay, nil)
+	cs.Stop()
+
+	before := relay.recaptureCount()
+	relay.triggerIngestLost()
+
+	if got := relay.recaptureCount(); got != before {
+		t.Fatalf("a stopped session must not request a recapture: recaptures = %d, want %d", got, before)
+	}
+}
+
+// TestCaptureSession_WiresIngestLossHook pins the WIRING itself. The two tests
+// above drive the callback through the fake, so they would still pass if the
+// SetOnIngestLost call in newCaptureSessionWithDeps were deleted — which is
+// exactly the class of "feature present but never connected" bug that shipped
+// the start page inert earlier in this same effort.
+func TestCaptureSession_WiresIngestLossHook(t *testing.T) {
+	relay := &fakeRelay{}
+	_ = newTestCaptureSession(t, relay, nil)
+
+	relay.mu.Lock()
+	registered := relay.onIngestLost != nil
+	relay.mu.Unlock()
+
+	if !registered {
+		t.Fatal("CaptureSession must register an ingest-loss callback on a relay that supports it — " +
+			"without the wiring a dead ingest is never noticed and the stream freezes")
 	}
 }
