@@ -41,14 +41,6 @@ import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import type { SpanStep, SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
-// ADR-053 FE-5: mid-span session list — join the latest lifecycle state +
-// typed child messages onto each agent span (ActivityPanel session list).
-import {
-  useSessionActivityStore,
-  type SessionMessageRow,
-  type SessionLifecycleState,
-  type SpanSessionState,
-} from '@/store/sessionActivity'
 import { fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
 
@@ -82,26 +74,6 @@ export interface AgentActivityItem {
    * via formatInterruptReason (@/lib/subagentStatus), not this raw value.
    */
   interruptReason?: SubagentSpanTerminal['reason']
-  /**
-   * ADR-053 FE-5 (design §4 H-1..H-6) — the live session-list enrichment.
-   * Latest typed child→parent messages (progress / checkpoint / artifact /
-   * blocker / question / decision_request / handback) for this span, from
-   * the mid-span `subagent_message` frames held in the sessionActivity
-   * store. Most-recent-last; empty/undefined when no mid-span ping has
-   * arrived yet (the span brackets still render). Rendered via
-   * <UntrustedChildText> (FE-7) — every row is untrusted-origin child text.
-   */
-  sessionMessages?: SessionMessageRow[]
-  /**
-   * The child session's durable 8-state lifecycle, projected from
-   * `subagent_state` frames. Undefined until the first state ping arrives.
-   * Drives the lifecycle badge in the session list.
-   */
-  lifecycleState?: SessionLifecycleState
-  /** Durable child session id (for the stop/steer affordances' wire target). */
-  lifecycleSessionId?: string
-  /** Last steer/respond receipt ack (INV-3) — drives an "applied" affordance state. */
-  steeringReceipt?: SpanSessionState['steeringReceipt']
 }
 
 export interface BashActivityItem {
@@ -433,12 +405,6 @@ export function useRunningActivity(): RunningActivity {
   // ADR-049 D2/D4/US-13: global (session-agnostic) judge-verdict feed — see judgeActivity.ts.
   const judgeVerdicts = useJudgeActivityStore((s) => s.verdicts)
 
-  // ADR-053 FE-5: mid-span session-list enrichment (subagent_message /
-  // subagent_state frames forwarded from chat.ts). Joined onto each agent
-  // span by span_id == AgentActivityItem.key.
-  const sessionMessagesBySpan = useSessionActivityStore((s) => s.messagesBySpan)
-  const sessionStateBySpan = useSessionActivityStore((s) => s.stateBySpan)
-
   // Reused ['agents'] query (prefetched by AppShell) — no extra network request.
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
@@ -491,8 +457,6 @@ export function useRunningActivity(): RunningActivity {
     const terminal = isSpanRunning ? null : (span as SubagentSpanTerminal)
     const finishedDurationMs = terminal?.durationMs
     const durationMs = trackDurationMs(span.spanId, isSpanRunning, finishedDurationMs, firstSeenAtMap)
-    // ADR-053 FE-5: join the mid-span session-list enrichment for this span.
-    const spanState = sessionStateBySpan[span.spanId]
     const item: AgentActivityItem = {
       kind: 'agent',
       key: span.spanId,
@@ -504,10 +468,6 @@ export function useRunningActivity(): RunningActivity {
       steps: resolved.agentType === '3p' ? [] : span.steps,
       finalResult: terminal?.finalResult,
       interruptReason: terminal?.reason,
-      sessionMessages: sessionMessagesBySpan[span.spanId],
-      lifecycleState: spanState?.state,
-      lifecycleSessionId: spanState?.sessionId,
-      steeringReceipt: spanState?.steeringReceipt,
     }
     if (span.status === 'running') running.push(item)
     else recentlyFinished.push(item)

@@ -4,7 +4,7 @@
 // AgentActivityItem, BashActivityItem) — this component is purely prop-driven,
 // no store/query mocking required.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
@@ -32,11 +32,6 @@ function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivit
     steps: overrides.steps ?? [],
     finalResult: overrides.finalResult,
     interruptReason: overrides.interruptReason,
-    // FE-5 session-list enrichment (forwarded so session-list tests can set them).
-    sessionMessages: overrides.sessionMessages,
-    lifecycleState: overrides.lifecycleState,
-    lifecycleSessionId: overrides.lifecycleSessionId,
-    steeringReceipt: overrides.steeringReceipt,
   }
 }
 
@@ -529,188 +524,10 @@ describe('ActivityPanel — bash-kind error state', () => {
   })
 })
 
-// ── ADR-053 FE-5 (design §4 H-1..H-6): Agent-View session list ──────────────
-// The open/close span brackets grow into a live session list: lifecycle badge
-// + latest child messages (FE-7 sanitized via <UntrustedChildText>) + gated
-// peek/reply/steer/stop affordances.
-
-import type { SessionMessageRow, SessionLifecycleState } from '@/store/sessionActivity'
-
-function sessionMessage(overrides: Partial<SessionMessageRow> = {}): SessionMessageRow {
-  return {
-    messageId: overrides.messageId ?? 'sm_1',
-    kind: overrides.kind ?? 'progress',
-    text: overrides.text ?? 'scanning pkg/plan',
-    pct: overrides.pct,
-    correlationId: overrides.correlationId,
-    senderIdentity: overrides.senderIdentity ?? 'ray',
-    untrustedOrigin: overrides.untrustedOrigin ?? true,
-    createdAt: overrides.createdAt ?? '2026-07-22T10:00:00Z',
-  }
-}
-
-describe('ActivityPanel — FE-5 Agent-View session list', () => {
-  it('renders the lifecycle badge for a span with mid-span state', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[
-          makeAgentItem({
-            status: 'running',
-            lifecycleState: 'needs_input' as SessionLifecycleState,
-            sessionMessages: [sessionMessage({ kind: 'question', text: 'which file?' })],
-          }),
-        ]}
-        recentlyFinished={[]}
-      />,
-    )
-    // expand the row (it has session detail, so it is expandable even with zero steps)
-    const toggle = screen.getByRole('button', { expanded: false })
-    expect(toggle).not.toBeDisabled()
-    fireEvent.click(toggle)
-    const badge = screen.getByTestId('session-lifecycle-badge')
-    expect(badge).toHaveAttribute('data-lifecycle', 'needs_input')
-    expect(badge.textContent).toContain('needs input')
-  })
-
-  it('peek reveals the live child-message list, rendered as untrusted text (FE-7 badge)', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[
-          makeAgentItem({
-            status: 'running',
-            lifecycleState: 'running' as SessionLifecycleState,
-            sessionMessages: [
-              sessionMessage({ messageId: 'sm_a', kind: 'progress', text: 'halfway', pct: 40 }),
-              sessionMessage({ messageId: 'sm_b', kind: 'checkpoint', text: 'saved checkpoint' }),
-            ],
-          }),
-        ]}
-        recentlyFinished={[]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    // Before peek, the message list is hidden.
-    expect(screen.queryByTestId('session-message-list')).not.toBeInTheDocument()
-    // PEEK toggles it open.
-    fireEvent.click(screen.getByTestId('session-peek'))
-    expect(screen.getByTestId('session-message-list')).toBeInTheDocument()
-    // Both message rows render, each with an FE-7 untrusted badge + sanitized body.
-    expect(screen.getAllByTestId('session-message-row')).toHaveLength(2)
-    expect(screen.getAllByTestId('untrusted-origin-badge').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getByText('40%')).toBeInTheDocument()
-    expect(screen.getAllByText('halfway').length).toBeGreaterThan(0)
-  })
-
-  it('renders all four affordances (peek/reply/steer/stop) for a running owned session', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[
-          makeAgentItem({
-            status: 'running',
-            lifecycleState: 'running' as SessionLifecycleState,
-            lifecycleSessionId: 'sess-child-1',
-            sessionMessages: [sessionMessage({ kind: 'progress', text: 'working' })],
-          }),
-        ]}
-        recentlyFinished={[]}
-        onSessionAction={() => {}}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    expect(screen.getByTestId('session-peek')).toBeInTheDocument()
-    expect(screen.getByTestId('session-steer')).toBeInTheDocument()
-    expect(screen.getByTestId('session-stop')).toBeInTheDocument()
-    // REPLY needs an open question/decision_request — none here, so disabled.
-    expect(screen.getByTestId('session-reply')).toBeDisabled()
-  })
-
-  it('enables REPLY when a child question carries a correlation_id', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[
-          makeAgentItem({
-            status: 'running',
-            lifecycleState: 'needs_input' as SessionLifecycleState,
-            lifecycleSessionId: 'sess-child-1',
-            sessionMessages: [
-              sessionMessage({
-                messageId: 'sm_q1',
-                kind: 'question',
-                text: 'which branch?',
-                correlationId: 'corr_42',
-              }),
-            ],
-          }),
-        ]}
-        recentlyFinished={[]}
-        onSessionAction={() => {}}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    const replyBtn = screen.getByTestId('session-reply')
-    expect(replyBtn).not.toBeDisabled()
-  })
-
-  it('STOP dispatches onSessionAction("stop", target) with the child session id', () => {
-    const onAction = vi.fn()
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[
-          makeAgentItem({
-            status: 'running',
-            lifecycleState: 'running' as SessionLifecycleState,
-            lifecycleSessionId: 'sess-child-9',
-            sessionMessages: [sessionMessage({ kind: 'progress', text: 'working' })],
-          }),
-        ]}
-        recentlyFinished={[]}
-        onSessionAction={onAction}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    fireEvent.click(screen.getByTestId('session-stop'))
-    expect(onAction).toHaveBeenCalledWith('stop', {
-      spanId: 'span_1',
-      sessionId: 'sess-child-9',
-      correlationId: undefined,
-    })
-  })
-
-  it('gated attach: a FINISHED span shows its retained detail; control affordances render DISABLED (gate closed)', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[]}
-        recentlyFinished={[
-          makeAgentItem({
-            status: 'success',
-            lifecycleState: 'completed' as SessionLifecycleState,
-            sessionMessages: [sessionMessage({ kind: 'handback', text: 'final handback' })],
-          }),
-        ]}
-        onSessionAction={() => {}}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    // Retained lifecycle badge still renders (completed).
-    expect(screen.getByTestId('session-lifecycle-badge')).toHaveAttribute('data-lifecycle', 'completed')
-    // PEEK stays enabled — retained messages are always inspectable.
-    expect(screen.getByTestId('session-peek')).not.toBeDisabled()
-    // Control affordances render but are DISABLED: the gate (ownsSession)
-    // closes on a non-running span — discoverable but not actionable.
-    expect(screen.getByTestId('session-stop')).toBeDisabled()
-    expect(screen.getByTestId('session-steer')).toBeDisabled()
-    expect(screen.getByTestId('session-reply')).toBeDisabled()
-  })
-})
+// ── ADR-057: the ADR-053 FE-5 Agent-View session list (lifecycle badge +
+// peek/reply/steer/stop affordances) has been removed as dead code — its
+// sole data source, mid-span `subagent_message`/`subagent_state` frames, has
+// zero Go emitters and can never be populated. See ActivityPanel.tsx's own
+// header comment. This describe block covered that removed surface and is
+// gone with it; makeAgentItem above no longer accepts the now-deleted
+// sessionMessages/lifecycleState/lifecycleSessionId/steeringReceipt fields.

@@ -15,14 +15,8 @@ import type {
   GoalStatusFrame,
   LoopStatusFrame,
   JudgeVerdictFrame,
-  SubagentMessageFrame,
-  SubagentStateFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
-// ADR-053 FE-5: mid-span subagent_message/subagent_state frames feed the
-// Agent-View session list (ActivityPanel). Mirrors the judgeActivity ingress
-// precedent — forwarded here, never routed through a chat bucket.
-import { useSessionActivityStore } from '@/store/sessionActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -98,8 +92,10 @@ interface SubagentSpanBase {
    * only its inline steps and no navigable child session. Populated so a
    * renderer CAN link out to the drill-down surface
    * (`/sessions/{childSessionId}`, FR-046) for the child's own full
-   * transcript — deliberately NOT derived from `subagent_message` /
-   * `subagent_state`, which have zero Go emitters (Explicit Non-Behaviors).
+   * transcript — deliberately NOT derived from the mid-span child
+   * progress/lifecycle WS frame pair (ADR-053 FE-5), which have zero Go
+   * emitters (ADR-057 Explicit Non-Behaviors — see that section for the
+   * frame type names).
    */
   childSessionId?: string
 }
@@ -320,9 +316,7 @@ export interface SessionChatState {
    * `messageOrder × spans`, which re-ran on every subagent_end frame for
    * the whole duration of a long turn. Written by subagent_start alongside
    * spanByParentCallId; deleted the moment subagent_end consumes it (once a
-   * span is terminal it is never looked up by span_id again — the
-   * subagent_message/subagent_state frames route through
-   * sessionActivityStore, not through this index).
+   * span is terminal it is never looked up by span_id again).
    *
    * Optional for the same fixture-compat reason as `toolCallOwnerMessageId`
    * below: several existing test fixtures construct a SessionChatState-
@@ -4587,25 +4581,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // whatsapp_pairing/notification pattern: accessed via getState()
           // at frame time, never routed through a session bucket).
           useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
-          break
-        }
-
-        case 'subagent_message':
-        case 'subagent_state': {
-          // ADR-053 FE-5 (design §4 H-1..H-6): mid-span frames riding the
-          // existing subagent_start/subagent_end bracket channel. These are
-          // flat UI projections (SubagentMessageFrame / SubagentStateFrame)
-          // that grow the ActivityPanel's span brackets into a live session
-          // list (latest progress/checkpoint/blocker/question/handback +
-          // 8-state lifecycle). Forwarded here to the dedicated store —
-          // accessed via getState() at frame time so chatStore stays
-          // decoupled (same pattern as judge_verdict above). NOT routed
-          // through a session bucket: these frames carry the CHILD's
-          // session_id, and their join key to the span is `span_id`, which
-          // the store keys on directly.
-          useSessionActivityStore.getState().apply(
-            frame as SubagentMessageFrame | SubagentStateFrame,
-          )
           break
         }
 
