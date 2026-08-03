@@ -6,6 +6,64 @@
 
 **Branch**: `feature/plan-swimlane-board`. **Greenfield** — no migration, no back-compat, for chats or config files (ADR-057 v4 operator decision 1).
 
+**Version**: v2 (2026-08-03). Supersedes v1 (commit `478b85b5`).
+
+> **v2 changelog.** v1 was reviewed by [grill #1](adr-057-session-unification-spec-review.md) — **verdict BLOCK, 6 CRITICAL / 14 MAJOR / 5 MINOR / 2 OBSERVATION**. All 20 numbered findings are resolved here; **nothing is deferred**. In parallel the operator resolved all 12 items in the Ambiguity Self-Audit. The two classes of change are marked distinctly throughout — `[grill C-n / M-n / m-n]` for a correction forced by the review, `[operator n]` for a settled decision.
+>
+> **Grill-driven corrections (what was actually wrong):**
+> - **C-1** — FR-031 ("`Inherit`'s first argument MUST become the child's own session id") was, implemented literally, a **silent no-op**: `Inherit` uses one `sessionID` for both the source lookup and the destination write (`pkg/security/approvalgrants.go:112-129`, verified), so re-keying it to the child makes the source lookup miss and return at `:118-120`. FR-031 is rewritten as an explicit **source/destination pair** (`InheritFrom`), FR-079 makes the empty-source branch loud, and BDD-31/32/88/89 assert the grant was **not** present under the child key before the spawn.
+> - **C-2** — FR-003's premise was **factually false**. `pkg/agent/turn.go:1297` already does `abandonedWritesSuppressed.Add(1)`; the counter is declared at `:25`, exported at `:44`, incremented at **seven** sites, and there is already a passing test (`pkg/agent/turn_test.go:221`). Test #7 was green against the unmodified tree — inside the P0 story that gates every other measurement. FR-003, US-1 AS-4, BDD-04 and test #7 now target the **log record** (the genuinely new artefact) plus a counter **delta**. Every other "is silent today" claim was re-verified against the tree; see "Silent-today claims, re-verified".
+> - **C-3** — eleven tests were negative/static gates that pass when their **search finds nothing**. A **fourth binding rule** now requires every such gate to prove its search is live by first asserting a stated positive lower bound; FR-085 makes it a requirement, the bounds are enumerated in "Negative-gate positive lower bounds", and SC-003's `rg` invocation is corrected (as written it matched this spec and the ADR themselves and could **never** return zero).
+> - **C-4** — the W24 throttle could be entirely non-functional with tests #20/#21/#22/#74 all green, because nothing asserted the **unforced** periodic flush. FR-083, BDD-93, test #89, SC-036, a negative control inside #20, and a two-sided rewrite of throttle-dataset row 7.
+> - **C-5** — W23+W24 relocate Alternative F's clobber from the **file** to `metaCache` (`writeMetaLocked` ends with a whole-document `us.metaCache[sessionID] = meta.Clone()`, `pkg/session/unified.go:798`, verified). FR-084, BDD-94, test #90, SC-037.
+> - **C-6** — copying the parent's `Owner` is a **two-session** operation that FR-050 forbade outright. FR-082 defines the protocol (read under the parent's shard, **release**, then create under the child's), FR-050 gains the matching exception, and test #88 asserts acquisition order via an instrumented lock wrapper rather than relying on `-race`.
+> - **M-1…M-5, M-13** — the ownership table was neither exhaustive nor acyclic. It is **re-derived**: five previously unowned files get owners (three new units U22/U23/U24), U20 is split so the cascade wiring sits with its hook, U7 declares U17, U2's existence predicate is frozen as a contract, the child-terminal `CloseSession` call site is assigned, and every unit's new tests move to **new** files so U21's exclusive 12 no longer collide with "tests first".
+> - **M-6…M-12, M-14** and the five MINORs are each corrected in place; see the finding-resolution table below.
+> - **m-1 is REBUTTED with evidence and inverted.** The review said AC-13's `lifecycle.go:572-575` was one line past the block. Verified: `:571` is the closing brace of the `AgentID` clause and the `ParentAgentID` comment block is exactly `:572-575`. **The ADR is right and this spec was wrong** — FR-022, BDD-22 and US-4 AS-5 are corrected from `:571-575` to `:572-575`.
+> - **New defect found while verifying (not in the grill):** the spec said "the **seven** role-B predicates" while citing **eight** sites in **eight** distinct functions. Both numbers are now stated with their scope — eight reads pre-change, seven post-change (W13 collapses `InterruptSession`/`InterruptSessionHard` into one).
+>
+> **Operator decisions (settled — not re-litigated):** subordinate sessions are listed **nested under their parent**, which is real UI work and gets its own user story (US-19), its own units (U24) and its own FRs/BDDs/tests rather than a filter flag [1]; flush interval 5 s as a **MUST** config key [2]; AC-10's budget becomes a **slope** assertion [3]; the root-delegation cap **reuses `agents.defaults.subturn.max_concurrent`** [4]; `delegate cancel` becomes `ScopeSubtree` rooted at the child [5]; a refused delegation is a tool error plus `slog.Error` [6]; items 7–12 stand as the agent defaults [7–12].
+>
+> **Where a finding and a decision pulled against each other:** grill **M-7** argued AC-10 is unsatisfiable because operator decision [4] reuses a cap the UAT recorded as 16, so "refuses the 25th" cannot run. **Both are honoured.** Verified: `getSubTurnConfig` (`pkg/agent/subturn.go:64-69`) reads `agents.defaults.subturn.max_concurrent` **unclamped** when it is > 0, and only falls back to `Performance.EffectiveMaxParallelAgents()` — the value `clampParallelExplicit` caps at 16 (`pkg/config/config.go:459-468`) — when it is ≤ 0. Setting `subturn.max_concurrent = 24` therefore satisfies AC-10's 24/25 topology **literally**, with no ADR amendment and no second knob. FR-095 pins the cap to that key and forbids sourcing it from the clamped one.
+>
+> **ID stability.** AC-1 … AC-22 are byte-identical to ADR-057 v4 (machine-diffed, zero differences). **No existing FR/BDD/SC/test/unit ID was renumbered or reused for a different subject.** Additions only: **FR-079…FR-096**, **BDD-88…BDD-107**, **SC-035…SC-049**, tests **#84…#111**, units **U22/U23/U24**, and **US-19**. Two IDs changed **meaning** rather than number and are called out where they appear: **FR-031** (now a two-key operation) and **FR-047** (now a concrete static gate rather than an untestable meta-requirement). Three tests were renamed because their old names described the vacuous assertion: #7, #25, #31, #56. New BDD scenarios are placed **with the user story they trace to**, so numeric order and document order diverge; the set remains contiguous.
+>
+> **Counts.** v1 → v2: user stories 18 → **19**; FRs 78 → **96**; BDD scenarios 87 → **107**; success criteria 34 → **49**; test entries 84 → **112**; work units 21 → **24**; datasets 6 → **9**; waves 5 → **7**.
+>
+> **One finding is also a security promotion.** The review's STRIDE table noted that a child id colliding with an existing session directory — a tampering hazard, live today because `os.MkdirAll` at `pkg/session/unified.go:463` is idempotent and silent — had its **only** coverage inside the post-implementation evaluation set, which the implementing agent never sees. Its *property* is promoted to FR-096 / BDD-107 / #111 / SC-049; the evaluation scenario itself stays where it was, and **no evaluation-set identifier appears anywhere in the visible plan** (machine-checked).
+
+### Grill #1 finding resolution
+
+| # | Severity | Finding | Resolution | Where |
+|---|---|---|---|---|
+| C-1 | CRITICAL | FR-031 re-keys `Inherit` into a silent no-op | **Corrected** — two-key `InheritFrom` | FR-031, FR-079, BDD-88, BDD-89, #84, #85, SC-039 |
+| C-2 | CRITICAL | FR-003/BDD-04/#7 target an already-counted path | **Corrected** — assert the log record + counter delta | FR-003, US-1 AS-4, BDD-04, #7, "Silent-today claims" |
+| C-3 | CRITICAL | 11 negative gates pass on an empty search | **Corrected** — binding rule 4 + stated bounds | Rule 4, FR-085, BDD-97, #91, SC-003, SC-035 |
+| C-4 | CRITICAL | W24 throttle can be dead with 4 tests green | **Corrected** — unforced-flush requirement + negative control | FR-083, BDD-93, #89, #20, dataset row 7, SC-036 |
+| C-5 | CRITICAL | Clobber relocated from file to `metaCache`, untested | **Corrected** — field-group-only mutation | FR-084, BDD-94, #90, SC-037 |
+| C-6 | CRITICAL | Owner copy is a two-session op FR-050 forbids | **Corrected** — explicit protocol + FR-050 exception | FR-082, FR-050, BDD-92, #88, SC-038 |
+| M-1 | MAJOR | 5 unowned files + 2 unassigned pagination layers | **Corrected** — U22/U23 added, all layers assigned | Ownership table, FR-092 |
+| M-2 | MAJOR | U20 in Wave A depends on U18 in Wave C | **Corrected** — U20 split; cascade wiring is U18's W18b | Ownership table, #62 |
+| M-3 | MAJOR | U7's undeclared dependency on U17 | **Corrected** — declared for U7 and U9 | Ownership table, cross-unit requests |
+| M-4 | MAJOR | U21's 12 files collide with 8 units' tests | **Corrected** — Rule 5: new tests go in new files | Rules 5–6, TDD plan |
+| M-5 | MAJOR | U2's error path defined by concurrent U5 | **Corrected** — `readMetaLocked` signature frozen | Ownership table, cross-unit requests |
+| M-6 | MAJOR | No FR re-keys the approval **registry** | **Corrected** — FR-080/FR-081 + approve round-trip | FR-080, FR-081, BDD-90, BDD-91, #86, #87, SC-040 |
+| M-7 | MAJOR | AC-10 internally contradictory | **Corrected + partly rebutted** — slope [3]; the cap **is** reachable at 24 (evidence above) | FR-095, SC-044, #72, #102 |
+| M-8 | MAJOR | BDD-16 false for ≥5 of 19 rows | **Corrected** — split into three classes (a)/(b)/(c) | BDD-16, BDD-98, BDD-99, FR-089, SC-006 |
+| M-9 | MAJOR | BDD-36/#56 satisfied by total child-transcript loss | **Corrected** — both halves in one run | BDD-36, #56, SC-004 |
+| M-10 | MAJOR | FR-045 eviction has no policy or bound | **Corrected** — trigger + bound + measurable test | FR-045, FR-087, BDD-52, #93, SC-042 |
+| M-11 | MAJOR | 7 traceability rows don't test their FR | **Corrected** — real tests added; fabricated AC column blanked | #103–#107, FR-047, matrix |
+| M-12 | MAJOR | FR-030 tested only at depth 1 in the visible plan | **Corrected** — depth-3 scenario added to the visible plan | BDD-100, #97, SC-046 |
+| M-13 | MAJOR | No unit owns the child-terminal `CloseSession` | **Corrected** — U7 calls, U17 owns the entry point | FR-088, BDD-96, #94, ownership table |
+| M-14 | MAJOR | FR-051's reconcile/snapshot stale-read window | **Corrected** — consistency model stated + tested | FR-086, BDD-95, #92, SC-041 |
+| m-1 | MINOR | AC-13 cites the wrong line | **REBUTTED with file:line evidence — inverted.** `:572-575` is correct; the **spec** was off by one | Citation corrections, FR-022, BDD-22 |
+| m-2 | MINOR | BDD-65 has no "file exists" precondition | **Corrected** — prior forced flush required | BDD-65, SC-023 |
+| m-3 | MINOR | #81 claims an unenforceable property | **Corrected** — presence + marker comment; semantics to review | #81, FR-072 |
+| m-4 | MINOR | Wave collision inside one Go package | **Corrected** — Rule 6, unit-prefixed helpers | Rules |
+| m-5 | MINOR | FR-067 is the only `SHOULD` | **Corrected** — promoted to MUST [operator 2] | FR-067, #105, SC-048 |
+| o-1 | OBS | "21 units / 5 waves" overstates parallelism | **Accepted** — true critical path stated, 7 waves | Integration order |
+| o-2 | OBS | W20's named types enforced at one site | **Corrected** — conversion boundary made explicit | FR-090 |
+
 ---
 
 ## The governing constraint: silent failure
@@ -43,27 +101,96 @@ The project has been burned by exactly this shape before, and the code says so:
 // it was handed and returns success.
 ```
 
-**Three rules bind every test in this spec, without exception:**
+**Four rules bind every test in this spec, without exception:**
 
 1. **Every acceptance criterion is verified against REAL store-backed state and a REAL registered turn.** A spy, fake, or mock that records the argument it was handed and returns success is **disallowed**. Where a test needs a store, it gets a real `UnifiedStore` rooted at a `t.TempDir()`. Where it needs a turn, it gets a turn registered in `activeTurnStates`.
 2. **Assertions land on observable artefacts, not on invocation.** Files on disk and their bytes; process IDs that are gone; registry entries that no longer resolve; SPA store buckets. Never "the flush function was called".
 3. **Cross-process and store-level guarantees copy the shape of `pkg/entity/store_crossprocess_test.go`** — which re-execs the test binary as real OS processes (`//go:build !windows`, verified present). Performance properties assert a **slope** (doubling concurrency must not double wall-clock), never a machine-specific constant.
+4. **Every negative, exclusion or static gate MUST first prove its search is live.** `[grill C-3]` Rules 1–3 address spies, invocation assertions and cross-process guarantees. They say nothing about the third failure shape this migration is full of: a test whose assertion is *"the search returned zero results"*, which is green whenever the search **itself** is broken — a typo'd pattern, a renamed symbol, a fixture that is never compiled, a drifted file path, a parser that silently returns no nodes. Such a test MUST, in the same run and before its zero-assertion, assert a **stated positive lower bound** — that it located at least K of the occurrences it is supposed to be scanning, where K is written down in this spec so drift is visible in code review. A gate that cannot state a positive lower bound is not a gate and MUST NOT be counted as coverage. This rule is FR-085; the bounds are in "Negative-gate positive lower bounds" below.
 
 **Corollary — distinct ids everywhere.** `pkg/agent/message_parent_real_context_test.go:16-17` already records that its fixture *"happens to make `ToolTranscriptSessionID`"* equal the seeded id, i.e. an existing test would **not** catch a divergence introduced here. Every test written for this spec MUST construct parent and child ids as distinct, non-equal values and assert on **which one** was used.
+
+### Negative-gate positive lower bounds
+
+`[grill C-3]` Every gate below is one of the eleven identified as vacuity-prone. Each row states the positive assertion that MUST run **first**, in the same test. Counts marked *(verified 2026-08-03)* were measured on `feature/plan-swimlane-board` and are the review anchor: if the measured count drifts, the gate is stale and the reviewer must re-derive it, not relax it.
+
+| Test | Gate | Required positive lower bound (assert first, in the same run) |
+|---|---|---|
+| #3 `TestSessionIDTypes_DoNotInterconvert` | compile-fail fixture | The fixture file MUST exist and MUST be located by path; `go build` on it MUST **fail** with a type error naming both types. A missing/unreadable fixture is a **test failure**, never a pass |
+| #9 `TestCacheMu_NoFilesystemInCriticalSection` | AST gate over `cacheMu` regions | MUST locate **≥ 3** `cacheMu` critical sections (`cacheMu` does not exist today — `grep -c cacheMu pkg/session/unified.go` = **0**, verified; W15 creates it, and FR-048 requires it to guard `metaCache` reads, `metaCache` writes and `cacheLoadFailures`). Zero located is a failure |
+| #12 `TestLifecycleDocComments_NoSharedParentChildClaim` | doc-truth grep | MUST locate **all 3** comment blocks by anchor text before asserting content: `pkg/session/lifecycle.go:225-228`, `:572-575`, `pkg/tools/list_jobs_sources.go:311-315` (all three verified present). Locating fewer than 3 is a failure |
+| #17 `TestMetaWriters_WriterIsolationByteLevel` | byte-comparison of "other" files | MUST assert all **4** files exist with **non-zero** length and a **distinct** content hash before any "unchanged" assertion |
+| #19 `TestMetaDocComments_NoSingleFunnelClaim` | doc-truth grep | MUST locate **both** blocks (`pkg/session/unified.go:776-785` — verified: `writeMetaLocked`'s doc comment opens at `:776` and the "single invalidation/update point" sentence is at `:780` — and `:166-181`) before asserting content |
+| #27 `TestInterruptScope_RequiredByCompiler` | compile-fail fixture | As #3 |
+| #29 `TestRoutingSessionID_ConsumerSetIsClosed` | enumerate reads, assert none outside the set | MUST assert it enumerated **≥ K** reads before asserting none is outside the set. **K = 10 post-change**: 7 role-B predicate reads + 3 pre-arm key reads, **plus** every WS-payload stamping site enumerated by U9/U11/U23, which the test MUST also count and assert ≥ 1. See "Eight sites, seven predicates" below for the derivation. Enumerating zero is the D2 safety property silently unenforced |
+| #58 `TestIsDelegateChildEntry_ZeroNonTestReferences` | grep-for-zero | MUST first assert **≥ 60** non-test **Go** references to `ParentSpawnCallID` (measured: **73** across 9 non-test Go files, verified 2026-08-03), proving the file set and the search both work, before asserting zero for `IsDelegateChildEntry`. **The search MUST be restricted to Go source** — see SC-003 |
+| #81 `TestGateTestsInvertedNotDeleted` | file presence | MUST assert all **12** files are present **and** each contains the marker comment `// ADR-057-W22-inverted`. Scope is presence + marker only (`[grill m-3]`) |
+| #82 `TestW22CommitContainsOnlyTests` | commit-shape gate | MUST first resolve the W22 commit by its marker and assert it exists and its file list is **non-empty**; "commit not found" is a **failure**, not a pass |
+| #83 `TestAllFixturesUseDistinctParentChildIDs` | fixture discovery | MUST assert it discovered **≥ 20** fixtures constructing a parent/child id pair before asserting all are distinct. Discovering zero is a failure |
+
+### Eight sites, seven predicates
+
+`[found while verifying; not a grill finding]` v1 said "the **seven** role-B predicates" while citing **eight** line numbers. Both are right, at different times, and the ambiguity mattered because it sets K for test #29. Verified 2026-08-03, each citation resolved to its enclosing function:
+
+| Site | Enclosing function |
+|---|---|
+| `pkg/agent/steering.go:429` | `collectDescendantTurnIDs` |
+| `pkg/agent/steering.go:459` | `InterruptSession` |
+| `pkg/agent/steering.go:519` | `InterruptSessionHard` |
+| `pkg/agent/steering.go:745` | `sessionTurnsStillAlive` |
+| `pkg/agent/steering.go:787` | `hasLiveCriticalDelegate` |
+| `pkg/agent/turn.go:524` | `GetActiveTurnHookForSession` |
+| `pkg/agent/turn.go:564` | `resolveSessionIDByChannelChat` |
+| `pkg/agent/turn.go:607` | `getActiveRootTurnStateForSession` |
+
+**Eight distinct functions today. Seven after W13**, which collapses `InterruptSession` and `InterruptSessionHard` into one entry point (FR-041), removing one read. Wherever this spec says "seven role-B predicates" it means the **post-change** set; FR-015's eight citations are the **pre-change** sites to re-base.
 
 ---
 
 ## Citation corrections (verified 2026-08-03, `feature/plan-swimlane-board`)
 
-ADR-057 v4 demands citation accuracy as the floor (finding m-5). Every ADR citation this spec depends on was re-opened. Three drifted or were under-specified; the corrections below are what this spec uses. **No ADR *decision* changes as a result — these are pointer fixes.**
+ADR-057 v4 demands citation accuracy as the floor (finding m-5). Every ADR citation this spec depends on was re-opened. The corrections below are what this spec uses. **No ADR *decision* changes as a result — these are pointer fixes.**
 
-| ADR-057 says | Verified actual | Impact |
+| Source says | Verified actual | Impact |
 |---|---|---|
-| `unified.go:1194-1196` — `ReadTranscript` silent-empty | `pkg/session/unified.go:1192-1194` (`if os.IsNotExist(err) { return []TranscriptEntry{}, nil }`) | none — same construct, off by 2 |
-| `websocket.go:4254` — "streamed transcript write" | `:4254` is the `ParentSpawnCallID: parentSpawnCallID,` stamp; the `AppendTranscript` call is `pkg/gateway/websocket.go:4256` | W3 must convert `:4256`; W11's provenance retention concerns `:4254` |
-| `session_messaging_wire.go:141-143`, `normalization.go:247-254`, `media/tempdir.go:33-51` (no package prefix) | `pkg/agent/session_messaging_wire.go:141-143` (NOT `pkg/gateway/`), `pkg/tools/normalization.go:247-254`, `pkg/media/tempdir.go:33-51` — all three line ranges exact | file-ownership assignment only |
+| ADR: `unified.go:1194-1196` — `ReadTranscript` silent-empty | `pkg/session/unified.go:1192-1194` (`if os.IsNotExist(err) { return []TranscriptEntry{}, nil }`) | none — same construct, off by 2 |
+| ADR: `websocket.go:4254` — "streamed transcript write" | `:4254` is the `ParentSpawnCallID: parentSpawnCallID,` stamp; the `AppendTranscript` call is `pkg/gateway/websocket.go:4256` | W3 must convert `:4256`; W11's provenance retention concerns `:4254` |
+| ADR: `session_messaging_wire.go:141-143`, `normalization.go:247-254`, `media/tempdir.go:33-51` (no package prefix) | `pkg/agent/session_messaging_wire.go:141-143` (NOT `pkg/gateway/`), `pkg/tools/normalization.go:247-254`, `pkg/media/tempdir.go:33-51` — all three line ranges exact | file-ownership assignment only |
+| **v1 spec: `lifecycle.go:571-575`** (FR-022, BDD-22, US-4 AS-5) vs **AC-13: `:572-575`** | **`:572-575` is correct.** Verified: `matches` opens at `:565`; `:566-568` is the `WorkspaceID` clause; `:569-571` is the `AgentID` clause, whose closing `}` is `:571`; the `ParentAgentID` comment block is exactly `:572-575` | `[grill m-1 — REBUTTED and inverted]` The review asserted AC-13 was one line past the block. It is not: **the spec was**. FR-022/BDD-22/US-4 AS-5 corrected to `:572-575`; AC-13's governing text stands unamended |
+| **v1 spec + ADR W3: `turn.go:1296-1299` "is entirely silent today"** | **False.** `pkg/agent/turn.go:1295-1298` reads `if ts.abandoned.Load() { abandonedWritesSuppressed.Add(1); return }`. The counter is declared `:25`, documented `:21-24` as backing `omnipus_abandoned_writes_suppressed_total`, exported `:44`, and incremented at **seven** sites (`turn.go:866`, `:1097`, `:1172`, `:1226`, `:1297`, `:1496`; `loop.go:7596`). A passing test already exists (`pkg/agent/turn_test.go:221`) | `[grill C-2]` **Only the log line is missing.** FR-003, US-1 AS-4, BDD-04 and test #7 rewritten to assert the WARN record and a counter **delta** |
+| v1 spec: `approvalgrants.go:112-123` | `pkg/security/approvalgrants.go:112-129` — the function body runs to `:129`; the silent `return` on an empty source set is `:118-120` | `[grill C-1]` the silent branch is inside the cited range and is what FR-031 must not trip |
+| v1 spec: `writeMetaLocked` doc comment `:780-785` | The doc comment opens at `:776`; `:780` is the "single invalidation/update point for every mutation path" sentence; the func signature is `:786`. The whole-document cache refresh `us.metaCache[sessionID] = meta.Clone()` is `:798` | `[grill C-5]` FR-059/#19 must locate `:776-785`; FR-084 targets `:798` |
+| v1 spec: "the **seven** role-B predicates" + eight citations | Eight distinct functions pre-change, seven post-W13 | see "Eight sites, seven predicates" |
 
-Everything else this spec cites was re-verified exact, including: `pkg/session/unified.go:161` (single `sync.RWMutex`), `:405-418`/`:410`, `:415-416`, `:439-440`, `:448-460` (the `UnifiedMeta` literal — **no `Owner` field**), `:463`, `:466`, `:472`, `:582`, `:586`, `:614`, `:764`, `:786`, `:810-811`, `:819-823`, `:824-847`, `:848`, `:1247`, `:1388`, `:1397`, `:1494`, `:182`, `:192`; `pkg/fileutil/file.go:97`/`:121` (file and parent-directory `Sync()`); `pkg/session/lifecycle_lock.go:17`/`:29-31`/`:35-39`; `pkg/session/message_inbox.go:139`; `pkg/entity/lock.go:12`; `pkg/session/lifecycle.go:543-563` (exactly five filter fields) and `:571-575` (`matches` refusing `ParentDurableKey`); `pkg/session/daypartition.go:209-223` (`SessionStats`, **9** fields) and **9** `Goal*` + **9** `Loop*` fields in `SessionMeta`, `:332-334` (`IsDelegateChildEntry`); the four filter sites `pkg/gateway/replay.go:298`, `pkg/gateway/rest.go:826` (helper `:823-832`), `pkg/agent/verifier_adjudication.go:406`, `pkg/tools/inspect_session.go:172`; `pkg/agent/subturn.go:916`, `:1020`, `:1032`, `:1034`, `:1051`; `pkg/tools/delegate.go:1105`, `:1106`, `:1117-1122`, `:1123`, `:1966-1968`, `:1973-1979`; `pkg/agent/turn.go:1130`/`:1208`/`:1270`/`:1325`; `pkg/agent/loop.go:6844-6848`; `pkg/agent/cancel.go:233-234`, `:462`, `:487`; `pkg/agent/steering.go:425`/`:449`/`:511`/`:611`/`:665`/`:738`/`:780`; `pkg/agent/admission.go:12-18`; `pkg/security/approvalgrants.go:112-123`; `src/store/chat.ts:1236-1249` (**19** `SESSION_SCOPED_FRAME_TYPES`, counted) and `:2883-2885`. All twelve `*_test.go` files named by W22 exist.
+### Silent-today claims, re-verified
+
+`[grill C-2]` C-2 proved that at least one "X is silent today" claim propagated from the ADR into three places in this spec without being re-checked. Every remaining claim of that shape was re-opened against the tree on 2026-08-03. **Each row below is the evidence a reviewer should demand before accepting the requirement built on it.**
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| `AppendTranscript` returns `nil` after a failed meta read | **TRUE** | `pkg/session/unified.go:819-823` — `slog.Warn(...)` then `return nil` |
+| `fileutil.AppendJSONL` `MkdirAll`s first, so the append is a silent **create** | **TRUE** | `pkg/fileutil/file.go:207-210` |
+| `ReadTranscript` returns `[]TranscriptEntry{}, nil` on `IsNotExist` | **TRUE** | `pkg/session/unified.go:1192-1194` |
+| `Inherit` returns silently when the parent holds no grants | **TRUE** | `pkg/security/approvalgrants.go:118-120`; documented as intended at `:110-111` |
+| `ts.abandoned` suppression is silent | **FALSE — already counted** | `pkg/agent/turn.go:1297`; see the row above |
+| `createSessionLocked` constructs `UnifiedMeta` with **no** `Owner` field | **TRUE** | `pkg/session/unified.go:448-460` — the literal sets `ID`, `AgentID`, `AgentIDs`, `ActiveAgentID`, `Status`, `Channel`, `CreatedAt`, `UpdatedAt`, `Type` only |
+| `createSessionLocked` does `os.MkdirAll` with no existence check | **TRUE** | `:463` — idempotent and silent; this is the child-id-collision hazard (FR-096) |
+| `writeMetaLocked` refreshes the **whole** cache entry | **TRUE** | `:798` `us.metaCache[sessionID] = meta.Clone()` |
+| `ListSessions` runs entirely under `us.mu.Lock()` and says why | **TRUE** | `:1240-1246` doc comment, `:1248` `us.mu.Lock()` |
+| `cancelAllPendingForSession` matches by **exact** session-id equality | **TRUE** | `pkg/gateway/approvals.go:419`; the field is `:85`, set at `:213`/`:232` |
+| `CloseSession` has **no** child-turn-terminal call site | **TRUE** | defined `pkg/agent/session_end.go:32`; every non-test call site is `pkg/gateway/websocket.go:1038` ("explicit"), `pkg/agent/loop.go:1048`/`:1064` ("idle"), `pkg/agent/session_end.go:865` ("bootstrap") |
+| `RateLimitPayload` has no `SessionID` field | **TRUE** | `pkg/agent/events.go:525-533` — `Scope`, `Resource`, `PolicyRule`, `RetryAfterSeconds`, `AgentID`, `ChatID`, `Tool` |
+| `replay_done` is absent from the `WsFrameType` enum on both sides | **TRUE** | tree-wide it appears **only** at `src/store/chat.ts:1238`; zero hits in `contracts/`, `pkg/api/generated/`, `pkg/` |
+| `AdmissionController` does not gate subagent spawn | **TRUE** | `pkg/agent/admission.go:12-18`, verbatim: *"Subagent spawn and task-executor dispatch paths are NOT gated"* |
+| `concurrencySem` is set only on a child | **TRUE** | `pkg/agent/subturn.go:1051` is the only assignment; the acquire guard is `:607` |
+| There is **no pagination at any layer** | **TRUE** | `pkg/session/unified.go:1247` (no params), `pkg/agent/loop.go:5046` (no params), `pkg/gateway/rest.go:758-812` (reads only `agent_id`, `type`, `include_verifier`), `src/lib/api.ts:1379-1388` (`fetchSessions(agentId?, type?, opts?)` — no limit/offset) |
+| Sidebar shows only the 9 most recent by recency | **TRUE** | `src/components/layout/Sidebar.tsx:456-457` — `const maxVisible = 9` / `.slice(0, maxVisible)` |
+| `SearchModal` renders the session list unvirtualized | **TRUE** | `src/components/search/SearchModal.tsx:363` fetches the full list, `:687` `groups.map(...)` renders it with no windowing |
+| `SESSION_SCOPED_FRAME_TYPES` has exactly 19 members | **TRUE** | `src/store/chat.ts:1236-1249`, counted |
+| `subturn.go:916` passes the **parent's** transcript id to `Inherit` | **TRUE** | `al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)` |
+| `loop.go:8617` reads the grant under `ts.transcriptSessionID` | **TRUE** | `approved := al.ApprovalGrants().IsAllowed(ts.transcriptSessionID, ts.agentID, toolName)`; the 300 s fallthrough is `:8630-8631` |
+
+Everything else this spec cites was re-verified exact, including: `pkg/session/unified.go:161` (single `sync.RWMutex`), `:405-418`/`:410`, `:415-416`, `:439-440`, `:448-460` (the `UnifiedMeta` literal — **no `Owner` field**), `:463`, `:466`, `:472`, `:582`, `:586`, `:614`, `:764`, `:786`, `:810-811`, `:819-823`, `:824-847`, `:848`, `:1247`, `:1388`, `:1397`, `:1494`, `:182`, `:192`; `pkg/fileutil/file.go:97`/`:121` (file and parent-directory `Sync()`); `pkg/session/lifecycle_lock.go:17`/`:29-31`/`:35-39`; `pkg/session/message_inbox.go:139`; `pkg/entity/lock.go:12`; `pkg/session/lifecycle.go:543-563` (exactly five filter fields) and `:572-575` (`matches` refusing `ParentDurableKey` — **corrected from `:571-575`**, see the table above); `pkg/session/daypartition.go:209-223` (`SessionStats`, **9** fields) and **9** `Goal*` + **9** `Loop*` fields in `SessionMeta`, `:332-334` (`IsDelegateChildEntry`); the four filter sites `pkg/gateway/replay.go:298`, `pkg/gateway/rest.go:826` (helper `:823-832`), `pkg/agent/verifier_adjudication.go:406`, `pkg/tools/inspect_session.go:172`; `pkg/agent/subturn.go:916`, `:1020`, `:1032`, `:1034`, `:1051`; `pkg/tools/delegate.go:1105`, `:1106`, `:1117-1122`, `:1123`, `:1966-1968`, `:1973-1979`; `pkg/agent/turn.go:1130`/`:1208`/`:1270`/`:1325`; `pkg/agent/loop.go:6844-6848`; `pkg/agent/cancel.go:233-234`, `:462`, `:487`; `pkg/agent/steering.go:425`/`:449`/`:511`/`:611`/`:665`/`:738`/`:780`; `pkg/agent/admission.go:12-18`; `pkg/security/approvalgrants.go:112-129` (**corrected from `:112-123`**); `src/store/chat.ts:1236-1249` (**19** `SESSION_SCOPED_FRAME_TYPES`, counted) and `:2883-2885`. All twelve `*_test.go` files named by W22 exist.
 
 **`producing_session_id` (W5) is genuinely new**: `rg -c producing_session_id contracts/ src/ pkg/` returns zero matches tree-wide.
 
@@ -140,6 +267,8 @@ Spans four clusters: **agent execution** (`pkg/agent`), **session storage** (`pk
 
 An engineer verifying any other story in this spec needs the transcript primitive to be honest. Today `AppendTranscript` against an unknown session id creates an orphan directory, writes the line, and returns `nil` (`pkg/session/unified.go:814` → `pkg/fileutil/file.go:207-210`, then `:819-823`). Until that changes, every acceptance criterion in this document is measured against a primitive that reports success for a lost write.
 
+> `[grill C-2]` **v1's Acceptance Scenario 4 was measuring nothing.** It asserted that the `ts.abandoned` suppression "emits a counted, logged signal rather than returning silently" — but the count already exists (`turn.go:1297`), so the test written from it was green against the unmodified tree, **inside the P0 story this spec designates as the gate for every other measurement**. AS-4 now names the log record as the new artefact and the counter as a delta. AS-6 is new: it makes binding rule 4 a property of this story, so the gate story also gates the *gates*.
+
 **Why this priority**: It is the gate. ADR-057 §10 consequence 3 states it directly — "AC-1 comes first and gates the rest." Landing any other work item first means measuring it with a broken instrument.
 
 **Independent Test**: Call the strict primitive with a freshly generated UUID against a real `UnifiedStore` on `t.TempDir()`. Assert a non-nil error and assert `os.Stat` on the would-be directory returns `IsNotExist`. No other work item need exist.
@@ -149,8 +278,9 @@ An engineer verifying any other story in this spec needs the transcript primitiv
 1. **Given** a real `UnifiedStore` with no session `X`, **When** `AppendTranscriptStrict(X, entry)` is called, **Then** a non-nil error is returned **and** no directory `<baseDir>/X` exists on disk.
 2. **Given** a real `UnifiedStore` with an existing session `Y`, **When** `AppendTranscriptStrict(Y, entry)` is called, **Then** it returns nil and `transcript.jsonl` grows by exactly one line.
 3. **Given** a turn whose transcript store is wired and whose session id does not resolve, **When** any of the four `pkg/agent/turn.go` writers runs, **Then** the error is surfaced as a counter increment and a WARN naming the session id.
-4. **Given** a turn marked `ts.abandoned`, **When** a transcript write is suppressed, **Then** the suppression emits a counted, logged signal rather than returning silently (`pkg/agent/turn.go:1296-1299` is silent today).
-5. **Given** the compiled tree, **When** a distinct-type check runs, **Then** `SessionID` and `RoutingSessionID` are separate named types that do not interconvert implicitly.
+4. **Given** a turn marked `ts.abandoned`, **When** a transcript write is suppressed, **Then** a WARN naming the session id and the suppression reason is emitted **and** `AbandonedWritesSuppressed()` increases by exactly one across the call. `[grill C-2]` **The counter already exists and already increments** — `pkg/agent/turn.go:1297`, declared `:25`, exported `:44`, seven increment sites, existing coverage at `pkg/agent/turn_test.go:221`. The new artefact is the **log record**; the counter is asserted as a **delta**, never as mere existence.
+5. **Given** the compiled tree, **When** a distinct-type check runs, **Then** `SessionID` and `RoutingSessionID` are separate named types that do not interconvert implicitly, and the compile-fail fixture is proven present before its failure is asserted (binding rule 4).
+6. **Given** the merged tree, **When** any negative, exclusion or static gate in this spec's suite runs, **Then** it first asserts its stated positive lower bound and fails if its search located fewer occurrences than that bound. `[grill C-3]`
 
 ---
 
@@ -166,6 +296,7 @@ A delegated child today carries two identity namespaces: its own `childID` (`pkg
 
 1. **Given** a parent chat session and a delegation, **When** the child turn spawns, **Then** a session directory named exactly `childID` exists with a `meta.json`, created via the exact-id path (`pkg/session/unified.go:441`, precedent caller `:582`).
 2. **Given** a parent session whose `meta.Owner` is a non-empty principal, **When** the child spawns, **Then** the child's `meta.Owner` equals the parent's verbatim, and `WithSessionOwner` installs inside the child turn (`pkg/agent/loop.go:6844-6848` guards on `meta.Owner != ""`).
+2b. **Given** that same owner copy, **When** its lock acquisitions are recorded, **Then** the parent's shard is taken, the `Owner` is read, the parent's shard is **released**, and only then is the child's shard taken — two session shards are never held simultaneously. `[grill C-6]` Verified: `createSessionLocked` (`pkg/session/unified.go:441-478`) constructs `UnifiedMeta` with **no `Owner` field** (`:448-460`), so the value can only come from reading the **parent's** meta inside the operation that creates the **child's** session. Under W15 that is one operation touching two shards, which v1's own FR-050 flatly forbade. Honouring the prohibition by taking both anyway would acquire in **hash** order (`shard(child)`, `shard(parent)`), inverting against `ClearAll`/`RetentionSweep`'s **index**-order acquisition — the exact defect ADR-057 names as R-19. Releasing between the two accepts a benign TOCTOU on a field that is immutable after creation.
 3. **Given** the child's `processOptions`, **When** they are constructed, **Then** `NoHistory` is absent (today `true` at `pkg/agent/subturn.go:1032`) and `TranscriptSessionID == childID`.
 4. **Given** a child session's meta, **When** it is read, **Then** `ParentSessionID` names the direct parent and the session type is the subordinate value.
 5. **Given** a child turn, **When** `steer`/`respond`/`cancel`/`peek`/`inbox`/`follow_up` are invoked, **Then** each takes the same single id it takes today, because `delegateSessionID == sessionKey == transcriptSessionID`.
@@ -192,7 +323,7 @@ The SPA buckets frames **strictly** by the frame's own `session_id`, with no cha
 
 ### User Story 4 — The parent→child edge is durable and queryable (Priority: P0)
 
-A Stop must find a child that is no longer in memory. `OwnerScopeID` cannot serve: it is `""` for every direct child of a chat turn (`pkg/tools/delegate.go:1117-1122`; stated as contract at `pkg/session/lifecycle.go:141-143` and `:229`). `ParentDurableKey` is stamped unconditionally (`pkg/tools/delegate.go:1106`) and becomes a genuine strict-direct-parent edge under D1 — but `LifecycleFilter` has exactly five fields and `matches` explicitly refuses to match on it (`pkg/session/lifecycle.go:543-563`, `:571-575`), and `List` has no index.
+A Stop must find a child that is no longer in memory. `OwnerScopeID` cannot serve: it is `""` for every direct child of a chat turn (`pkg/tools/delegate.go:1117-1122`; stated as contract at `pkg/session/lifecycle.go:141-143` and `:229`). `ParentDurableKey` is stamped unconditionally (`pkg/tools/delegate.go:1106`) and becomes a genuine strict-direct-parent edge under D1 — but `LifecycleFilter` has exactly five fields and `matches` explicitly refuses to match on it (`pkg/session/lifecycle.go:543-563`, `:572-575` — **line range corrected in v2, see Citation corrections**), and `List` has no index.
 
 **Why this priority**: Under D3 the lifecycle record becomes the **only** durable cancel edge. A missing store means a Stop cancels nothing, with no error.
 
@@ -204,7 +335,7 @@ A Stop must find a child that is no longer in memory. `OwnerScopeID` cannot serv
 2. **Given** a session with N descendants, **When** the walk runs, **Then** its cost is O(descendants) via the parent index, not O(all sessions ever) per depth level (`pkg/session/lifecycle.go:617-636` is a full-directory scan plus full parse today).
 3. **Given** a `DelegateTool` with no lifecycle store wired (`pkg/agent/session_messaging_wire.go:141-143` makes it optional today), **When** a delegation is attempted, **Then** it is **refused** with an operator-visible error, never a silent skip.
 4. **Given** `tools.delegate.require_parent_agent_id=false`, **When** a child is minted with a blank `ParentAgentID`, **Then** the child is still reachable by the `ParentDurableKey` walk and a Stop cancels it.
-5. **Given** the merged tree, **When** the three doc comments at `pkg/session/lifecycle.go:225-228`, `:571-575` and `pkg/tools/list_jobs_sources.go:311-315` are read, **Then** none of them describes `ParentDurableKey` as shared between parent and children.
+5. **Given** the merged tree, **When** the three doc comments at `pkg/session/lifecycle.go:225-228`, `:572-575` and `pkg/tools/list_jobs_sources.go:311-315` are read, **Then** none of them describes `ParentDurableKey` as shared between parent and children — **and** the gate asserts all three blocks were **located** before asserting their content (binding rule 4).
 
 ---
 
@@ -220,6 +351,7 @@ Five shipped safety mechanisms were built specifically to exploit the shared tra
 
 1. **Given** a real root turn and a real live child turn, **When** a Stop is issued, **Then** PHASE A computes the live subtree once and PHASE B and PHASE C consume that set rather than re-scanning.
 2. **Given** a Stop that reached a child, **When** the `turn_canceled` audit entry is read, **Then** `descendants_canceled` (`pkg/agent/cancel.go:376`) is non-empty and names the child.
+2b. **Given** a chat with descendants at depths 1, 2 **and 3**, **When** a Stop is issued on the chat, **Then** `descendants_canceled` names **all three** — not merely the depth-1 child. `[grill M-12]` FR-030 says "every descendant"; v1 asserted that property only in the post-implementation evaluation set, and **that cannot serve as acceptance evidence for an FR** because the implementing agent never sees it. This scenario is deliberately part of the visible plan.
 3. **Given** a live `Critical:true` async delegate and an orphaned root, **When** the ADR-045 watchdog evaluates its fire predicate, **Then** it does **not** fire, and it does fire once the delegate finishes.
 4. **Given** a child that started a background `bash`, **When** a chat-level Stop is issued, **Then** the real PID is gone; **and** a sibling's background shell survives.
 5. **Given** a `delegate action=cancel` on that child, **When** it executes, **Then** the child's background shells are killed (today `InterruptBySessionKey` never calls `KillBackgroundSessions` at all — the only non-test call site tree-wide is `pkg/agent/cancel.go:234`).
@@ -229,18 +361,25 @@ Five shipped safety mechanisms were built specifically to exploit the shared tra
 
 ### User Story 6 — Approvals inherit to the child and are torn down with it (Priority: P0)
 
-`Inherit` writes under `{sessionID, agentID}` (`pkg/security/approvalgrants.go:112-123`), written at spawn with the parent's transcript id (`pkg/agent/subturn.go:916`) and read inside the child with the child's (`pkg/agent/loop.go:8617`, `:8630-8631`). Under D1 without a decision, every inherited grant misses, the child falls through to `CheckGrantOrRequestApproval` and blocks on a human for up to 300 s per tool call — with the delegate span hidden from the thread unless verbose chat is on (`src/lib/toolVisibility.ts:218-223`). The symptom is a delegation that hangs for five minutes with no prompt and no explanation.
+`Inherit` writes under `{sessionID, agentID}` (`pkg/security/approvalgrants.go:112-129`), written at spawn with the parent's transcript id (`pkg/agent/subturn.go:916`) and read inside the child with the child's (`pkg/agent/loop.go:8617`, `:8630-8631`). Under D1 without a decision, every inherited grant misses, the child falls through to `CheckGrantOrRequestApproval` and blocks on a human for up to 300 s per tool call — with the delegate span hidden from the thread unless verbose chat is on (`src/lib/toolVisibility.ts:218-223`). The symptom is a delegation that hangs for five minutes with no prompt and no explanation.
+
+> `[grill C-1]` **The obvious fix is the bug.** v1's FR-031 said *"`Inherit`'s first argument MUST become the child's own session id"*. Verified: `Inherit(sessionID, parentAgentID, childAgentID)` uses **one** `sessionID` for **both** the source lookup (`grants[{sessionID, parentAgentID}]`, `:118`) and the destination write (`grants[{sessionID, childAgentID}]`, `:122`). Passing the child's id makes the **source** lookup miss — the parent's grants live under the parent's key — so `!ok` fires at `:118-120` and the function returns having done nothing. That path is a **documented** silent no-op (`:110-111`: *"No-op on … or when the parent currently holds no grants for this session"*). The child then falls through exactly as if nothing had been inherited: `IsAllowed(ts.transcriptSessionID = childID, …)` returns false at `loop.go:8617`, `CheckGrantOrRequestApproval` blocks at `:8630-8631`, and the delegation hangs for 300 s with its span hidden. **That is, verbatim, the failure this story exists to prevent.** The re-key is a two-key operation and this spec now says so (FR-031, `InheritFrom`). A test that seeds the grant under the child key to begin with passes green while production hangs — which is why AS-1 now requires the "absent before" assertion.
+
+> `[grill M-6]` **The grant store and the pending-approval registry are different stores and v1 only re-keyed one.** `pkg/gateway/approvals.go` carries its own `SessionID` (`:85`, set at `:213`/`:232`) and matches by **exact equality** at `:419`. v1's FR-032 required `cancelAllPendingForSession` to run over the descendant set — which only makes sense if each descendant's entries carry that descendant's own id, and **no requirement said so**. Worse, `tool_approval_required` is in `SESSION_SCOPED_FRAME_TYPES` (`src/store/chat.ts:1240`), so under FR-012 its `session_id` becomes the **routing** key while the registry entry is keyed by the **child** — and v1 specified no route back. AS-5 and AS-6 close both halves.
 
 **Why this priority**: The failure direction is safe but the availability impact is severe and invisible.
 
-**Independent Test**: With a standing grant on the parent, run one delegation and assert the child executes the granted tool with no approval prompt and no wait.
+**Independent Test**: With a standing grant on the parent, run one delegation and assert the child executes the granted tool with no approval prompt and no wait — having first asserted the grant was **not** resolvable under the child's key before the spawn.
 
 **Acceptance Scenarios**:
 
-1. **Given** a standing grant on the parent for tool `T`, **When** a child executes `T`, **Then** no approval prompt is raised and no 300 s wait occurs.
+1. **Given** a standing grant on the parent for tool `T`, and parent/child session ids that are **distinct**, **When** a child executes `T`, **Then** no approval prompt is raised and no 300 s wait occurs — **and** a pre-spawn lookup under `{childSessionID, childAgentID}` returned absent, proving the grant arrived by inheritance rather than by fixture.
 2. **Given** the grant now keyed `{childSessionID, childAgentID}`, **When** the child session terminates, **Then** the grant set is gone — the grant does not outlive the child.
 3. **Given** a pending approval inside a child, **When** a chat-level Stop is issued, **Then** the registry entry is gone, its timer is stopped, and the child's goroutine unblocks.
-4. **Given** a terminated child turn, **When** teardown runs, **Then** `CloseSession` has run for the child: its grant set, `loadedTools` bucket and `recallSpans` entries are gone (today no call site exists on any child/delegate path).
+4. **Given** a terminated child turn, **When** teardown runs, **Then** `CloseSession` has run for the child: its grant set, `loadedTools` bucket and `recallSpans` entries are gone (today no call site exists on any child/delegate path — verified: the only non-test callers are `websocket.go:1038`, `loop.go:1048`/`:1064`, `session_end.go:865`).
+5. **Given** a child raising a real approval request, **When** the pending-approval registry entry is inspected, **Then** its `SessionID` is the **child's own** session id, not the chat's. `[grill M-6]`
+6. **Given** that pending approval and a client that **approves** it, **When** the approve response arrives carrying the routing `session_id`, **Then** it resolves to the child's entry **by approval id** and the child's tool call proceeds — the round trip does not depend on the frame's `session_id` matching the registry's. `[grill M-6]`
+7. **Given** a spawn where the parent genuinely holds no grants, **When** `InheritFrom` runs, **Then** the no-op is logged and counted rather than returning silently, so a future re-key cannot regress into C-1 again. `[grill C-1]`
 
 ---
 
@@ -250,12 +389,14 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 
 **Why this priority**: High value, low risk under greenfield, but strictly downstream of D1 landing; deleting the filter before D1 would un-hide narration with nothing gained.
 
-**Independent Test**: Assert `IsDelegateChildEntry` has zero non-test references and that after one delegation the **parent's** `transcript.jsonl` contains no child entry — asserted on the file, so the property cannot be satisfied by a re-added filter.
+**Independent Test**: Assert `IsDelegateChildEntry` has zero non-test references and that after one delegation the **parent's** `transcript.jsonl` contains no child entry **while the child's own `transcript.jsonl` gained exactly the expected non-zero count** — both asserted on the files, in one run.
+
+> `[grill M-9]` **v1's flagship AC-18(b) assertion was satisfied by total child-transcript loss.** "The parent's file contains no entry produced by the child" is trivially true of a child that wrote **nothing, anywhere** — and that is the *expected* outcome of this spec's own error handling: FR-002 surfaces a transcript-write failure as a counter increment plus a WARN, not a hard failure. If the child's session mint is broken (the C-6 owner copy, a shard deadlock, a `CreateSessionWithID` bug), every child write errors, gets WARN-logged, the turn proceeds — and the test goes green. v1's positive counterpart existed (AS-3 / BDD-37 / test #57) but sat in a **different test in a different unit**, so a partial implementation passed the flagship and deferred the counterpart. AS-2 now requires both halves in the same run.
 
 **Acceptance Scenarios**:
 
-1. **Given** the merged tree, **When** a repo-wide reference check runs, **Then** `IsDelegateChildEntry` has zero references outside tests and none of the four read boundaries filters on `ParentSpawnCallID`.
-2. **Given** one delegation, **When** the parent's `transcript.jsonl` is read from disk, **Then** it contains no child entry at all.
+1. **Given** the merged tree, **When** a repo-wide reference check runs, **Then** `IsDelegateChildEntry` has zero references outside tests and none of the four read boundaries filters on `ParentSpawnCallID` — **and** the check first proves its search is live by locating the ≥ 60 non-test Go references to `ParentSpawnCallID` (binding rule 4; measured 73).
+2. **Given** one delegation with distinct parent and child ids, **When** both `transcript.jsonl` files are read from disk **in the same run**, **Then** the parent's contains zero entries produced by the child **and** `<baseDir>/<childID>/transcript.jsonl` contains exactly the expected non-zero entry count with the expected content. `[grill M-9]`
 3. **Given** the child's own session, **When** `inspect_session` and `GET /api/v1/sessions/{childID}` are called, **Then** both return the full transcript, unfiltered.
 4. **Given** a child's own transcript entries, **When** they are read, **Then** `ParentSpawnCallID` is still stamped as provenance and is read by the drill-down surface.
 5. **Given** an adjudication window, **When** the verifier renders it (`pkg/agent/verifier_adjudication.go:403`), **Then** it receives the adjudicated session's own entries and nothing else.
@@ -310,7 +451,7 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 1. **Given** a completed synchronous delegation, **When** `delegate action=status` is called, **Then** a non-empty activity snapshot is returned.
 2. **Given** a completed asynchronous delegation, **When** `delegate action=status` is called, **Then** a non-empty activity snapshot is returned.
 3. **Given** a delegation whose activity genuinely is empty, **When** `recentActivityLines` returns nothing, **Then** the empty path is logged rather than returning silently.
-4. **Given** N completed delegations, **When** the process continues, **Then** `t.tasks` and `t.sessionIndex` do not retain all N entries indefinitely.
+4. **Given** a stated retention bound `C` and `N ≫ C` completed delegations whose tasks have reached a terminal state and whose last `status` read is older than the stated TTL `T`, **When** the eviction pass has run, **Then** `len(t.tasks) ≤ C` **and** `len(t.sessionIndex) ≤ C`. `[grill M-10]` v1 said only "do not retain all N", which is satisfied by deleting exactly one entry, and left "reaped" undefined so two implementers would build two different things. The trigger, the TTL and the bound are now all named (FR-045, FR-087).
 
 ---
 
@@ -328,7 +469,9 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 2. **Given** an in-flight `NewSession` on session A, **When** `ListSessions` is called, **Then** it does not block on A.
 3. **Given** a streaming append loop on session A, **When** session B is created, **Then** A's inter-token latency is unaffected.
 4. **Given** concurrent create/append/`SetMeta`/`ListSessions`/`DeleteSession` on overlapping and disjoint ids, **When** run under `-race`, **Then** the run is clean; `ClearAll`/`RetentionSweep` interleaved with per-session writes neither deadlock nor drop a session.
-5. **Given** the merged tree, **When** `cacheMu` critical sections are inspected, **Then** none contains an `os.*` or `fileutil.*` call, and lock order is only ever `sessionLock(id)` → `cacheMu`.
+5. **Given** the merged tree, **When** `cacheMu` critical sections are inspected, **Then** none contains an `os.*` or `fileutil.*` call, and lock order is only ever `sessionLock(id)` → `cacheMu` — **and** the gate first asserts it located ≥ 3 such sections (binding rule 4; `cacheMu` does not exist today, so a gate that finds zero is finding a bug, not a pass).
+6. **Given** `ListSessions` running concurrently with `DeleteSession` on a session the reconcile pass just installed, **When** both complete, **Then** the result honours the **stated** consistency model — a best-effort snapshot that MAY omit a session deleted during the call and MUST NOT return a session whose directory was already gone before the call began, and MUST NOT panic, deadlock or return a partially-composed meta. `[grill M-14]` v1 split `ListSessions` into per-session reconcile plus a `cacheMu.RLock` snapshot (FR-051) and stated no consistency model anywhere — not in the FRs, not in the Behavioral Contract, not in Edge Cases. Today's whole-method `us.mu.Lock()` (`pkg/session/unified.go:1240-1248`) makes the question moot and its doc comment says exactly why; splitting it makes the question real.
+7. **Given** a multi-session operation (the `CreateSessionWithID` owner copy), **When** its lock acquisitions are recorded by an instrumented lock wrapper, **Then** at no point are two session shards held simultaneously, and `ClearAll`/`RetentionSweep` acquire in **index** order. `[grill C-6]` `-race` is not a lock-order checker; it detects a lock-order inversion only if that particular run happens to deadlock.
 
 ---
 
@@ -348,7 +491,8 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 4. **Given** a session directory with **no** `meta.json`, **When** it is loaded, **Then** `readUnifiedMeta` returns an error and `GET /api/v1/sessions/{id}` 404s.
 5. **Given** a present but truncated/corrupt `goal.json`, **When** it is loaded, **Then** an error surfaces for that group rather than silently composing a zero goal.
 6. **Given** the same logical state before and after the split, **When** `UnifiedMeta` is marshalled and every REST/WS payload is rendered, **Then** the bytes are identical and `make verify-contracts` is unaffected.
-7. **Given** the merged tree, **When** `writeMetaLocked`'s (`:780-785`) and `metaCache`'s (`:166-181`) doc comments are read, **Then** neither asserts a single whole-document write funnel.
+7. **Given** the merged tree, **When** `writeMetaLocked`'s (`:776-785`) and `metaCache`'s (`:166-181`) doc comments are read, **Then** neither asserts a single whole-document write funnel — **and** the gate first asserts both blocks were located (binding rule 4).
+8. **Given** K transcript appends with no flush, followed by a `/goal set` and a `Status` transition, **When** a flush is then forced, **Then** `stats.json` equals K's exact deltas — the goal writer and the status writer each mutated **only their own field group** in the cached `*UnifiedMeta` and did **not** replace the cache entry wholesale. `[grill C-5]` This is the missing negative case for AC-22(b). This spec rejects Alternative F because a flusher over a fused document "would clobber goal/loop/status or re-serialise everything" — true of the **file**, false of the **cache**, and W24 puts the counters in the cache (FR-061). `writeMetaLocked` today ends with `us.metaCache[sessionID] = meta.Clone()` (`pkg/session/unified.go:798`), a whole-document refresh documented at `:780` as "the single invalidation/update point for every mutation path". If any of the four new targeted writers keeps that shape — the obvious translation — a `/goal` round replaces the cache entry with a meta composed from **disk**, discarding every unflushed in-memory `Stats.*` delta. Counters silently go backwards and the only v1 test of AC-22(b) (#21) is single-goroutine, single-writer-family, and cannot see it.
 
 ---
 
@@ -358,16 +502,19 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 
 **Why this priority**: Directly downstream of US-12; must not land without it.
 
-**Independent Test**: Burst appends within one flush interval against a real store; assert `stats.json`'s mtime and bytes do not change while `transcript.jsonl` grows by exactly one line per append.
+**Independent Test**: Burst appends within one flush interval against a real store; assert `stats.json`'s mtime and bytes do not change while `transcript.jsonl` grows by exactly one line per append — **then, in the same test, wait past the interval and assert `stats.json` becomes current**, so "unchanged" cannot mean "never written".
+
+> `[grill C-4]` **The load-bearing property of W24 had zero coverage.** Trace v1's four throttle tests against a store whose periodic flusher goroutine is **never started** and where only the forced flush points work: #20 asserts `stats.json` is *unchanged* during a burst — satisfied by never writing it at all ✅; #21 drives the flush explicitly (AC-22 permits an injected fake clock), so the production wiring is never exercised ✅; #22 tests exactly the four forced paths that still work ✅; #74's dataset row 7 expected "behind by ≤ K", which a store that flushed **nothing** satisfies exactly ✅. Four green tests, dead feature. Under the real production shape — a long-lived gateway that never calls `Close` — a broken flusher means `stats.json` is stale for the entire process lifetime. AS-7 asserts the unforced path directly.
 
 **Acceptance Scenarios**:
 
-1. **Given** a burst of appends inside one flush interval, **When** the burst completes, **Then** `stats.json`'s mtime and bytes are unchanged and `transcript.jsonl` has exactly one new line per append.
+1. **Given** `stats.json` already on disk from a prior forced flush with known bytes and mtime, **When** a burst of K appends occurs inside one flush interval, **Then** `stats.json`'s mtime and content hash are unchanged and `transcript.jsonl` has exactly one new line per append. `[grill m-2]` The precondition is explicit: under W23 `stats.json` is written lazily, so for a fresh session whose only activity is transcript appends it may not exist when the burst starts, and "unchanged" over a non-existent path is undefined and would be implemented three different ways.
 2. **Given** the flush interval has elapsed, **When** `stats.json` is read, **Then** it matches the counters implied by the appended entries **exactly** — no lost or double-counted delta.
 3. **Given** each forced flush point in turn — a `SetMeta` carrying `Status`, `DeleteSession` (`:1397`), `UnifiedStore.Close` (`:1388`), and the child `CloseSession` — **When** it fires, **Then** `stats.json` is current and re-opening the store reads back the exact counters.
 4. **Given** a `/goal` round, a `/loop` tick, a `Status` transition and a `Title` change, **When** each call returns, **Then** its value is on disk **immediately**, with no flush interval elapsed.
 5. **Given** two sessions where B streamed most recently, **When** `ListSessions` is called with no flush in between, **Then** B sorts ahead of A.
-6. **Given** the process is killed mid-interval, **When** the store is re-opened, **Then** the counters are behind by at most that interval's appends and the transcript is complete.
+6. **Given** the process is killed mid-interval **after a run spanning ≥ 2 flush intervals**, **When** the store is re-opened, **Then** the counters are behind by at most that interval's appends, the flushed prefix is **non-zero**, and the transcript is complete. `[grill C-4]` The two-sided bound matters: "behind by ≤ K" alone is satisfied by a store that flushed nothing.
+7. **Given** a single append and **no other action whatsoever** — the store is never closed, no `SetMeta` runs, no `DeleteSession`, no `CloseSession`, no test-driven tick — **When** more than one flush interval elapses on the real (or advanced fake) clock, **Then** `stats.json` on disk is current. `[grill C-4]` This is the only assertion in the story that fails when the periodic flusher is never started, and it is therefore the only one that proves W24 exists.
 
 ---
 
@@ -382,9 +529,9 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 **Acceptance Scenarios**:
 
 1. **Given** a hidden delegation and verbose chat **disabled**, **When** the drill-down surface is opened by child id, **Then** it is reachable and populated using only `GET /api/v1/sessions/{childID}`.
-2. **Given** a store with more sessions than one page, **When** `GET /api/v1/sessions` is called, **Then** it paginates through all four layers.
+2. **Given** a store with more sessions than one page, **When** `GET /api/v1/sessions` is called with paging parameters, **Then** each of the four named layers honours them: `UnifiedStore.ListSessions` (`pkg/session/unified.go:1247`, U6), `AgentLoop.ListAllSessions` (`pkg/agent/loop.go:5046`, U9), `restAPI.listSessions` (`pkg/gateway/rest.go:758-812`, U18) and `fetchSessions` (`src/lib/api.ts:1379-1388`, U12). `[grill M-1]` v1 assigned W16 to U12 + U18 only, leaving the store and loop layers with no owner, so FR-068 could not be delivered as scoped. Verified: **none of the four takes a limit or offset today.**
 3. **Given** a 24-way fan-out under one parent chat, **When** the sidebar renders, **Then** the parent chat is still shown.
-4. **Given** the drill-down view, **When** it filters, **Then** it filters on `producing_session_id`, and no criterion depends on `subagent_message`/`subagent_state`.
+4. **Given** the drill-down view, **When** it filters, **Then** it filters on `producing_session_id`, and a static gate asserts zero non-test references to `subagent_message`/`subagent_state` in `src/`. `[grill M-11]` v1's FR-047 ("no requirement MAY depend on…") was a property over all requirements that a single E2E test cannot establish; it is restated as something a gate can actually check.
 
 ---
 
@@ -394,13 +541,18 @@ Under D1 a child's entries are written to the child's own `transcript.jsonl`, so
 
 **Why this priority**: Required **by this ADR** — D1 turns every delegation into an fsync-bound session create, so an ungated root fan-out becomes a self-inflicted DoS. Not required for correctness of any other story.
 
-**Independent Test**: With the gate configured to N, attempt N+1 concurrent root-level delegations and assert the N+1th is refused rather than queued behind the store lock.
+**Independent Test**: With `agents.defaults.subturn.max_concurrent` set to N, attempt N+1 concurrent root-level delegations and assert the N+1th is refused rather than queued behind the store lock.
+
+> `[operator 4]` **The cap reuses the existing per-agent knob; no new config key.** `[grill M-7 — corrected, and partly rebutted]` The review argued AC-10's "refuses **the 25th**" (implying a cap of 24) is unrunnable if the cap is the existing `maxConcurrent`, because the UAT recorded that as **16**. Verified, and the review's premise does not hold: **there are two knobs, and only one is clamped.** `getSubTurnConfig` (`pkg/agent/subturn.go:64-69`) reads `agents.defaults.subturn.max_concurrent` (`pkg/config/config.go:1304`) **unclamped** whenever it is > 0, and falls back to `Performance.EffectiveMaxParallelAgents()` — the value `clampParallelExplicit` hard-caps at 16 (`pkg/config/config.go:459-468`) — only when it is ≤ 0. The 16 the UAT observed was that fallback. Setting `subturn.max_concurrent = 24` satisfies AC-10's 24/25 topology **literally**, so AC-10 needs no amendment and this spec needs no second config key. FR-095 pins the cap to the unclamped key and forbids sourcing it from the clamped one.
+
+> `[operator 6]` **"Operator-visible" means a tool error plus `slog.Error`.** Mirroring the shape already in the tree at `pkg/tools/delegate.go:1150-1159` — an `slog.Error` naming the ids, then an `ErrorResult(...)` returned to the calling agent. **No separate user-facing notification.**
 
 **Acceptance Scenarios**:
 
-1. **Given** a configured root-delegation cap of N, **When** the N+1th concurrent root-level delegation is attempted, **Then** it is **refused**, not queued.
-2. **Given** the gate is in effect, **When** a nested (child-level) delegation runs, **Then** its existing `concurrencySem` behaviour is unchanged.
-3. **Given** the refusal, **When** it surfaces, **Then** it is operator-visible, not silent.
+1. **Given** `agents.defaults.subturn.max_concurrent = N` with N in flight, **When** the N+1th concurrent root-level delegation is attempted, **Then** it is **refused**, not queued — asserted at N = 24 so AC-10's stated topology runs as written.
+2. **Given** the gate is in effect, **When** a nested (child-level) delegation runs, **Then** its existing `concurrencySem` behaviour is unchanged (`pkg/agent/subturn.go:607`, `:1051`).
+3. **Given** the refusal, **When** it surfaces, **Then** it is an `ErrorResult` naming the cap returned to the calling agent **and** an `slog.Error` record, matching `pkg/tools/delegate.go:1150-1159`'s shape.
+4. **Given** the cap is resolved, **When** its source is inspected, **Then** it came from `agents.defaults.subturn.max_concurrent` and **not** from `Performance.EffectiveMaxParallelAgents()`, so an operator-set 24 is honoured rather than clamped to 16. `[grill M-7]`
 
 ---
 
@@ -453,6 +605,33 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 
 ---
 
+### User Story 19 — Child sessions are listed nested under their parent (Priority: P2)
+
+`[operator 1]` ADR-057 §9's one remaining open question — hidden-with-a-flag (the `verifier` precedent) or nested under the parent — is **resolved as nested**. Children appear as an expandable tree under their parent, not as a hidden class behind `?include_subordinate=true`.
+
+**This is real UI and API work and is scoped as such, not as a filter flag.** The `verifier` precedent it is deliberately *not* following was cheap because hiding a session needs one `continue` in a loop (`pkg/gateway/rest.go:783-785`). Nesting needs hierarchy at every layer that currently has none. Verified 2026-08-03:
+
+- **There is no pagination anywhere.** `UnifiedStore.ListSessions` (`pkg/session/unified.go:1247`), `AgentLoop.ListAllSessions` (`pkg/agent/loop.go:5046`), `restAPI.listSessions` (`pkg/gateway/rest.go:758-812`, which reads only `agent_id`, `type`, `include_verifier`) and `fetchSessions` (`src/lib/api.ts:1379-1388`) all return or request **everything**. A tree cannot be paginated by slicing a flat list — a page boundary that lands between a parent and its children renders orphans — so pagination and hierarchy must be designed together.
+- **The sidebar is a hard-truncated recency list.** `src/components/layout/Sidebar.tsx:456-457`: `const maxVisible = 9` then `.slice(0, maxVisible)`. A 24-way fan-out evicts the parent chat with no hierarchy to fall back on.
+- **`SearchModal` renders the full list unvirtualized.** It fetches every session (`src/components/search/SearchModal.tsx:363`) and renders `groups.map(...)` (`:687`) with no windowing. Under D1 the session count becomes (chats + every delegated child, at every depth) — the same list, an order of magnitude longer.
+
+**Design that makes hierarchy and pagination coherent**: the list endpoint paginates over **root** sessions (`ParentSessionID == ""`) and returns a `child_count` per row; children are fetched on expand via the same endpoint filtered by `parent_session_id`, itself paginated. The client assembles the tree; no layer ever has to hold the whole forest.
+
+**Why this priority**: P2 — it is the difference between "delegations are inspectable" and "the session list is unusable at 24-way fan-out", but no correctness-critical story depends on it. It is called out separately from US-14 because it is a distinct body of work with its own owner (U24) and its own contract change.
+
+**Independent Test**: Create one parent chat with 24 children, then list; assert the first page contains the parent with `child_count == 24` and **zero** children inline, and that expanding it returns the 24 in pages.
+
+**Acceptance Scenarios**:
+
+1. **Given** a parent chat with 24 child sessions, **When** `GET /api/v1/sessions` is called with default paging, **Then** the response contains the parent with `child_count == 24` and contains **no** subordinate session as a top-level row.
+2. **Given** that parent, **When** `GET /api/v1/sessions?parent_session_id=<parentID>` is called with paging parameters, **Then** exactly its **direct** children are returned, a page at a time, ordered by recency — not its grandchildren.
+3. **Given** a depth-3 tree, **When** each level is expanded in turn, **Then** each expansion returns only that node's direct children, and the total number of requests is O(expanded nodes), not O(all sessions).
+4. **Given** the sidebar with 24 children under one parent, **When** it renders, **Then** the parent chat is present, its children are **collapsed** by default behind an expand affordance, and the `maxVisible` budget is spent on **root** sessions so a fan-out cannot evict a chat.
+5. **Given** `SearchModal` open against a store with more sessions than fit one viewport, **When** results render, **Then** matching children appear nested under their parent (with the parent shown for context even when only the child matched) and the list is **virtualized**.
+6. **Given** a child whose parent has been deleted, **When** the list renders, **Then** the orphan is shown as a root-level row rather than silently omitted — a session that exists and is not reachable in the tree is the R-7 shape again.
+
+---
+
 ## Behavioral Contract
 
 **Primary flows**
@@ -464,8 +643,12 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - When a `delegate action=cancel` targets child B, exactly B and B's own descendants are cancelled — never the parent, never a sibling.
 - When a gated delegate action (`inbox`, `steer`, `respond`, `cancel`, `follow_up`, `peek`) is invoked, it is permitted iff the caller is an **ancestor** of the target within the configured depth bound.
 - When a transcript is read at any of the four read boundaries, it is returned unfiltered.
-- When a session writes any of identity, statistics, goal state or loop state, it writes exactly one of the four files and leaves the other three byte-unchanged.
+- When a session writes any of identity, statistics, goal state or loop state, it writes exactly one of the four files and leaves the other three byte-unchanged, **and mutates only its own field group in the cached `*UnifiedMeta`** — never replacing the cache entry wholesale.
 - When a transcript line is appended, the transcript write is immediate and the counter update is in memory only.
+- When more than one flush interval elapses with a session's counters dirty and **no** external trigger of any kind, the periodic flusher writes that session's `stats.json`.
+- When the session list is requested, roots are returned a page at a time with a `child_count`; a node's direct children are returned only when explicitly requested by `parent_session_id`, also a page at a time.
+- When a delegated child inherits approval grants, the grants are **read** under `{parentRoutingOrSessionID, parentAgentID}` and **written** under `{childSessionID, childAgentID}` — two distinct keys in one operation.
+- When a child raises an approval, the pending-registry entry carries the **child's own** session id, and the approve/deny response resolves by **approval id**.
 
 **Error flows**
 
@@ -474,7 +657,9 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - When the ancestor walk exceeds the configured max delegation depth, the action is rejected.
 - When `meta.json` is absent, the session load returns an error and the REST surface 404s.
 - When `goal.json` / `loop.json` / `stats.json` is present but corrupt, the load surfaces an error for **that group**.
-- When the root-level delegation admission cap is reached, the next root-level delegation is refused with an operator-visible error.
+- When the root-level delegation admission cap is reached, the next root-level delegation is refused with a tool error returned to the calling agent **and** an `slog.Error` record — the shape at `pkg/tools/delegate.go:1150-1159`. No separate user-facing notification `[operator 6]`.
+- When a grant inheritance finds no grants under the **source** key, the no-op is logged and counted rather than returning silently.
+- When `ListSessions` runs concurrently with `DeleteSession`, the result MAY omit a session deleted during the call and MUST NOT include one whose directory was already gone when the call began; it never panics, deadlocks or returns a partially-composed meta.
 
 **Boundary conditions**
 
@@ -497,7 +682,10 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - **A channel `/stop` arrives when only a surviving child is alive.** Expected: `resolveSessionIDByChannelChat` (`pkg/agent/turn.go:557-583`) returns the **routing** id, so the Stop cancels the tree — not just the child.
 - **Two sessions collide on an FNV-32a hash mod 64.** Expected: they contend on one shard; correctness is unaffected and throughput is bounded by the filesystem and the admission gate, never by the shard count.
 - **`ClearAll` / `RetentionSweep` run while per-session writes are in flight.** Expected: every shard is taken **in index order** (never hash order); no deadlock, no dropped session.
-- **A `SetMeta` carrying `Status` lands between a counter bump and a flush.** Expected: structurally unrepresentable as a clobber — the flusher owns `stats.json`, which no other writer touches.
+- **A `SetMeta` carrying `Status` lands between a counter bump and a flush.** Expected: structurally unrepresentable as a clobber **at the file layer** — the flusher owns `stats.json`, which no other writer touches. **At the cache layer it is entirely representable and MUST be prevented by construction** (FR-084): the `Status` writer mutates only `meta.json`'s field group inside the cached `*UnifiedMeta` and MUST NOT replace the entry, and a `readMetaLocked` cache-miss compose MUST NOT overwrite an entry marked dirty. `[grill C-5]` v1 asserted the file-layer property and stopped there, while W24 moved the counters into the cache — one layer up from where the guarantee was proved.
+- **A child's `stats.json` deltas when the child is `DeleteSession`d mid-flush.** Expected: **flush-then-delete.** `DeleteSession` is a forced flush point (FR-064); the flush completes under the session's shard before the directory is removed, so a concurrent flusher tick cannot recreate a `stats.json` in a deleted directory. A tick that finds the session gone drops its dirty entry without writing.
+- **A page boundary falls between a parent and its children.** Expected: unrepresentable — the list endpoint paginates over **roots only**, and children are a separate, separately-paginated request keyed by `parent_session_id` (US-19). Slicing a flat mixed list is the design this explicitly rejects.
+- **A child whose parent session was deleted.** Expected: rendered as a **root-level row**, not omitted. A session that exists on disk and is unreachable in the UI is R-7's shape with a different surface.
 - **A pre-cutover session that ran a delegation is rendered.** Expected: previously-hidden narration appears; accepted and bounded (R-16). Tool-call and error entries were never filtered anyway — only three writers stamp `ParentSpawnCallID` (`pkg/agent/turn.go:1204`, `:1268`, `pkg/gateway/websocket.go:4254`), while `appendToolCallTranscript` (`pkg/agent/turn.go:1123-1129`) and `appendErrorTranscript` (`:1314-1324`) do not.
 - **`HydrateAgentHistoryFromTranscript` on reload.** Expected: the parent agent's LLM context **stops** absorbing delegate narration (`pkg/agent/attach_hydrate.go:34-42`, zero filter references, run at `pkg/gateway/websocket.go:2577` and `pkg/agent/loop.go:6204`). This is a behaviour change to the parent's own context and reviewers must see it coming.
 - **A child hands off.** Expected: impossible — `hand_off` is structurally excluded from a child registry (`pkg/agent/subturn.go:988` → `registry.go:667-669`), so `sessionActiveAgent` correctly returns `""` and the delegate target is stamped.
@@ -515,7 +703,7 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - The system MUST NOT unify `turnState.concurrencySem`, `TaskExecutor.dispatchSema` and `TaskExecutor.maxConcurrent`. That cut is ratified; the single exception is W17's root-level gate. D12's *write-cadence* throttle shares a word with this and nothing else.
 - The system MUST NOT mint the child's `UnifiedMeta` lazily on first drill-down. Between spawn and first drill-down the child would write into a directory with no meta — invisible to `ListSessions`, to replay and to `GET /api/v1/sessions/{id}` — while every write returns `nil`. That is R-7 reborn and it makes AC-1 unassertable.
 - The system MUST NOT keep the counters in the fused `meta.json` while throttling them (Alternative F). The flusher would clobber goal/loop/status or re-serialise everything under a lock shared with all 31 event-path call sites.
-- The system MUST NOT change `UnifiedMeta`'s in-memory shape or its marshalled JSON. **No `contracts/` change and no regeneration are required by D11/W23.** (W5 *does* require the Constraint #8 pipeline — that is a different work item.)
+- The system MUST NOT change `UnifiedMeta`'s in-memory shape or its marshalled JSON. **No `contracts/` change and no regeneration are required by D11/W23.** (**W5, W2 and W16 *do* require the Constraint #8 pipeline** — they are different work items, and AC-21(e)'s "byte-identical, `verify-contracts` unaffected" is scoped to the **split**, not to those three. A reviewer seeing a `contracts/` diff in this change set should check it belongs to W5/W2/W16 and not to W23.)
 - The system MUST NOT re-add a transcript visibility filter anywhere, including in frontend code. AC-18(b) asserts the property on the **file**, so a re-added filter cannot satisfy it.
 - The system MUST NOT rely on `subagent_message` / `subagent_state` frames. They have zero Go emitters, are absent from the `WsFrameType` enum in contracts, Go and TS, and their structs are dead declarations (`pkg/api/generated/asyncapi_types.gen.go:496`, `:521`).
 - The system MUST NOT touch `migrateLegacy` / `writeUnifiedMetaDirect` (`pkg/session/unified.go:1515`) — they handle a *different* legacy (PartitionStore → UnifiedStore) and are out of scope.
@@ -580,89 +768,121 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 
 > **This table is a safety mechanism, not bureaucracy.** This repository is a **shared working tree** and this session has already observed concurrent agents silently reverting each other's edits. A unit that writes a file it does not own can destroy another unit's work with no error and no conflict marker.
 
+> **v2: this table was re-derived from scratch.** `[grill M-1…M-5, M-13]` v1's table was not exhaustive (five files that FRs require changing had **no owner**, and two of FR-068's four pagination layers had no unit), not acyclic across waves (U20 sat two waves before the unit that installs the hook it depends on), and not consistent with its own TDD plan (U21 exclusively owned twelve `*_test.go` files that eight other units' tests naturally belong in, while those units were told to write tests **first** and U21 to land **last**). Three units are new — **U22** (turn-adjacent transcript writers), **U23** (`pkg/agent/events.go` payloads), **U24** (SPA session hierarchy, operator decision 1) — and every dependency below is declared.
+
 **Rules**
 
 1. **A file has exactly one owner.** Where a file appears against a *chain* (`U4→U5→U6`), the chain is the owner and its members **must never run concurrently**.
 2. **A unit that needs a change in a file it does not own must request it from the owner** — it must not make the edit itself.
 3. **`git add` only the files your unit owns.** Run `git status --short` first, every time.
 4. **Generated artefacts** (`pkg/api/generated/`, `src/lib/api/generated/`) are owned solely by **U10**. No other unit regenerates or edits them.
+5. **Every unit's new tests go in NEW files named `<subject>_adr057_test.go`.** `[grill M-4]` U21 touches **only** the twelve enumerated `*_test.go` files and nothing else — its scope is inversion of the existing gate tests, not authorship of new ones. No unit may add a test to a U21-owned file, and U21 may not add a test to any other file. Without this rule the "write tests before the implementation" instruction and "U21 lands last in its own commit" are mutually exclusive for every test that naturally belongs in `subturn_test.go`, `steering_test.go`, `cancel_subagent_cascade_test.go`, `interrupt_by_session_key_test.go` or `approval_grant_delegation_test.go` — which is eight units' worth.
+6. **Every new file added to an existing Go package MUST prefix its unexported package-level helpers with its unit id.** `[grill m-4]` U2 creates `pkg/session/unified_api.go` while U5 rewrites `pkg/session/unified.go` — same package, same wave. A package-level `sessionDir` or `metaPath` introduced independently by both is a compile break that neither unit owns and neither will see until integration. Use `u2SessionDir`, `u6FlushTick`, etc. Exported API is unaffected.
+7. **A frozen contract is a promise, not a suggestion.** Where the table below says a signature is frozen, its owner MUST NOT change it inside this change set. Changing it is a cross-unit request, not a refactor.
 
 ### Ownership table
 
 | Unit | Work items | Files owned (exclusive write) | Depends on | Must NOT touch |
 |---|---|---|---|---|
 | **U1** Named ID types | W20 | NEW `pkg/session/ids.go` | — | any existing file |
-| **U2** Strict store API | W3 (store half), W1 (store half) | NEW `pkg/session/unified_api.go` (`AppendTranscriptStrict`, `CreateSessionWithID`) | U1, U4 | `pkg/session/unified.go` — request lock-helper changes from U4 |
-| **U3** Turn-local identity | W3 (4 writers), W4 (`turnState.routingSessionID` + 3 resolvers) | `pkg/agent/turn.go` | U1, U2 | `pkg/agent/subturn.go`, `pkg/agent/steering.go`, `pkg/agent/loop.go` |
-| **U4** Store striping | W15 | `pkg/session/unified.go` (lock + cache surface), NEW `pkg/session/unified_lock.go` | U1 | `pkg/session/daypartition.go` |
-| **U5** meta split + parent fields + predicate deletion | W23, W2 (store half), W11a (delete `IsDelegateChildEntry`) | `pkg/session/unified.go`, `pkg/session/daypartition.go`, NEW `pkg/session/unified_meta_files.go` | **U4** | anything in `pkg/agent`, `pkg/gateway`, `pkg/tools` |
-| **U6** Stats throttle | W24 | `pkg/session/unified.go`, NEW `pkg/session/unified_stats_flush.go` | **U5** | `pkg/session/daypartition.go` (U5 is done with it; do not re-edit) |
-| **U7** Delegation spawn | W1 (agent half), W4 (subturn half), W10 (Inherit re-key), W21 (SubTurn payload pin) | `pkg/agent/subturn.go` | U2, U3, U5 | `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/security/approvalgrants.go` |
-| **U8** Steering + interrupt | W4 (7 predicates), W13 (scope collapse) | `pkg/agent/steering.go` | U3 | `pkg/agent/cancel.go`, `pkg/agent/subturn.go` |
-| **U9** Loop payload stamping | W4 (WS payload stamping), W10 (grant read re-key) | `pkg/agent/loop.go` | U3, U10, U17 | `pkg/agent/turn.go`, `pkg/agent/subturn.go` |
-| **U10** Contracts + regeneration | W5a | `contracts/**`, `pkg/api/generated/**`, `src/lib/api/generated/**` | — | any hand-written Go/TS consumer |
-| **U11** Gateway WS | W3 (streamed write, `pkg/gateway/websocket.go:4256`), W5b (frame stamping), W10 (teardown call site) | `pkg/gateway/websocket.go` | U2, U10, U17 | `pkg/gateway/rest.go`, `pkg/gateway/replay.go`, `pkg/gateway/approvals.go` |
-| **U12** SPA | W5c, W16b (sidebar), W19b (drill-down), W2c (SPA enum) | `src/store/chat.ts`, `src/lib/api.ts`, `src/routes/_app/sessions.$sessionId.tsx`, `src/components/**/Sidebar.tsx` | U10 | `src/lib/api/generated/**` |
+| **U2** Strict store API | W3 (store half), W1 (store half) | NEW `pkg/session/unified_api.go` (`AppendTranscriptStrict`, `CreateSessionWithID`) | U1, U4 · **frozen contract from U5** | `pkg/session/unified.go` — request lock-helper changes from U4 |
+| **U3** Turn-local identity | W3 (4 writers), W4 (`turnState.routingSessionID` + 3 resolvers) | `pkg/agent/turn.go` | U1, U2 | `pkg/agent/subturn.go`, `pkg/agent/steering.go`, `pkg/agent/loop.go`, `pkg/agent/events.go` |
+| **U4** Store striping | W15 | `pkg/session/unified.go` (chain 1/3: lock + cache surface), NEW `pkg/session/unified_lock.go` | U1 | `pkg/session/daypartition.go` |
+| **U5** meta split + parent fields + predicate deletion | W23, W2 (store half), W11a (delete `IsDelegateChildEntry`) | `pkg/session/unified.go` (chain 2/3), `pkg/session/daypartition.go`, NEW `pkg/session/unified_meta_files.go` | **U4** | anything in `pkg/agent`, `pkg/gateway`, `pkg/tools`. **MUST NOT change `readMetaLocked`'s signature** — frozen for U2 |
+| **U6** Stats throttle + store pagination | W24, **W16a (store layer)** | `pkg/session/unified.go` (chain 3/3), NEW `pkg/session/unified_stats_flush.go` | **U5** | `pkg/session/daypartition.go` (U5 is done with it; do not re-edit) |
+| **U7** Delegation spawn | W1 (agent half), W4 (subturn half), W10a (`InheritFrom` **call site**), W10d (**child-terminal `CloseSession` call site**), W21c (payload assignment) | `pkg/agent/subturn.go` | U2, U3, U5, **U17** | `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/agent/events.go`, `pkg/security/approvalgrants.go` |
+| **U8** Steering + interrupt | W4 (role-B predicates), W13 (scope collapse) | `pkg/agent/steering.go` | U3 | `pkg/agent/cancel.go`, `pkg/agent/subturn.go` |
+| **U9** Loop payload stamping + loop pagination | W4 (WS payload stamping), W10b (grant read re-key), **W16b (loop layer)** | `pkg/agent/loop.go` | U3, U6, U10, U17, U23 | `pkg/agent/turn.go`, `pkg/agent/subturn.go`, `pkg/agent/events.go` |
+| **U10** Contracts + regeneration | W5a, **W2b (OpenAPI enum)**, **W16e (pagination + `parent_session_id` filter + `child_count`)** | `contracts/**`, `pkg/api/generated/**`, `src/lib/api/generated/**` | — | any hand-written Go/TS consumer |
+| **U11** Gateway WS | W3 (streamed write, `pkg/gateway/websocket.go:4256`), W5b (frame stamping), W10c (WS-side teardown) | `pkg/gateway/websocket.go` | U2, U10, U17, U23 | `pkg/gateway/rest.go`, `pkg/gateway/replay.go`, `pkg/gateway/approvals.go` |
+| **U12** SPA store + API client | W5c, W19b (drill-down), W2c (SPA enum), **W16d (client paging + tree assembly)** | `src/store/chat.ts`, `src/lib/api.ts`, `src/routes/_app/sessions.$sessionId.tsx` | U10 | `src/lib/api/generated/**`, `src/components/layout/Sidebar.tsx`, `src/components/search/SearchModal.tsx` — **U24 owns those** |
 | **U13** Lifecycle edge + index | W6 | `pkg/session/lifecycle.go`, NEW `pkg/session/lifecycle_index.go` | — | `pkg/session/lifecycle_lock.go` (read-only precedent), `pkg/session/unified.go` |
-| **U14** Delegate tool | W7a (refuse), W9a (cancel kills shells), W12 (ancestor walk), W14 (status/leak), W21b (`DelegateTaskState.SessionID`), W6 doc-rot in `list_jobs_sources.go` | `pkg/tools/delegate.go`, `pkg/tools/list_jobs_sources.go` | U13 | `pkg/tools/shell.go`, `pkg/tools/session.go`, `pkg/tools/inspect_session.go` |
+| **U14** Delegate tool + inbox producer | W7a (refuse), W9a (cancel kills shells), W12 (ancestor walk), W14 (status/leak/eviction), W21b (`DelegateTaskState.SessionID`), W6 doc-rot in `list_jobs_sources.go`, **W12b (`message_parent.go:640` producer)** | `pkg/tools/delegate.go`, `pkg/tools/list_jobs_sources.go`, **`pkg/tools/message_parent.go`** | U13 | `pkg/tools/shell.go`, `pkg/tools/session.go`, `pkg/tools/inspect_session.go` |
 | **U15** Cancel orchestration | W8, W4 (pre-arm keys) | `pkg/agent/cancel.go`, `pkg/agent/cancel_prearm.go`, `pkg/agent/orphan_watch.go` | U8, U13, U16 | `pkg/agent/steering.go` |
 | **U16** Background shells | W9b | `pkg/tools/shell.go`, `pkg/tools/session.go` | — | `pkg/tools/delegate.go` |
-| **U17** Approvals + session teardown | W10 (store, registry, teardown) | `pkg/security/approvalgrants.go`, `pkg/gateway/approvals.go`, `pkg/agent/session_end.go`, `pkg/agent/tool_manifest.go` | — | `pkg/agent/loop.go`, `pkg/agent/subturn.go` |
-| **U18** Read boundaries + REST | W11b (4 filter sites), W16a (REST pagination), W19a (drill-down endpoint) | `pkg/gateway/replay.go`, `pkg/gateway/rest.go`, `pkg/agent/verifier_adjudication.go`, `pkg/tools/inspect_session.go` | U5 | `pkg/session/daypartition.go` — **the predicate deletion is U5's line item W11a** |
-| **U19** Admission + wiring | W17, W7b (fail-closed wiring) | `pkg/agent/admission.go`, `pkg/agent/session_messaging_wire.go` | U14 | `pkg/agent/subturn.go` |
-| **U20** Uploads cascade | W18 | `pkg/tools/normalization.go`, `pkg/media/tempdir.go`, `pkg/media/store.go` | — | `pkg/gateway/rest.go` — request the cascade-delete hook from U18 |
-| **U21** Test inversions | W22 | the 12 named `*_test.go` files + any test asserting the old contract | all behaviour units | **any non-test file** |
+| **U17** Approvals + session teardown | W10 (grant store **signature**, pending registry re-key, `CloseSession` **entry point**, tool manifest) | `pkg/security/approvalgrants.go`, `pkg/gateway/approvals.go`, `pkg/agent/session_end.go`, `pkg/agent/tool_manifest.go` | — | `pkg/agent/loop.go`, `pkg/agent/subturn.go` |
+| **U18** Read boundaries + REST | W11b (4 filter sites), **W16c (REST layer + nested listing)**, W19a (drill-down endpoint), **W18b (uploads cascade wiring)** | `pkg/gateway/replay.go`, `pkg/gateway/rest.go`, `pkg/agent/verifier_adjudication.go`, `pkg/tools/inspect_session.go` | U5, U9, U10, U13, U20 | `pkg/session/daypartition.go` — **the predicate deletion is U5's line item W11a** |
+| **U19** Admission + wiring + boot sweep | W17, W7b (fail-closed wiring), **W6b (boot-sweep reconcile, FR-078)** | `pkg/agent/admission.go`, `pkg/agent/session_messaging_wire.go`, **`pkg/agent/boot_sweep.go`** | U13, U14 | `pkg/agent/subturn.go` |
+| **U20** Uploads primitive | **W18a** (primitive only) | `pkg/tools/normalization.go`, `pkg/media/tempdir.go`, `pkg/media/store.go` | — | `pkg/gateway/rest.go` — **the cascade wiring is U18's line item W18b**; U20 only exposes `RemoveSessionUploadsTree(ids []string) error` |
+| **U21** Test inversions | W22 | **exactly** the 12 named `*_test.go` files, and nothing else | all behaviour units | **any non-test file; any test file not in the twelve** |
+| **U22** Turn-adjacent transcript writers | W3 (`external_dispatch.go:463`, `:550-555`, `:562-564`; `approval_transcript.go:179`, `:183`) | **NEW owner:** `pkg/agent/external_dispatch.go`, `pkg/agent/approval_transcript.go` | U1, U2 | `pkg/agent/turn.go`, `pkg/agent/subturn.go` |
+| **U23** Event payload types | **W21a** (`SubTurnSpawnPayload.SessionID` `events.go:441`, `SubTurnEndPayload.SessionID`), W5d (`ProducingSessionID` on session-scoped payloads) | **NEW owner:** `pkg/agent/events.go` | U1, U10 | every consumer of these types — U7/U9/U11 assign them |
+| **U24** SPA session hierarchy | **W16f (sidebar tree), W16g (search tree)** — operator decision 1 | **NEW owner:** `src/components/layout/Sidebar.tsx`, `src/components/search/SearchModal.tsx`, NEW `src/components/sessions/SessionTree.tsx` | U10, U12 | `src/store/chat.ts`, `src/lib/api.ts` — request shape changes from U12 |
+
+**Disjointness proof.** Every path above appears in exactly one row, with one declared exception: `pkg/session/unified.go` is owned by the **U4→U5→U6 chain** (Rule 1), whose members are in three consecutive waves and never run concurrently. `Sidebar.tsx` moved from U12 to U24 and was removed from U12's row; `message_parent.go`, `boot_sweep.go`, `events.go`, `external_dispatch.go` and `approval_transcript.go` were unowned in v1 and now have exactly one owner each `[grill M-1]`.
 
 ### Integration order
 
 ```
 Wave A  (parallel, no interdependencies)
-  U1  types          U4  striping        U13 lifecycle index
-  U16 shells         U20 uploads         U10 contracts+regen
+  U1  types            U10 contracts+regen    U13 lifecycle index
+  U16 shells           U17 approvals          U20 uploads primitive
 
-Wave B  (parallel)                       [needs Wave A]
-  U2  strict store API   (needs U1,U4)
-  U5  meta split         (needs U4)   ← SERIAL after U4, same file
-  U17 approvals
-  U14 delegate tool      (needs U13)
+Wave B  (parallel)                            [needs Wave A]
+  U4  striping            (needs U1)
+  U14 delegate tool       (needs U13)
+  U23 event payloads      (needs U1,U10)
+  U12 SPA store+client    (needs U10)
 
-Wave C  (parallel)                       [needs Wave B]
-  U3  turn.go            (needs U1,U2)
-  U6  stats throttle     (needs U5)   ← SERIAL after U5, same file
-  U8  steering           (needs U3)   -- may start once U3's turnState field lands
-  U18 read boundaries    (needs U5)
-  U11 gateway WS         (needs U2,U10,U17)
-  U12 SPA                (needs U10)
-  U19 admission+wiring   (needs U14)
+Wave C  (parallel)                            [needs Wave B]
+  U5  meta split          (needs U4)   ← SERIAL after U4, same file
+  U2  strict store API    (needs U1,U4 + U5's frozen readMetaLocked signature)
+  U19 admission+wiring    (needs U13,U14)
+  U24 SPA hierarchy       (needs U10,U12)
 
-Wave D  (parallel)                       [needs Wave C]
-  U7  subturn            (needs U2,U3,U5)
-  U9  loop.go            (needs U3,U10,U17)
-  U15 cancel             (needs U8,U13,U16)
+Wave D  (parallel)                            [needs Wave C]
+  U6  stats throttle      (needs U5)   ← SERIAL after U5, same file
+  U3  turn.go             (needs U1,U2)
+  U11 gateway WS          (needs U2,U10,U17,U23)
+  U22 3P + approval writers (needs U1,U2)
 
-Wave E  (own commit, no behaviour files)
+Wave E  (parallel)                            [needs Wave D]
+  U7  subturn             (needs U2,U3,U5,U17)
+  U8  steering            (needs U3)
+  U9  loop.go             (needs U3,U6,U10,U17,U23)
+
+Wave F  (parallel)                            [needs Wave E]
+  U15 cancel              (needs U8,U13,U16)
+  U18 read boundaries+REST(needs U5,U9,U10,U13,U20)
+
+Wave G  (own commit, no behaviour files)
   U21 test inversions
 ```
 
+**The true critical path is four to six sequential steps, not "21 units in 5 waves".** `[grill o-1 — accepted]` The storage cluster is a forced serial chain on one file (`U4 → U5 → U6`, three waves by construction) and the read/REST cluster is gated behind it twice over (`U4 → U5 → U2 → U3 → U9 → U18` is six). Twenty-four units buys parallel **breadth**, not a shorter path. If an implementer chooses to merge U4/U5/U6 into one agent taking three commits in the stated order, that is compliant with Rule 1 and loses nothing — the ownership overhead exists to stop *concurrent* writes, and a chain is not concurrent.
+
 **Hard orderings (violating any of these is a defect, not a preference):**
 
-1. **U4 → U5 → U6** (`W15 → W23 → W24`). W15 must land before W23 because the split's four targeted writers each take a per-session shard; writing them against the old store-global mutex means four lock acquisitions where there was one — strictly worse than today. W23 must land before W24 because throttling counters that still live in the fused document is **Alternative F**, which is rejected. **Do not land W24 without W23.**
-2. **U2 (AC-1's primitive) before any acceptance measurement.** ADR-057 §10: until `AppendTranscript` fails loudly, a green suite is not evidence.
-3. **U10 (contracts) before U9, U11, U12.** Constraint #8: schema first, generated types only, one atomic commit.
-4. **U5 before U18.** Deleting the four filter sites before the child owns its own file un-hides narration with nothing gained.
+1. **U4 → U5 → U6** (`W15 → W23 → W24`), Waves B → C → D. W15 must land before W23 because the split's four targeted writers each take a per-session shard; writing them against the old store-global mutex means four lock acquisitions where there was one — strictly worse than today. W23 must land before W24 because throttling counters that still live in the fused document is **Alternative F**, which is rejected. **Do not land W24 without W23.**
+2. **U2 (AC-1's primitive) before any acceptance measurement.** ADR-057 §10: until `AppendTranscript` fails loudly, a green suite is not evidence. U2 is Wave C; every unit whose tests measure an acceptance criterion is Wave D or later.
+3. **U10 (contracts) before U9, U11, U12, U23, U24.** Constraint #8: schema first, generated types only, one atomic commit. U10 is Wave A.
+4. **U5 before U18.** Deleting the four filter sites before the child owns its own file un-hides narration with nothing gained. U5 is Wave C, U18 is Wave F.
 5. **U21 last, in its own commit.** Bisection must be able to distinguish "the contract changed" from "the behaviour regressed".
+6. **W11's two halves must land in the same integration window.** `[grill §5, W11]` U5 deletes `IsDelegateChildEntry` (Wave C) and U18 deletes its four call sites (Wave F). **The intermediate tree does not compile.** This is enforced, not hoped: U5 MUST land the deletion behind a `//lint:ignore` deprecation shim that keeps the method compiling but always returns `false`, and U18's commit MUST remove both the shim and the call sites. Test #58's positive lower bound (see Rule 4) fails if the shim survives U18.
+7. **U6 → U9 → U18 → U12/U24 for pagination.** `[grill M-1]` FR-068/FR-092 requires four layers; each now has exactly one owner, and they only work in this order because each calls the one below it.
 
 **Cross-unit requests (a unit needing a change it does not own):**
 
 | Requesting unit | Needs | From owner |
 |---|---|---|
 | U2 | a `lockSession(id)` helper on `UnifiedStore` | U4 |
-| U18 | `IsDelegateChildEntry` removed from `daypartition.go` | U5 |
-| U20 | the child-uploads cascade hook invoked on session delete | U18 (`pkg/gateway/rest.go`) |
+| U2 | **frozen:** `readMetaLocked(sessionID string) (*UnifiedMeta, error)` keeps its exact signature; W23 may change only its internals. `AppendTranscriptStrict`'s existence predicate is "`readMetaLocked` returned a non-nil error" `[grill M-5]` | U5 |
+| U7 | **the two-key `InheritFrom(srcSessionID, srcAgentID, dstSessionID, dstAgentID)` signature** `[grill C-1, M-3]` | U17 |
+| U9 | **the two-key grant read** — `IsAllowed` under the child's own session key `[grill M-3]` | U17 |
+| U7 | the child-terminal `CloseSession(sessionID, trigger string)` entry point (`pkg/agent/session_end.go:32`), unchanged signature, new trigger value `[grill M-13]` | U17 |
+| U7 | the exported exact-id create wrapper `CreateSessionWithID` | U2 |
+| U7 / U9 / U11 | `ProducingSessionID` on the session-scoped payload structs | U23 |
+| U18 | `IsDelegateChildEntry` removed from `daypartition.go` (and its shim, see hard ordering 6) | U5 |
+| U18 | `RemoveSessionUploadsTree(ids []string) error` primitive `[grill M-2]` | U20 |
+| U18 | paginated `ListAllSessions(limit, offset int, parentSessionID string)` | U9 |
+| U18 | the descendant walk over the parent index | U13 |
+| U9 | paginated `ListSessions(limit, offset int, parentSessionID string)` | U6 |
 | U14 | `KillBackgroundSessions` reachable from the `delegate cancel` path | U16 |
-| U9 / U11 | the `producing_session_id` generated type | U10 |
-| U7 | the exported exact-id create wrapper | U2 |
+| U9 / U11 / U23 | the `producing_session_id` generated type | U10 |
+| U12 | the paginated + `parent_session_id`-filterable list contract | U10 |
+| U24 | the tree-assembly helper and `child_count`-bearing `Session` type from the API client | U12 |
 | U15 | the descendant-set accessor computed in PHASE A | U8 |
+| U22 | `AppendTranscriptStrict` | U2 |
 
 ---
 
@@ -723,20 +943,35 @@ Wave E  (own commit, no behaviour files)
 **Traces to**: User Story 1, Acceptance Scenario 4
 **Category**: Edge Case
 
-- **Given** a registered turn with `ts.abandoned` set
+- **Given** a registered turn with `ts.abandoned` set, and `AbandonedWritesSuppressed()` sampled immediately beforehand
 - **When** a transcript write is attempted
-- **Then** the write is suppressed
-- **And** a counter increments and a log line records the suppression
-- **But** the function does not return silently as it does today (`pkg/agent/turn.go:1296-1299`)
+- **Then** the write is suppressed and no entry lands in the transcript
+- **And** a **WARN log record** is emitted naming the session id and the suppression reason
+- **And** `AbandonedWritesSuppressed()` has increased by **exactly one** across the call
+- **But** the assertion is on the log record and the counter **delta** — never on the counter's existence, which `[grill C-2]` verified is already satisfied today at `pkg/agent/turn.go:1297` and already covered by `pkg/agent/turn_test.go:221`
 
 #### BDD-05 — Scenario: Routing and session ids are distinct types
 
 **Traces to**: User Story 1, Acceptance Scenario 5
 **Category**: Happy Path
 
-- **Given** the merged tree compiles
-- **When** a `RoutingSessionID` is assigned to a `SessionID` without conversion
-- **Then** compilation fails
+- **Given** the compile-fail fixture file is present and locatable by path (asserted first; absence is a failure, not a pass)
+- **When** `go build` runs over the fixture, in which a `RoutingSessionID` is assigned to a `SessionID` without conversion
+- **Then** the build fails with a type error naming **both** type names
+- **But** a build that succeeds, or a fixture that could not be found, fails the test
+
+#### BDD-97 — Scenario Outline: Every negative gate proves its search is live before asserting zero
+
+**Traces to**: User Story 1, Acceptance Scenario 6
+**Category**: Error Path
+
+- **Given** the merged tree and the gate `<gate>` with stated positive lower bound `<K>`
+- **When** the gate runs
+- **Then** it first asserts it located at least `<K>` occurrences of `<positive_target>`
+- **And** only then asserts its exclusion property
+- **But** a run in which the search located fewer than `<K>` **fails**, and never reports the exclusion as satisfied
+
+**Examples**: the eleven rows of "Negative-gate positive lower bounds" — #3, #9, #12, #17, #19, #27, #29, #58, #81, #82, #83.
 
 ---
 
@@ -850,16 +1085,19 @@ Wave E  (own commit, no behaviour files)
 - **When** the browser reconnects mid-delegation and replay completes
 - **Then** the span and its steps are in the same bucket and correlate
 
-#### BDD-16 — Scenario Outline: Every session-scoped frame type round-trips both ids
+> `[grill M-8]` **v1's BDD-16 asserted one property across all 19 types, and it is false for at least five of them.** Its Given was "a child turn emitting frame type X" and its Then was "`producing_session_id` equals the child's own id" — but `replay_message`/`replay_done` are emitted by the gateway replay path, not by a turn; `session_started`/`session_close_ack` are chat-lifecycle frames, not turn output; and `rate_limit` has **no `SessionID` field at all** (`pkg/agent/events.go:525-533`, verified: `Scope`, `Resource`, `PolicyRule`, `RetryAfterSeconds`, `AgentID`, `ChatID`, `Tool`), which directly contradicts this spec's own dataset row 5 expecting `producing_session_id` **absent**. SC-006 ("all 19 round-trip both ids") was therefore unachievable as literally written while being scored pass/fail. The outline is split into three classes. **The classification itself is the W5 audit's deliverable** (FR-089) — this spec pins only the rows it verified, and requires the remaining ones to be classified and committed rather than guessed here.
+
+#### BDD-16 — Scenario Outline: Class (a) — frames a child turn genuinely emits carry both ids
 
 **Traces to**: User Story 3, Acceptance Scenario 4
 **Category**: Happy Path
 
-- **Given** a child turn emitting frame type `<frame_type>`
+- **Given** a child turn emitting frame type `<frame_type>`, with the child's id distinct from the routing key
 - **When** the frame crosses the wire
-- **Then** `session_id` equals the routing key and `producing_session_id` equals the child's own id
+- **Then** `session_id` equals the routing key
+- **And** `producing_session_id` is present and equals the child's own id
 
-**Examples**:
+**Examples** (verified child-turn-produced):
 
 | frame_type |
 |---|
@@ -867,21 +1105,46 @@ Wave E  (own commit, no behaviour files)
 | `done` |
 | `tool_call_start` |
 | `tool_call_result` |
-| `subagent_start` |
-| `subagent_end` |
-| `replay_message` |
-| `replay_done` |
-| `agent_switched` |
-| `task_status_changed` |
 | `tool_approval_required` |
-| `rate_limit` |
 | `media` |
-| `session_started` |
-| `system_overload` |
-| `session_close_ack` |
-| `cancel_stage` |
-| `goal_status` |
-| `loop_status` |
+
+#### BDD-98 — Scenario Outline: Class (b) — root- or gateway-produced frames omit `producing_session_id`
+
+**Traces to**: User Story 3, Acceptance Scenario 4
+**Category**: Alternate Path
+
+- **Given** frame type `<frame_type>`, produced by the routing session itself or by the gateway rather than by a child turn
+- **When** the frame crosses the wire
+- **Then** `session_id` equals the routing key
+- **And** `producing_session_id` is **absent** — because FR-013 requires it present *iff* it differs
+
+**Examples** (each row's class is fixed by the W5 audit artefact required by FR-089; the four below are the ones this spec verified):
+
+| frame_type | why class (b) |
+|---|---|
+| `replay_message` | emitted by the gateway replay path, not by a turn |
+| `session_started` | chat-session lifecycle, not turn output |
+| `session_close_ack` | chat-session lifecycle, not turn output |
+| `subagent_start` / `subagent_end` | emitted by the **parent** about the child (`pkg/agent/subturn.go`); FR-017 pins their `SessionID` to the routing key, so producing == routing |
+
+#### BDD-99 — Scenario Outline: Class (c) — the two known-broken types assert the audited, documented gap
+
+**Traces to**: User Story 3, Acceptance Scenario 4
+**Category**: Edge Case
+
+- **Given** frame type `<frame_type>`, a pre-existing strain this change **exposes** and does not cause
+- **When** the frame crosses the wire
+- **Then** the **documented** behaviour is asserted exactly as recorded, `producing_session_id` is absent, and the gap is present in the W5 audit artefact
+- **But** no requirement in this spec depends on either type carrying a producing id `[operator 11 — audit, document, do not fix]`
+
+**Examples**:
+
+| frame_type | verified gap |
+|---|---|
+| `rate_limit` | `RateLimitPayload` has **no `SessionID` field** (`pkg/agent/events.go:525-533`); its `session_id` is reconstructed from the connection's chat→session map (`pkg/gateway/websocket.go:3461` → `sessionIDForChat`, `:3022`), and a reconstructed `""` is dropped in production |
+| `replay_done` | in `SESSION_SCOPED_FRAME_TYPES` (`src/store/chat.ts:1238`) but absent from the `WsFrameType` enum on both sides — verified: tree-wide it appears **only** at that one line, with zero hits in `contracts/`, `pkg/api/generated/` and `pkg/` |
+
+**Remaining types** — `agent_switched`, `task_status_changed`, `system_overload`, `cancel_stage`, `goal_status`, `loop_status` — MUST each be assigned to (a), (b) or (c) by the W5 audit and asserted per its class (FR-089). **This spec does not guess them**; assigning them by inspection here is exactly the unverified-claim habit `[grill C-2]` caught.
 
 #### BDD-17 — Scenario: A read of the routing id outside the closed consumer set fails the build gate
 
@@ -970,6 +1233,16 @@ Wave E  (own commit, no behaviour files)
 - **When** the `turn_canceled` audit entry is read
 - **Then** `descendants_canceled` is non-empty and contains the child's turn id
 
+#### BDD-100 — Scenario: The cancel audit names every descendant at depth 3
+
+**Traces to**: User Story 5, Acceptance Scenario 2b
+**Category**: Edge Case
+
+- **Given** a chat with live descendants at depths 1, 2 and 3 (the same tree BDD-30 builds)
+- **When** a Stop is issued on the chat and the `turn_canceled` audit entry is read
+- **Then** `descendants_canceled` (`pkg/agent/cancel.go:376`) contains **all three** turn ids
+- **But** v1 asserted this depth only in the post-implementation evaluation set `[grill M-12]` — FR-030 requires "every descendant", and a scenario the implementing agent never sees cannot serve as acceptance evidence for an FR
+
 #### BDD-26 — Scenario: The orphan watchdog defers while a critical delegate is alive
 
 **Traces to**: User Story 5, Acceptance Scenario 3
@@ -1023,10 +1296,34 @@ Wave E  (own commit, no behaviour files)
 **Traces to**: User Story 6, Acceptance Scenario 1
 **Category**: Happy Path
 
-- **Given** a standing approval grant on the parent for tool `T`
+- **Given** a standing approval grant on the parent for tool `T`, with `parentSessionID != childSessionID`
+- **And** a pre-spawn lookup of `{childSessionID, childAgentID}` that returns **absent**
 - **When** a delegated child executes `T`
 - **Then** the tool runs immediately
 - **But** no approval prompt is raised and no wait occurs
+
+#### BDD-88 — Scenario: The grant is read under the parent's key and written under the child's
+
+**Traces to**: User Story 6, Acceptance Scenario 1
+**Category**: Happy Path
+
+- **Given** `parentSessionID != childSessionID` and `parentAgentID` possibly equal to `childAgentID` (self-delegation is a same-agent, different-session union)
+- **And** a grant recorded **only** under `{parentSessionID, parentAgentID}`, verified absent under `{childSessionID, childAgentID}`
+- **When** `InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)` runs
+- **Then** the grant resolves under `{childSessionID, childAgentID}`
+- **And** it still resolves under `{parentSessionID, parentAgentID}` — inheritance is a copy, not a move
+- **But** a single-key `Inherit` cannot satisfy this scenario `[grill C-1]`: passing the child's id for both source and destination makes the source lookup miss at `pkg/security/approvalgrants.go:118`, the function returns at `:119`, and the child hangs 300 s at `pkg/agent/loop.go:8630-8631`
+
+#### BDD-89 — Scenario: An inheritance with no source grants is logged and counted
+
+**Traces to**: User Story 6, Acceptance Scenario 7
+**Category**: Error Path
+
+- **Given** a parent that holds **no** grants for its session
+- **When** `InheritFrom` runs at spawn
+- **Then** a log record names the source key, the destination key and "no grants to inherit"
+- **And** a counter increments across the call
+- **But** the function does not return silently as `Inherit` does today (`pkg/security/approvalgrants.go:118-120`, documented as intended at `:110-111`) — this is the tripwire that stops a future re-key from regressing into C-1 unnoticed
 
 #### BDD-32 — Scenario: A child's inherited grant does not outlive the child
 
@@ -1036,6 +1333,7 @@ Wave E  (own commit, no behaviour files)
 - **Given** a child holding an inherited grant keyed to its own session
 - **When** the child session terminates
 - **Then** the grant set for that session no longer exists
+- **And** the **parent's** grant set under its own key is untouched
 
 #### BDD-33 — Scenario: A chat Stop cancels a pending approval inside a child
 
@@ -1045,6 +1343,28 @@ Wave E  (own commit, no behaviour files)
 - **Given** a pending approval request raised inside a child
 - **When** a chat-level Stop is issued
 - **Then** the registry entry is gone, its timer is stopped, and the child's goroutine unblocks
+- **And** the cancellation ran over the **descendant set**, not a single id — `cancelAllPendingForSession` matches by exact equality on `SessionID` (`pkg/gateway/approvals.go:419`), so a chat id alone would match nothing once entries carry the child's id
+
+#### BDD-90 — Scenario: A pending-approval registry entry carries the acting session's id
+
+**Traces to**: User Story 6, Acceptance Scenario 5
+**Category**: Happy Path
+
+- **Given** a child turn raising a real approval request, with the child's id distinct from the chat's
+- **When** the registry entry is inspected (`pkg/gateway/approvals.go:85`, set at `:213`/`:232`)
+- **Then** its `SessionID` is the **child's own** session id
+- **But** it is not the chat's routing id `[grill M-6]` — v1's FR-032 presupposed this without any requirement stating it
+
+#### BDD-91 — Scenario: A client approves a child's request and the round trip resolves by approval id
+
+**Traces to**: User Story 6, Acceptance Scenario 6
+**Category**: Happy Path
+
+- **Given** that pending entry, and a `tool_approval_required` frame whose `session_id` is the **routing** key (it is in `SESSION_SCOPED_FRAME_TYPES`, `src/store/chat.ts:1240`, so FR-012 applies)
+- **When** the client responds **approve**
+- **Then** the response resolves to the child's entry **by approval id**
+- **And** the child's tool call proceeds without a prompt or a timeout
+- **But** the resolution does **not** depend on the frame's `session_id` matching the registry's, so the routing-key change cannot break it `[grill M-6]` — v1 covered only the cancel path and never the interactive approve round trip
 
 #### BDD-34 — Scenario: Child teardown evicts grants, loaded tools and recall spans
 
@@ -1053,7 +1373,28 @@ Wave E  (own commit, no behaviour files)
 
 - **Given** a child that loaded tools and recorded recall spans
 - **When** the child turn reaches a terminal state
-- **Then** its grant set, `loadedTools` bucket and `recallSpans` entries are all gone
+- **Then** its grant set, `loadedTools` bucket, `metaCache` entry and `recallSpans` entries are all gone
+
+#### BDD-96 — Scenario Outline: `CloseSession` fires from the child-turn terminal path on every terminal state
+
+**Traces to**: User Story 6, Acceptance Scenario 4
+**Category**: Edge Case
+
+- **Given** a child turn that reaches terminal state `<terminal_state>`
+- **When** the turn's terminal path runs
+- **Then** `CloseSession(childID, "delegate_terminal")` has been invoked for that child
+- **And** `forgetSession`'s first arm matches (`key == sessionID`, `pkg/agent/loop.go:11497-11500`), because a child's `sessionKey` is a bare UUID
+
+**Examples**:
+
+| terminal_state |
+|---|
+| completed |
+| cancelled |
+| failed |
+| abandoned |
+
+> `[grill M-13]` **No unit owned this call site in v1 and no call site exists in the tree.** Verified: `CloseSession` is defined at `pkg/agent/session_end.go:32` and its only non-test callers are `pkg/gateway/websocket.go:1038` (explicit user close), `pkg/agent/loop.go:1048`/`:1064` (idle sweep) and `pkg/agent/session_end.go:865` (bootstrap) — **none is a child-turn terminal**. v1 assigned "W10 (teardown call site)" to U11, whose file is the *user* session-close path. The child's terminal path is in `pkg/agent/subturn.go`; **U7 now owns the call**, U17 owns the entry point, and the cross-unit request is recorded. This spec's own Edge Cases already flagged the risk ("provided something actually calls `CloseSession`") and then left it unassigned.
 
 ---
 
@@ -1063,18 +1404,22 @@ Wave E  (own commit, no behaviour files)
 **Category**: Happy Path
 
 - **Given** the merged tree
-- **When** a repo-wide reference check runs for `IsDelegateChildEntry`
+- **And** a first assertion that the search located **≥ 60** non-test **Go** references to `ParentSpawnCallID` (measured 73 across 9 files; binding rule 4)
+- **When** a Go-source-only reference check runs for `IsDelegateChildEntry`
 - **Then** zero references exist outside tests
 - **And** none of the four read boundaries filters on `ParentSpawnCallID`
+- **But** the search MUST be scoped to `*.go` — an unscoped `rg` matches this spec, the ADR and the review, and can therefore **never** return zero
 
-#### BDD-36 — Scenario: The parent's transcript file contains no child entry
+#### BDD-36 — Scenario: The child's transcript is complete and the parent's contains none of it
 
 **Traces to**: User Story 7, Acceptance Scenario 2
 **Category**: Happy Path
 
-- **Given** one completed delegation
-- **When** the parent session's `transcript.jsonl` is read directly from disk
-- **Then** it contains no entry produced by the child
+- **Given** one completed delegation with `parentID != childID`, producing a known non-zero number `N` of child transcript entries
+- **When** **both** `transcript.jsonl` files are read directly from disk **in the same run**
+- **Then** the parent's contains zero entries produced by the child
+- **And** `<baseDir>/<childID>/transcript.jsonl` contains exactly `N` entries with the expected content
+- **But** the first assertion alone is **not** sufficient `[grill M-9]`: it is satisfied by a child that wrote nothing anywhere, which is the expected outcome when the session mint is broken and FR-002 downgrades every write failure to a counter plus a WARN
 
 #### BDD-37 — Scenario Outline: Each read boundary returns the child's transcript unfiltered
 
@@ -1247,9 +1592,11 @@ Wave E  (own commit, no behaviour files)
 **Traces to**: User Story 10, Acceptance Scenario 4
 **Category**: Edge Case
 
-- **Given** N delegations completed and reaped
-- **When** the delegate tool's internal maps are inspected
-- **Then** they do not retain all N entries
+- **Given** a stated retention bound `C` and TTL `T`, and `N ≫ C` delegations that have reached a terminal state with their last `status` read older than `T`
+- **When** the eviction pass has run
+- **Then** `len(t.tasks) ≤ C` **and** `len(t.sessionIndex) ≤ C`
+- **And** a task still within `T` of its last `status` read is **retained**, so eviction cannot break `delegate action=status`
+- **But** "fewer than N" is explicitly **not** the assertion `[grill M-10]` — it is satisfied by deleting one entry, and with no bound stated the requirement cannot fail
 
 ---
 
@@ -1297,9 +1644,34 @@ Wave E  (own commit, no behaviour files)
 **Category**: Happy Path
 
 - **Given** the merged tree
-- **When** every `cacheMu` critical section is inspected
+- **And** a first assertion that the gate located **≥ 3** `cacheMu` critical sections (binding rule 4; `cacheMu` does not exist today — `grep -c cacheMu pkg/session/unified.go` = 0 — so W15 must create them and a gate that finds zero has found a bug)
+- **When** every located `cacheMu` critical section is inspected
 - **Then** none contains an `os.*` or `fileutil.*` call
 - **And** no code path takes `cacheMu` before a session shard
+
+#### BDD-92 — Scenario: The parent-`Owner` copy never holds two session shards at once
+
+**Traces to**: User Story 11, Acceptance Scenario 7 · User Story 2, Acceptance Scenario 2b
+**Category**: Edge Case
+
+- **Given** an instrumented lock wrapper recording every `sessionLock` acquire and release in order
+- **When** `CreateSessionWithID(childID, …)` copies the parent's `Owner`
+- **Then** the recorded sequence is `acquire(shard(parent)) … release(shard(parent)) … acquire(shard(child))`
+- **And** at no instant are two session shards held simultaneously
+- **And** `ClearAll` / `RetentionSweep` acquire all 64 in **index** order, recorded and asserted
+- **But** the assertion is on the recorded **order**, not on a `-race` run `[grill C-6]` — Go's race detector is not a lock-order checker and reports nothing for an inversion that does not happen to deadlock in that run
+
+#### BDD-95 — Scenario: Listing concurrent with a delete honours the stated consistency model
+
+**Traces to**: User Story 11, Acceptance Scenario 6
+**Category**: Edge Case
+
+- **Given** a store where `ListSessions` reconciles per-session under each session's shard and then snapshots under `cacheMu.RLock` (FR-051)
+- **When** a `DeleteSession` runs concurrently, interleaved so it lands between the reconcile pass and the snapshot
+- **Then** the result MAY omit the deleted session
+- **And** the result MUST NOT contain a session whose directory was already absent when the call began
+- **And** no call panics, deadlocks, or returns a partially-composed meta
+- **But** v1 stated **no** consistency model for `ListSessions` after striping `[grill M-14]` — today the whole method runs under `us.mu.Lock()` and the doc comment at `pkg/session/unified.go:1240-1246` says exactly why ("an RLock cannot be upgraded to a Lock without risking deadlock"), so splitting it creates a window that must be specified rather than discovered
 
 ---
 
@@ -1376,8 +1748,21 @@ Wave E  (own commit, no behaviour files)
 **Category**: Happy Path
 
 - **Given** the merged tree
-- **When** `pkg/session/unified.go:780-785` and `:166-181` are read
+- **And** a first assertion that **both** comment blocks were located by anchor text (binding rule 4)
+- **When** `pkg/session/unified.go:776-785` and `:166-181` are read
 - **Then** neither asserts that every mutation path funnels through one whole-document write
+
+#### BDD-94 — Scenario: Interleaved writer families do not clobber unflushed counters in the cache
+
+**Traces to**: User Story 12, Acceptance Scenario 8
+**Category**: Edge Case
+
+- **Given** a session with K transcript appends recorded and **no** flush, so K's `Stats.*` deltas exist only in the cached `*UnifiedMeta`
+- **When** a `/goal set` round and a `Status` transition both run — each of which today would refresh the whole cache entry via `writeMetaLocked`'s trailing `us.metaCache[sessionID] = meta.Clone()` (`pkg/session/unified.go:798`)
+- **And** a flush is then forced
+- **Then** `stats.json` equals K's exact deltas — zero lost, zero double-counted
+- **And** `goal.json` and `meta.json` each carry their own writer's value
+- **But** neither targeted writer replaced the cache entry wholesale, and a `readMetaLocked` cache-miss compose did not overwrite an entry marked dirty `[grill C-5]`
 
 ---
 
@@ -1386,10 +1771,23 @@ Wave E  (own commit, no behaviour files)
 **Traces to**: User Story 13, Acceptance Scenario 1
 **Category**: Happy Path
 
-- **Given** a session and a flush interval that has just started
+- **Given** a session whose `stats.json` **already exists on disk from a prior forced flush**, with its mtime and content hash recorded `[grill m-2]`
+- **And** a flush interval that has just started
 - **When** K transcript appends occur inside that interval
-- **Then** `stats.json`'s mtime and bytes are unchanged
+- **Then** `stats.json`'s mtime and content hash are unchanged
 - **And** `transcript.jsonl` has exactly K new lines
+- **And** — as a **negative control in the same test** — after the interval elapses with no other action, `stats.json` **does** become current, so "unchanged" can never be satisfied by "never written" `[grill C-4]`
+
+#### BDD-93 — Scenario: The periodic flusher converges with no external trigger at all
+
+**Traces to**: User Story 13, Acceptance Scenario 7
+**Category**: Happy Path
+
+- **Given** a running store with one session and one transcript append recorded
+- **And** **no** other action whatsoever — the store is never closed, no `SetMeta` runs, no `DeleteSession`, no `CloseSession`, and the test drives no manual tick
+- **When** more than one flush interval elapses on the real clock (or on an injected fake advanced without invoking the flush directly)
+- **Then** `stats.json` on disk is current
+- **But** this is the **only** scenario in US-13 that fails when the periodic flusher goroutine is never started `[grill C-4]` — BDD-65 (unchanged bytes), BDD-66 (test-driven flush), BDD-67 (forced points) and BDD-70 (bounded loss) are **all** satisfiable by a store that has flushed nothing
 
 #### BDD-66 — Scenario: The stats file matches the counters exactly after the interval
 
@@ -1450,9 +1848,10 @@ Wave E  (own commit, no behaviour files)
 **Traces to**: User Story 13, Acceptance Scenario 6
 **Category**: Edge Case
 
-- **Given** a session mid-interval with pending counter deltas
+- **Given** a session streamed continuously across **≥ 2** flush intervals, then left mid-interval with pending counter deltas
 - **When** the process is killed without a graceful shutdown and the store is re-opened
 - **Then** the counters are behind by at most that interval's appends
+- **And** the flushed prefix is **non-zero** — the two-sided bound, so a store that flushed nothing fails `[grill C-4]`
 - **And** `transcript.jsonl` is complete
 
 ---
@@ -1474,6 +1873,25 @@ Wave E  (own commit, no behaviour files)
 - **Given** a store with more sessions than one page
 - **When** `GET /api/v1/sessions` is called with paging parameters
 - **Then** a bounded page is returned with a means to fetch the next
+
+#### BDD-102 — Scenario Outline: Every one of the four layers honours the paging parameters
+
+**Traces to**: User Story 14, Acceptance Scenario 2
+**Category**: Happy Path
+
+- **Given** a store holding more sessions than one page
+- **When** `<layer>` is invoked with a limit smaller than the total
+- **Then** it returns at most that many rows and reports how to fetch the next
+- **But** it does **not** load the whole set and slice it in memory — the point of the requirement is that the cost is bounded at every layer, not only at the last one
+
+**Examples** (each verified today to take **no** limit or offset):
+
+| layer | site | owner |
+|---|---|---|
+| store | `UnifiedStore.ListSessions`, `pkg/session/unified.go:1247` | U6 |
+| loop | `AgentLoop.ListAllSessions`, `pkg/agent/loop.go:5046` | U9 |
+| REST | `restAPI.listSessions`, `pkg/gateway/rest.go:758-812` (reads only `agent_id`, `type`, `include_verifier`) | U18 |
+| client | `fetchSessions`, `src/lib/api.ts:1379-1388` | U12 |
 
 #### BDD-73 — Scenario: A wide fan-out does not evict the parent chat from the sidebar
 
@@ -1501,9 +1919,10 @@ Wave E  (own commit, no behaviour files)
 **Traces to**: User Story 15, Acceptance Scenario 1
 **Category**: Error Path
 
-- **Given** a configured root-level delegation cap of N with N in flight
-- **When** the N+1th root-level delegation is attempted
+- **Given** `agents.defaults.subturn.max_concurrent = 24` with 24 root-level delegations in flight
+- **When** the **25th** root-level delegation is attempted
 - **Then** it is refused
+- **And** the cap was resolved from `agents.defaults.subturn.max_concurrent` (`pkg/agent/subturn.go:64-69`), **not** from `Performance.EffectiveMaxParallelAgents()`, which `clampParallelExplicit` would have capped at 16 (`pkg/config/config.go:459-468`) and which would make AC-10's stated topology unrunnable `[operator 4, grill M-7]`
 - **But** it is not queued behind the session-store lock
 
 #### BDD-76 — Scenario: Nested delegation gating is unchanged
@@ -1522,7 +1941,9 @@ Wave E  (own commit, no behaviour files)
 
 - **Given** a refused root-level delegation
 - **When** the refusal surfaces
-- **Then** it names the cap and is visible to the operator
+- **Then** an `ErrorResult` naming the cap is returned to the calling agent
+- **And** an `slog.Error` record is emitted naming the cap, the delegating agent and the target — the shape already in the tree at `pkg/tools/delegate.go:1150-1159`
+- **But** no separate user-facing notification is required `[operator 6]`
 
 ---
 
@@ -1553,8 +1974,9 @@ Wave E  (own commit, no behaviour files)
 
 - **Given** the twelve gate test files named by W22
 - **When** the change lands
-- **Then** each exists and asserts the new invariant
-- **But** none has been deleted and none still asserts the old one
+- **Then** all twelve exist
+- **And** each carries the marker comment `// ADR-057-W22-inverted`
+- **But** the automated gate asserts **presence plus marker only** `[grill m-3]` — a Go test can verify that another file exists and contains a token; it cannot verify that another test's assertions encode a semantic invariant. "Each asserts the new invariant" is a **review-gate** obligation (FR-072), recorded as such rather than claimed as automated coverage
 
 #### BDD-81 — Scenario: Test inversions land in their own commit
 
@@ -1562,6 +1984,7 @@ Wave E  (own commit, no behaviour files)
 **Category**: Happy Path
 
 - **Given** the commit history for this change
+- **And** a first assertion that the W22 commit was **resolved** and its file list is non-empty (binding rule 4 — "commit not found" is a failure, not a pass)
 - **When** the W22 commit is inspected
 - **Then** it contains only `*_test.go` files
 
@@ -1571,7 +1994,8 @@ Wave E  (own commit, no behaviour files)
 **Category**: Edge Case
 
 - **Given** any test written or inverted for this spec
-- **When** it constructs the parent and child session ids
+- **And** a first assertion that the discovery pass found **≥ 20** fixtures constructing a parent/child id pair (binding rule 4)
+- **When** each constructs the parent and child session ids
 - **Then** the two values are not equal
 - **And** the assertion names which of the two was used
 
@@ -1621,9 +2045,78 @@ Wave E  (own commit, no behaviour files)
 **Category**: Edge Case
 
 - **Given** a parent turn mid-delegation with a persisted child lifecycle record
-- **When** the process restarts and the boot sweep runs
+- **When** the process restarts and the boot sweep runs (`pkg/agent/boot_sweep.go`, owned by U19)
 - **Then** the child's lifecycle record is reconciled to a terminal state
-- **And** no transcript write lands in a directory with no `meta.json`
+- **And** a transcript write attempted against the un-minted child id returns a **non-nil error** from `AppendTranscriptStrict` and creates no directory — asserted positively, not as "no orphan directory was found", which is satisfied by a run that wrote nothing anywhere `[grill C-3, §4 item 8]`
+
+---
+
+#### BDD-107 — Scenario: A child id colliding with an existing session directory fails loudly
+
+**Traces to**: User Story 2, Acceptance Scenario 1
+**Category**: Error Path
+
+- **Given** an existing session directory whose name equals the `childID` the next delegation will mint, containing a `meta.json`, a non-empty `transcript.jsonl` and a distinct `Owner`
+- **When** `CreateSessionWithID(childID, …)` runs
+- **Then** it returns a non-nil error naming the collision
+- **And** the pre-existing directory's `transcript.jsonl`, `meta.json` and `stats.json` are byte-unchanged
+- **But** the child does **not** silently adopt that session — `createSessionLocked` calls `os.MkdirAll` (`pkg/session/unified.go:463`), which is idempotent and silent, so without this requirement the adoption is the default behaviour
+
+---
+
+#### BDD-101 — Scenario: The session list returns roots with a child count, never children inline
+
+**Traces to**: User Story 19, Acceptance Scenario 1
+**Category**: Happy Path
+
+- **Given** a parent chat with 24 child sessions created after it
+- **When** `GET /api/v1/sessions` is called with default paging
+- **Then** the parent appears with `child_count == 24`
+- **And** zero subordinate sessions appear as top-level rows
+- **But** the children are not omitted from the system — they remain reachable, a page at a time, via `parent_session_id`
+
+#### BDD-103 — Scenario: Expanding a node returns its direct children only, a page at a time
+
+**Traces to**: User Story 19, Acceptance Scenarios 2 and 3
+**Category**: Happy Path
+
+- **Given** a depth-3 tree beneath one chat
+- **When** `GET /api/v1/sessions?parent_session_id=<nodeID>` is called with paging parameters at each level in turn
+- **Then** each call returns exactly that node's **direct** children, bounded by the page size, ordered by recency
+- **And** no call returns a grandchild
+- **And** the total request count is O(expanded nodes), not O(all sessions)
+
+#### BDD-104 — Scenario: The sidebar spends its budget on roots and collapses children
+
+**Traces to**: User Story 19, Acceptance Scenario 4
+**Category**: Edge Case
+
+- **Given** a parent chat with 24 children created after it
+- **When** the sidebar renders
+- **Then** the parent chat is present
+- **And** its children are collapsed behind an expand affordance and are not counted against the visible-root budget
+- **But** the current behaviour — `maxVisible = 9` applied to a flat recency list (`src/components/layout/Sidebar.tsx:456-457`) — evicts the parent, which is the R-9 symptom this story exists to remove
+
+#### BDD-105 — Scenario: Search results nest matching children under their parent and virtualize
+
+**Traces to**: User Story 19, Acceptance Scenario 5
+**Category**: Edge Case
+
+- **Given** `SearchModal` open against a store with far more sessions than fit one viewport, where only a **child** matches the query
+- **When** results render
+- **Then** the matching child appears nested under its parent, with the parent shown for context even though it did not match
+- **And** the list is virtualized — the rendered node count is bounded by the viewport, not by the result count
+- **But** today the component fetches the full list (`src/components/search/SearchModal.tsx:363`) and renders `groups.map(...)` unwindowed (`:687`), which under D1 grows by every delegated child at every depth
+
+#### BDD-106 — Scenario: An orphaned child is listed as a root, not dropped
+
+**Traces to**: User Story 19, Acceptance Scenario 6
+**Category**: Error Path
+
+- **Given** a child session whose parent session has been deleted, so its `ParentSessionID` names a session that no longer resolves
+- **When** the session list renders
+- **Then** the orphan appears as a **root-level** row
+- **But** it is not silently omitted — a session that exists on disk and is unreachable in the UI is R-7's shape with a different surface
 
 ---
 
@@ -1646,40 +2139,44 @@ Wave E  (own commit, no behaviour files)
 
 Write these before the implementation code. Order is by dependency; the Unit tier for a unit's own primitive comes before any Integration test that consumes it.
 
+> **Every test below goes in a NEW file named `<subject>_adr057_test.go`** (ownership Rule 5). `[grill M-4]` v1 gave U21 exclusive ownership of twelve `*_test.go` files while assigning eight other units tests that naturally live in exactly those files (`subturn_test.go`, `steering_test.go`, `interrupt_by_session_key_test.go`, `cancel_subagent_cascade_test.go`, `cancel_orphan_delegate_test.go`, `orphan_watch_test.go`, `approval_grant_delegation_test.go`) — and simultaneously required those units to write tests **first** and U21 to land **last, in a commit containing no behaviour files**. Those two constraints are mutually exclusive for every such test. New files resolve it: U21 touches only the twelve, everyone else touches only their own new file.
+>
+> **The `Level` column is a claim about what the test can detect, not a label.** A test marked Integration that constructs its store with a fake is a Unit test that lies. Binding rules 1–4 apply to every row.
+
 | # | Test name | Level | Unit | Traces to BDD | What it verifies |
 |---|---|---|---|---|---|
 | 1 | `TestAppendTranscriptStrict_UnknownSession_ErrorsAndCreatesNothing` | Unit | U2 | BDD-01 | Non-nil error **and** `os.Stat` IsNotExist on the would-be dir |
 | 2 | `TestAppendTranscriptStrict_KnownSession_AppendsExactlyOneLine` | Unit | U2 | BDD-02 | Line count delta of exactly 1 |
-| 3 | `TestSessionIDTypes_DoNotInterconvert` | Unit | U1 | BDD-05 | Compile-fail fixture / `go vet`-style gate |
-| 4 | `TestCreateSessionWithID_UsesExactIDAndCopiesOwner` | Unit | U2 | BDD-06, BDD-07 | Directory name == supplied id; `meta.Owner` copied |
+| 3 | `TestSessionIDTypes_DoNotInterconvert` | Unit | U1 | BDD-05 | Fixture **located** first (absence = failure), then `go build` on it MUST fail naming both types |
+| 4 | `TestCreateSessionWithID_UsesExactIDAndCopiesOwner` | Unit | U2 | BDD-06, BDD-07 | Directory name == supplied id; `meta.Owner` copied from the parent (verified absent from the `UnifiedMeta` literal at `unified.go:448-460`) |
 | 5 | `TestTurnTranscriptWriters_SurfaceUnresolvableSession` | Unit | U3 | BDD-03 | 4 writers → counter + WARN each |
 | 6 | `TestWebsocketStreamedWrite_SurfacesUnresolvableSession` | Unit | U11 | BDD-03 | `pkg/gateway/websocket.go:4256` |
-| 7 | `TestAbandonedTurn_SuppressedWriteIsCounted` | Unit | U3 | BDD-04 | Suppression emits a signal |
+| 7 | `TestAbandonedTurn_SuppressionIsLoggedAndCountedDelta` | Unit | U3 | BDD-04 | **Renamed.** Asserts the WARN **record** (the new artefact) plus a `AbandonedWritesSuppressed()` **delta of exactly 1**. `[grill C-2]` The old name/assertion was green against the unmodified tree — `turn.go:1297` already increments and `turn_test.go:221` already covers it |
 | 8 | `TestStripedSessionLock_ShardIsolation` | Unit | U4 | BDD-57 | Distinct ids map to distinct shards; `Get` is stable per key |
-| 9 | `TestCacheMu_NoFilesystemInCriticalSection` | Unit | U4 | BDD-57 | Static/AST gate over `cacheMu` regions |
+| 9 | `TestCacheMu_NoFilesystemInCriticalSection` | Unit | U4 | BDD-57, BDD-97 | AST gate; asserts **≥ 3 `cacheMu` regions located** before asserting the exclusion |
 | 10 | `TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly` | Unit | U13 | BDD-18 | Depth-1 only; grandchild excluded |
 | 11 | `TestLifecycleParentIndex_MaintainedInsidePersist` | Unit | U13 | BDD-19 | Index updated under the striped lock; one file read per query |
-| 12 | `TestLifecycleDocComments_NoSharedParentChildClaim` | Unit | U13, U14 | BDD-22 | Doc-truth gate over the three comment blocks |
+| 12 | `TestLifecycleDocComments_NoSharedParentChildClaim` | Unit | U13, U14 | BDD-22, BDD-97 | Doc-truth gate; asserts **all 3 blocks located** (`lifecycle.go:225-228`, `:572-575`, `list_jobs_sources.go:311-315`) before asserting content |
 | 13 | `TestReadUnifiedMeta_ComposesFourFiles` | Unit | U5 | BDD-58 | All four read and composed |
 | 14 | `TestReadUnifiedMeta_MissingGroupFilesAreZeroValue` | Unit | U5 | BDD-60 | Success with zero stats/goal/loop |
 | 15 | `TestReadUnifiedMeta_MissingMetaJSONIsError` | Unit | U5 | BDD-61 | Error, not empty session — asymmetry asserted in both directions |
 | 16 | `TestReadUnifiedMeta_CorruptGroupFileErrors` | Unit | U5 | BDD-62 | Truncated `goal.json` → error for that group |
-| 17 | `TestMetaWriters_WriterIsolationByteLevel` | Unit | U5 | BDD-59 | Each op leaves the other files' bytes identical |
+| 17 | `TestMetaWriters_WriterIsolationByteLevel` | Unit | U5 | BDD-59, BDD-97 | Asserts all 4 files exist, non-zero, with distinct hashes **first**; then each op leaves the others byte-identical |
 | 18 | `TestUnifiedMetaMarshal_ByteIdenticalAcrossSplit` | Unit | U5 | BDD-63 | Golden-bytes comparison |
-| 19 | `TestMetaDocComments_NoSingleFunnelClaim` | Unit | U5 | BDD-64 | Doc-truth gate |
-| 20 | `TestStatsThrottle_NoFileWriteWithinInterval` | Unit | U6 | BDD-65 | `stats.json` mtime + bytes unchanged; transcript grows |
+| 19 | `TestMetaDocComments_NoSingleFunnelClaim` | Unit | U5 | BDD-64, BDD-97 | Doc-truth gate; both blocks (`unified.go:776-785`, `:166-181`) **located first** |
+| 20 | `TestStatsThrottle_NoFileWriteWithinInterval` | Unit | U6 | BDD-65 | Pre-existing `stats.json` from a forced flush; mtime + content hash unchanged; transcript grows; **negative control in the same test**: after the interval it *does* become current `[grill C-4, m-2]` |
 | 21 | `TestStatsThrottle_ExactCountersAfterInterval` | Unit | U6 | BDD-66 | Sum equality, no lost/double delta |
 | 22 | `TestStatsThrottle_ForcedFlushPoints` | Unit | U6 | BDD-67 | 4 flush points, each independently |
 | 23 | `TestEventWrites_NotThrottled` | Unit | U6 | BDD-68 | goal/loop/status/title on disk immediately |
 | 24 | `TestListSessions_RecencyExactInProcess` | Unit | U6 | BDD-69 | In-memory `UpdatedAt` bump orders correctly |
-| 25 | `TestApprovalGrants_InheritKeyedToChildSession` | Unit | U17 | BDD-31, BDD-32 | Grant resolves under the child key, and only there |
+| 25 | `TestApprovalGrants_InheritFromTwoKeys` | Unit | U17 | BDD-31, BDD-32, BDD-88 | **Renamed and rewritten `[grill C-1]`.** Distinct source/destination session ids; asserts the grant was **absent** under the destination key beforehand, resolves under it after, and **still** resolves under the source (copy, not move) |
 | 26 | `TestSessionUploadsDir_RejectsUnsafeID` | Unit | U20 | BDD-79 | Existing `("", false)` contract preserved |
-| 27 | `TestInterruptScope_RequiredByCompiler` | Unit | U8 | BDD-45 | Compile-fail fixture |
+| 27 | `TestInterruptScope_RequiredByCompiler` | Unit | U8 | BDD-45, BDD-97 | Fixture **located** first (absence = failure), then `go build` MUST fail |
 | 28 | `TestRoutingSessionID_RootEqualsOwnSessionID` | Unit | U3 | BDD-12 | Root behaviour byte-identical |
-| 29 | `TestRoutingSessionID_ConsumerSetIsClosed` | Unit | U3 | BDD-17 | Enumerates non-test reads; fails on any outside the set |
+| 29 | `TestRoutingSessionID_ConsumerSetIsClosed` | Unit | U3 | BDD-17, BDD-97 | Asserts it enumerated **≥ 10** reads (7 role-B + 3 pre-arm) **plus ≥ 1** WS-stamping site before asserting none is outside the set. `[grill C-3]` A silently empty enumeration leaves the entire D2 safety property unenforced while reporting green |
 | 30 | `TestRecentActivityLines_LogsEmptyPath` | Unit | U14 | BDD-51 | Empty path logged |
-| 31 | `TestDelegateTaskMaps_HaveDeletionPath` | Unit | U14 | BDD-52 | Maps shrink after reap |
-| 32 | `TestSpawnSubTurn_ChildOwnsRealSession` | Integration | U7 | BDD-06 | `meta.json` exists at `<baseDir>/<childID>` after a real spawn |
+| 31 | `TestDelegateTaskMaps_BoundedAfterNCompletions` | Unit | U14 | BDD-52 | **Renamed `[grill M-10]`.** N ≫ C terminal tasks past TTL → `len(t.tasks) ≤ C` and `len(t.sessionIndex) ≤ C`; a task within TTL is retained |
+| 32 | `TestSpawnSubTurn_ChildOwnsRealSession` | Integration | U7 | BDD-06 | `meta.json` exists at `<baseDir>/<childID>` after a real spawn. File: `pkg/agent/subturn_adr057_test.go` (NOT `subturn_test.go` — U21's) |
 | 33 | `TestSpawnSubTurn_NoHistoryFlagRemoved` | Integration | U7 | BDD-09 | Options carry no `NoHistory`; `TranscriptSessionID == childID` |
 | 34 | `TestSpawnSubTurn_OwnerInheritedAndInstalled` | Integration | U7, U9 | BDD-07, BDD-08 | `WithSessionOwner` installs; entity stamped with parent's owner |
 | 35 | `TestChildMeta_ParentSessionIDAndSubordinateType` | Integration | U5, U7 | BDD-10 | Depth-2 names depth-1, not the chat |
@@ -1700,19 +2197,19 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 50 | `TestOwnershipWalk_SiblingRejectedAncestorAllowed` | Integration | U14 | BDD-41, BDD-42 | Sibling rejected, root-over-grandchild allowed |
 | 51 | `TestOwnershipWalk_DepthBounded` | Integration | U14 | BDD-43 | Terminates at the bound |
 | 52 | `TestOwnershipWalk_AllSixGatedActions` | Integration | U14 | BDD-44 | Six sites, both directions |
-| 53 | `TestInterrupt_SubtreeAtChildSparesParentAndSibling` | Integration | U8 | BDD-46 | Inverted `interrupt_by_session_key_test.go` assertion |
+| 53 | `TestInterrupt_SubtreeAtChildSparesParentAndSibling` | Integration | U8 | BDD-46 | The new-invariant assertion, in `pkg/agent/steering_adr057_test.go`. U21 separately inverts `interrupt_by_session_key_test.go` `[grill M-4]` |
 | 54 | `TestInterrupt_SubtreeAtChatReachesAllDepths` | Integration | U8 | BDD-47 | Three depths |
 | 55 | `TestDelegateStatus_SyncAndAsyncSnapshotsNonEmpty` | Integration | U14 | BDD-49, BDD-50 | `executeSync` now registers state |
-| 56 | `TestParentTranscriptContainsNoChildEntry` | Integration | U7, U18 | BDD-36 | **Asserted on the file**, so a re-added filter cannot satisfy it |
+| 56 | `TestChildTranscriptCompleteAndParentClean` | Integration | U7, U18 | BDD-36 | **Renamed and merged `[grill M-9]`.** One run, both files: parent gains **zero** child entries **and** `<baseDir>/<childID>/transcript.jsonl` gains exactly N with expected content. The parent-only half is satisfied by a child that wrote nothing |
 | 57 | `TestReadBoundaries_ReturnChildTranscriptUnfiltered` | Integration | U18 | BDD-37 | All four boundaries |
-| 58 | `TestIsDelegateChildEntry_ZeroNonTestReferences` | Integration | U5, U18 | BDD-35 | Repo-wide reference gate |
+| 58 | `TestIsDelegateChildEntry_ZeroNonTestReferences` | Integration | U5, U18 | BDD-35, BDD-97 | Go-source-only gate; asserts **≥ 60** non-test Go `ParentSpawnCallID` references first (measured 73). Also fails if U5's compile shim survived U18 (hard ordering 6) |
 | 59 | `TestChildEntries_RetainParentSpawnCallID` | Integration | U7, U18 | BDD-38 | Provenance retained with a named reader |
 | 60 | `TestVerifierWindow_OwnSessionEntriesOnly` | Integration | U18 | BDD-39 | Adjudicated session only |
 | 61 | `TestPreCutoverSession_ShowsPreviouslyHiddenNarration` | Integration | U18 | BDD-40 | R-16 asserted as the accepted outcome, not as a bug |
 | 62 | `TestUploadsCascadeDeleteAcrossDescendants` | Integration | U20, U18 | BDD-78 | Depths 1 and 2 both removed |
 | 63 | `TestRootDelegationAdmission_RefusesNotQueues` | Integration | U19 | BDD-75, BDD-77 | N+1 refused, operator-visible |
 | 64 | `TestNestedDelegationGating_Unchanged` | Integration | U19 | BDD-76 | `concurrencySem` behaviour preserved |
-| 65 | `TestBootSweep_ReconcilesChildAcrossRestart` | Integration | U13, U19 | BDD-87 | No orphan-directory write after restart (AC-19) |
+| 65 | `TestBootSweep_ReconcilesChildAcrossRestart` | Integration | U13, U19 | BDD-87 | Record reconciled to terminal **and** a write against the un-minted child id returns a **non-nil error** — asserted positively, not as "no orphan dir found" |
 | 66 | `TestMessageParent_DrainedByDirectParentAtDepth3` | Integration | U14 | BDD-85 | Producer and consumer agree (AC-16) |
 | 67 | `TestPerChildMessageCeiling_IsPerDirectParent` | Integration | U14 | BDD-84 | Aggregate is (children × ceiling), asserted (AC-15) |
 | 68 | `TestFollowUpResume_SeesPreviousGeneration` | Integration | U7 | BDD-83 | Intended behaviour pinned (AC-11) |
@@ -1720,7 +2217,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 69 | `TestCrossProcess_ConcurrentSessionWritesDoNotLoseUpdates` | Cross-process | U4 | BDD-53 | Re-execs the binary as real OS processes |
 | 70 | `TestStoreSharding_SlopeNotDoubling` | Cross-process | U4 | BDD-53 | Asserts the **slope** at N and 2N against a pre-change baseline; no machine constant |
 | 71 | `TestListSessions_DoesNotBlockOnUnrelatedCreate` | Integration | U4 | BDD-54 | Real fsyncs in flight |
-| 72 | `TestStreamingUnaffectedByForeignSessionCreate` | Integration | U4 | BDD-55 | Inter-token distribution preserved |
+| 72 | `TestStreamingUnaffectedByForeignSessionCreate` | Integration | U4 | BDD-55 | **Concrete assertion `[grill M-7, operator 3]`:** A's median inter-token interval during B's create is within the **slope** bound of its interval with no concurrent create, baselined on the pre-change store. No millisecond constant |
 | 73 | `TestStoreConcurrency_RaceClean` | Integration | U4 | BDD-56 | `-race`; `ClearAll`/`RetentionSweep` interleaved |
 | 74 | `TestStatsThrottle_UngracefulKillBoundedLoss` | Cross-process | U6 | BDD-70 | Real SIGKILL, real re-open |
 | 75 | `TestFrameContract_BothIDsRoundTrip` | E2E | U10, U11, U12 | BDD-16 | All 19 session-scoped types |
@@ -1729,9 +2226,46 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 78 | `TestDrillDownReachableWithoutVerboseChat` | E2E | U12, U18 | BDD-71, BDD-74 | Only `GET /api/v1/sessions/{childID}` |
 | 79 | `TestSessionListPaginates` | E2E | U12, U18 | BDD-72 | All four layers |
 | 80 | `TestSidebarRetainsParentUnderWideFanOut` | E2E | U12 | BDD-73 | 24 children, parent still shown |
-| 81 | `TestGateTestsInvertedNotDeleted` | Unit | U21 | BDD-80 | All twelve files present and asserting the new invariant |
-| 82 | `TestW22CommitContainsOnlyTests` | Unit | U21 | BDD-81 | Commit-shape gate |
-| 83 | `TestAllFixturesUseDistinctParentChildIDs` | Unit | U21 | BDD-82 | Closes the `message_parent_real_context_test.go:16-17` hole |
+| 81 | `TestGateTestsInvertedNotDeleted` | Unit | U21 | BDD-80, BDD-97 | **Scoped `[grill m-3]`:** all twelve present **and** each carries `// ADR-057-W22-inverted`. Semantic-invariant verification is a review gate (FR-072), not this test |
+| 82 | `TestW22CommitContainsOnlyTests` | Unit | U21 | BDD-81, BDD-97 | Resolves the commit and asserts a **non-empty** file list first; "commit not found" is a failure |
+| 83 | `TestAllFixturesUseDistinctParentChildIDs` | Unit | U21 | BDD-82, BDD-97 | Asserts **≥ 20 fixtures discovered** first, then all pairs distinct. Closes the `message_parent_real_context_test.go:16-17` hole |
+
+#### Tests added in v2
+
+`[grill C-1…C-6, M-6…M-14; operator 1–4]` Each row names the finding it closes. Numbering continues from #83; no existing number was reused.
+
+| # | Test name | Level | Unit | Traces to BDD | What it verifies | Closes |
+|---|---|---|---|---|---|---|
+| 84 | `TestApprovalGrants_InheritFrom_SourceMissIsNotSilent` | Unit | U17 | BDD-89 | Empty source set → log record naming both keys + counter increment; **not** a bare `return` | C-1 |
+| 85 | `TestApprovalGrants_InheritFrom_SelfDelegationUnion` | Unit | U17 | BDD-88 | Same agent, **different** sessions: union at the destination, source untouched (dataset rows 3–4) | C-1 |
+| 86 | `TestApprovalRegistry_EntryCarriesActingSessionID` | Integration | U17, U11 | BDD-90 | A child's pending entry's `SessionID` is the child's, not the chat's (`approvals.go:85`) | M-6 |
+| 87 | `TestApprovalRoundTrip_ChildApprovedResolvesByApprovalID` | Integration | U17, U11, U12 | BDD-91 | Client **approves**; resolution is by approval id, so the routing-key change cannot break it | M-6 |
+| 88 | `TestCreateSessionWithID_NeverHoldsTwoSessionShards` | Unit | U2, U4 | BDD-92 | Instrumented lock wrapper records acquire/release order; parent shard released before child's; `ClearAll` in index order | C-6 |
+| 89 | `TestStatsThrottle_UnforcedFlushConverges` | Unit | U6 | BDD-93 | One append, **no** other action, > 1 interval → `stats.json` current. The only test that fails on a dead flusher | C-4 |
+| 90 | `TestStatsCache_FieldGroupIsolationUnderInterleavedWriters` | Unit | U6 | BDD-94 | K appends unflushed + `/goal set` + `Status` → forced flush yields exactly K's deltas; no wholesale cache replace | C-5 |
+| 91 | `TestNegativeGates_AssertPositiveLowerBounds` | Unit | U21 | BDD-97 | Meta-gate: each of the eleven gates fails when its search is deliberately broken (mutation-style: rename the target, assert the gate goes **red**) | C-3 |
+| 92 | `TestListSessions_ConcurrentDeleteConsistency` | Integration | U6 | BDD-95 | Delete interleaved between reconcile and snapshot; stated model honoured; no panic/deadlock/partial meta | M-14 |
+| 93 | `TestDelegateTaskMaps_RetainWithinTTL` | Unit | U14 | BDD-52 | The complement of #31: a terminal task **within** TTL is **not** evicted, so eviction cannot break `action=status` | M-10 |
+| 94 | `TestChildCloseSession_FiresOnEveryTerminalState` | Integration | U7, U17 | BDD-96 | completed / cancelled / failed / abandoned each invoke `CloseSession` from the child-turn terminal path | M-13 |
+| 95 | `TestFrameContract_ProducingIDAbsentForClassB` | E2E | U10, U11, U12, U23 | BDD-98 | Root- and gateway-produced types omit `producing_session_id` | M-8 |
+| 96 | `TestFrameContract_DocumentedGapsAssertedForClassC` | E2E | U10, U11, U23 | BDD-99 | `rate_limit` and `replay_done` behave exactly as documented; the W5 audit artefact records both | M-8, operator 11 |
+| 97 | `TestCancel_AuditNamesEveryDescendantAtDepth3` | Integration | U15, U13 | BDD-100 | `descendants_canceled` contains all three ids — **non-holdout** | M-12 |
+| 98 | `TestSessionList_RootsOnlyWithChildCount` | Integration | U18 | BDD-101 | 1 parent + 24 children → 1 row, `child_count == 24`, zero children inline | operator 1 |
+| 99 | `TestSessionList_ExpandReturnsDirectChildrenPaged` | Integration | U18, U13 | BDD-103 | `?parent_session_id=…&limit=n` returns direct children only, a page at a time, at every depth | operator 1 |
+| 100 | `TestSessionListLayers_EachHonoursPaging` | Integration | U6, U9, U18, U12 | BDD-102 | All four layers bound their own cost; none loads-all-then-slices | M-1 |
+| 101 | `TestSidebarTree_ParentSurvivesWideFanOut` | E2E | U24 | BDD-104 | 24 children, parent present, children collapsed, root budget unspent on children | operator 1 |
+| 102 | `TestSearchModalTree_NestedAndVirtualized` | E2E | U24 | BDD-105 | Child-only match shows its parent for context; rendered node count bounded by viewport | operator 1 |
+| 103 | `TestMetaCache_HitCostsZeroDiskReads` | Unit | U5 | BDD-58 | Instrumented FS counter: a `GetMeta`/`ListSessions` cache hit performs **zero** reads after the split | M-11 (FR-058) |
+| 104 | `TestMigrateLegacy_BytesUnchanged` | Unit | U5 | BDD-61 | Golden-bytes gate on `migrateLegacy`/`writeUnifiedMetaDirect` output; also asserts no pre-split fused reader exists | M-11 (FR-060) |
+| 105 | `TestFlushInterval_ConfigKeyDefaultAndOverride` | Unit | U6 | BDD-93 | The key exists, defaults to **5 s**, and a non-default value is honoured end to end | M-11 (FR-067), operator 2 |
+| 106 | `TestParentageWalk_NeverReadsOwnerScopeIDOrParentAgentID` | Unit | U13, U14 | BDD-18, BDD-21 | Static gate over the walk's code path: **zero** reads of either field | M-11 (FR-023) |
+| 107 | `TestStoreSharding_ThroughputRisesPast64Sessions` | Cross-process | U4 | BDD-53 | Throughput still increases at 64 → 128 concurrent sessions, proving no fixed cap above the tested N | M-11 (FR-052) |
+| 108 | `TestOrphanSession_ListedAsRoot` | Integration | U18 | BDD-106 | A child whose parent was deleted appears as a root row, not omitted | operator 1 |
+| 109 | `TestDrillDown_NoSubagentMessageOrStateReferences` | Unit | U12, U24 | BDD-74, BDD-97 | Static gate over `src/`: ≥ 1 `producing_session_id` reference located first, then **zero** non-test references to `subagent_message`/`subagent_state` | M-11 (FR-047) |
+| 110 | `TestRootDelegationCap_SourcedFromSubTurnMaxConcurrent` | Unit | U19 | BDD-75 | The resolved cap came from `agents.defaults.subturn.max_concurrent` (unclamped) and **not** from `Performance.EffectiveMaxParallelAgents()`; an operator-set 24 survives | operator 4, M-7 |
+| 111 | `TestCreateSessionWithID_RejectsCollidingDirectory` | Unit | U2 | BDD-107 | A pre-existing directory at the target id → loud failure; the child never adopts its transcript/meta/owner/stats | STRIDE: tampering |
+
+**Test count**: 112 entries — #1 … #111 plus #68a. v1 had 84 (#1 … #83 plus #68a).
 
 ### Test Datasets
 
@@ -1787,16 +2321,21 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 
 #### Dataset: Stats-throttle timing
 
+> Every "unchanged" row below requires `stats.json` to **already exist from a prior forced flush** `[grill m-2]`, and every "unchanged" assertion is paired with the negative control in BDD-65. Rows 1–3 and 7 were all trivially satisfiable in v1 by a store that never wrote `stats.json` at all `[grill C-4]`.
+
 | # | Appends | Elapsed vs flush interval | Boundary type | Expected `stats.json` | Traces to |
 |---|---|---|---|---|---|
-| 1 | 0 | 0 | Zero | unchanged | BDD-65 |
-| 2 | 1 | < interval | One | unchanged | BDD-65 |
-| 3 | 1000 | < interval | Very large burst | unchanged | BDD-65 |
+| 1 | 0 | 0 | Zero | unchanged (file pre-exists) | BDD-65 |
+| 2 | 1 | < interval | One | unchanged (file pre-exists) | BDD-65 |
+| 3 | 1000 | < interval | Very large burst | unchanged (file pre-exists) | BDD-65 |
 | 4 | 1 | ≥ interval | Min above bound | exact counters | BDD-66 |
 | 5 | 1000 | ≥ interval | Large + bound | exact counters, no double-count | BDD-66 |
 | 6 | K | forced flush before interval | Alternate trigger | exact counters | BDD-67 |
-| 7 | K | SIGKILL before interval | Resource loss | behind by ≤ K; transcript complete | BDD-70 |
+| 7 | K spread over **≥ 2** intervals | SIGKILL mid-interval | Resource loss | **two-sided:** shortfall ≥ 0 **and** ≤ the final interval's appends, **and** the flushed prefix is strictly **> 0** | BDD-70 |
+| 7a | K | SIGKILL **within** the first interval | Min resource loss | shortfall MAY be all K; transcript complete | BDD-70 |
 | 8 | K on session A, 0 on session B | ≥ interval | Dirty-set selectivity | only A's file rewritten | BDD-59 |
+| 9 | 1, then **no action of any kind** | > interval, real/advanced clock | **Unforced convergence** | current — this row fails iff the periodic flusher was never started | BDD-93 |
+| 10 | K, then a `/goal set` **and** a `Status` transition, then a forced flush | any | Cross-writer-family interleave | exactly K's deltas; `goal.json` and `meta.json` each carry their own writer's value | BDD-94 |
 
 #### Dataset: Sharding concurrency slope
 
@@ -1817,8 +2356,40 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 2 | depth-1 child | chat id | child id | Direct child | BDD-16 |
 | 3 | depth-3 grandchild | chat id | grandchild id | Deep nesting | BDD-16 |
 | 4 | self-delegation | chat id | child id | Same agent, different session | BDD-16 |
-| 5 | `rate_limit` (no `SessionID` field) | reconstructed | absent | Pre-existing strain | BDD-16 |
-| 6 | `replay_done` (absent from `WsFrameType` enum) | routing id | absent | Pre-existing gap | BDD-16 |
+| 5 | `rate_limit` (no `SessionID` field, `events.go:525-533`) | reconstructed | absent | Pre-existing strain — **class (c)** | BDD-99 |
+| 6 | `replay_done` (absent from `WsFrameType` enum; only occurrence tree-wide is `chat.ts:1238`) | routing id | absent | Pre-existing gap — **class (c)** | BDD-99 |
+| 7 | gateway replay (`replay_message`) | routing id | absent | Not turn-produced — **class (b)** | BDD-98 |
+| 8 | chat lifecycle (`session_started`, `session_close_ack`) | routing id | absent | Not turn-produced — **class (b)** | BDD-98 |
+| 9 | parent-emitted span frames (`subagent_start`, `subagent_end`) | routing id | absent | Producer **is** the routing session — **class (b)** | BDD-98 |
+| 10 | each of `agent_switched`, `task_status_changed`, `system_overload`, `cancel_stage`, `goal_status`, `loop_status` | per its assigned class | per its assigned class | **Unclassified pending the W5 audit** — FR-089 requires each to be assigned to (a)/(b)/(c) and committed; this spec deliberately does not guess | BDD-16 / BDD-98 / BDD-99 |
+
+#### Dataset: Approval-grant inheritance keys
+
+`[grill C-1]` The whole point is that source and destination differ. A row where they coincide is the trap FR-031 fell into.
+
+| # | Source key | Destination key | Boundary type | Expected | Traces to |
+|---|---|---|---|---|---|
+| 1 | `{parentSid, parentAgent}` holding `{T}` | `{childSid, childAgent}` empty | Valid representative | `T` resolves under the destination **and** still under the source | BDD-88 |
+| 2 | `{parentSid, parentAgent}` **empty** | `{childSid, childAgent}` empty | Missing source | no-op, **logged and counted** | BDD-89 |
+| 3 | `{parentSid, agentX}` holding `{T}` | `{childSid, agentX}` — self-delegation | Same agent, different session | union under the destination; source untouched | BDD-88 |
+| 4 | `{parentSid, parentAgent}` holding `{T}` | `{childSid, childAgent}` already holding `{U}` | Pre-existing destination | destination holds `{T, U}` — union, not replace (`approvalgrants.go:123-128`) | BDD-88 |
+| 5 | `parentSid == childSid` | — | **Degenerate / forbidden** | test fixture MUST NOT construct this; a fixture whose two ids coincide cannot distinguish a working re-key from C-1's no-op | BDD-88, FR-074 |
+| 6 | empty `srcSessionID` or empty agent id | — | Empty | no-op, logged and counted (existing guard, `approvalgrants.go:113-115`) | BDD-89 |
+
+#### Dataset: Session-list hierarchy and paging
+
+`[operator 1]`
+
+| # | Store contents | Request | Boundary type | Expected | Traces to |
+|---|---|---|---|---|---|
+| 1 | 1 chat, 0 children | default paging | Min | 1 row, `child_count == 0` | BDD-101 |
+| 2 | 1 chat, 24 children | default paging | Representative fan-out | 1 row, `child_count == 24`, zero children inline | BDD-101 |
+| 3 | 1 chat, 24 children | `?parent_session_id=<chat>&limit=10` | Page boundary | exactly 10 direct children + a next cursor | BDD-103 |
+| 4 | depth-3 tree | `?parent_session_id=<depth-1 child>` | Nesting | that node's direct children only; zero grandchildren | BDD-103 |
+| 5 | more roots than one page | `?limit=<n>` | Max | at most n roots; no page boundary ever splits a parent from its children, because children are never inline | BDD-102 |
+| 6 | a child whose parent was deleted | default paging | Orphan / corrupted state | orphan appears as a **root** row | BDD-106 |
+| 7 | 0 sessions | default paging | Empty | empty page, HTTP 200, not 404 | BDD-102 |
+| 8 | `?parent_session_id=<id that does not exist>` | — | Missing entity | empty page, HTTP 200 — "no children" is not "no such session"; a 404 here would make an orphan indistinguishable from a childless node | BDD-103 |
 
 ### Regression Test Requirements
 
@@ -1880,7 +2451,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 
 - **FR-001**: The system MUST provide `AppendTranscriptStrict`, which returns a non-nil error for a session id with no `meta.json` and MUST NOT create any directory for it.
 - **FR-002**: All five transcript writer sites (`pkg/agent/turn.go:1130`, `:1208`, `:1270`, `:1325`; `pkg/gateway/websocket.go:4256`) plus `pkg/agent/external_dispatch.go:463`, `:550-555`, `:562-564` and `pkg/agent/approval_transcript.go:179`, `:183` MUST use the strict primitive and MUST surface its error as a counter increment plus a WARN naming the session id.
-- **FR-003**: The `ts.abandoned` write suppression (`pkg/agent/turn.go:1296-1299`) MUST emit a counted, logged signal rather than returning silently.
+- **FR-003**: The `ts.abandoned` write suppression (`pkg/agent/turn.go:1295-1298`) MUST emit a **WARN naming the session id and the suppression reason**. The existing `abandonedWritesSuppressed` counter is **retained unchanged** — it already increments here and at six other sites, is declared at `turn.go:25`, documented at `:21-24` as backing `omnipus_abandoned_writes_suppressed_total`, and exported at `:44`. Any test of this requirement MUST assert the **log record** and a counter **delta** across the call, never the counter's existence. `[grill C-2 — v1's premise that this path is "entirely silent" was false, and the test written from it was green against the unmodified tree]`
 - **FR-004**: The system MUST define `SessionID` and `RoutingSessionID` as distinct named types that do not implicitly interconvert.
 
 ### Child owns a real session (W1, W2)
@@ -1909,7 +2480,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-020**: A secondary parent index MUST be maintained inside `Persist`, under the existing 64-shard striped lock, so "children of X" is one file read and a transitive walk is O(descendants).
 - **FR-021**: Delegation MUST be refused with an operator-visible error when no lifecycle store is wired (`pkg/agent/session_messaging_wire.go:141-143`), mirroring the existing fail-closed posture at `pkg/tools/delegate.go:1150-1157`.
 - **FR-022**: The three doc comments at `pkg/session/lifecycle.go:225-228`, `:571-575` and `pkg/tools/list_jobs_sources.go:311-315` MUST be rewritten so none describes `ParentDurableKey` as shared parent↔child.
-- **FR-023**: The system MUST NOT use `OwnerScopeID` or `ParentAgentID` as the parentage edge.
+- **FR-023**: The system MUST NOT use `OwnerScopeID` or `ParentAgentID` as the parentage edge, asserted by a **static gate** over the walk's code path (#106) rather than only by positive tests of the correct edge. `[grill M-11 — v1 mapped this to #10/#49, neither of which asserts the negative]`
 
 ### Cancellation (W8, W9)
 
@@ -1919,13 +2490,13 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-027**: `ProcessSession.OwnerSessionID` MUST be stamped from the child's own id, and `KillBackgroundSessions` MUST cascade over the descendant set.
 - **FR-028**: `delegate action=cancel` MUST kill that child's background shells (today no such call exists on that path).
 - **FR-029**: A 3P child's process **group** MUST die with the child.
-- **FR-030**: The `turn_canceled` audit entry's `descendants_canceled` (`pkg/agent/cancel.go:376`) MUST remain non-empty and name every descendant the Stop reached.
+- **FR-030**: The `turn_canceled` audit entry's `descendants_canceled` (`pkg/agent/cancel.go:376`) MUST remain non-empty and name **every** descendant the Stop reached, asserted at **depth 3** by BDD-100 / #97 in the visible plan. `[grill M-12 — v1 required "every descendant" but tested only depth 1 where the implementing agent could see it]`
 
 ### Approvals and session teardown (W10)
 
-- **FR-031**: `ApprovalGrantStore.Inherit`'s first argument MUST become the child's own session id.
-- **FR-032**: `cancelAllPendingForSession` MUST run over the descendant set, not a single id.
-- **FR-033**: A child session MUST receive a `CloseSession` on child-turn terminal, clearing its grant set, `loadedTools` bucket, `metaCache` entry and `recallSpans` entries.
+- **FR-031**: `ApprovalGrantStore` MUST expose a **two-key** inheritance operation, `InheritFrom(srcSessionID, srcAgentID, dstSessionID, dstAgentID string)`, which reads the grant set under `{srcSessionID, srcAgentID}` and unions it into `{dstSessionID, dstAgentID}`. At spawn it MUST be called with the **parent's** routing/session id as the source and the **child's own** session id as the destination. The single-key `Inherit` MUST be removed, not merely re-parameterised. `[grill C-1 — MEANING CHANGED from v1.]` v1 said only "`Inherit`'s first argument MUST become the child's own session id", which is a **silent no-op**: `Inherit` uses one `sessionID` for both the source lookup (`pkg/security/approvalgrants.go:118`) and the destination write (`:122`), so a child-keyed call misses the source, returns at `:119`, and the child blocks 300 s at `pkg/agent/loop.go:8630-8631` — the exact failure US-6 exists to prevent.
+- **FR-032**: `cancelAllPendingForSession` (`pkg/gateway/approvals.go:403-419`) MUST run over the descendant set, not a single id. It matches by **exact equality** on `SessionID` (`:419`), so this requirement is only meaningful together with FR-080.
+- **FR-033**: A child session MUST receive a `CloseSession` on child-turn terminal, clearing its grant set, `loadedTools` bucket, `metaCache` entry and `recallSpans` entries. See FR-088 for the call site and its owner — **no such call site exists in the tree today** (verified: the only non-test callers of `pkg/agent/session_end.go:32` are `websocket.go:1038`, `loop.go:1048`/`:1064`, `session_end.go:865`, none of which is a child-turn terminal).
 
 ### Transcript visibility (W11)
 
@@ -1946,17 +2517,17 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 
 - **FR-043**: `recentActivityLines` MUST read the delegate session id and MUST log its empty path.
 - **FR-044**: `executeSync` MUST register a `DelegateTaskState` (today only `executeAsync` does).
-- **FR-045**: `t.tasks` and `t.sessionIndex` MUST have a deletion path (today neither has one anywhere in the tree).
+- **FR-045**: `t.tasks` and `t.sessionIndex` MUST have a deletion path with a **named trigger**: an entry is deleted when its task has reached a terminal state **and** its last `status` read is older than a stated TTL `T`. Eviction MUST run without an external caller (on the same cadence as, or driven by, the delegate tool's own bookkeeping). `[grill M-10 — v1 said only "MUST have a deletion path", leaving "reaped" undefined so two implementers build two different things]`
 - **FR-046**: The drill-down surface (`GET /api/v1/sessions/{childID}` → `<ChatScreen />`) MUST be the stated inspection surface for hidden delegations and MUST work with verbose chat disabled.
-- **FR-047**: No requirement MAY depend on `subagent_message` or `subagent_state` frames.
+- **FR-047**: The drill-down surface MUST filter on `producing_session_id`, and a static gate MUST assert **zero** non-test references to `subagent_message` or `subagent_state` in `src/`, having first asserted it located ≥ 1 reference to `producing_session_id` there (binding rule 4). `[grill M-11 — MEANING CHANGED from v1.]` v1's "no requirement MAY depend on…" is a property quantified over all requirements; a single E2E test cannot establish it, so the matrix row claiming coverage was false. Restated as something a gate can actually check.
 
 ### Session store: striping (W15)
 
 - **FR-048**: `UnifiedStore.mu` MUST be replaced by (a) a 64-shard FNV-keyed `sync.Mutex` pool keyed by session id, copying `pkg/session/lifecycle_lock.go:17-39`'s shape, and (b) a narrow `cacheMu sync.RWMutex` guarding only `metaCache` (`:182`) and `cacheLoadFailures` (`:192`).
 - **FR-049**: `cacheMu` MUST NEVER be held across an `os.*` or `fileutil.*` call.
-- **FR-050**: Lock order MUST be one-directional: `sessionLock(id)` → `cacheMu`. Two session shards MUST NOT be held at once, except by `ClearAll`/`RetentionSweep`, which MUST take every shard **in index order**.
+- **FR-050**: Lock order MUST be one-directional: `sessionLock(id)` → `cacheMu`. Two session shards MUST NOT be held at once, with exactly two exceptions: (a) `ClearAll`/`RetentionSweep`, which MUST take every shard **in index order**; and (b) **none other** — in particular the parent-`Owner` copy MUST satisfy the prohibition by **releasing** the parent's shard before taking the child's, per FR-082, rather than by being exempted. `[grill C-6 — v1's blanket prohibition forbade the change's own most-used new operation]`
 - **FR-051**: `ListSessions` MUST reconcile per-session under that session's shard and snapshot under `cacheMu.RLock`, and MUST NOT take a store-global write lock.
-- **FR-052**: The design MUST NOT impose a fixed concurrency cap; 64 shards matches the in-house precedent and does not bound throughput.
+- **FR-052**: The design MUST NOT impose a fixed concurrency cap; 64 shards matches the in-house precedent and does not bound throughput, asserted by showing throughput **still rising** from 64 to 128 concurrent sessions (#107). `[grill M-11 — a slope measured at N cannot detect a cap above N]`
 
 ### Session store: file split (W23)
 
@@ -1965,9 +2536,9 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-055**: `readUnifiedMeta` MUST compose all four; a missing `stats.json`/`goal.json`/`loop.json` MUST compose as the zero value and MUST NOT be an error; a missing `meta.json` MUST be an error.
 - **FR-056**: A present-but-corrupt group file MUST surface an error for that group rather than composing a zero value.
 - **FR-057**: `UnifiedMeta`'s in-memory shape and marshalled JSON MUST be unchanged; no `contracts/` change and no regeneration are required by this work item.
-- **FR-058**: `metaCache` MUST continue to hold one composed `*UnifiedMeta` clone per session, so `GetMeta` and `ListSessions` cost nothing extra.
+- **FR-058**: `metaCache` MUST continue to hold one composed `*UnifiedMeta` clone per session, so `GetMeta` and `ListSessions` cost nothing extra — asserted by an instrumented filesystem counter showing **zero** disk reads on a cache hit after the split (#103). `[grill M-11 — v1 mapped this to #13, which never touches the cache]`
 - **FR-059**: The doc comments at `pkg/session/unified.go:780-785` and `:166-181` MUST be rewritten, as neither single-funnel claim remains true.
-- **FR-060**: The system MUST NOT provide a reader for a pre-split fused `meta.json`, and MUST NOT modify `migrateLegacy`/`writeUnifiedMetaDirect` (`:1515`).
+- **FR-060**: The system MUST NOT provide a reader for a pre-split fused `meta.json`, and MUST NOT modify `migrateLegacy`/`writeUnifiedMetaDirect` (`:1515`) — the latter asserted by a golden-bytes gate on their output (#104). `[grill M-11 — v1 mapped this to #15, which tests neither clause]`
 
 ### Session store: counter throttle (W24)
 
@@ -1977,18 +2548,18 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-064**: Forced synchronous flushes MUST occur on a `SetMeta` carrying `Status`, on `DeleteSession`, on `UnifiedStore.Close` (which has no flush hook today), and on the child `CloseSession` teardown.
 - **FR-065**: Event-driven `SetMeta` paths (goal, loop, status, title, owner, workspace) MUST NOT be throttled.
 - **FR-066**: `UpdatedAt` MUST compose as the later of `meta.json`'s and `stats.json`'s on load.
-- **FR-067**: The flush interval SHOULD be a config key with a default in the seconds range, tunable from measurement, not an operator decision about the design.
+- **FR-067**: The flush interval **MUST** be a config key with a default of **5 seconds** `[operator 2]`, tunable from measurement. `[grill m-5 — promoted from the spec's only `SHOULD`, which SC-034's gate list did not cover and which was therefore unenforced in either direction]` A test MUST assert the key exists, defaults to 5 s, and that a non-default value is honoured end to end (#105).
 
 ### Scale and hygiene (W16, W17, W18)
 
-- **FR-068**: `GET /api/v1/sessions` MUST paginate through all four layers, and the sidebar MUST filter subordinate sessions so a wide fan-out cannot evict the parent chat.
-- **FR-069**: Root-level delegation MUST be admission-gated, refusing rather than queueing when the cap is reached, with an operator-visible refusal.
+- **FR-068**: `GET /api/v1/sessions` MUST paginate through all four layers — see FR-092 for the layer-by-layer breakdown and owners — and the sidebar MUST spend its visible-root budget on **root** sessions so a wide fan-out cannot evict the parent chat. `[operator 1]` The sidebar treatment is nesting (FR-093), not a hide-filter.
+- **FR-069**: Root-level delegation MUST be admission-gated, refusing rather than queueing when the cap is reached. "Operator-visible" means an `ErrorResult` returned to the calling agent **and** an `slog.Error` record, mirroring `pkg/tools/delegate.go:1150-1159`; no separate user-facing notification is required `[operator 6]`. `turnState.concurrencySem` is set only on a child today (`pkg/agent/subturn.go:1051`, the sole assignment; guard at `:607`), which is why root-level fan-out is ungated.
 - **FR-070**: Nested delegation's existing `concurrencySem` gating MUST be unchanged.
 - **FR-071**: A child's uploads directory MUST be reachable by the parent session's cascade-delete, for every descendant.
 
 ### Process (W22)
 
-- **FR-072**: Every test encoding the current contract MUST be deliberately inverted to assert the new invariant; none MAY be quietly deleted.
+- **FR-072**: Every test encoding the current contract MUST be deliberately inverted to assert the new invariant; none MAY be quietly deleted. **The automated portion is presence plus the `// ADR-057-W22-inverted` marker (#81); "asserts the new invariant" is a human review gate.** `[grill m-3 — a Go test can verify a file exists and contains a token; it cannot verify that another test's assertions encode a semantic invariant]`
 - **FR-073**: The test inversions MUST land as their own commit, containing no behaviour-file change.
 - **FR-074**: Every test written or inverted for this spec MUST construct parent and child ids as distinct, non-equal values and MUST assert which one was used.
 
@@ -1997,7 +2568,30 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-075**: `follow_up` warm resume MUST load generation N's history into generation N+1 — this is intended behaviour, not a leak, and MUST be pinned by test.
 - **FR-076**: The ADR-053 D15 per-child message ceiling MUST be enforced per **direct parent**, making a chat's aggregate (children × ceiling); the change MUST be asserted, not assumed.
 - **FR-077**: The ADR-053 D16 inbox producer (`pkg/tools/message_parent.go:640`) and consumers (`pkg/tools/delegate.go:2024`, `:2200`) MUST both key on the immediate parent's `ParentDurableKey` and MUST change together.
-- **FR-078**: The boot sweep MUST reconcile an in-flight child's lifecycle record across a process restart, and no transcript write MAY land in a directory with no `meta.json`.
+- **FR-078**: The boot sweep (`pkg/agent/boot_sweep.go`, owned by U19) MUST reconcile an in-flight child's lifecycle record across a process restart, and a transcript write against an un-minted child id MUST return a **non-nil error** — asserted positively, not as "no orphan directory was found".
+
+### Added in v2 (W3, W10, W15, W16, W20, W23, W24 and operator decision 1)
+
+`[grill C-1…C-6, M-1, M-6, M-8, M-10, M-13, M-14; operator 1, 2, 4, 6; o-2]`
+
+- **FR-079**: `InheritFrom` MUST log and count the branch where the **source** key holds no grants, naming both keys. `[grill C-1]` Today this is a documented silent `return` (`pkg/security/approvalgrants.go:118-120`, doc at `:110-111`). Without a signal here, any future re-key can regress into C-1 and every test stays green.
+- **FR-080**: A pending-approval registry entry's `SessionID` (`pkg/gateway/approvals.go:85`, set at `:213`/`:232`) MUST be the **acting** session id — the child's own, not the chat's. `[grill M-6]` FR-032 presupposed this and no v1 requirement stated it.
+- **FR-081**: An approve/deny response MUST resolve to its pending entry **by approval id**, never by session id. `[grill M-6]` `tool_approval_required` is in `SESSION_SCOPED_FRAME_TYPES` (`src/store/chat.ts:1240`), so FR-012 makes its `session_id` the **routing** key while FR-080 keys the registry entry by the **child** — resolving by session id would break the round trip on the first delegated approval.
+- **FR-082**: The parent-`Owner` copy inside `CreateSessionWithID` MUST read the parent's meta under `sessionLock(parent)`, **release** that shard, and only then create the child under `sessionLock(child)`. Two session shards MUST NOT be held simultaneously. The resulting TOCTOU on `Owner` is accepted and documented: the field is immutable after session creation. `[grill C-6]` `createSessionLocked` builds `UnifiedMeta` with no `Owner` (`pkg/session/unified.go:448-460`), so the value can only come from the parent — one operation, two shards. Acquiring both would use **hash** order, inverting against `ClearAll`/`RetentionSweep`'s **index** order (R-19).
+- **FR-083**: The periodic flusher MUST make a dirty session's `stats.json` current **without any external trigger** — no `Close`, no `SetMeta`, no `DeleteSession`, no `CloseSession`, no test-driven tick. `[grill C-4]` Every other W24 requirement is satisfiable by a store whose flusher goroutine was never started; under the production shape (a long-lived gateway that never calls `Close`) that means `stats.json` is stale for the process lifetime.
+- **FR-084**: Each of W23's four targeted writers MUST update **only its own field group** within the cached `*UnifiedMeta` and MUST NOT replace the cache entry wholesale; and a `readMetaLocked` cache-miss compose MUST NOT overwrite an entry marked dirty. `[grill C-5]` `writeMetaLocked` ends today with a whole-document `us.metaCache[sessionID] = meta.Clone()` (`pkg/session/unified.go:798`), documented at `:780` as "the single invalidation/update point for every mutation path". The obvious per-writer translation of that shape discards every unflushed `Stats.*` delta — Alternative F's clobber, one layer up from the file the spec proved it away on.
+- **FR-085**: Every negative, exclusion or static gate MUST assert a **stated positive lower bound** before its zero-assertion, and MUST fail if its search located fewer occurrences than that bound. The bounds are enumerated in "Negative-gate positive lower bounds" and MUST be restated in the test's own comment so drift is visible in review. `[grill C-3]`
+- **FR-086**: `ListSessions`'s consistency model after striping MUST be stated in code and honoured: a **best-effort point-in-time snapshot** that MAY omit a session deleted during the call, MUST NOT return a session whose directory was already absent when the call began, and MUST NOT panic, deadlock or return a partially-composed meta. `[grill M-14]` Today the whole method runs under `us.mu.Lock()` and `pkg/session/unified.go:1240-1246` documents why; FR-051's split creates a window that must be specified rather than discovered.
+- **FR-087**: `t.tasks` and `t.sessionIndex` MUST each be bounded by a stated constant `C`, enforced after eviction. A task within its TTL MUST be retained so eviction cannot break `delegate action=status`. `[grill M-10]`
+- **FR-088**: The child-turn terminal path in `pkg/agent/subturn.go` (**owned by U7**) MUST invoke `CloseSession(childID, "delegate_terminal")` on each of the four terminal states — completed, cancelled, failed, abandoned — using the entry point at `pkg/agent/session_end.go:32` (**owned by U17**, signature unchanged). `[grill M-13]` No such call site exists in the tree, and v1 assigned "W10 (teardown call site)" to U11, whose file is the *user* session-close path.
+- **FR-089**: The W5 audit MUST produce a **committed classification artefact** assigning each of the 19 `SESSION_SCOPED_FRAME_TYPES` to exactly one of class **(a)** child-turn-produced → both ids, **(b)** root/gateway-produced → `producing_session_id` absent, **(c)** documented pre-existing gap. Every type MUST be asserted per its class, and a gate MUST fail if any of the 19 is unclassified. `[grill M-8]` A single outline asserting one property across all 19 is false for at least five of them.
+- **FR-090**: W20's conversion boundary MUST be stated and MUST be complete within it: **every field and parameter in `turnState`, `processOptions` and the `UnifiedStore` public API** carries `SessionID` or `RoutingSessionID` rather than a bare `string`. References outside that boundary are explicitly out of scope for this change. `[grill o-2]` With 116 non-test `transcriptSessionID` references across 18 files, a partial conversion is the likely outcome; test #3 proves the types do not interconvert, not that they are used.
+- **FR-091**: `GET /api/v1/sessions` MUST return **root** sessions (`ParentSessionID == ""`) only, each carrying a `child_count`, and MUST accept a `parent_session_id` filter returning exactly that node's **direct** children. A session whose `ParentSessionID` names a session that no longer resolves MUST be returned as a **root**. `[operator 1]` This is the resolution of ADR-057 §9's R-9 open question: **nested under parent**, explicitly **not** the `verifier` hidden-with-a-flag precedent.
+- **FR-092**: Pagination MUST be implemented at each of the four layers, each with exactly one owner, and each MUST bound its own cost rather than loading the full set and slicing: `UnifiedStore.ListSessions` (`pkg/session/unified.go:1247`, **U6**), `AgentLoop.ListAllSessions` (`pkg/agent/loop.go:5046`, **U9**), `restAPI.listSessions` (`pkg/gateway/rest.go:758-812`, **U18**), `fetchSessions` (`src/lib/api.ts:1379-1388`, **U12**). `[grill M-1]` v1 assigned W16 to U12 + U18 only. Verified: **none of the four takes a limit or offset today.**
+- **FR-093**: The sidebar MUST render the session tree — roots at the top level with an expand affordance, children collapsed by default — and its visible budget (`maxVisible`, `src/components/layout/Sidebar.tsx:456-457`) MUST apply to **roots**, so a wide fan-out cannot evict a parent chat. `[operator 1]`
+- **FR-094**: `SearchModal` MUST nest matching children under their parent (showing the parent for context even when only a child matched) and MUST render the list **virtualized**. `[operator 1]` It currently fetches every session (`src/components/search/SearchModal.tsx:363`) and renders `groups.map(...)` unwindowed (`:687`); under D1 that list grows by every delegated child at every depth.
+- **FR-096**: `CreateSessionWithID` MUST detect a child id that collides with an existing session directory and MUST fail loudly rather than adopting it. Under no circumstance may a child silently inherit a pre-existing session's transcript, meta, owner or stats. `[grill §6 STRIDE note]` `createSessionLocked` calls `os.MkdirAll` (`pkg/session/unified.go:463`), which is **idempotent and silent**, and FR-005 said nothing about an existing directory — so a child adopting another session's transcript, meta, owner and stats was the **default** behaviour, with no requirement anywhere obliging an implementer to defend against it.
+- **FR-095**: The root-delegation cap MUST be sourced from `agents.defaults.subturn.max_concurrent` (`pkg/config/config.go:1304`, resolved at `pkg/agent/subturn.go:64-69`) and MUST NOT be sourced from `Performance.EffectiveMaxParallelAgents()`. `[operator 4; grill M-7]` No new config key is introduced. The distinction is load-bearing: the former is honoured **unclamped** when > 0, the latter is hard-capped at 16 by `clampParallelExplicit` (`pkg/config/config.go:459-468`) — which is the 16 the UAT observed, and which would make AC-10's "refuses the 25th" unrunnable.
 
 ---
 
@@ -2005,10 +2599,10 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 
 - **SC-001**: `AppendTranscriptStrict` against a UUID with no `meta.json` returns a non-nil error in 100 % of trials and creates zero directories, verified by `os.Stat`.
 - **SC-002**: After one delegation, `<store>/<childID>/meta.json` exists on disk and `GET /api/v1/sessions/{childID}` returns HTTP 200 with a non-empty `messages` array.
-- **SC-003**: `rg -n "IsDelegateChildEntry" --glob '!*_test.go'` returns zero matches.
-- **SC-004**: After one delegation, the parent session's `transcript.jsonl` contains zero entries produced by the child, measured by reading the file.
+- **SC-003**: `rg -n "IsDelegateChildEntry" --glob '*.go' --glob '!*_test.go'` returns zero matches, **and** `rg -c "ParentSpawnCallID" --glob '*.go' --glob '!*_test.go'` returns ≥ 60 across ≥ 8 files (measured 73 across 9, 2026-08-03). `[grill C-3]` **Two corrections.** (a) v1's invocation had **no `*.go` glob**, so it matched this spec, the ADR and the review — it could never return zero and was therefore not a criterion at all. (b) The positive control proves the search works; without it, deleting `daypartition.go` satisfies the criterion.
+- **SC-004**: After one delegation, in the **same run**: the parent session's `transcript.jsonl` contains zero entries produced by the child **and** `<baseDir>/<childID>/transcript.jsonl` contains exactly the expected non-zero entry count, both measured by reading the files. `[grill M-9]` The first clause alone is satisfied by a child that wrote nothing anywhere.
 - **SC-005**: In the live-connection E2E, the SPA store's chat bucket contains both the subagent span and 100 % of its tool-call steps, and `chatAttachStepSpanIndexMiss` fires zero times.
-- **SC-006**: All 19 `SESSION_SCOPED_FRAME_TYPES` round-trip both `session_id` and `producing_session_id` per the stamping matrix, with zero types unaudited.
+- **SC-006**: All 19 `SESSION_SCOPED_FRAME_TYPES` are classified into exactly one of (a) child-turn-produced, (b) root/gateway-produced, (c) documented pre-existing gap; the classification is committed as an artefact; and each type is asserted per its class — zero types unclassified, zero types asserted against a class they do not belong to. `[grill M-8]` v1's "all 19 round-trip both ids" is **false for at least five** and was scored pass/fail.
 - **SC-007**: `List(LifecycleFilter{ParentDurableKey: X})` returns exactly the direct children of X — zero grandchildren, zero siblings — at depths 1, 2 and 3.
 - **SC-008**: A chat-level Stop against a live `Critical:true` child produces a PHASE B hard abort and a PHASE C detach against that child, and `descendants_canceled` has length ≥ 1 naming it.
 - **SC-009**: A chat-level Stop leaves zero live PIDs among the subtree's background shells and ≥ 1 live PID for an unrelated sibling chat's shell.
@@ -2018,25 +2612,40 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **SC-013**: A sibling's attempt at each of the six gated actions against another sibling returns an ownership error in 6 of 6 cases; the root chat's attempt against a grandchild succeeds in 6 of 6.
 - **SC-014**: The interrupt API exposes exactly one entry point (plus its `Hard` variant) and the scope argument is non-optional, proven by a compile-fail fixture.
 - **SC-015**: `delegate action=status` returns a non-empty activity snapshot for both a sync and an async delegation.
-- **SC-016**: Wall-clock for 2N concurrent single-session writers is less than 2× the wall-clock for N, on the same box and filesystem, with the pre-change store's measurement recorded as the baseline that must be beaten.
+- **SC-016**: Wall-clock for 2N concurrent single-session writers is less than 2× the wall-clock for N, on the same box and filesystem, with the pre-change store's measurement recorded as the baseline that must be beaten — **and** throughput still rises from 64 to 128 concurrent sessions, proving no fixed cap above the tested N (FR-052). `[grill M-11]`
 - **SC-017**: A `-race` run over concurrent create/append/`SetMeta`/`ListSessions`/`DeleteSession` on overlapping and disjoint ids reports zero data races and completes without deadlock.
 - **SC-018**: Zero `cacheMu` critical sections contain an `os.*` or `fileutil.*` call, verified by a static gate.
 - **SC-019**: After a create plus one `/goal set`, one `/loop` start and one transcript append, the session directory contains exactly the four expected files and zero fields appear in more than one of them.
 - **SC-020**: A `/loop` tick leaves `goal.json` byte-identical, a `/goal` round leaves `loop.json` byte-identical, and a transcript append leaves both byte-identical — 3 of 3.
 - **SC-021**: `readUnifiedMeta` returns success for a directory with only `meta.json` and an error for a directory with no `meta.json`, in both directions, with `GET /api/v1/sessions/{id}` returning 404 in the latter case.
 - **SC-022**: `UnifiedMeta`'s marshalled JSON and the REST session payload are byte-identical pre- and post-split for the same logical state, and `make verify-contracts` exits 0.
-- **SC-023**: During a burst of K appends inside one flush interval, `stats.json`'s mtime and byte content are unchanged and `transcript.jsonl` gains exactly K lines.
+- **SC-023**: With `stats.json` pre-existing from a forced flush, a burst of K appends inside one flush interval leaves its mtime and content hash unchanged and `transcript.jsonl` gains exactly K lines — **and, in the same test, `stats.json` becomes current once the interval elapses**, so "unchanged" cannot be satisfied by "never written". `[grill C-4, m-2]`
 - **SC-024**: After the flush interval elapses, `stats.json`'s counters equal the exact sum of the appended entries' deltas — zero lost and zero double-counted.
 - **SC-025**: Each of the four forced flush points independently leaves `stats.json` current, verified by re-opening the store and comparing counters exactly.
 - **SC-026**: `GoalRoundsUsed`, `LoopRunCount`, `Status` and `Title` are each readable from disk immediately after their call returns, with zero flush interval elapsed — 4 of 4.
-- **SC-027**: After a SIGKILL mid-interval and a re-open, the counter shortfall is at most that interval's appends and `transcript.jsonl` is complete.
+- **SC-027**: After a run spanning ≥ 2 flush intervals, a SIGKILL mid-interval and a re-open: the counter shortfall is at most the final interval's appends, **the flushed prefix is strictly greater than zero**, and `transcript.jsonl` is complete. `[grill C-4]` The one-sided bound alone is satisfied by a store that flushed nothing.
 - **SC-028**: With verbose chat disabled, the drill-down surface renders a hidden delegation's transcript using only `GET /api/v1/sessions/{childID}`.
-- **SC-029**: With 24 child sessions created after a parent chat, the sidebar still lists that parent chat.
-- **SC-030**: With a root-delegation cap of N and N in flight, the N+1th root-level delegation is refused with an operator-visible error and zero of them are queued.
+- **SC-029**: With 24 child sessions created after a parent chat, the sidebar lists that parent chat as a root with an expand affordance, the 24 children collapsed beneath it, and zero children counted against the visible-root budget. `[operator 1]`
+- **SC-030**: With `agents.defaults.subturn.max_concurrent = 24` and 24 in flight, the **25th** root-level delegation is refused with an `ErrorResult` naming the cap plus an `slog.Error` record, and zero are queued; the resolved cap is asserted to have come from that key and not from the clamped `Performance.EffectiveMaxParallelAgents()`. `[operator 4, 6; grill M-7]`
 - **SC-031**: Deleting a parent session removes `<home>/uploads/<id>/` for 100 % of its descendants.
-- **SC-032**: All twelve named gate test files exist and assert the new invariant; zero are deleted.
+- **SC-032**: All twelve named gate test files exist and each carries the `// ADR-057-W22-inverted` marker; zero are deleted. Whether each *asserts* the new invariant is a recorded **review-gate** sign-off, not an automated criterion. `[grill m-3]`
 - **SC-033**: The W22 commit's file list contains zero non-`_test.go` files.
 - **SC-034**: `gofmt -l . | wc -l` is 0, `golangci-lint run --build-tags=goolm,stdjson` exits 0, `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 ./...` exits 0 in CI, `govulncheck ./...` reports 0 vulnerabilities, `npm run typecheck` and `npx vitest run` exit 0, and `make verify-contracts` exits 0.
+- **SC-035**: Each of the eleven negative/static gates fails **red** when its search target is deliberately renamed (mutation check, #91), and each asserts its stated positive lower bound before its zero-assertion — 11 of 11. `[grill C-3]`
+- **SC-036**: With one append and **no** other action — store never closed, no `SetMeta`, no `DeleteSession`, no `CloseSession`, no test-driven tick — `stats.json` on disk is current after one flush interval elapses, in 100 % of trials. `[grill C-4]`
+- **SC-037**: After K unflushed appends followed by a `/goal set` and a `Status` transition and then a forced flush, `stats.json` equals K's exact deltas — zero lost, zero double-counted — while `goal.json` and `meta.json` each carry their own writer's value. `[grill C-5]`
+- **SC-038**: An instrumented lock wrapper over `CreateSessionWithID` records zero instants at which two session shards are held simultaneously, and records `ClearAll`/`RetentionSweep` acquiring all 64 shards in strictly ascending index order. `[grill C-6]`
+- **SC-039**: With distinct parent and child session ids, the inherited grant is **absent** under `{childSessionID, childAgentID}` before the spawn and **present** after, while remaining present under `{parentSessionID, parentAgentID}` — 3 of 3 assertions in one run. `[grill C-1]`
+- **SC-040**: A child's pending-approval registry entry carries the child's own session id in 100 % of trials, and a client **approve** on a routing-keyed frame resolves to that entry by approval id and completes the child's tool call. `[grill M-6]`
+- **SC-041**: A `ListSessions` interleaved with `DeleteSession` between the reconcile pass and the snapshot returns a result consistent with the stated model, with zero panics, zero deadlocks and zero partially-composed metas across 100 interleavings. `[grill M-14]`
+- **SC-042**: After N ≫ C terminal delegations past TTL, `len(t.tasks) ≤ C` and `len(t.sessionIndex) ≤ C`; a terminal task within TTL is still present and `delegate action=status` still returns for it. `[grill M-10]`
+- **SC-043**: With one parent chat and 24 children, `GET /api/v1/sessions` returns the parent with `child_count == 24` and zero children inline; `?parent_session_id=<parent>&limit=10` returns exactly 10 direct children and a next cursor; and each of the four layers bounds its own cost. `[operator 1; grill M-1]`
+- **SC-044**: While a 24-way root fan-out runs, a second session's inter-token interval satisfies the **slope** assertion against the pre-change baseline on the same box (no millisecond constant), and the 25th root delegation is refused. `[operator 3, 4; grill M-7]`
+- **SC-045**: The W5 classification artefact assigns all 19 session-scoped frame types to (a), (b) or (c), with zero unclassified, and the gate fails if a type is added to `SESSION_SCOPED_FRAME_TYPES` without a class. `[grill M-8]`
+- **SC-046**: A Stop on a chat with descendants at depths 1, 2 and 3 produces a `turn_canceled` audit entry whose `descendants_canceled` contains all three turn ids. `[grill M-12]`
+- **SC-047**: `CloseSession` is invoked from the child-turn terminal path for each of the four terminal states — 4 of 4 — and after each, the child's grant set, `loadedTools` bucket, `metaCache` entry and `recallSpans` entries are absent. `[grill M-13]`
+- **SC-048**: The flush-interval config key exists, resolves to **5 s** with no operator override, and a non-default value is honoured end to end. `[operator 2; grill m-5]`
+- **SC-049**: A `CreateSessionWithID` against an id whose directory already exists fails loudly in 100 % of trials, and the pre-existing directory's `transcript.jsonl`, `meta.json` and `stats.json` are byte-unchanged afterwards. `[grill §6 STRIDE note]`
 
 ---
 
@@ -2090,36 +2699,44 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | FR-001 | US-1 | W3 | BDD-01 | #1 | AC-1 |
 | FR-002 | US-1 | W3 | BDD-02, BDD-03 | #2, #5, #6 | AC-1 |
 | FR-003 | US-1 | W3 | BDD-04 | #7 | AC-1 |
+| FR-085 | US-1 | W22 | BDD-97 | #91, #3, #9, #12, #17, #19, #27, #29, #58, #81, #82, #83 | AC-1, AC-2 |
+| FR-090 | US-1 | W20 | BDD-05 | #3 | AC-2 |
 | FR-004 | US-1 | W20 | BDD-05 | #3 | AC-2 |
 | FR-005 | US-2 | W1 | BDD-06 | #4, #32 | AC-1 |
 | FR-006 | US-2 | W1 | BDD-07, BDD-08 | #4, #34 | AC-2 |
+| FR-082 | US-2, US-11 | W1, W15 | BDD-92 | #88 | AC-20 |
 | FR-007 | US-2 | W1 | BDD-09 | #33 | AC-11 |
 | FR-008 | US-2 | W2 | BDD-10 | #35 | AC-14 |
 | FR-009 | US-2 | W1 | BDD-11 | #36 | AC-8 |
 | FR-010 | US-2 | W1 | BDD-06 | #32 | AC-1 |
 | FR-011 | US-3 | W4 | BDD-12, BDD-13 | #28, #37 | AC-2 |
 | FR-012 | US-3 | W4, W5 | BDD-14, BDD-16 | #75, #76 | AC-3 |
-| FR-013 | US-3 | W5 | BDD-16 | #75 | AC-3 |
+| FR-013 | US-3 | W5 | BDD-16, BDD-98, BDD-99 | #75, #95, #96 | AC-3 |
 | FR-014 | US-3 | W4 | BDD-17 | #29 | AC-2 |
 | FR-015 | US-3, US-5 | W4 | BDD-23, BDD-24, BDD-26, BDD-27 | #38, #39, #41, #42 | AC-4, AC-5 |
 | FR-016 | US-3 | W4 | BDD-13 | #37 | AC-4 |
 | FR-017 | US-3 | W21 | BDD-14, BDD-15 | #76, #77 | AC-3 |
-| FR-018 | US-3 | W5 | BDD-16 | #75 | AC-3 |
+| FR-018 | US-3 | W5 | BDD-16, BDD-98, BDD-99 | #75, #95, #96 | AC-3 |
+| FR-089 | US-3 | W5 | BDD-16, BDD-98, BDD-99 | #75, #95, #96 | AC-3 |
 | FR-019 | US-4 | W6 | BDD-18 | #10 | AC-17 |
 | FR-020 | US-4 | W6 | BDD-19 | #11 | AC-17 |
 | FR-021 | US-4 | W7 | BDD-20 | #48 | AC-17 |
 | FR-022 | US-4 | W6 | BDD-22 | #12 | AC-13 |
-| FR-023 | US-4 | W6 | BDD-18, BDD-21 | #10, #49 | AC-17 |
+| FR-023 | US-4 | W6 | BDD-18, BDD-21 | #10, #49, **#106** | AC-17 |
 | FR-024 | US-5 | W8 | BDD-23, BDD-24 | #38, #39 | AC-4 |
 | FR-025 | US-5 | W8 | BDD-30 | #45 | AC-4 |
 | FR-026 | US-5 | W8 | BDD-30 | #45 | AC-4 |
 | FR-027 | US-5 | W9 | BDD-28 | #43 | AC-6 |
 | FR-028 | US-5 | W9 | BDD-29 | #44 | AC-6 |
 | FR-029 | US-5, US-18 | W9 | BDD-86 | #68a | AC-17 |
-| FR-030 | US-5 | W8 | BDD-25 | #40 | AC-4 |
-| FR-031 | US-6 | W10 | BDD-31, BDD-32 | #25 | AC-7 |
+| FR-030 | US-5 | W8 | BDD-25, BDD-100 | #40, #97 | AC-4 |
+| FR-031 | US-6 | W10 | BDD-31, BDD-32, BDD-88 | #25, #85 | AC-7 |
+| FR-079 | US-6 | W10 | BDD-89 | #84 | AC-7 |
 | FR-032 | US-6 | W10 | BDD-33 | #46 | AC-7 |
+| FR-080 | US-6 | W10 | BDD-90 | #86 | AC-7 |
+| FR-081 | US-6 | W10 | BDD-91 | #87 | AC-7 |
 | FR-033 | US-6 | W10 | BDD-34 | #47 | AC-7 |
+| FR-088 | US-6 | W10 | BDD-96 | #94 | AC-7 |
 | FR-034 | US-7 | W11 | BDD-35, BDD-40 | #58, #61 | AC-18, R-16 |
 | FR-035 | US-7 | W11 | BDD-35, BDD-37, BDD-39 | #57, #58, #60 | AC-18 |
 | FR-036 | US-7 | W11 | BDD-38 | #59 | AC-18 |
@@ -2131,99 +2748,124 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | FR-042 | US-9 | W13 | BDD-46, BDD-47 | #53, #54 | AC-8 |
 | FR-043 | US-10 | W14 | BDD-51 | #30 | AC-9 |
 | FR-044 | US-10 | W14 | BDD-49, BDD-50 | #55 | AC-9 |
-| FR-045 | US-10 | W14 | BDD-52 | #31 | AC-9 |
+| FR-045 | US-10 | W14 | BDD-52 | #31, #93 | AC-9 |
+| FR-087 | US-10 | W14 | BDD-52 | #31, #93 | AC-9 |
 | FR-046 | US-14 | W19 | BDD-71, BDD-74 | #78 | AC-14 |
-| FR-047 | US-14 | W19 | BDD-74 | #78 | AC-14 |
+| FR-047 | US-14 | W19 | BDD-74, BDD-97 | #78, **#109** | AC-14 |
 | FR-048 | US-11 | W15 | BDD-53, BDD-55, BDD-57 | #8, #69, #70, #72 | AC-20 |
 | FR-049 | US-11 | W15 | BDD-57 | #9 | AC-20 |
 | FR-050 | US-11 | W15 | BDD-56, BDD-57 | #9, #73 | AC-20 |
 | FR-051 | US-11 | W15 | BDD-54 | #71 | AC-20 |
-| FR-052 | US-11 | W15 | BDD-53 | #70 | AC-20 |
+| FR-086 | US-11 | W15 | BDD-95 | #92 | AC-20 |
+| FR-052 | US-11 | W15 | BDD-53 | #70, **#107** | AC-20 |
 | FR-053 | US-12 | W23 | BDD-58 | #13 | AC-21 |
 | FR-054 | US-12 | W23 | BDD-59 | #17 | AC-21 |
 | FR-055 | US-12 | W23 | BDD-60, BDD-61 | #14, #15 | AC-21 |
 | FR-056 | US-12 | W23 | BDD-62 | #16 | AC-21 |
 | FR-057 | US-12 | W23 | BDD-63 | #18 | AC-21 |
-| FR-058 | US-12 | W23 | BDD-58 | #13 | AC-21 |
+| FR-058 | US-12 | W23 | BDD-58 | #13, **#103** | AC-21 |
 | FR-059 | US-12 | W23 | BDD-64 | #19 | AC-21 |
-| FR-060 | US-12 | W23 | BDD-61 | #15 | AC-21 |
+| FR-060 | US-12 | W23 | BDD-61 | #15, **#104** | AC-21 |
 | FR-061 | US-13 | W24 | BDD-65 | #20 | AC-22 |
+| FR-084 | US-12, US-13 | W23, W24 | BDD-94 | #90 | AC-22 |
 | FR-062 | US-13 | W24 | BDD-65 | #20 | AC-22 |
-| FR-063 | US-13 | W24 | BDD-66 | #21 | AC-22 |
+| FR-063 | US-13 | W24 | BDD-66, BDD-70, BDD-93 | #21, #74, #89 | AC-22 |
+| FR-083 | US-13 | W24 | BDD-93 | #89 | AC-22 |
 | FR-064 | US-13 | W24 | BDD-67 | #22 | AC-22 |
 | FR-065 | US-13 | W24 | BDD-68 | #23 | AC-22 |
 | FR-066 | US-13 | W24 | BDD-69 | #24 | AC-22 |
-| FR-067 | US-13 | W24 | BDD-70 | #74 | AC-22 |
-| FR-068 | US-14 | W16 | BDD-72, BDD-73 | #79, #80 | AC-10 |
+| FR-067 | US-13 | W24 | BDD-93 | **#105** | AC-22 |
+| FR-068 | US-14 | W16 | BDD-72, BDD-73, BDD-102 | #79, #80, #100 | AC-10 |
+| FR-092 | US-14, US-19 | W16 | BDD-102 | #100 | AC-10 |
 | FR-069 | US-15 | W17 | BDD-75, BDD-77 | #63 | AC-10 |
+| FR-095 | US-15 | W17 | BDD-75 | #63, **#110** | AC-10 |
 | FR-070 | US-15 | W17 | BDD-76 | #64 | AC-10 |
 | FR-071 | US-16 | W18 | BDD-78, BDD-79 | #26, #62 | AC-12 |
-| FR-072 | US-17 | W22 | BDD-80 | #81 | AC-8 |
-| FR-073 | US-17 | W22 | BDD-81 | #82 | AC-8 |
+| FR-072 | US-17 | W22 | BDD-80, BDD-97 | #81, #91 | — (process item; W22 has no ADR AC) |
+| FR-073 | US-17 | W22 | BDD-81, BDD-97 | #82 | — (process item; W22 has no ADR AC) |
 | FR-074 | US-17 | W22 | BDD-82 | #83 | all (m-5) |
 | FR-075 | US-18 | W1 | BDD-83 | #68 | AC-11 |
 | FR-076 | US-18 | W12 | BDD-84 | #67 | AC-15 |
 | FR-077 | US-18 | W12, W14 | BDD-85 | #66 | AC-16 |
 | FR-078 | US-18 | W6, W17 | BDD-87 | #65 | AC-19 |
+| FR-096 | US-2 | W1 | BDD-107 | #111 | AC-1 |
+| FR-091 | US-19 | W16 | BDD-101, BDD-103, BDD-106 | #98, #99, #108 | AC-10 |
+| FR-093 | US-19 | W16 | BDD-104 | #101 | AC-10 |
+| FR-094 | US-19 | W16 | BDD-105 | #102 | AC-10 |
 
-**Completeness check**: 78 FRs, every row carrying at least one BDD scenario and at least one test. 87 BDD scenarios, every one of which appears in at least one row (BDD-01 … BDD-87, contiguous). Every ADR acceptance criterion AC-1 … AC-22 is referenced by at least one row.
+**Completeness check (v2)**: **96 FRs** (FR-001 … FR-096), every row carrying at least one BDD scenario and at least one test. **106 BDD scenarios** (BDD-01 … BDD-107 with BDD-96/BDD-97 present, contiguous), every one of which appears in at least one row. **19 user stories**, each with ≥ 1 acceptance scenario. **49 success criteria.** **112 test entries** (#1 … #111 plus #68a). Every ADR acceptance criterion AC-1 … AC-22 is referenced by at least one row.
+
+**Two columns now legitimately read `—`.** `[grill M-11]` FR-072 and FR-073 are **process** requirements (W22's commit shape). W22 has **no** acceptance criterion in ADR-057 §10, and v1 filled the column with **AC-8**, which is the interrupt-scope criterion and has nothing to do with commit shape. A fabricated mapping is worse than a blank one: it makes a structural completeness check pass while the row means nothing. The column is now blank with a stated reason.
+
+**BDD numbering is by user story, not by document position.** Scenarios added in v2 are placed with the story they trace to, so BDD-88 … BDD-105 appear throughout the document rather than appended at the end. Contiguity of the **set** is what the check above asserts.
 
 ### Work-item coverage map (W1 … W24 — nothing deferred)
 
 | W | Summary | User Story | Work Unit | FRs |
 |---|---|---|---|---|
 | W1 | Exact-id session create; copy parent `Owner`; delete `NoHistory` | US-2, US-18 | U2 (store), U7 (agent) | FR-005…FR-007, FR-009, FR-010, FR-075 |
-| W2 | `SessionMeta.ParentSessionID` + subordinate `UnifiedSessionType` + OpenAPI + SPA | US-2, US-14 | U5 (store), U10 (contract), U12 (SPA) | FR-008 |
-| W3 | `AppendTranscriptStrict` + convert all writers | US-1 | U2, U3, U11 | FR-001…FR-003 |
+| W2 | `SessionMeta.ParentSessionID` + subordinate `UnifiedSessionType` + OpenAPI + SPA | US-2, US-14, **US-19** | U5 (store), U10 (contract), U12 (SPA) | FR-008, **FR-091** (its consumer) |
+| W3 | `AppendTranscriptStrict` + convert all writers | US-1 | U2, U3, U11, **U22** | FR-001…FR-003 |
 | W4 | `turnState.routingSessionID`; re-base 7 predicates + pre-arm keys | US-3 | U3, U7, U8, U9, U15 | FR-011, FR-014…FR-016 |
-| W5 | WS contract: routing key + `producing_session_id`; audit 19 frame types | US-3 | U10, U11, U12 | FR-012, FR-013, FR-018 |
-| W6 | `LifecycleFilter.ParentDurableKey` + parent index + 3 doc rewrites | US-4, US-18 | U13, U14 | FR-019, FR-020, FR-022, FR-023, FR-078 |
+| W5 | WS contract: routing key + `producing_session_id`; **classify** all 19 frame types | US-3 | U10, U11, U12, **U23** | FR-012, FR-013, FR-018, **FR-089** |
+| W6 | `LifecycleFilter.ParentDurableKey` + parent index + 3 doc rewrites + boot sweep | US-4, US-18 | U13, U14, **U19** (`boot_sweep.go`) | FR-019, FR-020, FR-022, FR-023, FR-078 |
 | W7 | Refuse delegation with no lifecycle store | US-4 | U14, U19 | FR-021 |
 | W8 | Subtree computed once in PHASE A; durable walk; per-descendant transitions | US-5 | U15 | FR-024…FR-026, FR-030 |
 | W9 | Shell ownership + cascade kill + `delegate cancel` kills shells + 3P group | US-5, US-18 | U14, U16 | FR-027…FR-029 |
-| W10 | Grants re-keyed; pending-approval teardown; child `CloseSession` | US-6 | U7, U9, U11, U17 | FR-031…FR-033 |
+| W10 | Grants re-keyed **two-key**; pending-registry re-key + approve round-trip; child `CloseSession` **call site** | US-6 | U7 (call sites), U9 (grant read), U11 (WS), U17 (signatures) | FR-031…FR-033, **FR-079, FR-080, FR-081, FR-088** |
 | W11 | Delete `IsDelegateChildEntry` + 4 filter sites + 3 comment blocks | US-7 | U5 (predicate), U18 (sites) | FR-034…FR-038 |
-| W12 | Ancestor-chain ownership walk at 6 call sites | US-8, US-18 | U14 | FR-039, FR-040, FR-076, FR-077 |
+| W12 | Ancestor-chain ownership walk at 6 call sites; inbox producer+consumer move together | US-8, US-18 | U14 (incl. `message_parent.go`) | FR-039, FR-040, FR-076, FR-077 |
 | W13 | One interrupt entry point with explicit `InterruptScope` | US-9 | U8 | FR-041, FR-042 |
-| W14 | `recentActivityLines` fix; `executeSync` registers state; map deletion path | US-10 | U14 | FR-043…FR-045 |
-| W15 | Stripe `UnifiedStore.mu`; narrow `cacheMu`; one-directional lock order | US-11 | U4 | FR-048…FR-052 |
-| W16 | Pagination through all four layers; sidebar filter | US-14 | U12, U18 | FR-068 |
-| W17 | Root-level delegation admission gate | US-15, US-18 | U19 | FR-069, FR-070, FR-078 |
-| W18 | Child uploads directory reachable by cascade-delete | US-16 | U20, U18 | FR-071 |
-| W19 | Drill-down surface as the stated inspection surface | US-14 | U12, U18 | FR-046, FR-047 |
-| W20 | Named ID types (`SessionID`, `RoutingSessionID`) | US-1 | U1 | FR-004 |
-| W21 | Pin `SubTurn*Payload.SessionID`; re-point `DelegateTaskState.SessionID` | US-3 | U7, U14 | FR-017 |
-| W22 | Deliberately invert the 12 gate tests, in their own commit | US-17 | U21 | FR-072…FR-074 |
-| W23 | Split `meta.json` into four files + 2 doc rewrites | US-12 | U5 | FR-053…FR-060 |
-| W24 | Throttle the counter path; forced flush points; event writes immediate | US-13 | U6 | FR-061…FR-067 |
+| W14 | `recentActivityLines` fix; `executeSync` registers state; **bounded** map eviction | US-10 | U14 | FR-043…FR-045, **FR-087** |
+| W15 | Stripe `UnifiedStore.mu`; narrow `cacheMu`; one-directional lock order **with the stated two-session protocol**; `ListSessions` consistency model | US-11 | U4 (+ U2 for the two-session protocol) | FR-048…FR-052, **FR-082, FR-086** |
+| W16 | Pagination through all four **owned** layers; **nested-under-parent listing**, sidebar tree, search tree | US-14, **US-19** | **U6** (store), **U9** (loop), U18 (REST), U12 (client), **U24** (sidebar+search), U10 (contract) | FR-068, **FR-091, FR-092, FR-093, FR-094** |
+| W17 | Root-level delegation admission gate, cap from `subturn.max_concurrent` | US-15, US-18 | U19 | FR-069, FR-070, FR-078, **FR-095** |
+| W18 | Child uploads directory reachable by cascade-delete — **W18a primitive (U20), W18b wiring (U18)** | US-16 | U20, U18 | FR-071 |
+| W19 | Drill-down surface as the stated inspection surface | US-14 | U12, U18, U24 | FR-046, FR-047 |
+| W20 | Named ID types (`SessionID`, `RoutingSessionID`) **+ a stated conversion boundary** | US-1 | U1 | FR-004, **FR-090** |
+| W21 | Pin `SubTurn*Payload.SessionID`; re-point `DelegateTaskState.SessionID` | US-3 | **U23** (types), U7 (assignment), U14 (`DelegateTaskState`) | FR-017 |
+| W22 | Deliberately invert the 12 gate tests, in their own commit; **enforce binding rule 4 across the suite** | US-17, **US-1** | U21 | FR-072…FR-074, **FR-085** |
+| W23 | Split `meta.json` into four files + 2 doc rewrites + **field-group-only cache mutation** | US-12 | U5 | FR-053…FR-060, **FR-084** |
+| W24 | Throttle the counter path; forced flush points; **unforced periodic flush**; event writes immediate | US-13 | U6 | FR-061…FR-067, **FR-083** |
 
 **Hardest to place, stated honestly:**
 
-- **W2** is split three ways (store field, OpenAPI enum, SPA enum) across three units. Its ADR justification also *narrowed* in v4 — with the filter deleted, the "filter discriminator" rationale is gone and only R-9 (listing) and W19 (drill-down) remain. It survives on those two.
-- **W17** sits between US-15 and US-18: it is a concurrency gate, but its acceptance evidence (`docs/internal/uat/max-parallel-concurrency-gap-2026-07-31.md` §G1) is a UAT observation rather than a code-derived requirement, and it is required *by* this ADR rather than *of* it.
-- **W22** is a process requirement, not a behaviour. It gets a P0 user story because the commit shape is the only thing that keeps bisection honest, and because ~430 references make "quietly delete the failing test" the path of least resistance.
-- **W11's predicate deletion vs its call sites** land in two different units (U5 owns `daypartition.go`, U18 owns the four call sites) purely for file-ownership safety. They must land in the same integration window or the tree does not compile.
+- **W2** is split three ways (store field, OpenAPI enum, SPA enum) across three units. Its ADR justification also *narrowed* in v4 — with the filter deleted, the "filter discriminator" rationale is gone and only R-9 (listing) and W19 (drill-down) remain. **It now has a named consumer** `[grill §5, W2]`: v1 left `ParentSessionID` with no requirement that anything **read** it, so W2 could have shipped as a write-only field with every test green. **FR-091 is that consumer** — the nested listing filters and groups on it, and BDD-101/103/106 fail if it is unread.
+- **W17** sits between US-15 and US-18: it is a concurrency gate, but its acceptance evidence (`docs/internal/uat/max-parallel-concurrency-gap-2026-07-31.md` §G1) is a UAT observation rather than a code-derived requirement, and it is required *by* this ADR rather than *of* it. Its cap value is settled by operator decision 4 and pinned by FR-095.
+- **W22** is a process requirement, not a behaviour. It gets a P0 user story because the commit shape is the only thing that keeps bisection honest, and because ~430 references make "quietly delete the failing test" the path of least resistance. **It has no ADR acceptance criterion**, and FR-072/FR-073's AC column reads `—` rather than borrowing AC-8 as v1 did `[grill M-11]`. v2 also gives it FR-085 (binding rule 4), because "the suite is the specification" is worthless if eleven of its gates pass on an empty search.
+- **W11's predicate deletion vs its call sites** land in two different units (U5 owns `daypartition.go`, U18 owns the four call sites) purely for file-ownership safety, and now **three waves apart** (C and F). v1 flagged that they "must land in the same integration window" and provided no mechanism `[grill §5, W11]`. **Hard ordering 6 is that mechanism**: U5 lands a deprecation shim that keeps the method compiling and always returns `false`; U18's commit removes the shim and the call sites together; test #58's positive lower bound fails if the shim survives.
 
 ---
 
-## Ambiguity Self-Audit
+## Ambiguity Resolution (operator, 2026-08-03)
 
-> Take these to the operator. None of them blocks starting Wave A.
+> All twelve items in v1's Ambiguity Self-Audit are **resolved**. Items 1–6 were put to the operator explicitly; 7–12 are agent defaults the operator reviewed and did not override. **None of these is open. Do not re-litigate them.**
 
-| # | What's ambiguous | Likely agent assumption (what will happen if nobody answers) | Question to resolve |
+| # | What was ambiguous | **DECISION** | Landed in |
 |---|---|---|---|
-| 1 | **R-9 listing policy** — ADR §9's one remaining open question. Are subordinate sessions hidden by default with an opt-in flag (the `verifier` precedent, `pkg/gateway/rest.go:783-785` + `?include_verifier=true`), or shown nested under their parent? | The agent will copy the `verifier` precedent: hidden by default, `?include_subordinate=true`. It is the closest in-tree pattern and the lowest-risk default | Hidden-with-flag, or nested-under-parent? W2 supplies the data either way; only the SPA treatment differs |
-| 2 | **D12 flush interval default.** ADR §9 says explicitly this is a tuning value, not a design question — "any value in the seconds range satisfies both" constraints | The agent will pick 5 s and expose it as a config key with that default | Confirm 5 s, or name a preferred default? |
-| 3 | **AC-10's "stated budget" for inter-token latency** is not stated anywhere. AC-20 solves the same problem by asserting a slope; AC-10 still says "within a stated budget" | The agent will convert AC-10(a) into a slope assertion too, using the pre-change store as the baseline, rather than inventing a millisecond constant | Is a slope assertion acceptable for AC-10, or does the operator want a concrete p95 budget? |
-| 4 | **Root-level delegation cap value (W17).** The UAT observed "24 parallel against a cap of 16"; the ADR does not name the new cap | The agent will reuse the existing `maxConcurrent` config value rather than introduce a second knob | Should root-level fan-out share `maxConcurrent`, or get its own key? |
-| 5 | **`InterruptScope` default at existing call sites.** D8 makes the scope mandatory, but does not say which scope each of today's callers gets | The agent will map `InterruptSession*` → `ScopeSubtree` and `InterruptBySessionKey*` → `ScopeSubtree` **rooted at the child** (per D8's reconciliation of #577), which is a deliberate behaviour change (R-13) | Confirm `delegate action=cancel` should become subtree-scoped — this is R-13 and it is a real behaviour change |
-| 6 | **What "operator-visible" means for a refused delegation** (W7, W17). The ADR says "operator-visible error, never a silent skip" without naming the surface | The agent will return a tool error to the calling agent **and** emit `slog.Error`, mirroring `pkg/tools/delegate.go:1150-1159`'s existing shape | Is a tool-result error + `slog.Error` sufficient, or is a user-facing notification required? |
-| 7 | **Corrupt-group-file recovery (FR-056).** AC-21(d) requires an error for a corrupt `goal.json`, but does not say whether the session as a whole becomes unloadable | The agent will surface a per-group error while still loading `meta.json`, so the session remains listable and deletable rather than becoming a permanently stuck row | Should a corrupt group file make the whole session unloadable, or only that group? |
-| 8 | **`cacheLoadFailures` semantics after striping.** The existing counter documents an accepted limitation: a session that fails to load at construction is excluded for the process lifetime (`pkg/session/unified.go:184-192`) | The agent will preserve that behaviour exactly, since changing it is out of scope | Confirm this accepted limitation stays as-is under W15 |
-| 9 | **Whether `ParentSpawnCallID` should also be persisted on child tool-call and error entries.** Today only three writers stamp it; `appendToolCallTranscript` and `appendErrorTranscript` do not | The agent will leave the three writers as-is — the field's new job is provenance for W19's drill-down, and widening it is unrequested scope | Should provenance be complete across all entry types, or is partial stamping fine? |
-| 10 | **Audit-query impact.** ADR §3.1 marks "no aggregation consumer groups audit entries by chat session" as **[INFERRED]** — it was not verified, only unfound | The agent will proceed on the inference and note it, since the ADR does | Does any operator dashboard or export group audit rows by chat `session_id`? If yes, it needs a `ParentDurableKey` join |
-| 11 | **`replay_done` and `rate_limit` frame gaps.** Both are pre-existing strains this change *exposes*: `rate_limit` has no `SessionID` field at all, and `replay_done` is absent from the `WsFrameType` enum | The agent will audit them per W5, document the gap, and **not** fix them — they are named in the ADR as pre-existing and not caused here | Fix in scope, or track separately? |
-| 12 | **How `metaCache` interacts with the D12 dirty set.** D12 mutates the cached meta in memory; D11 caches a *composed* clone. The ADR does not say whether the dirty set lives on the cache entry or beside it | The agent will keep a separate dirty-session set guarded by `cacheMu`, so the cache entry stays a plain clone | Confirm, or specify a preferred shape |
+| **1** | **R-9 listing policy** — ADR §9's one remaining open question. Subordinate sessions hidden by default with an opt-in flag (the `verifier` precedent, `pkg/gateway/rest.go:783-785` + `?include_verifier=true`), or shown **nested under their parent**? | **NESTED UNDER PARENT.** The operator **overrode** the agent's stated default (copy the `verifier` precedent). Children appear as an expandable tree; the sidebar, `SearchModal` and pagination must all learn hierarchy. This is **real UI and API work**, scoped as such — not a filter flag | **US-19** (6 acceptance scenarios), FR-091…FR-094, BDD-101…BDD-106, tests #98–#102, #108, SC-029, SC-043, dataset "Session-list hierarchy and paging", **new unit U24**, W16 rewritten |
+| **2** | **D12 flush interval default** | **5 seconds, exposed as a config key** — and **MUST**, not `SHOULD` (which also closes `[grill m-5]`, the spec's only `SHOULD`, uncovered by SC-034's gate list and therefore unenforced in either direction) | FR-067, #105, SC-048 |
+| **3** | **AC-10's "stated budget"** for inter-token latency, which is stated nowhere | **Slope assertion**, as AC-20 already uses, baselined on the **pre-change store**. No machine-specific millisecond constant. Recorded as the operative reading of AC-10(a); AC-10's text is unamended | #72 (given a concrete assertion), SC-044 |
+| **4** | **Root-level delegation cap value (W17)** — the UAT observed "24 parallel against a cap of 16"; the ADR names no new cap | **Reuse the existing per-agent `maxConcurrent`. No new config knob.** Specifically `agents.defaults.subturn.max_concurrent`, which is honoured **unclamped**; **not** `Performance.EffectiveMaxParallelAgents()`, which `clampParallelExplicit` caps at 16 and which was the 16 the UAT saw. This is why AC-10's 24/25 topology runs **as written** — see the changelog's note on M-7 | FR-095, BDD-75, #63, **#110**, SC-030, SC-044 |
+| **5** | **`InterruptScope` at existing call sites** — D8 makes the scope mandatory but does not say which scope each of today's callers gets | **`ScopeSubtree` rooted at the child** for `delegate action=cancel`. **R-13's behaviour change is INTENDED and confirmed** — cancelling a child cancels that child **and its descendants**, where today it cancels one turn and leaves the grandchildren running | FR-041, FR-042, BDD-46, BDD-47, regression dataset row 3 |
+| **6** | **What "operator-visible" means** for a refused delegation (W7, W17) | **Tool error + `slog.Error`**, mirroring `pkg/tools/delegate.go:1150-1159`. **No separate user-facing notification** | FR-021, FR-069, BDD-77, BDD-20 |
+| 7 | **Corrupt-group-file blast radius (FR-056)** | Per-**group** error; the session stays listable and deletable rather than becoming a permanently stuck row *(agent default accepted)* | FR-056, BDD-62, #16 |
+| 8 | **`cacheLoadFailures` after striping** | **Preserve the documented accepted limitation exactly** — a session that fails to load at construction stays excluded for the process lifetime (`pkg/session/unified.go:184-192`). Changing it is out of scope *(agent default accepted)* | FR-048, Assumptions |
+| 9 | **Widen `ParentSpawnCallID` stamping** to tool-call and error entries? | **No.** Leave the three existing writers alone (`pkg/agent/turn.go:1204`, `:1268`, `pkg/gateway/websocket.go:4254`); widening is unrequested scope. The field's new job is provenance for W19's drill-down *(agent default accepted)* | FR-036, BDD-38, Edge Cases |
+| 10 | **Audit-query impact** — ADR §3.1 marks "no aggregation consumer groups audit entries by chat session" as **[INFERRED]**: not verified, only unfound | **Proceed on the inference, keep it flagged.** It remains `[INFERRED]` and is called out here so a reviewer can challenge it rather than inherit it silently *(agent default accepted)* | regression dataset row 6, Assumptions |
+| 11 | **`replay_done` / `rate_limit` frame gaps** | **Audit per W5, document, do NOT fix.** Both are pre-existing strains this change *exposes* — verified: `RateLimitPayload` has no `SessionID` field (`pkg/agent/events.go:525-533`) and `replay_done` appears tree-wide only at `src/store/chat.ts:1238` *(agent default accepted)* | **BDD-99 (class c)**, FR-089, #96, Assumptions |
+| 12 | **`metaCache` × D12 dirty set shape** | **Separate dirty-session set guarded by `cacheMu`; the cache entry stays a plain clone** *(agent default accepted)*. **Note `[grill C-5]`:** this settles *where the dirty set lives* and does **not** settle the harder question one layer up — that the shared mutable `*UnifiedMeta` is itself the fused document, so a wholesale cache replace by any targeted writer discards unflushed deltas. That is FR-084 | FR-084, BDD-94, #90, SC-037 |
+
+### Newly surfaced during the v2 correction pass — agent default applied, flagged for the operator
+
+> These are **not** blockers and none belongs to the 20 grill findings. They are recorded rather than silently decided, in keeping with this spec's own standard.
+
+| # | Question | Agent default applied | Why it is defensible |
+|---|---|---|---|
+| 13 | **What bounds the number of `sessionLock` shards held by `ClearAll`?** Holding all 64 while `RetentionSweep` walks the whole tree (`pkg/session/retention_sweep.go:35`) is a full-store stall | Accept the stall; assert **no deadlock and no dropped session** (AC-20(d), FR-050) and do not add a batching scheme | The operation is already store-global today under one write lock, so 64-in-index-order is not a regression. Batching would reintroduce the lock-order question this design just closed |
+| 14 | **Is `metaCache` bounded?** W24 makes it the authoritative counter home; a long-lived gateway with repeated 24-way fan-outs now caches a `*UnifiedMeta` per **child** session for the process lifetime | Evict a child's `metaCache` entry at `CloseSession` (already required by FR-033/FR-088) and treat that as the bound | The eviction point already exists in this change set, so the growth D1 introduces is retired by the teardown D1 also introduces. A general cache bound is a separate concern that predates this ADR |
+| 15 | **Does `producing_session_id` survive replay?** BDD-15 asserts span/step correlation after a reconnect but nothing says whether replayed frames carry it or reconstruct it | Replayed frames **carry** it, persisted per entry; they do not reconstruct it | Reconstruction would need the parentage edge at render time, which is precisely the derived-value habit ADR-057 exists to remove |
+| 16 | **`follow_up` at generation N+2** — `follow_up` reuses `childID` verbatim (`pkg/agent/subturn.go:1115-1135`), so generation N+2 runs against a session that already has two generations of history | Covered by FR-075/BDD-83's property, which is generation-agnostic; no per-generation cap is introduced | The requirement is "generation N is visible to N+1", which composes. If a context-budget problem emerges it is `windowTrim`'s (ADR-028), not this ADR's |
 
 ---
 
@@ -2268,6 +2910,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **Category**: Edge Case
 
 ### H-7 — A child whose id collides with an existing session directory
+> **v2 note (holdout-side only):** this scenario's *property* was promoted to FR-096 / BDD-107 / #111 so the implementing agent is obliged to defend against it. The scenario below stays a holdout and is **not** referenced anywhere in the visible plan.
 - **Setup**: pre-create a session directory whose name equals the `childID` the next delegation will mint.
 - **Action**: dispatch that delegation.
 - **Expected outcome**: the collision is detected and surfaced — the delegation either fails loudly or mints a fresh id; under no circumstance does the child silently adopt the pre-existing session's transcript, meta, owner or stats.
@@ -2283,7 +2926,10 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - `UnifiedMeta` is not a wire type in its own right — the REST/WS payloads derive from it — so W23 requires no `contracts/` change. W5 does, and follows Constraint #8's 5-step pipeline.
 - The 64-shard constant is chosen to match the in-house precedent (`pkg/session/lifecycle_lock.go:17`, `pkg/entity/lock.go:12`), not to bound throughput.
 - Windows has no cross-process file locking anywhere in the file-store family (`pkg/fileutil/flock_windows.go` is a no-op). W15's cross-process assertions are POSIX-only, matching `pkg/entity/store_crossprocess_test.go`'s `//go:build !windows` gate. This is an accepted, documented limitation, not a gap this spec closes.
-- **Out of scope**: plan cancellation (D9), throttle unification (ratified cut, W17 excepted), `migrateLegacy`/`writeUnifiedMetaDirect`, and any fix to the pre-existing `rate_limit`/`replay_done` frame gaps.
+- The **W5 audit artefact** (FR-089) is produced before U11/U23 stamp anything, so no frame type is stamped against a class nobody assigned.
+- `agents.defaults.subturn.max_concurrent` is honoured **unclamped** when > 0 (`pkg/agent/subturn.go:64-69`). If a future change routes it through `clampParallelExplicit`, FR-095 and AC-10's 24/25 topology both break — #110 is the tripwire.
+- The listing design (US-19) paginates over **roots** and fetches children on expand. This is a **breaking change to the `GET /api/v1/sessions` response shape**, which greenfield permits (ADR-057 v4 operator decision 1) and which travels through Constraint #8's pipeline as part of W16 — **not** as part of W23, whose AC-21(e) "byte-identical, `verify-contracts` unaffected" is scoped to the file split alone.
+- **Out of scope**: plan cancellation (D9), throttle unification (ratified cut, W17 excepted), `migrateLegacy`/`writeUnifiedMetaDirect`, and any fix to the pre-existing `rate_limit`/`replay_done` frame gaps (operator decision 11 — audit and document, do not fix).
 
 ## Clarifications
 
@@ -2296,3 +2942,16 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - Q: How many files does `meta.json` become? → A: **Four** — identity/lifecycle, statistics, goal, loop. The boundary is the *writer*, not the reader (operator decision 5).
 - Q: Which writes get throttled? → A: **Only the per-token counter path.** Every event-driven write (goal, loop, status, title, owner, workspace) stays immediate, because they are control flow, not display (operator decision 6).
 - Q: Does throttle unification come along? → A: **No**, ratified unchanged, with the single exception of the ungated root-level fan-out (W17). D12's write-cadence throttle is unrelated despite the shared word (operator decision 7).
+
+### 2026-08-03 (v2, post-grill-#1)
+
+- Q: Are subordinate sessions hidden behind a flag, or nested under their parent? → A: **Nested under their parent** (operator decision 1). The `verifier` hidden-with-a-flag precedent is deliberately **not** followed. Scoped honestly as real UI and API work: US-19, FR-091…FR-094, unit U24, and a `GET /api/v1/sessions` response-shape change.
+- Q: What is `Inherit`'s new signature? → A: **`InheritFrom(srcSessionID, srcAgentID, dstSessionID, dstAgentID)`** — a two-key operation. Re-keying the single-key form is a silent no-op and is the failure US-6 exists to prevent (`[grill C-1]`).
+- Q: When a child's transcript write fails, does the child turn continue? → A: **Yes** — FR-002's counter-plus-WARN, unchanged. That is precisely why AC-18(b)'s assertion is not sufficient alone and why BDD-36 now asserts the child's file too (`[grill M-9]`).
+- Q: What is `ListSessions`'s consistency model after striping? → A: **Best-effort point-in-time snapshot**, stated in FR-086 and asserted by BDD-95.
+- Q: Who calls `CloseSession` for a child, and on which terminal states? → A: **U7, from `pkg/agent/subturn.go`'s terminal path, on completed / cancelled / failed / abandoned** (FR-088). No such call site exists in the tree today.
+- Q: What happens to a child's `stats.json` deltas when the child is `DeleteSession`d mid-flush? → A: **Flush-then-delete**; a flusher tick that finds the session gone drops its dirty entry without writing (Edge Cases).
+- Q: How does the SPA route an approve/deny response back to a child's pending entry when the frame's `session_id` is the chat's? → A: **By approval id** (FR-081). Resolving by session id breaks on the first delegated approval.
+- Q: Does `producing_session_id` survive replay? → A: **Carried, not reconstructed** (Ambiguity Resolution item 15).
+- Q: Does `ParentSessionID` have a reader, or is W2 a write-only field? → A: **FR-091 is its reader.** Without US-19 it had none, and W2 could have shipped write-only with every test green (`[grill §5, W2]`).
+- Q: Does `CreateSessionWithID` fail or succeed when the directory already exists? → A: **Fails loudly** (FR-096). `os.MkdirAll` at `pkg/session/unified.go:463` is idempotent and silent, so adoption was the default; the property is promoted out of holdout H-7 while H-7's scenario stays a holdout.
