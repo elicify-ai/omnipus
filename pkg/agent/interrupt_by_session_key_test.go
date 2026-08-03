@@ -201,6 +201,7 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(context.Background())
 
 	spawnDone := make(chan struct{})
+	var spawnErr error
 	go func() {
 		defer close(spawnDone)
 		spawnCtx := withSpawnToolCallID(parentTS.ctx, "call-577-1")
@@ -211,15 +212,31 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 			Timeout:           30 * time.Second,
 			DelegateSessionID: childID,
 		}
-		_, _ = spawnSubTurn(spawnCtx, al, parentTS, subCfg)
+		_, spawnErr = spawnSubTurn(spawnCtx, al, parentTS, subCfg)
 	}()
 
 	// Wait for the target's LLM call to actually be in flight (blocked on
 	// its own ctx.Done()) before firing the cancel — the exact window the
 	// #577 bug lived in: a cancel arriving while the target is genuinely
 	// running, which used to be silently swallowed.
+	//
+	// The <-spawnDone branch (in addition to the plain 5s timeout) is a
+	// deliberate diagnostic improvement, not a relaxation of the assertion:
+	// a genuine hang still only fails via the timeout branch below, exactly
+	// as before. Root-cause investigation of a real failure here (2026-08-03)
+	// found spawnSubTurn actually returns almost immediately with an error —
+	// e.g. CreateSessionWithID's FR-096 collision guard refusing a re-used
+	// childID directory left on disk by a prior test run — and that fast,
+	// silent error return was indistinguishable from a genuine 5s hang
+	// because the goroutine discarded it (`_, _ = spawnSubTurn(...)`).
+	// Surfacing spawnErr here turns that class of failure into an immediate,
+	// actionable message instead of a misleading "LLM call never started"
+	// after a needless 5s wait.
 	select {
 	case <-provider.entered:
+	case <-spawnDone:
+		t.Fatalf("spawnSubTurn returned before the target's LLM call ever started (err=%v) — "+
+			"the sub-turn never actually ran, so there is nothing for delegate(cancel) to cancel", spawnErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("target sub-turn's LLM call never started")
 	}
@@ -326,6 +343,7 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(context.Background())
 
 	spawnDone := make(chan struct{})
+	var spawnErr error
 	go func() {
 		defer close(spawnDone)
 		spawnCtx := withSpawnToolCallID(parentTS.ctx, "call-577-2")
@@ -336,11 +354,20 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 			Timeout:           30 * time.Second,
 			DelegateSessionID: childID,
 		}
-		_, _ = spawnSubTurn(spawnCtx, al, parentTS, subCfg)
+		_, spawnErr = spawnSubTurn(spawnCtx, al, parentTS, subCfg)
 	}()
 
+	// See the identical <-spawnDone diagnostic branch in
+	// TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext above
+	// for why this exists: it turns a fast, silent spawnSubTurn error return
+	// into an immediate, actionable failure instead of a misleading 5s
+	// timeout. The plain timeout branch below still covers a genuine hang,
+	// unchanged.
 	select {
 	case <-provider.entered:
+	case <-spawnDone:
+		t.Fatalf("spawnSubTurn returned before the target's LLM call ever started (err=%v) — "+
+			"the sub-turn never actually ran, so there is nothing for delegate(cancel) to cancel", spawnErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("target sub-turn's LLM call never started")
 	}

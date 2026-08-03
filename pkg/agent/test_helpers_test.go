@@ -85,12 +85,71 @@ func mustNewAgentLoop(
 	provider providers.LLMProvider,
 ) *AgentLoop {
 	t.Helper()
+	ensureTestIsolatedAgentHome(t, cfg)
 	ensureTestWorkspaceMembership(t, cfg)
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
 	return al
+}
+
+// ensureTestIsolatedAgentHome gives cfg its own private, per-test home
+// directory (via t.TempDir()) whenever the caller left Agents.Defaults.Home
+// unset — closing a real (test-only) defect class this package's tests were
+// silently hitting.
+//
+// The mechanism: config.Config.AgentHomeBasePath() (pkg/config/config.go) is
+// expandHome(cfg.Agents.Defaults.Home), and THAT expandHome (unlike the
+// same-named helper in pkg/agent/instance.go) does NOT fall back to
+// $OMNIPUS_HOME/$HOME for an empty input — it returns "" verbatim. NewAgentLoop
+// (pkg/agent/loop.go) then computes homePath := filepath.Dir(cfg.
+// AgentHomeBasePath()); filepath.Dir("") returns ".", the test PROCESS's
+// current working directory — this package's own source directory when
+// running `go test ./pkg/agent/` — and roots the shared session store AND
+// task store there (sharedDir := filepath.Join(homePath, "sessions"), etc.).
+//
+// Real gateway boots never hit this: config.DefaultConfig() (pkg/config/
+// defaults.go) always seeds Agents.Defaults.Home from OmnipusHomeDir(), so
+// homePath is never "." in production. But a large fraction of this
+// package's tests construct a bare config.Config{} literal (bypassing
+// DefaultConfig() entirely) and leave Agents.Defaults.Home empty — every one
+// of those was, before this fix, silently writing real session directories
+// straight into pkg/agent/sessions/ on the actual checkout: not under any
+// temp root, never cleaned up between runs, accumulating indefinitely.
+//
+// Most such tests never noticed because they mint a fresh random session id
+// every run (al.generateSubTurnID()/store.NewSession's ULID), so the leak was
+// silent — a new, never-colliding directory each time. The exception that
+// surfaced this: TestDelegateCancelHard/Soft_RealSubTurn_
+// ActuallyCancelsTargetContext (interrupt_by_session_key_test.go, #577) use a
+// FIXED, hardcoded DelegateSessionID ("test-577-delegate-child"[-soft]) so
+// their SECOND (and every subsequent) run collided with their OWN first run's
+// leftover directory and tripped CreateSessionWithID's FR-096 collision guard
+// (pkg/session/unified_api.go) — surfacing as "target sub-turn's LLM call
+// never started" (spawnSubTurn returns the collision error before ever
+// reaching runTurn/the provider Chat call), which is a test-infrastructure
+// artifact, NOT a defect in the delegate-cancel logic those tests exist to
+// prove. Root-caused and verified via targeted instrumentation: the isolated
+// failure is a ~10ms error return (session already exists), not a hang —
+// indistinguishable from a genuine 5s timeout only because both tests discard
+// spawnSubTurn's return value.
+//
+// t.TempDir() (not t.Setenv) is deliberate: safe to call even after
+// t.Parallel(), auto-removed after the test, and unique per call — so this
+// closes the leak for every mustNewAgentLoop caller in this package in one
+// place, rather than requiring each test to remember to set Home itself (many
+// already do, e.g. loop_test.go/loop_sysagent_test.go's own explicit
+// `cfg.Agents.Defaults.Home = tmpDir`; this is a no-op for those — only a cfg
+// that left Home empty is touched).
+func ensureTestIsolatedAgentHome(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	if cfg == nil {
+		return
+	}
+	if cfg.Agents.Defaults.Home == "" {
+		cfg.Agents.Defaults.Home = t.TempDir()
+	}
 }
 
 // testHarnessWorkspaceMembershipID is the fixed workspace id the shared

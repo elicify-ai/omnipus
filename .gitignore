@@ -17,6 +17,15 @@ cmd/**/workspace
 # Anchored: an unanchored `sessions/` also matches src/components/sessions/,
 # silently hiding SPA source from git status and `add -A`.
 /sessions/
+# pkg/agent/*_test.go tests that build a bare config.Config{} literal (never
+# populating Agents.Defaults.Home) resolve NewAgentLoop's shared session/task
+# store at filepath.Dir(cfg.AgentHomeBasePath()) == filepath.Dir("") == "."
+# — the package's own source directory — writing real session data straight
+# into the checkout instead of a temp dir. See mustNewAgentLoop's
+# ensureTestIsolatedAgentHome (pkg/agent/test_helpers_test.go) for the fix;
+# this entry is a safety net for any caller that bypasses that helper.
+pkg/agent/sessions/
+pkg/agent/tasks/
 
 # Coverage
 coverage.txt
