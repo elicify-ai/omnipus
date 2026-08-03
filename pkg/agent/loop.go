@@ -727,14 +727,23 @@ func NewAgentLoop(
 	// nil-gate check, which is a no-op change for every such caller. Real
 	// gateway boots always carry the seeded (or operator-overridden) positive
 	// value, so the gate is genuinely constructed and enforced in production.
-	var rootDelegationAdmission *RootDelegationAdmission
-	if rootDelegationCap, rootDelegationCapErr := ResolveRootDelegationCap(cfg); rootDelegationCapErr != nil {
-		logger.WarnCF("agent",
-			"Root-delegation admission gate (ADR-057 W17) not constructed — root-level delegate() fan-out is UNGATED until agents.defaults.subturn.max_concurrent is set to a positive value",
-			map[string]any{"error": rootDelegationCapErr.Error()})
-	} else {
-		rootDelegationAdmission = NewRootDelegationAdmission(rootDelegationCap)
+	// FAIL CLOSED, never nil: an unresolvable cap falls back to the seeded
+	// default rather than leaving the gate nil, because a nil gate means
+	// UNLIMITED root fan-out — the "silently reinterpreted as no gate"
+	// outcome FR-095 names as the banned ADR-037 anti-pattern. Coercion is
+	// confined to this failure branch precisely so it cannot defeat a valid
+	// operator override: any positive configured value is passed through
+	// untouched and unclamped (ResolveRootDelegationCap's contract). The
+	// error is still surfaced, loudly, so a genuine misconfiguration is
+	// diagnosable instead of manifesting as an unexplained refusal at 16.
+	rootDelegationCap, rootDelegationCapErr := ResolveRootDelegationCap(cfg)
+	if rootDelegationCapErr != nil {
+		rootDelegationCap = config.DefaultSubTurnMaxConcurrent
+		logger.ErrorCF("agent",
+			"Root-delegation cap unresolvable — falling back to the seeded default so root-level delegate() fan-out stays GATED; set agents.defaults.subturn.max_concurrent to a positive value",
+			map[string]any{"error": rootDelegationCapErr.Error(), "fallback_cap": rootDelegationCap})
 	}
+	rootDelegationAdmission := NewRootDelegationAdmission(rootDelegationCap)
 
 	eventBus := NewEventBus()
 	al := &AgentLoop{
@@ -1843,6 +1852,15 @@ func registerSharedTools(
 			delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
 				currentAgentID, cfg.Agents.Defaults,
 			))
+
+			// ADR-057: derive the ownership-walk bound from the SAME operator
+			// setting that bounds delegation depth. Left unwired, the walk used
+			// a hardcoded 3 while delegation depth stayed configurable — so
+			// raising max_depth made cancel/steer/peek on a legitimate depth-4+
+			// child fail with an ownership error indistinguishable from a real
+			// cross-tenant attempt. Zero/unset is ignored by the setter, which
+			// keeps its own default.
+			delegateTool.SetOwnershipWalkMaxDepth(cfg.Agents.Defaults.SubTurn.MaxDepth)
 
 			agent.Tools.Register(delegateTool)
 		}
