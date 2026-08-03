@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
@@ -30,6 +31,27 @@ const (
 // semaphore is exhausted. Callers (e.g. the REST handler) use errors.Is to
 // distinguish this retryable condition from hard failures.
 var ErrDispatchCapReached = errors.New("task_executor: global dispatch cap reached")
+
+// taskGoalTranscriptWriteFailures is incremented each time one of this
+// unit's task/goal-path transcript writers — task_executor.go's task
+// prompt/error/response/steering/evidence-gate/judge-verdict entries and
+// goal_loop.go's goal judge-verdict/handover entries — calls
+// UnifiedStore.AppendTranscriptStrict against a session id that does not
+// resolve to a real, store-backed session (ADR-057 FR-002/W3d). Before
+// ADR-057, AppendTranscript silently minted an orphan session directory for
+// exactly this case and returned nil, so a lost task/goal transcript write
+// was indistinguishable from a successful one. Mirrors pkg/agent/turn.go's
+// transcriptWriteFailures (U3) and pkg/tools/handoff.go's
+// handoffTranscriptWriteFailures (U22) — a package-local counter scoped to
+// this unit's own call sites, never a shared cross-package counter.
+var taskGoalTranscriptWriteFailures atomic.Uint64
+
+// TaskGoalTranscriptWriteFailures returns the current value of the
+// task/goal-path transcript-write-failure counter (ADR-057 FR-002/W3d).
+// Used by tests and operator tooling.
+func TaskGoalTranscriptWriteFailures() uint64 {
+	return taskGoalTranscriptWriteFailures.Load()
+}
 
 // taskSlot holds the state for one running (or reserved) task goroutine. A
 // slot is inserted into te.running atomically under te.mu before the goroutine
@@ -551,14 +573,15 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 	// advanceBlockedTasks, SpawnTriggeredRun, and plan-member dispatch (every
 	// caller of ExecuteTask funnels through this function).
 	te.mintTaskLifecycleRecord(taskSessionID, t)
-	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+	if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 		ID:        t.ID + "-prompt",
 		Role:      "user",
 		Content:   te.buildPrompt(t),
 		Timestamp: time.Now().UTC(),
 	}); appendErr != nil {
-		logger.ErrorCF("task_executor", "Transcript write failed",
-			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+		taskGoalTranscriptWriteFailures.Add(1)
+		logger.WarnCF("task_executor", "Transcript write failed",
+			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
 	return taskSessionID, nil
 }
@@ -684,15 +707,16 @@ func (te *TaskExecutor) finishTaskRun(
 		logger.ErrorCF("task_executor", "Agent execution failed"+logSuffix,
 			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": err.Error()})
 		if taskSessionID != "" && sessStore != nil {
-			if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+			if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 				ID:        t.ID + "-error",
 				Role:      "assistant",
 				Content:   fmt.Sprintf("Task execution failed: %v", err),
 				Status:    "error",
 				Timestamp: time.Now().UTC(),
 			}); appendErr != nil {
+				taskGoalTranscriptWriteFailures.Add(1)
 				logger.WarnCF("task_executor", "Transcript write failed",
-					map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+					map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 			}
 			status := session.StatusInterrupted
 			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
@@ -715,14 +739,15 @@ func (te *TaskExecutor) finishTaskRun(
 	}
 
 	if taskSessionID != "" && resp != "" && sessStore != nil {
-		if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+		if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 			ID:        t.ID + "-response",
 			Role:      "assistant",
 			Content:   resp,
 			Timestamp: time.Now().UTC(),
 		}); appendErr != nil {
+			taskGoalTranscriptWriteFailures.Add(1)
 			logger.WarnCF("task_executor", "Transcript write failed",
-				map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+				map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 		}
 	}
 
@@ -1081,14 +1106,15 @@ func (te *TaskExecutor) writeSteeringPrompt(
 	if sessStore == nil {
 		return
 	}
-	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+	if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("%s-steering-%d", t.ID, t.AttemptCount+1),
 		Role:      "system",
 		Content:   steering,
 		Timestamp: time.Now().UTC(),
 	}); appendErr != nil {
+		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("task_executor", "goal-loop: steering transcript write failed",
-			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
 }
 
@@ -1167,15 +1193,16 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 	}
 	if taskSessionID != "" {
 		if sessStore := te.agentLoop.GetAgentStore(updated.AgentID); sessStore != nil {
-			if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+			if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 				ID:        fmt.Sprintf("%s-evidence-gate-%d", updated.ID, time.Now().UnixNano()),
 				Role:      "system",
 				Content:   steeringText,
 				Timestamp: time.Now().UTC(),
 			}); appendErr != nil {
+				taskGoalTranscriptWriteFailures.Add(1)
 				logger.WarnCF("task_executor",
 					"evidence-marker gate: steering transcript write failed",
-					map[string]any{"task_id": updated.ID, "error": appendErr.Error()})
+					map[string]any{"task_id": updated.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 			}
 		}
 	}
@@ -1275,7 +1302,7 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 			map[string]any{"task_id": t.ID, "error": merr.Error()})
 		return
 	}
-	if appendErr := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+	if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("%s-judge-%d", t.ID, verdict.Round),
 		Type:      session.EntryTypeJudgeVerdict,
 		Role:      "system",
@@ -1283,8 +1310,9 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 		AgentID:   verdict.JudgeAgentID,
 		Timestamp: time.Now().UTC(),
 	}); appendErr != nil {
+		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("task_executor", "goal-loop: judge verdict transcript write failed",
-			map[string]any{"task_id": t.ID, "error": appendErr.Error()})
+			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
 }
 
@@ -1986,14 +2014,15 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		// createTaskSessionSync; both must call this so every dispatch path
 		// gets a record.
 		te.mintTaskLifecycleRecord(taskSessionID, t)
-		if err := sessStore.AppendTranscript(taskSessionID, session.TranscriptEntry{
+		if err := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 			ID:        t.ID + "-prompt",
 			Role:      "user",
 			Content:   te.buildPrompt(t),
 			Timestamp: time.Now().UTC(),
 		}); err != nil {
-			logger.ErrorCF("task_executor", "StartTaskNow: transcript write failed",
-				map[string]any{"task_id": taskID, "error": err.Error()})
+			taskGoalTranscriptWriteFailures.Add(1)
+			logger.WarnCF("task_executor", "StartTaskNow: transcript write failed",
+				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": err.Error()})
 		}
 	} else {
 		logger.WarnCF("task_executor", "StartTaskNow: no agent store found, task will have no session",

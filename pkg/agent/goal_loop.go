@@ -736,7 +736,7 @@ func (al *AgentLoop) writeGoalVerdictTranscript(store *session.UnifiedStore, ses
 			map[string]any{"session_id": sessionID, "error": merr.Error()})
 		return
 	}
-	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("goal-%s-judge-%d", sessionID, verdict.Round),
 		Type:      session.EntryTypeJudgeVerdict,
 		Role:      "system",
@@ -744,6 +744,7 @@ func (al *AgentLoop) writeGoalVerdictTranscript(store *session.UnifiedStore, ses
 		AgentID:   verdict.JudgeAgentID,
 		Timestamp: time.Now().UTC(),
 	}); err != nil {
+		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "goal loop: judge verdict transcript write failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 	}
@@ -820,7 +821,7 @@ func effectiveGoalActivity(m *session.UnifiedMeta) time.Time {
 // writeGoalSystemTranscript writes a plain system-entry note (used for the
 // round-bound-reached handover, SD-B9) to the session transcript.
 func (al *AgentLoop) writeGoalSystemTranscript(store *session.UnifiedStore, sessionID, agentID, content string) {
-	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("goal-%s-handover-%d", sessionID, time.Now().UnixNano()),
 		Type:      session.EntryTypeSystem,
 		Role:      "system",
@@ -828,6 +829,7 @@ func (al *AgentLoop) writeGoalSystemTranscript(store *session.UnifiedStore, sess
 		AgentID:   agentID,
 		Timestamp: time.Now().UTC(),
 	}); err != nil {
+		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "goal loop: handover transcript write failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 	}
