@@ -167,6 +167,41 @@ func (us *UnifiedStore) FlushSessionStats(sessionID string) error {
 	return us.u6FlushDirtySessionLocked(sessionID)
 }
 
+// EvictSessionMeta drops sessionID's metaCache entry ONLY — no disk write,
+// no directory removal, and NO change to the FR-097 parent index. Exported
+// as the ADR-057 FR-033 cache-eviction seam for the child-terminal
+// CloseSession teardown (U17b, pkg/agent/session_end.go, Wave E).
+//
+// CROSS-UNIT EXCEPTION: this method lives in U6's file (a deliberate,
+// authorized deviation from the ownership table, logged as such) because no
+// existing UnifiedStore method separates cache eviction from session
+// deletion — DeleteSession (unified.go) conflates os.RemoveAll, u4IndexEvict
+// and the metaCache delete into one operation, and dataset row 8 ("Session
+// parent index", ADR-057 spec) is explicit that eviction != deletion: "the
+// session still exists on disk, so it stays in the index; only the cached
+// meta is dropped." U6 built FlushSessionStats as U17b's forced-flush seam
+// but did not build this one, since FR-033's cache-eviction requirement has
+// no other implementation site.
+//
+// Deliberately does NOT call u4IndexEvict: the session remains a live member
+// of the FR-097 parent index (ChildCount must keep counting it, and it must
+// not resurface as an orphan root) even though its composed *UnifiedMeta is
+// no longer cached. The next GetMeta/ListSessions call for this id self-heals
+// the cache from disk exactly like any other cache miss (readMetaLocked).
+//
+// Takes sessionID's shard before cacheMu — the same one-directional lock
+// order (FR-050) every other mutation in this store follows — so this cannot
+// interleave with a concurrent SetMeta/AppendTranscript/GetMeta cache-miss
+// refill for the SAME session id. No-op (and safe) for a session that was
+// never cached, mirroring u4IndexEvict's idempotency convention.
+func (us *UnifiedStore) EvictSessionMeta(sessionID string) {
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+	us.cacheMu.Lock()
+	delete(us.metaCache, sessionID)
+	us.cacheMu.Unlock()
+}
+
 // --- the periodic flusher goroutine (FR-063, FR-067) ---
 
 // startStatsFlusher launches the FR-063 periodic flusher goroutine exactly

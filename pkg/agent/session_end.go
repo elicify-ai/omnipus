@@ -44,6 +44,40 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// AgentLoop literals built directly in tests without NewAgentLoop).
 	al.approvalGrants.ClearSession(sessionID)
 
+	// FR-064/FR-033: force any pending in-memory-only stats delta (the
+	// FR-061 throttle) to disk, THEN evict this session's metaCache entry —
+	// unconditionally, same reasoning as forgetSession/approvalGrants.
+	// ClearSession above: this is bounded per-session cleanup, not gated on
+	// the recap feature. Order matters: flush BEFORE evict, mirroring
+	// FR-064's DeleteSession sequence (flush-then-remove) — evicting first
+	// would drop the cache entry FlushSessionStats itself reads to produce
+	// stats.json's bytes, losing the pending delta instead of persisting it.
+	// Without the flush, counters accumulated since the last periodic tick
+	// (up to StatsFlushInterval, default 5s) are silently lost: nothing
+	// errors, the session simply reports stale Stats to the next GetMeta/
+	// ListSessions caller. Without the evict, a stale composed meta can be
+	// served to a caller after this session has "closed" (FR-033) and the
+	// cache grows one entry per ever-delegated child for the process
+	// lifetime (Ambiguity 14). Eviction is NOT deletion: the session's files
+	// stay on disk and it stays in the FR-097 parent index (EvictSessionMeta
+	// deliberately does not call u4IndexEvict) — only the process-lifetime
+	// cache entry is dropped; the next GetMeta/ListSessions call self-heals
+	// it from disk like any other cache miss. al.sharedSessionStore may be
+	// nil in tests that build an AgentLoop literal directly without
+	// NewAgentLoop (same nil-safety concern documented on approvalGrants
+	// above), so both are skipped rather than panicking when there is no
+	// store.
+	if store := al.sharedSessionStore; store != nil {
+		if err := store.FlushSessionStats(sessionID); err != nil {
+			slog.Warn("session_end: forced stats flush failed at close",
+				"session_id", sessionID,
+				"trigger", trigger,
+				"error", err,
+			)
+		}
+		store.EvictSessionMeta(sessionID)
+	}
+
 	// Use GetConfig() (holds al.mu.RLock) so that a PUT /settings/memory that
 	// hot-swaps the config via SwapConfig is immediately visible here — a direct
 	// al.cfg read races with SwapConfig's write and may see the pre-PUT value.
