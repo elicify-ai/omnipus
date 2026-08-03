@@ -257,11 +257,20 @@ func TestAgentLoop_SteeringMode_GetSet(t *testing.T) {
 }
 
 func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -308,11 +317,20 @@ func TestAgentLoop_Continue_NoMessages(t *testing.T) {
 }
 
 func TestAgentLoop_Continue_WithMessages(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -346,11 +364,20 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 // With per-session workers, messages for different scopes are routed into
 // separate workers — there is no requeue path.
 func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -624,11 +651,20 @@ func (t *interruptibleTool) Execute(ctx context.Context, args map[string]any) *t
 }
 
 func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -739,11 +775,20 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 }
 
 func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -810,11 +855,20 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 }
 
 func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -944,11 +998,20 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 }
 
 func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1030,11 +1093,20 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 }
 
 func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1133,11 +1205,20 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 }
 
 func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1311,11 +1392,20 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 }
 
 func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1476,11 +1566,20 @@ func (m *capturingMockProvider) GetDefaultModel() string {
 }
 
 func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{

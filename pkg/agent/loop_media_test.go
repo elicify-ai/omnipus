@@ -403,9 +403,16 @@ func (p *imageRejectionProvider) GetDefaultModel() string {
 //
 // Traces to: sprint/258 review finding #2 (loop.go image→friendly-message has no test).
 func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-imgrej-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-imgrej-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	require.NoError(t, os.MkdirAll(tmpDir, 0o700))
 
 	const modelName = "anthropic/claude-3-5-haiku"
 	cfg := &config.Config{
@@ -480,9 +487,16 @@ func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
 //
 // Traces to: sprint/258 review finding #2 (negative test case).
 func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-nonimg-*")
+	tmpDirOuter, err := os.MkdirTemp("", "agent-nonimg-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDirOuter)
+	// Nested one level below the freshly-made outer container so
+	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
+	// session/task store at) is THIS test's own private tmpDirOuter,
+	// never the shared OS temp root — see loop_test.go's
+	// newTestAgentLoop doc comment for the leak this closes.
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	require.NoError(t, os.MkdirAll(tmpDir, 0o700))
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{

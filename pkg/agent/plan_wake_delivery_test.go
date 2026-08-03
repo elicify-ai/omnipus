@@ -156,13 +156,26 @@ func newPlanWakeHarness(t *testing.T) *planWakeHarness {
 	// flushing when the test ends, and t.TempDir's cleanup FAILS THE TEST on a
 	// non-empty directory. That is the same reason newTestAgentLoop in this
 	// package uses MkdirTemp. Nothing here asserts on the directories.
+	//
+	// outerDir is this harness's OWN private container (one per call to
+	// newPlanWakeHarness), created exactly once. Every tmp() call below nests
+	// INSIDE it (os.MkdirTemp(outerDir, ...), not os.MkdirTemp("", ...)) so
+	// filepath.Dir(cfg.Agents.Defaults.Home) — what NewAgentLoop roots the
+	// shared session/task store at — is THIS harness's own outerDir, never
+	// the shared OS temp root every other test's flat MkdirTemp call used to
+	// share. See loop_test.go's newTestAgentLoop doc comment for the leak
+	// this closes across the package.
+	outerDir, outerErr := os.MkdirTemp("", "plan-wake-outer-*")
+	if outerErr != nil {
+		t.Fatalf("mkdtemp (outer): %v", outerErr)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outerDir) })
 	tmp := func() string {
 		t.Helper()
-		dir, err := os.MkdirTemp("", "plan-wake-*")
+		dir, err := os.MkdirTemp(outerDir, "plan-wake-*")
 		if err != nil {
 			t.Fatalf("mkdtemp: %v", err)
 		}
-		t.Cleanup(func() { _ = os.RemoveAll(dir) })
 		return dir
 	}
 	t.Setenv(config.EnvHome, tmp())

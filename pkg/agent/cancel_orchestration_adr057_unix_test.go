@@ -19,6 +19,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"syscall"
 	"testing"
@@ -104,7 +105,15 @@ func u15SpawnRealSleep(t *testing.T, seconds int) int {
 //     left running.
 func TestU15Cancel_KillsChildShellsNotSiblings_RealPIDs(t *testing.T) {
 	al := newCancelTestAgentLoop(t)
-	lifecycleStore := session.NewLifecycleStore(t.TempDir())
+	// os.MkdirTemp + best-effort RemoveAll, NOT t.TempDir: same rationale as
+	// newCancelTestAgentLoop (cancel_test.go) — a straggling background
+	// writer touching this store after RequestCancel returns must never
+	// turn into a t.TempDir()-style t.Errorf on cleanup for a harness
+	// timing quirk unrelated to this test's real-PID assertions.
+	lifecycleDir, err := os.MkdirTemp("", "u15-lifecycle-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(lifecycleDir) })
+	lifecycleStore := session.NewLifecycleStore(lifecycleDir)
 	al.SetSessionMessagingStores(nil, lifecycleStore)
 
 	nonce := time.Now().UnixNano()

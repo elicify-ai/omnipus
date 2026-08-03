@@ -32,7 +32,38 @@ import (
 
 func newCancelTestAgentLoop(t *testing.T) *AgentLoop {
 	t.Helper()
-	tmpDir := t.TempDir()
+	// os.MkdirTemp + a best-effort RemoveAll, NOT t.TempDir: AgentLoop's own
+	// background writers (recap drain, stats flusher, session bookkeeping)
+	// are only BOUNDED-drained by al.Close() (e.g. waitRecapDrain's 30s
+	// budget just logs a warning and proceeds on timeout — it does not
+	// guarantee every writer has actually stopped touching Home by the time
+	// Close() returns). t.TempDir()'s own cleanup calls os.RemoveAll and
+	// FAILS THE TEST (t.Errorf) if a straggling writer still has the
+	// directory non-empty at that instant — observed in practice as
+	// "TempDir RemoveAll cleanup: ...: directory not empty" on
+	// TestU15Cancel_KillsChildShellsNotSiblings_RealPIDs under full
+	// pkg/agent suite load (never in isolation, where there's no contention
+	// to delay the drain). plan_wake_delivery_test.go's newPlanWakeHarness
+	// documents and works around the identical hazard the same way: a
+	// plain, best-effort os.RemoveAll here silently tolerates the race
+	// instead of failing the test over a harness cleanup timing quirk that
+	// has nothing to do with the behavior under test.
+	//
+	// Nested under its own private outer container (not bare
+	// os.MkdirTemp("", ...)) so filepath.Dir(tmpDir) — what NewAgentLoop
+	// roots the shared session/task store at — stays THIS test's own
+	// private directory, never the shared OS temp root every test in this
+	// package that used to call os.MkdirTemp("", "agent-test-*") directly
+	// shared (see loop_test.go's newTestAgentLoop doc comment).
+	tmpDirOuter, err := os.MkdirTemp("", "agent-cancel-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDirOuter) })
+	tmpDir := filepath.Join(tmpDirOuter, "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("Failed to create nested home dir: %v", err)
+	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
