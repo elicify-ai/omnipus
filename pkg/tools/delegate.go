@@ -163,16 +163,23 @@ type DelegateTaskState struct {
 	Result        string
 	Created       int64
 
-	// SessionID is the transcript session ID a spawned child sub-turn writes
-	// its own intermediate narration and final-turn text into — the SAME
-	// session ID the delegating PARENT turn itself uses (delegated children
-	// share their parent's transcript; see pkg/agent/subturn.go's
-	// TranscriptSessionID: parentTS.transcriptSessionID). Captured at
-	// task-creation time from ToolTranscriptSessionID(ctx) — the identical
-	// value the child will be spawned with. Used by action:"status" (W2) to
-	// read back a running native task's recent activity. Empty when no
-	// transcript session context was available at creation time (e.g. a
-	// direct programmatic Execute call, as in most of this file's tests).
+	// SessionID (ADR-057 W21b — RE-POINTED, deliberately, not left as a
+	// silent byproduct of FR-007 landing elsewhere in this change set) is
+	// the DELEGATING PARENT's own transcript session id at task-creation
+	// time — captured from ToolTranscriptSessionID(ctx) inside the caller's
+	// own tool-execution context, i.e. the caller's OWN durable session id
+	// (pkg/agent/subturn.go's TranscriptSessionID: childID, post-FR-007),
+	// NOT the spawned child's. Retained for display/back-compat only
+	// (delegateFormatTask does not currently render it, and no other
+	// consumer in this package reads it). Pre-ADR-057, this field doubled
+	// as "the session a running native task's activity snapshot is read
+	// from", because a delegated child used to write its OWN narration into
+	// its PARENT's shared transcript — that assumption broke silently the
+	// moment FR-007 gave every child its own real session, and
+	// recentActivityLines has been re-pointed at DelegateSessionID instead
+	// (FR-043; see that field's own doc comment). Empty when no transcript
+	// session context was available at creation time (e.g. a direct
+	// programmatic Execute call, as in most of this file's tests).
 	SessionID string
 	// SpawnCallID is this delegate tool call's own ID — the value a spawned
 	// child sub-turn's transcript entries carry back as
@@ -199,11 +206,29 @@ type DelegateTaskState struct {
 	Is3P bool
 
 	// DelegateSessionID is the ADR-053 durable session_id (S2) this task's
-	// child was spawned under — distinct from SessionID above (which
-	// remains the shared parent transcript session id, unchanged, for
-	// backward compat with recentActivityLines). status/inbox/steer/
-	// respond/cancel/follow_up/peek all address a child by THIS id.
+	// child was spawned under — distinct from SessionID above. status/
+	// inbox/steer/respond/cancel/follow_up/peek all address a child by THIS
+	// id, and (ADR-057 FR-043) so does recentActivityLines: post-FR-007 a
+	// delegated child writes its OWN transcript into its OWN session
+	// (DelegateSessionID), never into SessionID (the delegating PARENT's
+	// own transcript id at dispatch time — see SessionID's own doc comment
+	// above), so reading SessionID back for a running task's activity
+	// snapshot silently found nothing the moment FR-007 landed elsewhere in
+	// this change set. Fixed here; DelegateSessionID is the only correct
+	// key for that read.
 	DelegateSessionID string
+
+	// LastStatusRead is the UnixMilli timestamp of this task's most recent
+	// action:"status" read (ADR-057 FR-045/FR-087, BDD-52) — stamped by
+	// getTaskCopy/listTaskCopies on every read, and initialized to the
+	// task's own Created time at registration so a never-polled task still
+	// ages from a real timestamp rather than from the zero value (which
+	// would read as 1970 and make it immediately eligible for eviction).
+	// evictStaleTasksLocked uses this, not Created, to decide whether a
+	// terminal task has gone stale long enough to reclaim — a task still
+	// being actively polled must never be evicted out from under a caller
+	// mid-conversation.
+	LastStatusRead int64
 }
 
 // delegateSessionIDCtxKey is the context key carrying a child turn's own
@@ -305,6 +330,31 @@ type DelegateTool struct {
 	// already returned before this feature.
 	sessionStore DelegateSessionStore
 
+	// sessionManager, when set via SetSessionManager, is the shared
+	// *SessionManager (pkg/tools/session.go — same package, no interface
+	// indirection needed) executeCancel uses to kill a cancelled child's
+	// OWN background bash/exec shells (ADR-057 FR-028/BDD-29): "delegate
+	// action=cancel MUST kill that child's background shells (today no such
+	// call exists on that path)". This is deliberately independent of, and
+	// does not replace, U15's RequestCancel/Stop-button cascade
+	// (pkg/agent/cancel.go's resolveBackgroundKillSessionIDs loop over
+	// hooks.KillBackgroundSessions) — that path fires on a chat-wide Stop
+	// click and walks the FULL descendant subtree; this one fires on a
+	// delegate(action="cancel") tool call targeting exactly one child
+	// session (BDD-29's scope is "that child's" shells, not its subtree,
+	// matching ScopeSelfOnly's own single-target semantics — see
+	// SetCancelHooks' doc comment). Reuses the SAME KillAllForSessions
+	// primitive U16 exposes rather than re-deriving a second, parallel
+	// descendant walk. A nil sessionManager (SetSessionManager never
+	// called) is a silent no-op, matching every other optional capability
+	// this tool accepts via a setter.
+	sessionManager *SessionManager
+
+	// ownershipWalkMaxDepth bounds the ancestor-chain walk
+	// verifyCallerOwnsSession performs (FR-039/BDD-43) — see
+	// SetOwnershipWalkMaxDepth and defaultOwnershipWalkMaxDepth.
+	ownershipWalkMaxDepth int
+
 	mu     sync.Mutex
 	tasks  map[string]*DelegateTaskState
 	nextID int
@@ -312,6 +362,11 @@ type DelegateTool struct {
 	// legacy taskID (t.tasks' key), so status/inbox/etc. can resolve either
 	// the legacy task_id or the new session_id to the same DelegateTaskState.
 	sessionIndex map[string]string
+	// taskRetentionCap/taskRetentionTTL bound t.tasks/t.sessionIndex
+	// (FR-045/FR-087, BDD-52) — see SetTaskRetentionPolicy,
+	// defaultDelegateTaskRetentionCap and defaultDelegateTaskTTL.
+	taskRetentionCap int
+	taskRetentionTTL time.Duration
 
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
@@ -347,14 +402,19 @@ type DelegateTool struct {
 	// steering-queue scope (generalizes pkg/agent/steering.go's existing
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
-	// cancelSoft/cancelHard hold AgentLoop.InterruptBySessionKey /
-	// InterruptBySessionKeyHard respectively (wired in
-	// pkg/agent/session_messaging_wire.go), keyed by the delegate's
-	// sessionKey (== delegateSessionID). Same signature as the legacy
-	// InterruptSession/InterruptSessionHard pair, but a direct
-	// activeTurnStates.Load(sessionKey) instead of a transcriptSessionID
-	// Range — see SetCancelHooks for why the implementer choice is
-	// load-bearing. Injected to avoid a tools<->agent import cycle, matching
+	// cancelSoft/cancelHard hold two-argument closures over AgentLoop's
+	// collapsed ADR-057 W13 entry points, Interrupt/InterruptSessionHard
+	// (pkg/agent/steering.go — each now takes a mandatory, explicit
+	// InterruptScope), wired in pkg/agent/session_messaging_wire.go as
+	// `func(sessionKey, hint string) ([]string, error) { return
+	// al.Interrupt(sessionKey, ScopeSelfOnly, hint) }` (soft) and the
+	// InterruptSessionHard analogue (hard) — both pinned to ScopeSelfOnly,
+	// never ScopeSubtree, matching this field's own load-bearing point
+	// below: a direct activeTurnStates.Load(sessionKey) targeting exactly
+	// ONE delegation, not a subtree sweep. (Pre-W13 these wrapped the now-
+	// retired two-argument InterruptBySessionKey/InterruptBySessionKeyHard
+	// directly — the field TYPE here never changed, only what it's wired
+	// to.) Injected to avoid a tools<->agent import cycle, matching
 	// every other AgentLoop capability this tool already consumes via a
 	// setter (SetSpawner, etc.). Returns the canceled turn's ID as a
 	// single-element descendants slice on a hit, nil descendants on a miss
@@ -550,25 +610,38 @@ func isSessionMessagingAction(action string) bool {
 }
 
 // SetCancelHooks installs the soft (cooperative) and hard (RequestCancel
-// backstop) cancel functions. The canonical implementers are AgentLoop's
-// InterruptBySessionKey (soft) and InterruptBySessionKeyHard (hard), wired in
-// pkg/agent/session_messaging_wire.go — NOT InterruptSession/InterruptSession
-// Hard. The two pairs share the same Go signature
-// (func(string, string) ([]string, error)) so the compiler cannot catch a
-// re-wire: a future maintainer "fixing consistency" by switching back to
-// InterruptSession/InterruptSessionHard would silently reintroduce the
-// dual-namespace bug where every delegate.cancel no-op'd against
-// transcriptSessionID while still reporting success.
+// backstop) cancel functions. ADR-057 W13 collapsed the four legacy
+// interrupt entry points (InterruptSession, InterruptSessionHard,
+// InterruptBySessionKey, InterruptBySessionKeyHard) into two —
+// AgentLoop.Interrupt and AgentLoop.InterruptSessionHard
+// (pkg/agent/steering.go) — each now taking a mandatory, explicit
+// InterruptScope. The canonical wiring, in
+// pkg/agent/session_messaging_wire.go, is a pair of two-argument closures
+// pinned to ScopeSelfOnly: `func(sessionKey, hint string) ([]string, error)
+// { return al.Interrupt(sessionKey, ScopeSelfOnly, hint) }` (soft) and the
+// InterruptSessionHard analogue (hard) — NEVER ScopeSubtree, and never a
+// closure over the OLD, now-retired InterruptBySessionKey(Hard) pair
+// (still named here only for historical contrast). ScopeSubtree would
+// widen a single targeted cancel into a whole-subtree sweep, exactly the
+// dual-namespace-style bug this hook's own WARNING below exists to keep
+// closed (see pkg/agent/session_messaging_wire_adr057_test.go's
+// TestSetCancelHooks_ScopeSelfOnlyNotSubtree) — a future "fixing
+// consistency" edit swapping in ScopeSubtree here would silently
+// reintroduce it, unless a scope-aware regression test catches it, since
+// the compiler cannot: soft/hard keep the same
+// func(string, string) ([]string, error) signature regardless of which
+// scope the wiring closure captures.
 //
 // WARNING — the hook MUST be invoked with the delegate's sessionKey
 // (== delegateSessionID, the caller-facing id this tool returns from run and
 // accepts on every subsequent cancel/steer/respond/peek), NEVER the parent
-// chat's transcriptSessionID. The two namespaces are deliberately distinct
-// for a delegated sub-turn (subturn.go's FR-6a sets transcriptSessionID equal
-// to the PARENT's shared chat id so a chat-wide Stop cascades via
-// InterruptSession's transcriptSessionID Range; sessionKey is the unique
-// per-delegation address). executeCancel passes its session_id argument here
-// verbatim — that argument IS the delegateSessionID by contract.
+// chat's transcriptSessionID/routingSessionID. The two id spaces are
+// deliberately distinct for a delegated sub-turn (see
+// turnState.routingSessionID's own doc comment, pkg/agent/turn.go — the
+// ROUTING id, not the transcript id, is what a chat-wide Stop cascades via)
+// — sessionKey is the unique per-delegation address, unrelated to either.
+// executeCancel passes its session_id argument here verbatim — that
+// argument IS the delegateSessionID by contract.
 func (t *DelegateTool) SetCancelHooks(
 	soft func(sessionKey, hint string) ([]string, error),
 	hard func(sessionKey, hint string) ([]string, error),
@@ -712,6 +785,113 @@ func (t *DelegateTool) SetAgentRegistry(getRegistry func() DelegateAgentRegistry
 // action:"status" (W2). See the sessionStore field doc.
 func (t *DelegateTool) SetSessionStore(store DelegateSessionStore) {
 	t.sessionStore = store
+}
+
+// SetSessionManager installs the shared *SessionManager executeCancel uses
+// to kill a cancelled child's own background shells (FR-028/BDD-29). See
+// the sessionManager field doc. A nil sessionManager (never called) leaves
+// action="cancel" behaving exactly as before this fix — a silent no-op on
+// this specific side effect, matching every other optional capability.
+func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
+	t.sessionManager = sm
+}
+
+// defaultOwnershipWalkMaxDepth bounds the ancestor-chain walk
+// verifyCallerOwnsSession performs (FR-039/BDD-43) when
+// SetOwnershipWalkMaxDepth is never called. pkg/tools cannot reference
+// pkg/agent's own safety-backstop delegation-depth default
+// (defaultMaxSubTurnDepth, currently 3) directly — that package boundary
+// already exists for every other AgentLoop capability this tool consumes
+// via a setter (see delegationDepthResolver) — so this is a same-valued,
+// independently-declared constant, not a shared symbol.
+const defaultOwnershipWalkMaxDepth = 3
+
+// SetOwnershipWalkMaxDepth overrides the ancestor-chain walk's depth bound
+// (FR-039). Zero/negative values fall back to defaultOwnershipWalkMaxDepth.
+func (t *DelegateTool) SetOwnershipWalkMaxDepth(n int) {
+	if n > 0 {
+		t.ownershipWalkMaxDepth = n
+	}
+}
+
+func (t *DelegateTool) ownershipMaxDepth() int {
+	if t.ownershipWalkMaxDepth > 0 {
+		return t.ownershipWalkMaxDepth
+	}
+	return defaultOwnershipWalkMaxDepth
+}
+
+// defaultDelegateTaskRetentionCap/defaultDelegateTaskTTL bound
+// t.tasks/t.sessionIndex (FR-045/FR-087, BDD-52) when
+// SetTaskRetentionPolicy is never called: an install that runs many
+// delegations over a long uptime must not grow these maps without bound.
+const (
+	defaultDelegateTaskRetentionCap = 1000
+	defaultDelegateTaskTTL          = time.Hour
+)
+
+// SetTaskRetentionPolicy overrides the retention bound (C, FR-087) and TTL
+// (T, FR-045) governing t.tasks/t.sessionIndex eviction. Zero/negative
+// values fall back to the defaults above.
+func (t *DelegateTool) SetTaskRetentionPolicy(cap int, ttl time.Duration) {
+	if cap > 0 {
+		t.taskRetentionCap = cap
+	}
+	if ttl > 0 {
+		t.taskRetentionTTL = ttl
+	}
+}
+
+func (t *DelegateTool) taskCap() int {
+	if t.taskRetentionCap > 0 {
+		return t.taskRetentionCap
+	}
+	return defaultDelegateTaskRetentionCap
+}
+
+func (t *DelegateTool) taskTTL() time.Duration {
+	if t.taskRetentionTTL > 0 {
+		return t.taskRetentionTTL
+	}
+	return defaultDelegateTaskTTL
+}
+
+// isTerminalDelegateStatus reports whether status is one of the three
+// terminal DelegateTaskState.Status values eviction is scoped to
+// (FR-045/FR-087) — a "running" task is never evicted regardless of age.
+func isTerminalDelegateStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "canceled":
+		return true
+	}
+	return false
+}
+
+// evictStaleTasksLocked removes terminal DelegateTaskState entries whose
+// last action:"status" read (getTaskCopy/listTaskCopies stamp
+// LastStatusRead on every read; a never-polled task ages from its own
+// Created time) is older than the configured TTL (FR-045), keeping
+// t.tasks/t.sessionIndex bounded (FR-087, BDD-52) without evicting a task
+// still within its TTL window (BDD-52's "But" clause, test #93) — which
+// would otherwise break a caller's next action:"status" poll for it.
+// Callers MUST already hold t.mu. Runs as part of the tool's own
+// bookkeeping (every new task registration in executeAsync/executeSync) —
+// FR-045 requires no external caller/ticker, and this satisfies it without
+// adding a goroutine to manage.
+func (t *DelegateTool) evictStaleTasksLocked() {
+	cutoff := t.now().Add(-t.taskTTL())
+	for id, st := range t.tasks {
+		if !isTerminalDelegateStatus(st.Status) {
+			continue
+		}
+		if time.UnixMilli(st.LastStatusRead).After(cutoff) {
+			continue
+		}
+		delete(t.tasks, id)
+		if st.DelegateSessionID != "" {
+			delete(t.sessionIndex, st.DelegateSessionID)
+		}
+	}
 }
 
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
@@ -1127,13 +1307,17 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		// value here means the DELEGATING agent's identity could not be
 		// resolved at all. A record minted without it is permanently
 		// unattributable: ParentAgentID is the only parent linkage, and no
-		// other field can stand in for it (ParentDurableKey is shared
-		// parent↔child, OwnerScopeID is "" for a top-level delegation, and
-		// AgentID is the child's). Such a session could never be returned to
-		// its parent by list_jobs. Refuse the mint — and therefore the whole
-		// delegation — rather than persist an orphan. Note the mint is
-		// deliberately still skipped entirely when no lifecycle store is
-		// configured: with no store there is no record to orphan.
+		// other field can stand in for it (ParentDurableKey post-ADR-057 (D1)
+		// names only the DIRECT parent — one hop, never re-inherited down the
+		// chain, see pkg/session/lifecycle.go's ParentDurableKey doc comment —
+		// so it cannot stand in for ParentAgentID either; OwnerScopeID is ""
+		// for a top-level delegation, and AgentID is the child's). Such a
+		// session could never be returned to its parent by list_jobs. Refuse
+		// the mint — and therefore the whole delegation — rather than persist
+		// an orphan. Note the mint is deliberately still skipped entirely
+		// when no lifecycle store is configured: with no store there is no
+		// record to orphan (see the else branch below — FR-021/BDD-20 refuse
+		// the delegation outright in that case instead).
 		//
 		// R2-MAJ-015 — tools.delegate.require_parent_agent_id is the operator
 		// kill switch for exactly that refusal. It exists because the guard's
@@ -1181,6 +1365,28 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		if err := t.lifecycle.Persist(rec); err != nil {
 			return ErrorResult(fmt.Sprintf("delegate: failed to persist durable session record: %v", err)).WithError(err)
 		}
+	} else {
+		// FR-021/BDD-20 (W7a) — fail CLOSED, not silently degraded, when no
+		// durable lifecycle store is wired at all. Before this fix, the whole
+		// `if t.lifecycle != nil { ... }` block above (mint + persist) was
+		// simply skipped and execution fell straight through to
+		// executeAsync/executeSync below — spawning a real child sub-turn
+		// with NO durable record, no ParentDurableKey edge for the ancestor
+		// walk (W12) or the boot sweep (W6/FR-078) to ever find, and a
+		// success-shaped AsyncResult/inline result returned to the caller as
+		// if nothing were wrong. That is precisely the silent-degradation
+		// posture Hard Constraint #6 and this file's own FR-015 guard above
+		// forbid, and BDD-20 pins the correct behavior: an operator-visible
+		// refusal, no child session created, no success payload returned.
+		// Mirrors the FR-015 refusal's shape (slog.Error + ErrorResult)
+		// immediately above rather than introducing a second error style.
+		slog.Error("delegate: refusing delegation — no durable lifecycle store configured",
+			"delegate_session_id", delegateSessionID,
+			"target_agent_id", agentID,
+			"parent_durable_key", parentDurableKey)
+		return ErrorResult("delegate: cannot start a delegated session — no durable lifecycle store is " +
+			"configured (operator misconfiguration); refusing rather than spawning an untracked, " +
+			"unrecoverable session")
 	}
 
 	if async {
@@ -1273,6 +1479,22 @@ func (t *DelegateTool) transitionLifecycle(sessionID string, state session.Lifec
 	}
 }
 
+// killChildBackgroundShells kills sessionID's own background bash/exec
+// shells (ADR-057 FR-028/BDD-29 — see the sessionManager field doc for the
+// full rationale) via the same KillAllForSessions primitive U16 exposes. A
+// nil sessionManager (SetSessionManager never called) is a silent no-op,
+// matching every other optional capability this tool accepts via a setter.
+func (t *DelegateTool) killChildBackgroundShells(sessionID string) {
+	if t.sessionManager == nil || sessionID == "" {
+		return
+	}
+	killed, failed := t.sessionManager.KillAllForSessions([]string{sessionID})
+	if killed > 0 || failed > 0 {
+		slog.Info("delegate: cancel: killed background shells for cancelled child",
+			"session_id", sessionID, "killed", killed, "failed", failed)
+	}
+}
+
 // executeAsync runs the background (async=true) delegation path. It records
 // the task's state in t.tasks BEFORE launching the sub-turn goroutine and
 // updates that SAME record on completion — the fix for FR-D2: action:"status"
@@ -1310,6 +1532,9 @@ func (t *DelegateTool) executeAsync(
 	}
 
 	t.mu.Lock()
+	// FR-045: eviction runs as part of the tool's own bookkeeping — every
+	// new task registration — never a separate goroutine/ticker.
+	t.evictStaleTasksLocked()
 	taskID := fmt.Sprintf("delegate-%d", t.nextID)
 	t.nextID++
 	t.tasks[taskID] = &DelegateTaskState{
@@ -1325,6 +1550,7 @@ func (t *DelegateTool) executeAsync(
 		SpawnCallID:       spawnCallID,
 		Is3P:              is3P,
 		DelegateSessionID: delegateSessionID,
+		LastStatusRead:    t.now().UnixMilli(),
 	}
 	if delegateSessionID != "" {
 		t.sessionIndex[delegateSessionID] = taskID
@@ -1516,6 +1742,48 @@ func (t *DelegateTool) executeSync(
 		return ErrorResult("delegate: no sub-turn spawner configured").WithError(fmt.Errorf("spawner not set"))
 	}
 
+	// ADR-057 FR-044/BDD-49: executeSync now registers a DelegateTaskState
+	// too — previously only executeAsync did, so a completed/failed
+	// synchronous (await) delegation left action:"status" with nothing to
+	// find for it at all (not "empty", genuinely absent), and
+	// recentActivityLines could never build a snapshot for a task that
+	// action:"status" could not even resolve. Mirrors executeAsync's own
+	// registration exactly (same fields, same eviction call).
+	channel := ToolChannel(ctx)
+	chatID := ToolChatID(ctx)
+	sessionID := ToolTranscriptSessionID(ctx)
+	spawnCallID := ToolCallID(ctx)
+	is3P := false
+	if agentID != "" && t.getAgentRegistry != nil {
+		if reg := t.getAgentRegistry(); reg != nil {
+			is3P = reg.IsExternalCLI(agentID)
+		}
+	}
+
+	t.mu.Lock()
+	t.evictStaleTasksLocked()
+	taskID := fmt.Sprintf("delegate-%d", t.nextID)
+	t.nextID++
+	t.tasks[taskID] = &DelegateTaskState{
+		ID:                taskID,
+		Task:              task,
+		Label:             label,
+		AgentID:           agentID,
+		OriginChannel:     channel,
+		OriginChatID:      chatID,
+		Status:            "running",
+		Created:           time.Now().UnixMilli(),
+		SessionID:         sessionID,
+		SpawnCallID:       spawnCallID,
+		Is3P:              is3P,
+		DelegateSessionID: delegateSessionID,
+		LastStatusRead:    t.now().UnixMilli(),
+	}
+	if delegateSessionID != "" {
+		t.sessionIndex[delegateSessionID] = taskID
+	}
+	t.mu.Unlock()
+
 	t.transitionLifecycle(delegateSessionID, session.LifecycleRunning, "")
 
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
@@ -1546,16 +1814,20 @@ func (t *DelegateTool) executeSync(
 	// "interrupted" (matching live) or "failed" (the bug this closes).
 	if result == nil || (err != nil && !result.Interrupted) {
 		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
+		t.finalizeSyncTask(taskID, "failed", fmt.Sprintf("Error: %v", err))
 		return ErrorResult(fmt.Sprintf("Delegate execution failed: %v", err)).WithError(err)
 	}
 
 	switch {
 	case result.Interrupted:
 		t.transitionLifecycle(delegateSessionID, session.LifecycleCancelled, "stopped_by_user")
+		t.finalizeSyncTask(taskID, "canceled", "Task canceled during execution")
 	case result.IsError:
 		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
+		t.finalizeSyncTask(taskID, "failed", result.ForLLM)
 	default:
 		t.transitionLifecycle(delegateSessionID, session.LifecycleCompleted, "")
+		t.finalizeSyncTask(taskID, "completed", result.ForLLM)
 	}
 
 	// Format result for display
@@ -1582,6 +1854,20 @@ func (t *DelegateTool) executeSync(
 		IsError:     result.IsError,
 		Interrupted: result.Interrupted,
 		Async:       false,
+	}
+}
+
+// finalizeSyncTask records executeSync's terminal outcome onto the
+// DelegateTaskState registered at the top of executeSync (FR-044), mirroring
+// the status/Result assignment executeAsync's own completion goroutine makes.
+// A no-op if taskID was never registered (defensive; cannot happen given
+// executeSync always registers before this is called).
+func (t *DelegateTool) finalizeSyncTask(taskID, status, resultText string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st, ok := t.tasks[taskID]; ok {
+		st.Status = status
+		st.Result = resultText
 	}
 }
 
@@ -1722,6 +2008,11 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 
 // getTaskCopy returns a copy of the task with the given ID, taken under the
 // lock, so the caller receives a consistent snapshot with no data race.
+// ADR-057 FR-045: this is action:"status"'s single-task read path, so it
+// also stamps LastStatusRead — resetting the eviction clock on the task's
+// own stored record (not just the returned copy) so a task under active
+// polling is never reclaimed by evictStaleTasksLocked out from under the
+// caller (BDD-52's "But" clause, test #93).
 func (t *DelegateTool) getTaskCopy(taskID string) (DelegateTaskState, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1729,17 +2020,22 @@ func (t *DelegateTool) getTaskCopy(taskID string) (DelegateTaskState, bool) {
 	if !ok {
 		return DelegateTaskState{}, false
 	}
+	task.LastStatusRead = t.now().UnixMilli()
 	return *task, true
 }
 
 // listTaskCopies returns value copies of all tasks, taken under the lock, so
-// callers receive consistent snapshots with no data race.
+// callers receive consistent snapshots with no data race. ADR-057 FR-045:
+// this backs action:"status"'s list-all-tasks path, so every returned task
+// also has its LastStatusRead stamp reset (same reasoning as getTaskCopy).
 func (t *DelegateTool) listTaskCopies() []DelegateTaskState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	now := t.now().UnixMilli()
 	copies := make([]DelegateTaskState, 0, len(t.tasks))
 	for _, task := range t.tasks {
+		task.LastStatusRead = now
 		copies = append(copies, *task)
 	}
 	return copies
@@ -1820,7 +2116,14 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 	if task.Is3P {
 		return delegate3PStatusNote
 	}
-	lines := t.recentActivityLines(task.SessionID, task.SpawnCallID, maxStatusActivityLines)
+	// ADR-057 FR-043: read the child's OWN durable session (DelegateSessionID),
+	// not task.SessionID (the delegating PARENT's own transcript id — see
+	// its doc comment). Post-FR-007 a delegated child writes its own
+	// narration into its own session, so reading task.SessionID here always
+	// found nothing the moment FR-007 landed elsewhere in this change set —
+	// BDD-49/BDD-50 (a sync or async delegation's status snapshot must be
+	// non-empty) were silently broken until this re-point.
+	lines := t.recentActivityLines(task.DelegateSessionID, task.SpawnCallID, maxStatusActivityLines)
 	if len(lines) == 0 {
 		return ""
 	}
@@ -1834,11 +2137,13 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 }
 
 // recentActivityLines reads back up to max of the most recent transcript
-// entries a running NATIVE delegated sub-turn has written into its shared
-// parent session, filtered to just this task's own activity via
-// session.TranscriptEntry.ParentSpawnCallID == spawnCallID — the delegate
-// tool call's own ID, which subturn.go stamps onto every intermediate/final
-// assistant-text entry the child sub-turn produces (see
+// entries a running NATIVE delegated sub-turn has written into its OWN
+// durable session (ADR-057 FR-043 — sessionID here is the child's
+// DelegateSessionID, not the shared parent transcript id; see
+// delegateStatusExtra's call site), filtered to just this task's own
+// activity via session.TranscriptEntry.ParentSpawnCallID == spawnCallID —
+// the delegate tool call's own ID, which subturn.go stamps onto every
+// intermediate/final assistant-text entry the child sub-turn produces (see
 // ParentSpawnCallID's doc comment). This is a pure READ of data the child
 // sub-turn already persists as a side effect of running — no new storage or
 // write path is introduced by W2.
@@ -1847,7 +2152,11 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 // spawnCallID is empty, the transcript can't be read, or nothing has been
 // written yet — delegateStatusExtra treats all of these as "no snapshot
 // available" and falls back to the prompt-only summary that predates this
-// feature.
+// feature. The last of those cases — a clean read that simply found no
+// matching entries yet — is logged (ADR-057 FR-043/BDD-51): a genuinely
+// empty activity path must leave a trace an operator can find, not degrade
+// silently into the exact same "nothing available" shape as an unwired
+// store or a transcript-read error.
 func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLines int) []string {
 	if t.sessionStore == nil || sessionID == "" || spawnCallID == "" {
 		return nil
@@ -1875,6 +2184,8 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLin
 		lines = append(lines, content)
 	}
 	if len(lines) == 0 {
+		slog.Info("delegate: status snapshot: no recent activity found for this task yet",
+			"session_id", sessionID, "spawn_call_id", spawnCallID)
 		return nil
 	}
 	// Entries are in chronological (append) order — keep only the most
@@ -1967,15 +2278,63 @@ func callerOwnerKey(ctx context.Context) string {
 	return strings.TrimSpace(ToolTranscriptSessionID(ctx))
 }
 
-// verifyCallerOwnsSession rejects an action whose caller is not the SAME
-// parent who spawned rec (defense in depth — a session_id alone is
-// guessable/loggable; ownership must also match at the handler).
-func verifyCallerOwnsSession(ctx context.Context, rec *session.LifecycleRecord) error {
+// verifyCallerOwnsSession (ADR-057 W12/FR-039/FR-040) rejects a gated
+// delegate action whose caller is not an ANCESTOR of rec — a direct parent,
+// grandparent, and so on up to the configured max delegation depth
+// (SetOwnershipWalkMaxDepth) — in the ParentDurableKey chain (defense in
+// depth: a session_id alone is guessable/loggable; ownership must also
+// match at the handler).
+//
+// Pre-ADR-057, a plain `caller == rec.ParentDurableKey` equality check was
+// correct because ParentDurableKey was shared across an entire subtree (a
+// parent's key was literally re-inherited down every generation) — which
+// ALSO meant it accidentally permitted sibling/cousin reach (FR-040's
+// "MUST be removed": any two sessions sharing the SAME parent — or the same
+// distant ancestor — carried the identical ParentDurableKey value and thus
+// passed the equality check against EACH OTHER's records, not just their
+// real parent's). U13's ParentDurableKey redefinition (pkg/session/lifecycle.go's
+// own doc comment: "names its DIRECT parent only — it is NOT re-inherited
+// down the chain") already closed that leak by construction — a sibling's
+// target now carries the immediate parent's key, never the caller's own —
+// but it also silently broke the LEGITIMATE root-over-subtree case
+// (BDD-42): a chat A that spawned child B, which spawned grandchild D, can
+// no longer reach D via one-hop equality, because D's ParentDurableKey
+// names B, not A. This walk restores that reach without reopening the
+// sibling/cousin one: it climbs ONE hop per iteration (rec's own
+// ParentDurableKey is depth 1, its parent's ParentDurableKey is depth 2,
+// …), matching each hop against the caller, and stops — rejecting — the
+// moment it either exhausts the depth bound (BDD-43) or reaches a link with
+// no further LifecycleRecord to load (the root chat has none of its own,
+// which is exactly the terminal, no-match case; a Load failure is never
+// treated as an ownership match).
+func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session.LifecycleRecord) error {
 	caller := callerOwnerKey(ctx)
-	if caller == "" || rec.ParentDurableKey == "" || caller != rec.ParentDurableKey {
+	if caller == "" {
 		return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
 	}
-	return nil
+	ancestor := strings.TrimSpace(rec.ParentDurableKey)
+	maxDepth := t.ownershipMaxDepth()
+	for depth := 0; depth < maxDepth; depth++ {
+		if ancestor == "" {
+			break
+		}
+		if ancestor == caller {
+			return nil
+		}
+		if t.lifecycle == nil {
+			break
+		}
+		parentRec, err := t.lifecycle.Load(ancestor)
+		if err != nil {
+			// No further lifecycle record to climb — e.g. ancestor names
+			// the root chat, which (being a plain chat session, never
+			// itself a delegated child) has no LifecycleRecord of its own.
+			// The chain ends here with no match, not an error to surface.
+			break
+		}
+		ancestor = strings.TrimSpace(parentRec.ParentDurableKey)
+	}
+	return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
 }
 
 func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *ToolResult {
@@ -2007,7 +2366,7 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", lerr))
 	}
-	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", verr))
 	}
 
@@ -2077,6 +2436,29 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(err.Error())
 	}
 
+	// ADR-057 W12: ownership is verified via a plain Load BEFORE the Mutate
+	// below, deliberately OUTSIDE the atomic closure — unlike the terminal
+	// check (see the TOCTOU comment below), ownership cannot race: a
+	// session's ParentDurableKey is stamped once at mint time and carried
+	// forward unchanged even across follow_up generations (see
+	// spawnCorrectiveFollowUp's whole-struct-copy comment), so a Load taken
+	// a moment before Mutate observes the exact same value Mutate itself
+	// would. Verifying it here, rather than inside the closure below, is
+	// not just style: the ownership walk (verifyCallerOwnsSession, FR-039)
+	// climbs the ParentDurableKey chain via t.lifecycle.Load(ancestor) for
+	// every hop beyond the direct parent, and pkg/session/lifecycle_lock.go's
+	// striped lock is only 64-wide — an ancestor whose id happens to hash to
+	// the SAME shard as sessionID would deadlock against Mutate's
+	// already-held, non-reentrant per-shard sync.Mutex if the walk ran
+	// inside that closure instead.
+	rec, lerr := t.lifecycle.Load(sessionID)
+	if lerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
+	}
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
+	}
+
 	// TOCTOU race guard: a plain Load() followed by a branch on
 	// rec.Terminal() was a check-then-act race against the concurrent
 	// atomic terminal transition in pkg/agent/task_executor.go
@@ -2090,22 +2472,19 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// that holds the per-session striped lock across the whole read+decide
 	// (pkg/session/lifecycle.go's own docs: "a naked Load+Persist races a
 	// concurrent transition on the same session_id"). Doing the same here —
-	// ownership and terminal checks both evaluated INSIDE the Mutate
-	// closure, under the SAME lock the terminal-transition writer uses —
-	// closes the window; a transition landing just before we take the lock
-	// is now guaranteed visible, and one landing just after must wait for us
-	// to release it. This performs no actual field mutation on the non-error
-	// path (steer delivery is a separate side channel, not a lifecycle
-	// field) — Mutate persisting an unchanged copy of the tail record is a
-	// harmless, deliberate byproduct of reusing the RMW primitive purely for
-	// its locking guarantee.
-	var rec *session.LifecycleRecord
+	// the terminal check evaluated INSIDE the Mutate closure, under the SAME
+	// lock the terminal-transition writer uses — closes the window; a
+	// transition landing just before we take the lock is now guaranteed
+	// visible, and one landing just after must wait for us to release it.
+	// This performs no actual field mutation on the non-error path (steer
+	// delivery is a separate side channel, not a lifecycle field) — Mutate
+	// persisting an unchanged copy of the tail record is a harmless,
+	// deliberate byproduct of reusing the RMW primitive purely for its
+	// locking guarantee. Ownership is deliberately NOT re-checked here — see
+	// the comment above for why a stale ownership read cannot happen.
 	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
-		}
-		if verr := verifyCallerOwnsSession(ctx, cur); verr != nil {
-			return verr
 		}
 		if cur.Terminal() {
 			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
@@ -2156,7 +2535,7 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any) 
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", lerr))
 	}
-	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr))
 	}
 	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil || rec.NeedsInput.CorrelationID != correlationID {
@@ -2318,7 +2697,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", lerr))
 	}
-	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
 	}
 
@@ -2335,8 +2714,8 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	//
 	// There is, however, a TOCTOU window BETWEEN this check and the
 	// cancelSoft/cancelHard call below: a non-terminal session can terminate
-	// in that gap, in which case InterruptBySessionKey(Hard) finds no live
-	// turnState and returns (nil descendants, nil error) — a documented
+	// in that gap, in which case Interrupt/InterruptSessionHard (ScopeSelfOnly)
+	// finds no live turnState and returns (nil descendants, nil error) — a documented
 	// no-op. The pre-fix code discarded the descendants return and STILL
 	// reported the success-shaped message, so a cancel that landed nothing
 	// looked identical to one that actually interrupted. The cancelSoft/
@@ -2350,6 +2729,17 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			"delegate: cancel: session %s is already terminal (%s) — nothing to cancel", sessionID, rec.State,
 		))
 	}
+
+	// ADR-057 FR-028/BDD-29: delegate action="cancel" now also kills that
+	// child's OWN background shells — before this fix, no such call existed
+	// on this path at all (only U15's RequestCancel/Stop-button cascade did,
+	// and only for a chat-wide Stop, not a targeted delegate cancel). Fired
+	// unconditionally of hard/soft and BEFORE the turn-level escalation
+	// below, mirroring RequestCancel's own "decoupled from the active-turn
+	// gate" design (pkg/agent/cancel.go): a background shell is an OS
+	// process, not a steerable LLM turn, so there is no reason to make it
+	// wait through the cooperative grace window that exists for the turn.
+	t.killChildBackgroundShells(sessionID)
 
 	if hard {
 		if t.cancelHard == nil {
@@ -2384,8 +2774,8 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	}
 
 	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
-	// after the grace window, mirroring InterruptSession/InterruptSessionHard's
-	// existing two-phase escalation (steering.go). The backstop only fires
+	// after the grace window, mirroring Interrupt/InterruptSessionHard's
+	// existing two-phase escalation (steering.go, ScopeSelfOnly). The backstop only fires
 	// if the session has NOT already reached a terminal state within grace.
 	// (Comments-MINOR-3: the prior `// FR-...` prefix was a placeholder —
 	// cancel is not a numbered FR; see ADR-053 R§Cancel/restart for the
@@ -2456,7 +2846,7 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", lerr))
 	}
-	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", verr))
 	}
 	// NOTE: this is a naked Load+Terminal check, NOT the LifecycleStore.Mutate
@@ -2589,7 +2979,7 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", lerr))
 	}
-	if verr := verifyCallerOwnsSession(ctx, rec); verr != nil {
+	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", verr))
 	}
 	state := string(rec.State)

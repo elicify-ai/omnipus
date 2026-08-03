@@ -309,10 +309,22 @@ func taskAssignedTo(t *task.Task, principal string) bool {
 // collectSubagentRows returns the sessions this caller delegated.
 //
 // Parentage is LifecycleRecord.ParentAgentID and nothing else. It must never
-// be inferred from ParentDurableKey (which a parent SHARES with its children
-// and every cousin in the subtree — inferring from it leaks grandchildren),
-// from ScopeID (empty for a top-level delegation), or from AgentID (the
-// CHILD's id, not the parent's).
+// be inferred from ParentDurableKey, from ScopeID (empty for a top-level
+// delegation), or from AgentID (the CHILD's id, not the parent's).
+//
+// [ADR-057 FR-022 doc correction] This comment used to justify excluding
+// ParentDurableKey by claiming it is "shared with its children and every
+// cousin in the subtree — inferring from it leaks grandchildren." That
+// described the PRE-ADR-057 semantics only. Post-ADR-057 (D1), U13's
+// redefinition (pkg/session/lifecycle.go's own ParentDurableKey doc
+// comment) makes it name only the DIRECT parent — one hop, never
+// re-inherited down the chain — so it is no longer shared across cousins
+// at all, and the old justification is false as a description of the
+// current field. The conclusion (do not use it here) still holds, for the
+// simpler reason ParentAgentID already gives directly: it names an AGENT
+// identity, which is what "did I delegate this" means, whereas
+// ParentDurableKey names a SESSION id one hop up — the wrong kind of value
+// for this predicate regardless of how many hops it spans.
 func collectSubagentRows(
 	store JobLifecycleLister,
 	principal, workspaceID string,

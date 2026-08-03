@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // --- Schema / basic wiring (ported from the former spawn_test.go / subagent_tool_test.go) ---
@@ -103,8 +105,14 @@ func TestDelegateTool_Execute_NilSpawner(t *testing.T) {
 	// per the 7-reviewer-gate fix) gate doesn't mask the assertion under test.
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a delegation is now refused before ever
+	// reaching the nil-spawner check when no lifecycle store is wired, or
+	// when the calling agent's identity is unresolvable (FR-015) — neither
+	// is this test's concern, so both are wired past to reach the actual
+	// assertion under test.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 
-	ctx := context.Background()
+	ctx := WithAgentID(context.Background(), "test-agent")
 	args := map[string]any{"task": "test task"}
 
 	result := tool.Execute(ctx, args)
@@ -171,6 +179,15 @@ func TestDelegate_DefaultIsAsync(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	// This test's concern is the async default, not the delegation-policy gate.
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
+	// lifecycle store and a resolvable calling-agent identity — neither is
+	// this test's concern, so both are wired past. Cleanup is registered
+	// AFTER t.TempDir() so LIFO ordering drains the async goroutine's own
+	// lifecycle-store write before the temp dir is removed ("directory not
+	// empty" otherwise).
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	t.Cleanup(tool.WaitForAsyncTasks)
+	ctx := WithAgentID(context.Background(), "test-agent")
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -180,7 +197,7 @@ func TestDelegate_DefaultIsAsync(t *testing.T) {
 		return NewToolResult("done"), nil
 	}))
 
-	result := tool.Execute(context.Background(), map[string]any{"task": "research X"})
+	result := tool.Execute(ctx, map[string]any{"task": "research X"})
 	if result == nil || result.IsError {
 		t.Fatalf("expected success, got: %+v", result)
 	}
@@ -209,13 +226,16 @@ func TestDelegate_AsyncFalseBlocks(t *testing.T) {
 	// This test's concern is the async=false blocking behavior, not the
 	// delegation-policy gate.
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	ctx := WithAgentID(context.Background(), "test-agent")
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		time.Sleep(20 * time.Millisecond) // simulate real work
 		return &ToolResult{ForLLM: "Task completed: compute Y", ForUser: "done"}, nil
 	}))
 
 	start := time.Now()
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(ctx, map[string]any{
 		"task":  "compute Y",
 		"async": false,
 	})
@@ -247,6 +267,9 @@ func TestDelegate_StatusReflectsRealState(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	// This test's concern is action:"status" tracking, not the delegation-policy gate.
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	runCtx := WithAgentID(context.Background(), "test-agent")
 
 	release := make(chan struct{})
 	var wg sync.WaitGroup
@@ -258,7 +281,7 @@ func TestDelegate_StatusReflectsRealState(t *testing.T) {
 	}))
 
 	// 1. Delegate a task (async default) and extract the task_id.
-	runResult := tool.Execute(context.Background(), map[string]any{
+	runResult := tool.Execute(runCtx, map[string]any{
 		"task":  "long research task",
 		"label": "research",
 	})
@@ -323,13 +346,22 @@ func TestDelegate_MainAgentCanDelegate(t *testing.T) {
 			return NewToolResult("ok"), nil
 		}))
 		tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+		// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+		tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+		// Registered AFTER the t.TempDir() call above so LIFO cleanup
+		// ordering drains this tool's in-flight async delegation goroutine
+		// (the default async=true dispatch below) BEFORE its temp dir is
+		// removed — otherwise the goroutine's own lifecycle-store write can
+		// race t.TempDir()'s RemoveAll ("directory not empty").
+		t.Cleanup(tool.WaitForAsyncTasks)
 		return tool
 	}
+	runCtx := WithAgentID(context.Background(), "test-agent")
 
 	// "main" agent's own DelegateTool instance (as loop.go would construct one
 	// per agent, including the main/orchestrating agent).
 	mainAgentTool := newAllowedTool()
-	mainResult := mainAgentTool.Execute(context.Background(), map[string]any{
+	mainResult := mainAgentTool.Execute(runCtx, map[string]any{
 		"task": "delegate as main", "agent_id": "ray",
 	})
 	if mainResult == nil || mainResult.IsError {
@@ -338,7 +370,7 @@ func TestDelegate_MainAgentCanDelegate(t *testing.T) {
 
 	// A specialist agent's own DelegateTool instance — identical code path.
 	specialistTool := newAllowedTool()
-	specialistResult := specialistTool.Execute(context.Background(), map[string]any{
+	specialistResult := specialistTool.Execute(runCtx, map[string]any{
 		"task": "delegate as specialist", "agent_id": "ava",
 	})
 	if specialistResult == nil || specialistResult.IsError {
@@ -597,31 +629,59 @@ func TestDelegateStatus_DifferentConversation_NotFound(t *testing.T) {
 	}
 }
 
-// TestDelegate_AsyncFalse_DoesNotRecordStatusTask proves that the sync (await)
-// path does not create an entry in the async task store — it has nothing to
-// poll, matching run_subagent's historical behavior of not participating in
-// check_spawn_status at all.
-func TestDelegate_AsyncFalse_DoesNotRecordStatusTask(t *testing.T) {
+// TestDelegate_AsyncFalse_NowRecordsStatusTask is the ADR-057 FR-044
+// deliberate inversion of the former TestDelegate_AsyncFalse_DoesNotRecordStatusTask:
+// pre-ADR-057, the sync (await) path did NOT create an entry in the async
+// task store, matching run_subagent's historical behavior of not
+// participating in check_spawn_status at all — the "expected zero recorded
+// tasks" assertion this test used to make. That was itself the bug FR-044
+// fixes (BDD-49/#55): action:"status" for a completed SYNC delegation had
+// nothing to find at all — not "empty", genuinely absent. executeSync now
+// registers a DelegateTaskState exactly like executeAsync does, so
+// action:"status" can resolve it. This test is the NEW invariant, not a
+// new file, because it directly contradicts the old test's own assertion —
+// keeping both would make the suite self-contradictory.
+func TestDelegate_AsyncFalse_NowRecordsStatusTask(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	// This test's concern is executeSync not touching tool.tasks, not the
+	// This test's concern is executeSync's t.tasks registration, not the
 	// delegation-policy gate — wire a permissive checker so the call actually
 	// reaches executeSync (an unwired/denied call would also leave tool.tasks
 	// empty, but for the wrong reason, silently testing nothing real).
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		return NewToolResult("done"), nil
 	}))
 
-	result := tool.Execute(context.Background(), map[string]any{"task": "sync work", "async": false})
+	ctx := WithAgentID(context.Background(), "test-agent")
+	result := tool.Execute(ctx, map[string]any{"task": "sync work", "async": false})
 	if result == nil || result.IsError {
 		t.Fatalf("expected the sync delegate call to succeed, got: %+v", result)
 	}
 
 	tool.mu.Lock()
 	count := len(tool.tasks)
+	var taskID string
+	for id := range tool.tasks {
+		taskID = id
+	}
 	tool.mu.Unlock()
-	if count != 0 {
-		t.Errorf("expected zero recorded tasks after a sync (async=false) call, got %d", count)
+	if count != 1 {
+		t.Fatalf("ADR-057 FR-044: expected exactly one recorded task after a sync (async=false) call, got %d",
+			count)
+	}
+
+	// Positive lower bound beyond the raw count (Rule 4): action:"status"
+	// must actually be able to resolve it, and it must show completed with
+	// the real result — proving the registration is genuinely usable, not
+	// merely a map entry nobody can reach.
+	statusResult := tool.Execute(ctx, map[string]any{"action": "status", "task_id": taskID})
+	if statusResult == nil || statusResult.IsError {
+		t.Fatalf("expected action:status to resolve the sync delegation's task_id, got: %+v", statusResult)
+	}
+	if !strings.Contains(statusResult.ForLLM, "status=completed") {
+		t.Errorf("expected status=completed for the finished sync delegation, got: %s", statusResult.ForLLM)
 	}
 }
 
@@ -638,6 +698,8 @@ func TestDelegate_AsyncFalse_DoesNotRecordStatusTask(t *testing.T) {
 func TestDelegate_SyncInterrupted_PropagatesToResult(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 	// Simulates spawnSubTurn's OWN sync-conversion + cleanup-defer output for
 	// a canceled child context (pkg/agent/subturn.go): a non-nil err
 	// alongside a non-nil result carrying IsError=true (preserves the outer
@@ -654,7 +716,7 @@ func TestDelegate_SyncInterrupted_PropagatesToResult(t *testing.T) {
 		}, cancelErr
 	}))
 
-	result := tool.Execute(context.Background(), map[string]any{"task": "long work", "async": false})
+	result := tool.Execute(WithAgentID(context.Background(), "test-agent"), map[string]any{"task": "long work", "async": false})
 	if result == nil {
 		t.Fatal("expected a non-nil result")
 	}
@@ -679,11 +741,13 @@ func TestDelegate_SyncInterrupted_PropagatesToResult(t *testing.T) {
 func TestDelegate_SyncGenuineError_StillUsesGenericShortcut(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): see TestDelegate_DefaultIsAsync's comment.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
 		return nil, errors.New("dispatch rejected: depth limit exceeded")
 	}))
 
-	result := tool.Execute(context.Background(), map[string]any{"task": "long work", "async": false})
+	result := tool.Execute(WithAgentID(context.Background(), "test-agent"), map[string]any{"task": "long work", "async": false})
 	if result == nil || !result.IsError {
 		t.Fatalf("expected an error result, got: %+v", result)
 	}

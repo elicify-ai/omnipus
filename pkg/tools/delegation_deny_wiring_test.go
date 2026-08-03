@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -116,8 +117,14 @@ func TestDelegateTool_DelegationDenyChecker_Allows(t *testing.T) {
 		return NewToolResult("ran"), nil
 	}))
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
+	// lifecycle store and a resolvable calling-agent identity — neither is
+	// this test's concern (it exercises the deny-checker wiring), so both
+	// are wired past.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	t.Cleanup(tool.WaitForAsyncTasks)
 
-	result := tool.Execute(context.Background(), map[string]any{
+	result := tool.Execute(WithAgentID(context.Background(), "test-caller"), map[string]any{
 		"task":     "do the thing",
 		"agent_id": "trusted-agent",
 	})
@@ -294,8 +301,13 @@ func TestSyncDelegateWait_Rejected(t *testing.T) {
 			return NewToolResult("child answer"), nil
 		}))
 		tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
+		// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
+		// lifecycle store and a resolvable calling-agent identity — neither
+		// is this test's concern (it exercises the opt-in deny-checker
+		// routing), so both are wired past.
+		tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 
-		result := tool.Execute(context.Background(), map[string]any{
+		result := tool.Execute(WithAgentID(context.Background(), "test-caller"), map[string]any{
 			"task":     "bounded wait on a child question",
 			"agent_id": "child-agent",
 			"async":    false, // wait=true

@@ -29,6 +29,11 @@ func TestDelegateTool_Run_AgentID_Validation(t *testing.T) {
 	tool.SetSpawner(&mockDelegateSpawner{})
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
+	// lifecycle store and a resolvable calling-agent identity — neither is
+	// this test's concern (it exercises agent_id argument validation), so
+	// both are wired past for the two subtests below that reach dispatch.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 	t.Cleanup(tool.WaitForAsyncTasks)
 
 	t.Run("empty string agent_id rejected", func(t *testing.T) {
@@ -56,14 +61,14 @@ func TestDelegateTool_Run_AgentID_Validation(t *testing.T) {
 	})
 
 	t.Run("omitted agent_id still accepted (generic subagent)", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false})
+		result := tool.Execute(WithAgentID(context.Background(), "test-caller"), map[string]any{"task": "x", "async": false})
 		if result.IsError {
 			t.Fatalf("expected omitted agent_id to be accepted, got error: %s", result.ForLLM)
 		}
 	})
 
 	t.Run("non-empty agent_id still accepted", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "agent_id": "worker-1", "async": false})
+		result := tool.Execute(WithAgentID(context.Background(), "test-caller"), map[string]any{"task": "x", "agent_id": "worker-1", "async": false})
 		if result.IsError {
 			t.Fatalf("expected a valid agent_id to be accepted, got error: %s", result.ForLLM)
 		}
@@ -98,10 +103,16 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 	tool.SetSpawner(spawner)
 	tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
+	// lifecycle store and a resolvable calling-agent identity — neither is
+	// this test's concern (it exercises timeout_seconds threading), so both
+	// are wired past.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+	ctx := WithAgentID(context.Background(), "test-caller")
 	t.Cleanup(tool.WaitForAsyncTasks)
 
 	t.Run("nonzero timeout_seconds threads through on the sync path", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false, "timeout_seconds": 1800})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": false, "timeout_seconds": 1800})
 		if result.IsError {
 			t.Fatalf("run failed: %s", result.ForLLM)
 		}
@@ -111,7 +122,7 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 	})
 
 	t.Run("nonzero timeout_seconds threads through on the async path", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": true, "timeout_seconds": 900})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": true, "timeout_seconds": 900})
 		if result.IsError {
 			t.Fatalf("run failed: %s", result.ForLLM)
 		}
@@ -122,7 +133,7 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 	})
 
 	t.Run("zero/absent timeout_seconds leaves Timeout unset (use spawner default)", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": false})
 		if result.IsError {
 			t.Fatalf("run failed: %s", result.ForLLM)
 		}
@@ -132,7 +143,7 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 	})
 
 	t.Run("explicit zero timeout_seconds also leaves Timeout unset", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false, "timeout_seconds": 0})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": false, "timeout_seconds": 0})
 		if result.IsError {
 			t.Fatalf("run failed: %s", result.ForLLM)
 		}
@@ -142,7 +153,7 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 	})
 
 	t.Run("out-of-bounds (too large) timeout_seconds rejected", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false, "timeout_seconds": 999999})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": false, "timeout_seconds": 999999})
 		if !result.IsError {
 			t.Fatal("expected an out-of-bounds timeout_seconds to be rejected")
 		}
@@ -152,14 +163,14 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 	})
 
 	t.Run("negative timeout_seconds rejected", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false, "timeout_seconds": -5})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": false, "timeout_seconds": -5})
 		if !result.IsError {
 			t.Fatal("expected a negative timeout_seconds to be rejected")
 		}
 	})
 
 	t.Run("non-numeric timeout_seconds rejected", func(t *testing.T) {
-		result := tool.Execute(context.Background(), map[string]any{"task": "x", "async": false, "timeout_seconds": "soon"})
+		result := tool.Execute(ctx, map[string]any{"task": "x", "async": false, "timeout_seconds": "soon"})
 		if !result.IsError {
 			t.Fatal("expected a non-numeric timeout_seconds to be rejected")
 		}
@@ -343,9 +354,22 @@ func TestDelegateTool_Steer_TerminalCheck_RoutesThroughMutate(t *testing.T) {
 		t.Error("#581: expected executeSteer's terminal check to route through Mutate (the atomic RMW " +
 			"primitive that holds the per-session lock across the read+decide), got 0 Mutate calls")
 	}
-	if loads != 0 {
-		t.Errorf("#581: expected executeSteer to no longer use a naked Load() for its terminal check "+
-			"(that is precisely the check-then-act TOCTOU this fix closes), got %d Load call(s)", loads)
+	// ADR-057 W12 (deliberate change, not a #581 regression): executeSteer
+	// now makes exactly ONE Load() call BEFORE the Mutate above, to verify
+	// ownership (the ancestor-chain walk, FR-039) OUTSIDE the atomic
+	// closure. Doing it inside the closure (as #581's original fix did) is
+	// unsafe post-W12: the walk climbs the ParentDurableKey chain via
+	// t.lifecycle.Load(ancestor) for every hop beyond the direct parent, and
+	// an ancestor whose id happens to hash to the SAME striped-lock shard as
+	// sessionID would deadlock against Mutate's already-held, non-reentrant
+	// per-shard mutex. Ownership cannot race the way the terminal state can
+	// (ParentDurableKey is immutable after mint — see
+	// spawnCorrectiveFollowUp's whole-struct-copy comment), so moving ONLY
+	// that check outside Mutate preserves #581's actual TOCTOU fix (the
+	// terminal check stays atomic) while avoiding the new deadlock class.
+	if loads != 1 {
+		t.Errorf("ADR-057 W12: expected executeSteer to make exactly 1 Load() call (the ownership "+
+			"pre-check, deliberately outside Mutate — see comment above), got %d", loads)
 	}
 	if len(steer.delivered) != 1 {
 		t.Errorf("expected exactly 1 steering message delivered for a legitimate non-terminal steer, got %d",
@@ -389,9 +413,13 @@ func TestDelegateTool_ResolvableSessionIDs(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetSpawner(&mockDelegateSpawner{})
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
+	// lifecycle store — not this test's concern (it exercises
+	// ResolvableSessionIDs/t.sessionIndex), so it is wired past.
+	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
 	t.Cleanup(tool.WaitForAsyncTasks)
 
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "parent-1"), "test-caller")
 	sessionID := runAndExtractSessionID(t, tool, ctx, "some task")
 
 	resolvable := tool.ResolvableSessionIDs([]string{sessionID, "unknown-session-id"})
