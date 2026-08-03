@@ -1179,7 +1179,7 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 		return fmt.Errorf("browser: coordinator: cannot locate chromium: %w", err)
 	}
 
-	cmdline := managedExecAllocatorOpts(c.cfg)
+	cmdline := managedExecAllocatorOpts(c.cfg, chromeMajorVersion(ctx, execPath))
 
 	// Launch over the pipe (fail closed — err reports launch + CDP
 	// connectivity failure directly). The launcher is a seam so tests never

@@ -34,7 +34,7 @@ func headlessArgs(t *testing.T, headless bool) []string {
 	cfg, err := DefaultConfig()
 	require.NoError(t, err)
 	cfg.Headless = headless
-	return managedExecAllocatorOpts(cfg).Args
+	return managedExecAllocatorOpts(cfg, "151").Args
 }
 
 func TestManagedChrome_UsesNewHeadless(t *testing.T) {
@@ -68,4 +68,80 @@ func TestManagedChrome_KeepsAutomationControlledDisabled(t *testing.T) {
 	assert.Contains(t, headlessArgs(t, true), "--disable-blink-features=AutomationControlled",
 		"the automation-controlled blink feature must stay disabled — without it the "+
 			"webdriver override cannot take effect even on new headless")
+}
+
+// --- launch-level User-Agent -------------------------------------------------
+//
+// Chrome's headless User-Agent literally contains the token "HeadlessChrome",
+// which is the single most obvious bot signal a site can read — Google gates on
+// it directly. applyStealth already rewrote it per tab, but measured live on
+// UAT v46 the browser STILL reported
+// "…HeadlessChrome/151.0.0.0 Safari/537.36", for two reasons:
+//
+//  1. coverage — applyStealth runs from createTab only, while the coordinator
+//     builds each agent's FIRST window through its own CreateTarget path, so
+//     the tab the user actually browses in never got the override; and
+//  2. race — where it does run it lands after the target is bound, so an early
+//     navigator.userAgent read still sees the headless string.
+//
+// The launch flag closes both. These pin it.
+
+func TestManagedChrome_OverridesHeadlessUserAgent(t *testing.T) {
+	args := headlessArgs(t, true)
+
+	var ua string
+	for _, a := range args {
+		if strings.HasPrefix(a, "--user-agent=") {
+			ua = strings.TrimPrefix(a, "--user-agent=")
+		}
+	}
+	require.NotEmpty(t, ua, "headless launches must set --user-agent — Chrome's own headless UA "+
+		"contains the HeadlessChrome token that gates like Google's read directly")
+	assert.NotContains(t, ua, "Headless",
+		"the launch User-Agent must not carry any Headless token, got %q", ua)
+	assert.Contains(t, ua, "Chrome/151.", "the UA must report the real browser major version")
+}
+
+// TestManagedChrome_NoUserAgentOverrideWhenVersionUnknown — a hardcoded or
+// guessed version is its own mismatch signal (a UA claiming a version the
+// binary does not have). Unknown must degrade to Chrome's own UA plus the
+// existing per-tab rewrite, not a fabricated one.
+func TestManagedChrome_NoUserAgentOverrideWhenVersionUnknown(t *testing.T) {
+	cfg, err := DefaultConfig()
+	require.NoError(t, err)
+	cfg.Headless = true
+
+	for _, a := range managedExecAllocatorOpts(cfg, "").Args {
+		assert.False(t, strings.HasPrefix(a, "--user-agent="),
+			"an unknown Chrome version must NOT produce a guessed User-Agent, got %q", a)
+	}
+}
+
+func TestManagedChrome_HeadfulSetsNoUserAgent(t *testing.T) {
+	for _, a := range headlessArgs(t, false) {
+		assert.False(t, strings.HasPrefix(a, "--user-agent="),
+			"a headful launch already sends a normal UA and must not override it, got %q", a)
+	}
+}
+
+func TestChromeMajorFromVersionOutput(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Google Chrome for Testing 151.0.7922.71", "151"},
+		{"Chromium 149.0.7827.53", "149"},
+		{"Google Chrome 151.0.7922.71\n", "151"},
+		{"", ""},
+		{"not a version line", ""},
+	} {
+		assert.Equal(t, tc.want, chromeMajorFromVersionOutput(tc.in), "input %q", tc.in)
+	}
+}
+
+// TestDesktopUserAgent_LooksLikeRealChrome — the replacement must be a
+// plausible desktop Chrome UA, not merely "not headless".
+func TestDesktopUserAgent_LooksLikeRealChrome(t *testing.T) {
+	ua := desktopUserAgent("151")
+	assert.NotContains(t, ua, "Headless")
+	for _, want := range []string{"Mozilla/5.0", "X11; Linux x86_64", "AppleWebKit/537.36", "Chrome/151.0.0.0", "Safari/537.36"} {
+		assert.Contains(t, ua, want)
+	}
 }

@@ -781,7 +781,7 @@ func (m *BrowserManager) ensureStarted() error {
 	// coordinator.go's file doc). The launcher is a seam (m.pipeLauncherFn)
 	// so tests never spawn real Chrome — mirrors the coordinator's
 	// pipeLauncher field exactly.
-	cmdline := managedExecAllocatorOpts(m.cfg)
+	cmdline := managedExecAllocatorOpts(m.cfg, chromeMajorVersion(context.Background(), execPath))
 	launch := m.pipeLauncherFn
 	if launch == nil {
 		launch = launchManagedPipe

@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,7 +179,84 @@ func chromeHardeningBaseFlags() []string {
 // specifically (not just ExtensionDir) because the wave-plan's extension-ID
 // model pins a deterministic ID via the manifest's "key" before launch — the
 // caller always knows the ID by the time it sets ExtensionDir.
-func managedExecAllocatorOpts(cfg BrowserConfig) managedChromeCmdline {
+// chromeMajorCache memoises chromeMajorVersion per resolved binary path. The
+// probe spawns a process, and the launch path can run repeatedly (every agent
+// registration); the version of a given binary cannot change without the path
+// changing, so one probe per path is sufficient.
+var chromeMajorCache sync.Map // path -> string
+
+// chromeMajorVersion returns the major version of the Chrome at path ("151"),
+// or "" if it cannot be determined. Never fatal: callers degrade to no
+// launch-level User-Agent override.
+//
+// Bounded by chromiumProbeTimeout for the same reason probeChromiumBinary is —
+// a hung binary must not stall a launch.
+func chromeMajorVersion(ctx context.Context, path string) string {
+	if path == "" {
+		return ""
+	}
+	if cached, ok := chromeMajorCache.Load(path); ok {
+		return cached.(string)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(probeCtx, path, "--version").Output()
+	major := ""
+	if err == nil {
+		major = chromeMajorFromVersionOutput(string(out))
+	}
+	chromeMajorCache.Store(path, major)
+	return major
+}
+
+// chromeMajorFromVersionOutput extracts the major version from `chrome
+// --version` output ("Google Chrome for Testing 151.0.7922.71" → "151").
+// Returns "" when the shape is unrecognised, which callers treat as "no
+// launch-level User-Agent override" rather than guessing a number.
+func chromeMajorFromVersionOutput(out string) string {
+	for _, field := range strings.Fields(out) {
+		if field == "" || field[0] < '0' || field[0] > '9' {
+			continue
+		}
+		major, _, _ := strings.Cut(field, ".")
+		if major == "" {
+			continue
+		}
+		for _, r := range major {
+			if r < '0' || r > '9' {
+				return ""
+			}
+		}
+		return major
+	}
+	return ""
+}
+
+// desktopUserAgent renders the User-Agent a normal desktop Chrome on Linux
+// sends, for the given major version.
+//
+// Why this is set at LAUNCH rather than only per-tab: Chrome's built-in
+// headless User-Agent literally contains the token "HeadlessChrome", which is
+// the single most obvious bot signal a site can read — Google gates on it
+// directly. applyStealth (manager.go) already rewrites it per tab via
+// Emulation.setUserAgentOverride, but that has two gaps measured live on UAT
+// v46 (`navigator.userAgent` still reported "HeadlessChrome/151.0.0.0"):
+//
+//  1. COVERAGE — applyStealth runs from createTab only. The coordinator builds
+//     each agent's FIRST window through its own CreateTarget path, so the tab
+//     the user actually browses in never received the override.
+//  2. RACE — even where it does run, it lands after the target is bound, so a
+//     page that reads navigator.userAgent early can still see the headless
+//     string.
+//
+// A launch flag closes both: no tab can ever start with the headless token, on
+// any creation path. applyStealth stays as the belt-and-braces layer.
+func desktopUserAgent(major string) string {
+	return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+		"Chrome/" + major + ".0.0.0 Safari/537.36"
+}
+
+func managedExecAllocatorOpts(cfg BrowserConfig, chromeMajor string) managedChromeCmdline {
 	// Point Chrome's HOME and XDG dirs at the profile directory so stray
 	// writes (Crash Reports, GPUCache, Singleton locks) land inside the
 	// Landlock-allowed workspace instead of $HOME/.config/google-chrome.
@@ -203,6 +281,15 @@ func managedExecAllocatorOpts(cfg BrowserConfig) managedChromeCmdline {
 		// (docker/Dockerfile.heavy), this is the other half of the operator's
 		// "captchas on google and youtube, video not working" report.
 		args = append(args, "--headless=new", "--hide-scrollbars")
+		// Kill the "HeadlessChrome" User-Agent token at the source — see
+		// desktopUserAgent's doc comment for why the per-tab override alone
+		// left it leaking. Only when the version probe produced a major:
+		// a wrong/hardcoded version is its own mismatch signal (UA claiming a
+		// version the binary does not have), so "unknown" degrades to Chrome's
+		// own UA plus the existing per-tab rewrite rather than guessing.
+		if chromeMajor != "" {
+			args = append(args, "--user-agent="+desktopUserAgent(chromeMajor))
+		}
 	}
 	if cfg.ExtensionID != "" {
 		args = append(
