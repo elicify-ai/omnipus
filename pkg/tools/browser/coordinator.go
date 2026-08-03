@@ -400,8 +400,8 @@ func (c *BrowserCoordinator) Register(
 	ctParams := target.CreateTarget(c.startPageURL()).
 		WithBrowserContextID(bid).
 		WithNewWindow(true).
-		WithWidth(screencastMaxWidth).
-		WithHeight(screencastMaxHeight)
+		WithWidth(agentWindowWidth).
+		WithHeight(agentWindowHeight)
 	// createTargetParamsForTest (D17 test seam, nil in production) lets
 	// tests assert the Width/Height pinning directly on the outgoing CDP
 	// params, without depending on any particular Chrome build/platform's

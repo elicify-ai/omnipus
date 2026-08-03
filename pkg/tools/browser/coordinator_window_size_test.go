@@ -8,14 +8,14 @@ package browser
 // target.CreateTarget(...).WithNewWindow(true) had no explicit
 // Width/Height, so it fell back to Chrome's own version/platform-dependent
 // new-window default instead of the screencast's fixed cap (live.go's
-// screencastMaxWidth/screencastMaxHeight, 1280x720). That size was then
+// agentWindowWidth/agentWindowHeight, 1280x720). That size was then
 // cached for the agent's whole lifetime (c.contexts), so which size an
 // agent got depended only on "which agent/session happened to create its
 // window first" — no visible trigger from the user's perspective.
 //
 // Two tests cover this:
 //
-//   - TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap
+//   - TestCoordinator_Register_CreateTargetParams_PinsWindowSize
 //     is the REVERT-PROOF unit test: it uses the createTargetParamsForTest
 //     seam (coordinator.go) to capture the actual outgoing
 //     target.CreateTargetParams and assert Width/Height are set, with no
@@ -24,7 +24,7 @@ package browser
 //     already happens to DEFAULT to 1280x720 with no Width/Height set at
 //     all, so a live-Chrome window-bounds assertion cannot by itself
 //     distinguish fixed from unfixed code — see the sibling test below.
-//   - TestCoordinator_Register_NewAgentWindow_MatchesScreencastCap is a
+//   - TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize is a
 //     live-Chrome smoke test (needs a real Chrome, forces two separate
 //     agent windows) verifying the ACTUAL resulting behavior via the real
 //     CDP Browser.getWindowForTarget call — one of the two verification
@@ -42,7 +42,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap is
+// TestCoordinator_Register_CreateTargetParams_PinsWindowSize is
 // the REVERT-PROOF test for D17. It hooks createTargetParamsForTest
 // (coordinator.go) to capture the target.CreateTargetParams Register
 // builds for the per-agent window, before it is sent over CDP — no live
@@ -50,7 +50,7 @@ import (
 // fields are simply never set (zero value), so this assertion fails
 // deterministically regardless of what any particular Chrome
 // build/platform happens to default an unset size to.
-func TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap(t *testing.T) {
+func TestCoordinator_Register_CreateTargetParams_PinsWindowSize(t *testing.T) {
 	var captured []*target.CreateTargetParams
 	prev := createTargetParamsForTest
 	createTargetParamsForTest = func(p *target.CreateTargetParams) {
@@ -84,11 +84,11 @@ func TestCoordinator_Register_CreateTargetParams_PinsWindowToScreencastCap(t *te
 				i,
 			)
 		}
-		if p.Width != screencastMaxWidth {
-			t.Errorf("captured params[%d]: Width = %d, want %d (D17 regression)", i, p.Width, screencastMaxWidth)
+		if p.Width != agentWindowWidth {
+			t.Errorf("captured params[%d]: Width = %d, want %d (D17 regression)", i, p.Width, agentWindowWidth)
 		}
-		if p.Height != screencastMaxHeight {
-			t.Errorf("captured params[%d]: Height = %d, want %d (D17 regression)", i, p.Height, screencastMaxHeight)
+		if p.Height != agentWindowHeight {
+			t.Errorf("captured params[%d]: Height = %d, want %d (D17 regression)", i, p.Height, agentWindowHeight)
 		}
 	}
 }
@@ -124,7 +124,7 @@ func windowBoundsForSession(t *testing.T, tabCtx context.Context) *browser.Bound
 	return bounds
 }
 
-// TestCoordinator_Register_NewAgentWindow_MatchesScreencastCap is the
+// TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize is the
 // live-Chrome end-to-end companion to the unit test above: it forces two
 // separate agents to open their first real tab (mirroring exactly how
 // every production browser tool call gets its context, via
@@ -133,7 +133,7 @@ func windowBoundsForSession(t *testing.T, tabCtx context.Context) *browser.Bound
 // build available in this environment this passes both before and after
 // the fix (see file doc comment) — it is real evidence of correct
 // end-to-end behavior, not the revert-proof (that is the unit test above).
-func TestCoordinator_Register_NewAgentWindow_MatchesScreencastCap(t *testing.T) {
+func TestCoordinator_Register_NewAgentWindow_MatchesAgentWindowSize(t *testing.T) {
 	if testing.Short() {
 		t.Skip("needs a real Chrome")
 	}
@@ -163,14 +163,14 @@ func TestCoordinator_Register_NewAgentWindow_MatchesScreencastCap(t *testing.T) 
 	boundsB := windowBoundsForSession(t, tabB)
 
 	for name, b := range map[string]*browser.Bounds{"agent-window-a": boundsA, "agent-window-b": boundsB} {
-		if b.Width != screencastMaxWidth || b.Height != screencastMaxHeight {
+		if b.Width != agentWindowWidth || b.Height != agentWindowHeight {
 			t.Errorf(
 				"%s: window bounds = %dx%d, want %dx%d (D17 regression — new-window size not pinned to the screencast cap)",
 				name,
 				b.Width,
 				b.Height,
-				screencastMaxWidth,
-				screencastMaxHeight,
+				agentWindowWidth,
+				agentWindowHeight,
 			)
 		}
 	}

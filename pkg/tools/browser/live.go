@@ -26,6 +26,27 @@ const (
 	screencastEveryNthFrame = 1
 )
 
+// agentWindowWidth/Height size each agent's Chrome window (coordinator.go's
+// CreateTarget). Deliberately SEPARATE from the screencast caps above, which
+// tune JPEG bandwidth: a window must be large enough to satisfy the largest
+// CSS viewport a panel may request AT ITS deviceScaleFactor, and in headless
+// Chrome a window can never exceed the virtual screen (--window-size,
+// exec_resolver.go).
+//
+// Sized at 1280x720 before, these two limits collided: a panel asking for a
+// 512-CSS-px-tall viewport at dsf 2 needs 1024 device px, so Chrome clamped it
+// and the live panel visibly shrank moments after opening and stayed shrunk
+// (operator report 2026-08-03; gateway log "window resize not fully reflected
+// in the tab's CSS viewport", requested_height 512 -> actual_height 425). The
+// chrome-delta compensation could not converge, because the ceiling was the
+// screen rather than a constant offset.
+//
+// Kept in lockstep with --window-size in exec_resolver.go.
+const (
+	agentWindowWidth  = 2560
+	agentWindowHeight = 1440
+)
+
 // maxInputEventsPerSecond caps injected input events per LiveView session
 // (ADR-038 D6: "browser_input is rate-limited"). Generous enough for a real
 // mouse-move stream while bounding a runaway or malicious client.

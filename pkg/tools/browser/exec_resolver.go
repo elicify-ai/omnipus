@@ -128,7 +128,22 @@ func chromeHardeningBaseFlags() []string {
 		"--disable-crash-reporter",
 		"--disable-blink-features=AutomationControlled",
 		"--lang=en-US",
-		"--window-size=1280,720",
+		// Launch geometry doubles as headless Chrome's virtual SCREEN size,
+		// and a window can never exceed it. At 1280x720 a panel asking for a
+		// 512-CSS-px-tall viewport at deviceScaleFactor 2 needs 1024 device
+		// px of screen — more than 720 — so Chrome silently clamped it and
+		// the live panel visibly shrank moments after opening and stayed
+		// shrunk (operator report + gateway log "window resize not fully
+		// reflected in the tab's CSS viewport", requested_height 512 ->
+		// actual_height 425, device_scale_factor 2, 2026-08-03). The existing
+		// chrome-delta compensation could not converge because the ceiling is
+		// the screen, not a constant chrome offset.
+		//
+		// 2560x1440 leaves headroom for a full-height panel on a 2x display
+		// without pre-allocating an absurd framebuffer; the per-request
+		// physical-pixel ceiling (maxViewportPhysicalPixels, live.go) still
+		// bounds what any single viewport may ask for.
+		"--window-size=2560,1440",
 	}
 
 	// Chromium's zygote sandbox depends on new user namespaces, which the
