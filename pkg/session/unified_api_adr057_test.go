@@ -47,12 +47,13 @@ func u2NewTestStore(t *testing.T) *UnifiedStore {
 // non-nil error and create NOTHING on disk.
 //
 // Red/green evidence (required by this unit's task): this test's assertions
-// are DELIBERATELY the exact assertions that FAIL against today's lenient
-// UnifiedStore.AppendTranscript for the same input — see
-// TestAppendTranscript_LenientBehavior_DemonstratesTheDefect below, which
-// runs the identical setup against AppendTranscript and asserts the OPPOSITE
-// outcome (nil error, directory created), pinning the defect this method
-// closes.
+// were DELIBERATELY the exact assertions that FAILED against the
+// PRE-ADR-057-U5 lenient UnifiedStore.AppendTranscript for the same input —
+// see TestAppendTranscript_StrictAfterFR002_MatchesAppendTranscriptStrict
+// below (// ADR-057-U5-inverted), which originally ran the identical setup
+// against AppendTranscript and asserted the OPPOSITE outcome (nil error,
+// directory created) as a RED pin, and is now INVERTED to assert the FR-002
+// end state once U5 (Wave C) made AppendTranscript itself strict.
 func TestAppendTranscriptStrict_UnknownSession_ErrorsAndCreatesNothing(t *testing.T) {
 	store := u2NewTestStore(t)
 	const unknownID = "unknown-session-adr057-1"
@@ -66,29 +67,50 @@ func TestAppendTranscriptStrict_UnknownSession_ErrorsAndCreatesNothing(t *testin
 		"AppendTranscriptStrict MUST create no directory for an unknown session — os.Stat(%q) returned err=%v", sessionDir, statErr)
 }
 
-// TestAppendTranscript_LenientBehavior_DemonstratesTheDefect is the RED half
-// of this unit's required red/green pair: it runs the SAME setup as the test
-// above through today's lenient AppendTranscript and asserts the exact
-// silent-create mechanism this spec's governing note names — proving the
-// strict test above is not vacuously true (i.e. that an unknown session
-// would ALSO fail these assertions if AppendTranscript's own lenient
-// behavior were substituted for AppendTranscriptStrict's).
-func TestAppendTranscript_LenientBehavior_DemonstratesTheDefect(t *testing.T) {
+// TestAppendTranscript_StrictAfterFR002_MatchesAppendTranscriptStrict is the
+// GREEN half of this unit's required red/green pair, INVERTED from
+// TestAppendTranscript_LenientBehavior_DemonstratesTheDefect
+// (// ADR-057-U5-inverted) once ADR-057 U5 (Wave C, FR-002/W3a) deleted
+// AppendTranscript's lenient slog.Warn+return-nil branch — `[grill2 C2-3]`:
+// AC-1's frozen text is a property of AppendTranscript ITSELF, not of a
+// strict sibling, so leaving the plain method lenient while only
+// AppendTranscriptStrict was strict would satisfy AC-1 only for callers that
+// had switched to the sibling. The original version of this test (preserved
+// verbatim in git history at commit acfd0e5a) asserted the OPPOSITE outcome
+// — nil error, orphan directory created — as a deliberate RED pin proving
+// the pre-fix defect was real, not vacuous. Verified red before this
+// inversion: `go test -run TestAppendTranscript_LenientBehavior` failed with
+// "the LENIENT AppendTranscript returns nil for an unknown session (the
+// defect)" once FR-002 landed, which is exactly the signal that the old
+// assertions now describe a defect that no longer exists — the correct
+// response is inversion (FR-072's principle), not silent deletion.
+//
+// This test now pins FR-002's actual end state: AppendTranscript and
+// AppendTranscriptStrict are "a name, not a second behavior" (FR-002) — both
+// must refuse an unknown session identically.
+func TestAppendTranscript_StrictAfterFR002_MatchesAppendTranscriptStrict(t *testing.T) {
 	store := u2NewTestStore(t)
 	const unknownID = "unknown-session-adr057-1-lenient"
 
 	err := store.AppendTranscript(unknownID, TranscriptEntry{Role: "user", Content: "hello"})
-	require.NoError(t, err, "the LENIENT AppendTranscript returns nil for an unknown session (the defect)")
+	require.Error(t, err, "AppendTranscript itself must now be strict (FR-002) — no lenient sibling survives")
 
 	sessionDir := filepath.Join(store.BaseDir(), unknownID)
 	_, statErr := os.Stat(sessionDir)
-	require.NoErrorf(t, statErr,
-		"the LENIENT AppendTranscript silently creates a directory for an unknown session (os.Stat(%q) err=%v) — "+
-			"this is the exact mechanism AppendTranscriptStrict exists to close", sessionDir, statErr)
+	require.Truef(t, os.IsNotExist(statErr),
+		"AppendTranscript must create NO directory for an unknown session (os.Stat(%q) err=%v) — "+
+			"FR-002 deleted the orphan-create branch this test used to pin as a defect", sessionDir, statErr)
 
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 	_, statErr2 := os.Stat(transcriptPath)
-	require.NoError(t, statErr2, "the lenient path also writes the transcript line into the orphan directory")
+	require.True(t, os.IsNotExist(statErr2), "no transcript.jsonl may be written for an unknown session")
+
+	// FR-002's own text: AppendTranscriptStrict is "a name, not a second
+	// behavior" — both entry points must now agree on this exact input.
+	const secondUnknownID = "unknown-session-adr057-1-lenient-strict-parity"
+	strictErr := store.AppendTranscriptStrict(secondUnknownID, TranscriptEntry{Role: "user", Content: "hello"})
+	require.Error(t, strictErr)
+	assert.Equal(t, err != nil, strictErr != nil, "AppendTranscript and AppendTranscriptStrict must agree on an unknown session")
 }
 
 // ---------------------------------------------------------------------
