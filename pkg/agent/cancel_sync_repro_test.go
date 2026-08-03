@@ -24,7 +24,13 @@ import (
 func TestRepro_SyncDelegateCancel_RequestCancel(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			// Home MUST be an isolated t.TempDir() — an empty Home resolves the
+			// agent workspace/session-store base to the process's current
+			// working directory (verified: "Failed to create agent workspace
+			// directory error=\"mkdir : no such file or directory\" workspace="),
+			// which both leaks real session dirs into the repo tree across runs
+			// and makes spawnSubTurn's child registration flaky under load.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -43,12 +49,16 @@ func TestRepro_SyncDelegateCancel_RequestCancel(t *testing.T) {
 	parentTS := &turnState{
 		turnID:              "parent-sync-cancel-repro",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		session:             newEphemeralSession(nil),
-		pendingResults:      make(chan *tools.ToolResult, 16),
-		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
-		al:                  al,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession
+		// (the role-B predicate RequestCancel's ClaimCancel gate uses) now
+		// matches on routingSessionID, not transcriptSessionID.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		session:          newEphemeralSession(nil),
+		pendingResults:   make(chan *tools.ToolResult, 16),
+		concurrencySem:   make(chan struct{}, testMaxConcurrentSubTurns),
+		al:               al,
+		finishedChan:     make(chan struct{}),
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	al.activeTurnStates.Store(sessionID, parentTS)

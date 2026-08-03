@@ -111,6 +111,11 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 	al, childTS := newExternalTestLoop(t, "claude-code", "")
 	const sessionID = "session_ext_cancel_async"
 	childTS.transcriptSessionID = sessionID
+	// ADR-057 FR-011/FR-015 fixture repair: activeTurnStates is keyed by
+	// turnKey below (not sessionID), so al.Interrupt(sessionID, ...)
+	// (steering.go's resolveInterruptAnchors) falls through its direct-key
+	// Load to the Range fallback, which now matches on routingSessionID.
+	childTS.routingSessionID = session.RoutingSessionID(sessionID)
 	const turnKey = "child-async-1"
 	childTS.turnID = turnKey
 	// MED (7-reviewer gate follow-up): genuinely mirror what
@@ -187,6 +192,9 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 	al, childTS := newExternalTestLoop(t, "codex", "")
 	const sessionID = "session_ext_cancel_sync"
 	childTS.transcriptSessionID = sessionID
+	// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+	// TestExternalCLISubTurn_CancelPropagates_Async above.
+	childTS.routingSessionID = session.RoutingSessionID(sessionID)
 	const turnKey = "child-sync-1"
 	childTS.turnID = turnKey
 
@@ -265,6 +273,9 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 
 	al, firstTS := newExternalTestLoop(t, "claude-code", sharedWorkDir)
 	firstTS.transcriptSessionID = "session_lock_first"
+	// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+	// TestExternalCLISubTurn_CancelPropagates_Async above.
+	firstTS.routingSessionID = session.RoutingSessionID("session_lock_first")
 	firstTS.turnID = "lock-first-1"
 
 	// A second turnState whose agent resolves to the SAME workspace work/ dir
@@ -296,6 +307,9 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 		agentID:             secondAgent.ID,
 		turnID:              "lock-second-1",
 		transcriptSessionID: "session_lock_second",
+		// ADR-057 FR-011/FR-015 fixture repair: see the identical note above
+		// on firstTS/newExternalTestLoop's callers in this file.
+		routingSessionID: session.RoutingSessionID("session_lock_second"),
 	}
 
 	// Track driver-factory calls so we can prove the SECOND (queued) run
@@ -420,6 +434,10 @@ func TestExternalCLISubTurn_RequestCancelEndToEnd_ExternalCLIOnlySession(t *test
 
 	childTS.transcriptSessionID = sessionID
 	childTS.transcriptStore = store
+	// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession (the
+	// role-B predicate RequestCancel's ClaimCancel gate uses) now matches on
+	// routingSessionID, not transcriptSessionID.
+	childTS.routingSessionID = session.RoutingSessionID(sessionID)
 	const turnKey = "child-e2e-1"
 	childTS.turnID = turnKey
 	// Model a genuine async delegate (MED finding, mirrored from the Async

@@ -91,10 +91,15 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 
 	// A real transcript store, shared between "parent" and "child" exactly as
 	// production wires it (spawnSubTurn: TranscriptSessionID:
-	// parentTS.transcriptSessionID).
-	store, err := session.NewUnifiedStore(tmpDir + "/sessions")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	// parentTS.transcriptSessionID). ADR-057 FR-005/FR-096 fixture repair: an
+	// independent session.NewUnifiedStore rooted at its own directory is a
+	// DIFFERENT store instance than the one spawnSubTurn actually validates
+	// the parent against (al.GetSessionStore() — subturn.go's
+	// sharedStore.CreateSessionWithID call) — a session minted there is
+	// invisible to spawnSubTurn, which fails "resolve parent ...: no such
+	// file or directory". Use the AgentLoop's own shared store instead.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
 	require.NoError(t, err)
 	sessionID := meta.ID
@@ -109,6 +114,7 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 		session:             &ephemeralSessionStore{},
 		agent:               defaultAgent,
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		transcriptStore:     store,
 		agentID:             defaultAgent.ID,
 	}
@@ -119,7 +125,7 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 	// ScopeCore and allowed by default policy resolution with no extra
 	// config — mirrors the established raySeq pattern in
 	// subturn_delegate_nesting_test.go.
-	loadToolArgs := map[string]any{"names": []string{"web_search"}}
+	loadToolArgs := map[string]any{"names": []string{"search_web"}}
 	childProvider := newScriptedProvider(
 		&providers.LLMResponse{
 			Content: "Step 1: let me check what tools I have available.",
@@ -154,21 +160,47 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 	defaultAgent.mu.Unlock()
 
 	const spawnCallID = "call_research1"
+	// Corollary — distinct ids everywhere: the child's own session id is
+	// deliberately DIFFERENT from the parent's, pinned via
+	// SubTurnConfig.DelegateSessionID so the test can read the exact file the
+	// child's writes land in.
+	const childSessionID = "child-transcript-nesting-1"
+	require.NotEqual(t, sessionID, childSessionID, "parent and child session ids must be distinct")
 	ctx := withSpawnToolCallID(context.Background(), spawnCallID)
 
 	result, err := spawnSubTurn(ctx, al, parentTS, SubTurnConfig{
-		SystemPrompt: "Research topic X across multiple sources and report back.",
-		Model:        defaultAgent.Model,
-		Async:        false,
+		SystemPrompt:      "Research topic X across multiple sources and report back.",
+		Model:             defaultAgent.Model,
+		Async:             false,
+		DelegateSessionID: childSessionID,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Contains(t, result.ForLLM, "Executive Summary",
 		"the child's own final turn text must be returned as the sub-turn result")
 
-	entries, err := store.ReadTranscript(sessionID)
+	// ADR-057 D1 inversion: a delegated child no longer shares the parent's
+	// transcriptSessionID — it owns its OWN real, store-backed session
+	// (FR-007/FR-009), so its writes land in a SEPARATE transcript.jsonl.
+	// "Nesting survives on the span key, not the transcript key": the
+	// pre-ADR-057 version of this test read the PARENT's shared transcript
+	// (store.ReadTranscript(sessionID)) to find the child's own entries —
+	// that file is now permanently empty of them. Correlation back to the
+	// spawning tool call is proven instead by ParentSpawnCallID surviving
+	// INSIDE the child's own, separate transcript file.
+	entries, err := store.ReadTranscript(childSessionID)
 	require.NoError(t, err)
-	require.NotEmpty(t, entries, "the shared transcript must contain the child's own writes")
+	require.NotEmpty(t, entries, "the child's OWN transcript must contain its own writes")
+
+	// THE NEW-INVARIANT PROOF (negative space the pre-ADR-057 assertion could
+	// never express): the PARENT's shared session must contain NONE of the
+	// child's writes — proving the child's transcript is genuinely its own
+	// file, not a shared one the old assertion happened to also read from.
+	parentEntries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, parentEntries,
+		"the child's own narration/tool-calls must NOT land in the parent's shared transcript — "+
+			"D1 gives every delegated child its own real session")
 
 	var assistantEntries []session.TranscriptEntry
 	var toolCallEntries []session.TranscriptEntry

@@ -70,9 +70,13 @@ func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
 	ts := &turnState{
 		turnID:              "turn-bridge-001",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
-		transcriptStore:     store,
+		// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession
+		// (the role-B predicate RequestCancel uses to find and claim the
+		// active turn) matches on routingSessionID, not transcriptSessionID.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
+		transcriptStore:  store,
 	}
 	ts.providerCancel = func() { ts.Finish(false) }
 	al.activeTurnStates.Store(sessionID, ts)
@@ -140,9 +144,12 @@ func TestRequestCancel_LifecycleRecordMissing_DoesNotPanic(t *testing.T) {
 	ts := &turnState{
 		turnID:              "turn-bridge-002",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		finishedChan:        make(chan struct{}),
-		transcriptStore:     store,
+		// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
+		// TestRequestCancel_TransitionsLifecycleRecordToCancelled above.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		finishedChan:     make(chan struct{}),
+		transcriptStore:  store,
 	}
 	ts.providerCancel = func() { ts.Finish(false) }
 	al.activeTurnStates.Store(sessionID, ts)

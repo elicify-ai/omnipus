@@ -46,7 +46,16 @@ import (
 func TestRepro_SpawnSubTurn_RawStoreBypassesPreArmedCancel(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			// Home MUST be an isolated t.TempDir(): AgentHomeBasePath() (and
+			// therefore the shared session store's baseDir) resolves an empty
+			// Home to the process's current working directory, which every
+			// test in this package/binary that leaves Home unset then shares
+			// — a deterministic childID like "child-bypass-repro" (below)
+			// leaks a real, un-cleaned-up session directory into the repo
+			// tree (verified: pkg/agent/sessions/child-bypass-repro existed
+			// from a prior run and collided with FR-096's new collision
+			// guard) instead of vanishing with t.TempDir()'s cleanup.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 			List: []config.AgentConfig{
 				{
 					ID:   "remote-target",
@@ -78,12 +87,20 @@ func TestRepro_SpawnSubTurn_RawStoreBypassesPreArmedCancel(t *testing.T) {
 	parentTS := &turnState{
 		turnID:              "parent-bypass-repro",
 		transcriptSessionID: sessionID,
-		depth:               0,
-		session:             newEphemeralSession(nil),
-		pendingResults:      make(chan *tools.ToolResult, 16),
-		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
-		al:                  al,
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair: preArmKeysForTurn
+		// (cancel_prearm.go) now derives its "s:"+id consumption key from
+		// routingSessionID, not transcriptSessionID — and childTS inherits
+		// this field verbatim from parentTS (spawnSubTurn). Left unset, the
+		// child's registration would carry no session-id pre-arm key at all,
+		// so the latch this test arms under "s:"+sessionID would never be
+		// found/consumed regardless of the fix under test.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		depth:            0,
+		session:          newEphemeralSession(nil),
+		pendingResults:   make(chan *tools.ToolResult, 16),
+		concurrencySem:   make(chan struct{}, testMaxConcurrentSubTurns),
+		al:               al,
+		finishedChan:     make(chan struct{}),
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	// Deliberately never registered in al.activeTurnStates — simulating the

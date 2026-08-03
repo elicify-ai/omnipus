@@ -11,6 +11,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -120,15 +121,35 @@ func TestSpawnSubTurn(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// ADR-057 FR-005/FR-096 fixture repair `[grill C-1]`: spawnSubTurn's
+			// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+			// requires the parent id to resolve to a REAL session in
+			// al.GetSessionStore() — a bare turnState with no transcriptSessionID
+			// at all fails validateSessionID before ever reaching the LLM call,
+			// which the depth-limit/invalid-config error-path cases below don't
+			// notice (they error out even earlier) but the success-path cases
+			// need. Mint a fresh, real session per subtest.
+			store := al.GetSessionStore()
+			if store == nil {
+				t.Fatal("test harness did not wire a shared session store")
+			}
+			meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+			if err != nil {
+				t.Fatalf("store.NewSession: %v", err)
+			}
+
 			// Prepare parent Turn
 			parent := &turnState{
-				ctx:            context.Background(),
-				turnID:         "parent-1",
-				depth:          tt.parentDepth,
-				childTurnIDs:   []string{},
-				pendingResults: make(chan *tools.ToolResult, 10),
-				session:        &ephemeralSessionStore{},
-				agent:          al.registry.GetDefaultAgent(),
+				ctx:                 context.Background(),
+				turnID:              "parent-1",
+				depth:               tt.parentDepth,
+				childTurnIDs:        []string{},
+				pendingResults:      make(chan *tools.ToolResult, 10),
+				session:             &ephemeralSessionStore{},
+				agent:               al.registry.GetDefaultAgent(),
+				transcriptSessionID: meta.ID,
+				routingSessionID:    session.RoutingSessionID(meta.ID),
+				transcriptStore:     store,
 			}
 
 			// Subscribe to real EventBus to capture events
@@ -142,8 +163,25 @@ func TestSpawnSubTurn(t *testing.T) {
 				spawnCtx = withSpawnToolCallID(spawnCtx, "test-spawn-call-1")
 			}
 
+			// Pin an explicit, per-run-unique child session id (derived from
+			// the freshly-minted parent ULID above) rather than relying on
+			// spawnSubTurn's auto-generated "subturn-N" counter. newTestAgentLoop
+			// (loop_test.go) roots its shared session store at
+			// filepath.Dir(cfg.Agents.Defaults.Home) — for os.MkdirTemp("",
+			// "agent-test-*")'s flat tmp dirs, that resolves to the OS's shared
+			// /tmp, so a deterministic "subturn-1" can collide with a
+			// same-named directory left behind by any other test in this
+			// package that also let the counter default (verified: FR-096's
+			// new collision guard turned a previously-silent MkdirAll
+			// no-op into a loud "already exists" failure here). This is a
+			// pre-existing newTestAgentLoop hazard (loop_test.go, not owned by
+			// this fix) now surfaced by FR-096; work around it locally rather
+			// than editing the shared helper.
+			cfg := tt.config
+			cfg.DelegateSessionID = "subturn-test-" + meta.ID
+
 			// Execute spawnSubTurn
-			result, err := spawnSubTurn(spawnCtx, al, parent, tt.config)
+			result, err := spawnSubTurn(spawnCtx, al, parent, cfg)
 
 			// Assert errors
 			if tt.wantErr != nil {
@@ -236,16 +274,35 @@ func TestSpawnSubTurn_ResultDelivery(t *testing.T) {
 	_ = provider
 	defer cleanup()
 
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-1",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestSpawnSubTurn above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
 	}
 
-	// Set Async=true to test async result delivery via pendingResults channel
-	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true}
+	parent := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-1",
+		depth:               0,
+		pendingResults:      make(chan *tools.ToolResult, 1),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
+	}
+
+	// Set Async=true to test async result delivery via pendingResults channel.
+	// DelegateSessionID pinned explicitly (see TestSpawnSubTurn's identical
+	// note) to avoid colliding with newTestAgentLoop's shared-/tmp hazard.
+	cfg := SubTurnConfig{
+		Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: true,
+		DelegateSessionID: "subturn-test-" + meta.ID,
+	}
 
 	_, _ = spawnSubTurn(context.Background(), al, parent, cfg)
 
@@ -266,16 +323,34 @@ func TestSpawnSubTurn_ResultDeliverySync(t *testing.T) {
 	_ = provider
 	defer cleanup()
 
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-sync-1",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestSpawnSubTurn above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
 	}
 
-	// Sync call (Async=false, the default) - result should be returned directly
-	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: false}
+	parent := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-sync-1",
+		depth:               0,
+		pendingResults:      make(chan *tools.ToolResult, 1),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
+	}
+
+	// Sync call (Async=false, the default) - result should be returned directly.
+	// DelegateSessionID pinned explicitly — see TestSpawnSubTurn's identical note.
+	cfg := SubTurnConfig{
+		Model: "gpt-4o-mini", Tools: []tools.Tool{}, Async: false,
+		DelegateSessionID: "subturn-test-" + meta.ID,
+	}
 
 	result, err := spawnSubTurn(context.Background(), al, parent, cfg)
 	if err != nil {
@@ -617,22 +692,37 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 		}
 	}()
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestSpawnSubTurn above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	// Create a root turn
 	rootSession := &ephemeralSessionStore{}
 	rootTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "root-turn",
-		depth:          0,
-		session:        rootSession,
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, 5),
+		ctx:                 context.Background(),
+		turnID:              "root-turn",
+		depth:               0,
+		session:             rootSession,
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, 5),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
-	// Spawn a child (depth 1).
+	// Spawn a child (depth 1). DelegateSessionID pinned explicitly — see
+	// TestSpawnSubTurn's identical note on newTestAgentLoop's shared-/tmp hazard.
 	// W1-12: inject a parentSpawnCallID so span events are emitted.
-	childCfg := SubTurnConfig{Model: "gpt-4o-mini"}
+	childCfg := SubTurnConfig{Model: "gpt-4o-mini", DelegateSessionID: "subturn-test-" + meta.ID}
 	spawnCtx := withSpawnToolCallID(context.Background(), "nested-spawn-call-1")
-	_, err := spawnSubTurn(spawnCtx, al, rootTS, childCfg)
+	_, err = spawnSubTurn(spawnCtx, al, rootTS, childCfg)
 	if err != nil {
 		t.Fatalf("failed to spawn child: %v", err)
 	}
@@ -864,12 +954,31 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), panicProvider)
 
+	// ADR-057 FR-005/FR-096 fixture repair `[grill C-1]`: without a real
+	// parent session, spawnSubTurn's sharedStore.CreateSessionWithID fails
+	// and returns BEFORE the defer block that emits EventKindSubTurnEnd and
+	// delivers to pendingResults is even registered — the panicProvider is
+	// never reached at all, and this test's real subject (recovery from an
+	// in-flight LLM panic) goes untested even though its "err != nil"
+	// assertion happens to still pass for the wrong reason.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-panic",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 1),
-		session:        &ephemeralSessionStore{},
+		ctx:                 context.Background(),
+		turnID:              "parent-panic",
+		depth:               0,
+		pendingResults:      make(chan *tools.ToolResult, 1),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
 	collector, collectCleanup := newEventCollector(t, al)
@@ -1434,23 +1543,41 @@ func TestEphemeralSession_AutoTruncate(t *testing.T) {
 func TestContextWrapping_SingleLayer(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Provider: "mock",
-			},
+			// Home MUST be a real, isolated dir — an empty Home resolves
+			// AgentHomeBasePath() (and the shared session store's baseDir) to
+			// the process's current working directory, shared by every test
+			// in this package/binary that also leaves it unset.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProviderAPI{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// ADR-057 FR-005/FR-096 fixture repair `[grill C-1]`: spawnSubTurn's
+	// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+	// requires the parent id to resolve to a REAL session in
+	// al.GetSessionStore().
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	ctx := context.Background()
 	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-context-test",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		ctx:                 ctx,
+		turnID:              "parent-context-test",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
@@ -1480,23 +1607,37 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Provider: "mock",
-			},
+			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
+			// identical note.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProviderAPI{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestContextWrapping_SingleLayer above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	ctx := context.Background()
 	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-sync-test",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		ctx:                 ctx,
+		turnID:              "parent-sync-test",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
@@ -1537,23 +1678,37 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Provider: "mock",
-			},
+			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
+			// identical note.
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProviderAPI{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestContextWrapping_SingleLayer above.
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+
 	ctx := context.Background()
 	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-async-test",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		ctx:                 ctx,
+		turnID:              "parent-async-test",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	defer parentTS.Finish(false)

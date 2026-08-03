@@ -160,7 +160,19 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	require.True(t, ok, "delegate tool must be a *tools.DelegateTool")
 
 	const childID = "test-577-delegate-child"
-	const callerKey = "test-577-parent-transcript"
+
+	// ADR-057 FR-005/FR-096 fixture repair: spawnSubTurn's
+	// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+	// requires the parent id to resolve to a REAL session in
+	// al.GetSessionStore() — an empty/unset transcriptSessionID (the pre-fix
+	// literal here) fails validateSessionID and spawnSubTurn returns an error
+	// before ever reaching runTurn, so the target's LLM call never starts.
+	// Mint a real parent session and use its id as the caller/lifecycle key.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	parentMeta, err := store.NewSession(session.SessionTypeChat, "web", defAgent.ID)
+	require.NoError(t, err)
+	callerKey := parentMeta.ID
 
 	// Seed the lifecycle record delegate.go's `run` action would have
 	// minted for a real delegation, so executeCancel's FAIL-CLOSED ownership
@@ -175,13 +187,16 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	}))
 
 	parentTS := &turnState{
-		agent:          defAgent,
-		turnID:         "parent-577",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		al:             al,
+		agent:               defAgent,
+		turnID:              "parent-577",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		al:                  al,
+		transcriptSessionID: callerKey,
+		routingSessionID:    session.RoutingSessionID(callerKey),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(context.Background())
 
@@ -279,7 +294,14 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	require.True(t, ok, "delegate tool must be a *tools.DelegateTool")
 
 	const childID = "test-577-delegate-child-soft"
-	const callerKey = "test-577-parent-transcript-soft"
+
+	// ADR-057 FR-005/FR-096 fixture repair: see the identical note in
+	// TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext above.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	parentMeta, err := store.NewSession(session.SessionTypeChat, "web", defAgent.ID)
+	require.NoError(t, err)
+	callerKey := parentMeta.ID
 
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
 		SessionID:        childID,
@@ -290,13 +312,16 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	}))
 
 	parentTS := &turnState{
-		agent:          defAgent,
-		turnID:         "parent-577-soft",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		al:             al,
+		agent:               defAgent,
+		turnID:              "parent-577-soft",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		al:                  al,
+		transcriptSessionID: callerKey,
+		routingSessionID:    session.RoutingSessionID(callerKey),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(context.Background())
 

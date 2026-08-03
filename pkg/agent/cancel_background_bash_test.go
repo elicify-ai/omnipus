@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -91,8 +92,15 @@ func newRunningBackgroundSession(id, ownerSessionID string, pid int) *tools.Proc
 func registerActiveTurn(t *testing.T, al *AgentLoop, sessionID, turnID string) *turnState {
 	t.Helper()
 	ts := &turnState{
-		turnID:              turnID,
+		turnID: turnID,
+		// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession
+		// (turn.go) — the role-B predicate RequestCancel uses to find the
+		// active turn for a CancelScope.SessionID — now matches on
+		// routingSessionID, not transcriptSessionID. Both are set to the same
+		// value here because this fixture predates the D1/D2 identity split
+		// (transcriptSessionID and routingSessionID coincide for a root turn).
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}

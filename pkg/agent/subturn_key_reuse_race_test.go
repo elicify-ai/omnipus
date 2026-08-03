@@ -112,9 +112,13 @@ func TestSubTurnKeyReuseRace_CancelStillReachesSurvivingGeneration(t *testing.T)
 		turnID:              "gen1",
 		sessionKey:          childID,
 		transcriptSessionID: chatSessionID,
-		depth:               1,
-		parentTurnID:        "root-turn",
-		finishedChan:        make(chan struct{}),
+		// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession
+		// (and RequestCancel's use of it) now matches on routingSessionID,
+		// not transcriptSessionID.
+		routingSessionID: session.RoutingSessionID(chatSessionID),
+		depth:            1,
+		parentTurnID:     "root-turn",
+		finishedChan:     make(chan struct{}),
 	}
 	al.registerActiveTurn(gen1)
 
@@ -142,6 +146,7 @@ func TestSubTurnKeyReuseRace_CancelStillReachesSurvivingGeneration(t *testing.T)
 		turnID:              "gen2",
 		sessionKey:          childID,
 		transcriptSessionID: chatSessionID,
+		routingSessionID:    session.RoutingSessionID(chatSessionID),
 		depth:               1,
 		parentTurnID:        "root-turn",
 		finishedChan:        make(chan struct{}),
@@ -249,6 +254,7 @@ func TestSubTurnKeyReuseRace_SpawnSubTurnSideCompareAndDelete(t *testing.T) {
 		turnID:              "gen1-spawnside",
 		sessionKey:          childID,
 		transcriptSessionID: chatSessionID,
+		routingSessionID:    session.RoutingSessionID(chatSessionID),
 		depth:               1,
 		parentTurnID:        "root-turn",
 		finishedChan:        make(chan struct{}),
@@ -267,6 +273,7 @@ func TestSubTurnKeyReuseRace_SpawnSubTurnSideCompareAndDelete(t *testing.T) {
 		turnID:              "gen2-spawnside",
 		sessionKey:          childID,
 		transcriptSessionID: chatSessionID,
+		routingSessionID:    session.RoutingSessionID(chatSessionID),
 		depth:               1,
 		parentTurnID:        "root-turn",
 		finishedChan:        make(chan struct{}),

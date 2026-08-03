@@ -97,6 +97,12 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	// gate fails CLOSED when unwired, by design — unrelated to this fix).
 	delegateTool := tools.NewDelegateTool("slow-model", 0, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair: DelegateTool now refuses to start a
+	// delegated session without a durable lifecycle store wired (fail-closed
+	// rather than an untracked, unrecoverable session) — mirrors
+	// message_parent_real_context_test.go's wiring.
+	lifecycleStore := session.NewLifecycleStore(t.TempDir())
+	delegateTool.SetLifecycleStore(lifecycleStore)
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
@@ -104,12 +110,17 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	parentTS := &turnState{
 		turnID:              "parent-async-cancel-repro",
 		transcriptSessionID: sessionID,
-		agentID:             DefaultAgentID,
-		channel:             "web",
-		chatID:              "main",
-		depth:               0,
-		session:             newEphemeralSession(nil),
-		pendingResults:      make(chan *tools.ToolResult, 16),
+		// ADR-057 FR-011/FR-015 fixture repair `[grill C-1]`: RequestCancel's
+		// role-B predicates (GetActiveTurnHookForSession, the pre-arm
+		// consumption path) now match on routingSessionID, not
+		// transcriptSessionID.
+		routingSessionID: session.RoutingSessionID(sessionID),
+		agentID:          DefaultAgentID,
+		channel:          "web",
+		chatID:           "main",
+		depth:            0,
+		session:          newEphemeralSession(nil),
+		pendingResults:   make(chan *tools.ToolResult, 16),
 		// Deliberately capacity 1 and pre-filled (below) to capacity, so
 		// spawnSubTurn's own semaphore acquisition (step 0) deterministically
 		// BLOCKS until this test releases a slot — the child is PROVABLY not

@@ -93,6 +93,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -160,6 +161,16 @@ func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 
+	// ADR-057 U14 fixture repair: NewAgentLoop registers every agent's own
+	// DelegateTool fail-closed against a nil lifecycle store (real boot only
+	// wires it later via the gateway's SetSessionMessagingStores call, per
+	// session_messaging_wire.go). ray's nested delegate call to planner goes
+	// through THIS loop's own internally-registered "delegate" tool (not a
+	// test-constructed one), so it needs the same re-wiring mustNewAgentLoop's
+	// callers get in production — mirrors
+	// cancel_orchestration_adr057_test.go's al.SetSessionMessagingStores(nil, lifecycleStore) pattern.
+	al.SetSessionMessagingStores(nil, session.NewLifecycleStore(t.TempDir()))
+
 	// Sanity: ray and planner must both be registered before the caller
 	// installs their scripted providers via setAgentProvider.
 	_, ok := al.GetRegistry().GetAgent("ray")
@@ -226,7 +237,21 @@ func assertNoDelegateDeniedByPolicy(t *testing.T, c *eventCollector) {
 // pattern in approval_grant_delegation_test.go. jim is never itself run
 // through al.runTurn — only the REAL spawnSubTurn(TargetAgentID="ray") call
 // that follows exercises production code.
-func buildParentTurnState(al *AgentLoop) *turnState {
+//
+// ADR-057 FR-005/FR-096 fixture repair: spawnSubTurn's
+// sharedStore.CreateSessionWithID(childID, parentTS.transcriptSessionID, ...)
+// now requires the parent id to resolve to a REAL session in
+// al.GetSessionStore() — a hand-picked literal like "S-nested-delegation"
+// that was never created there fails loudly instead of silently. Mint a real
+// session via store.NewSession and use its id, and set routingSessionID
+// alongside transcriptSessionID (FR-011/FR-015: the role-B predicates and
+// pendingSpawnKeys now key on routingSessionID, not transcriptSessionID).
+func buildParentTurnState(t *testing.T, al *AgentLoop) *turnState {
+	t.Helper()
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "jim")
+	require.NoError(t, err)
 	return &turnState{
 		ctx:                 context.Background(),
 		turnID:              "jim-parent-turn",
@@ -236,7 +261,9 @@ func buildParentTurnState(al *AgentLoop) *turnState {
 		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
 		session:             &ephemeralSessionStore{},
 		agent:               al.GetRegistry().GetDefaultAgent(),
-		transcriptSessionID: "S-nested-delegation",
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 		agentID:             "jim",
 	}
 }
@@ -284,7 +311,7 @@ func TestNestedDelegate_Await(t *testing.T) {
 	collector, cleanup := newEventCollector(t, al)
 	defer cleanup()
 
-	parent := buildParentTurnState(al)
+	parent := buildParentTurnState(t, al)
 	ctx := withSpawnToolCallID(context.Background(), "jim-to-ray-await-call")
 	_, err := spawnSubTurn(ctx, al, parent, SubTurnConfig{
 		Model:         "test-model",
@@ -360,7 +387,7 @@ func TestNestedDelegate_Background(t *testing.T) {
 	collector, cleanup := newEventCollector(t, al)
 	defer cleanup()
 
-	parent := buildParentTurnState(al)
+	parent := buildParentTurnState(t, al)
 	ctx := withSpawnToolCallID(context.Background(), "jim-to-ray-background-call")
 	_, err := spawnSubTurn(ctx, al, parent, SubTurnConfig{
 		Model:         "test-model",

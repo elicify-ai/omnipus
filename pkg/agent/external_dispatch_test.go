@@ -681,7 +681,16 @@ func newRecordResultTurnState(t *testing.T) (*turnState, *session.UnifiedStore, 
 	baseDir := filepath.Join(t.TempDir(), "sessions")
 	store, err := session.NewUnifiedStore(baseDir)
 	require.NoError(t, err)
-	const sessionID = "session_record_result_test"
+	// ADR-057 US-1/W3 fixture repair: AppendTranscript is now STRICT — it
+	// reads meta FIRST and fails loudly ("session ... does not exist")
+	// instead of silently creating an orphan directory (the old behavior
+	// this migration deliberately removed). A hand-picked literal session id
+	// that was never minted via NewSession no longer works; recordExternalToolResult's
+	// underlying AppendTranscript call would fail and lastToolCall would find
+	// an empty transcript.
+	meta, err := store.NewSession(session.SessionTypeChat, "", "ext-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
 	ts := &turnState{
 		agentID:             "ext-agent",
 		turnID:              "ext-run-result",
