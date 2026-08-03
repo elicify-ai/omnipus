@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // lifecycleParentIndex maps a durable ParentDurableKey to the set of
@@ -42,11 +43,16 @@ type lifecycleParentIndex struct {
 	mu       sync.RWMutex
 	byParent map[string]map[string]struct{}
 
-	// warmOnce/warmErr back ensureWarm's exactly-once backfill scan — see
-	// its own doc comment for why a scan is needed at all alongside
-	// Persist-time maintenance.
-	warmOnce sync.Once
-	warmErr  error
+	// warmMu/warmed back ensureWarm's backfill scan — see its own doc
+	// comment for why a scan is needed at all alongside Persist-time
+	// maintenance, and for why this is NOT a plain sync.Once (Defect-3 fix:
+	// a FAILED warm must be retried on the next call, never latched
+	// forever). warmed is set true ONLY after a scan that returns a nil
+	// error; warmMu serializes concurrent ensureWarm callers (both the
+	// fast-path read and the scan-and-set below) so two callers can never
+	// race a partial warm.
+	warmMu sync.Mutex
+	warmed atomic.Bool
 }
 
 // newLifecycleParentIndex returns an empty, ready-to-use index.
@@ -115,9 +121,18 @@ func (idx *lifecycleParentIndex) children(parentKey string) []string {
 	return out
 }
 
-// ensureWarm backfills the index from disk exactly once per LifecycleStore
-// instance (guarded by sync.Once, so concurrent first-callers block on the
-// same scan rather than each racing their own).
+// ensureWarm backfills the index from disk once per LifecycleStore instance
+// — but, unlike a plain sync.Once, only a SUCCESSFUL scan is memoized
+// (Defect-3 fix). A failed scan (e.g. a transient EMFILE during a fan-out
+// burst) must not permanently latch that error for the process's entire
+// remaining lifetime: every subsequent Stop cascade, background-shell
+// cascade, approval cascade and drill-down would otherwise silently degrade
+// to root-only until a restart, with no recovery path. warmMu serializes
+// callers (both the fast-path check and the scan-and-set below) so
+// concurrent first-callers block on the same attempt rather than each
+// racing their own, exactly like sync.Once did — the difference is purely
+// that a failed attempt leaves warmed false so the NEXT call retries the
+// full scan instead of returning the same stale error forever.
 //
 // Why a scan is needed at all: FR-020 requires the index be "maintained
 // inside Persist", and persistLocked does exactly that (lifecycle.go) — but
@@ -128,31 +143,46 @@ func (idx *lifecycleParentIndex) children(parentKey string) []string {
 // seen, so relying on Persist-time maintenance alone would silently return
 // zero children for every parent until something happened to re-persist
 // each child — exactly the "success-shaped" silent failure this whole spec
-// exists to close out. The scan closes that gap once; every Persist call
-// before, during or after it keeps the index correct for that session_id
-// independently via add(), so warming never needs to repeat.
+// exists to close out. The scan closes that gap once it succeeds; every
+// Persist call before, during or after it keeps the index correct for that
+// session_id independently via add(), so a SUCCESSFUL warm never needs to
+// repeat. A MISSING directory is legitimately not an error here:
+// scanSessionIDs (lifecycle.go) returns (nil, nil) for os.IsNotExist, so a
+// fresh install with no lifecycle directory yet warms successfully with an
+// empty index — it is never treated as a failure to retry.
 func (idx *lifecycleParentIndex) ensureWarm(s *LifecycleStore) error {
-	idx.warmOnce.Do(func() {
-		ids, err := s.scanSessionIDs()
-		if err != nil {
-			idx.warmErr = fmt.Errorf("session: lifecycle: parent index warm-up: %w", err)
-			return
-		}
-		for _, id := range ids {
-			rec, loadErr := s.Load(id)
-			if loadErr != nil {
-				if loadErr == ErrLifecycleNotFound {
-					continue
-				}
-				// A single corrupt/unreadable record must not fail warm-up
-				// for every OTHER session — log and continue, mirroring
-				// PruneTerminal's own per-id error handling in lifecycle.go.
-				slog.Warn("session: lifecycle: parent index warm-up: load failed, skipping",
-					"session_id", id, "error", loadErr)
+	if idx.warmed.Load() {
+		return nil
+	}
+	idx.warmMu.Lock()
+	defer idx.warmMu.Unlock()
+	if idx.warmed.Load() {
+		// Another goroutine completed a successful warm while we waited for
+		// warmMu.
+		return nil
+	}
+
+	ids, err := s.scanSessionIDs()
+	if err != nil {
+		// Deliberately NOT setting idx.warmed — a failed scan must be
+		// retried by the next ensureWarm call, not latched forever.
+		return fmt.Errorf("session: lifecycle: parent index warm-up: %w", err)
+	}
+	for _, id := range ids {
+		rec, loadErr := s.Load(id)
+		if loadErr != nil {
+			if loadErr == ErrLifecycleNotFound {
 				continue
 			}
-			idx.add(rec.ParentDurableKey, rec.SessionID)
+			// A single corrupt/unreadable record must not fail warm-up
+			// for every OTHER session — log and continue, mirroring
+			// PruneTerminal's own per-id error handling in lifecycle.go.
+			slog.Warn("session: lifecycle: parent index warm-up: load failed, skipping",
+				"session_id", id, "error", loadErr)
+			continue
 		}
-	})
-	return idx.warmErr
+		idx.add(rec.ParentDurableKey, rec.SessionID)
+	}
+	idx.warmed.Store(true)
+	return nil
 }

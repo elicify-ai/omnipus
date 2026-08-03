@@ -471,6 +471,26 @@ func (us *UnifiedStore) loadMetaCacheLocked() {
 			continue
 		}
 		us.metaCache[entry.Name()] = meta
+		// FR-097 (Defect-1 fix): wire the parent index for every session
+		// composed here. This is the boot/restart-time cache-population
+		// path — until this fix it was one of TWO paths (alongside
+		// readMetaLocked's cache-miss branch) that populated metaCache
+		// without ever touching parentIndex/childToParent. A prior process's
+		// Persist-time maintenance (u5WriteIdentityLocked -> u4IndexAddChild)
+		// only ever updated THAT process's in-memory index, which dies with
+		// it; a NEW UnifiedStore over the same baseDir must rebuild the
+		// index from the meta.json this scan just composed, or every
+		// parent->child edge stays correct on disk (ParentSessionID
+		// round-trips fine) while ChildCount silently reports 0 for every
+		// parent until the child is re-written — the "success-shaped"
+		// silent failure this whole spec exists to close out (see
+		// lifecycle_index.go's ensureWarm doc comment for the sibling index
+		// that already got this right). Safe to call unconditionally here:
+		// u4IndexAddChild no-ops for an empty ParentSessionID and is
+		// idempotent, and taking cacheMu per-entry is harmless since no
+		// other goroutine can reach us yet (see this method's own doc
+		// comment above).
+		us.u4IndexAddChild(meta.ParentSessionID, entry.Name())
 	}
 }
 
@@ -1014,6 +1034,20 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 	us.cacheMu.Lock()
 	us.metaCache[sessionID] = meta
 	us.cacheMu.Unlock()
+
+	// FR-097 (Defect-1 fix): wire the parent index on this cache-miss
+	// self-heal too — OUTSIDE the cacheMu critical section above (it takes
+	// cacheMu itself; sync.Mutex is not reentrant), exactly mirroring
+	// u5WriteIdentityLocked's own ADD-side call in unified_meta_files.go.
+	// Before this fix, this was the second of two metaCache-population
+	// paths (alongside loadMetaCacheLocked) that populated the cache
+	// without ever touching parentIndex/childToParent — every caller that
+	// reaches this branch (GetMeta, SetMeta, SwitchAgent, AppendTranscript,
+	// GetOrCreateScheduledSession, ListSessions' out-of-band reconcile) was
+	// silently leaving ChildCount under-reporting for the session it just
+	// composed from disk. A no-op when meta.ParentSessionID is empty;
+	// idempotent otherwise.
+	us.u4IndexAddChild(meta.ParentSessionID, sessionID)
 	return meta.Clone(), nil
 }
 
@@ -1592,6 +1626,17 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 // below, letting an in-package test interleave a DeleteSession
 // deterministically at exactly that boundary (BDD-95/#92/SC-041) instead of
 // hoping go test -race happens to hit the window.
+//
+// Defect-2 fix seam: listSessionsPruneRaceBarrierFn fires right after the
+// os.ReadDir snapshot below is captured but BEFORE onDisk is built from it,
+// letting an in-package test deterministically create (or dirty-mark) a
+// session in the exact window a real concurrent goroutine would occupy
+// between this call's ReadDir and its stale-eviction pass further down —
+// see the stale-eviction loop's own doc comment for why that window used to
+// be able to permanently lose a session's unflushed stats and parent-index
+// edge. Default no-op; overridden only by a test in this package.
+var listSessionsPruneRaceBarrierFn = func() {}
+
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
@@ -1601,6 +1646,7 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 			listErr = fmt.Errorf("unified_store: list sessions: read base dir %q: %w", us.baseDir, err)
 		}
 	} else {
+		listSessionsPruneRaceBarrierFn()
 		onDisk := make(map[string]struct{}, len(entries))
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".context" {
@@ -1641,6 +1687,25 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 		// under ITS OWN shard (mirroring DeleteSession's own lock order:
 		// sessionLock(id) -> cacheMu -> u4IndexEvict) so a concurrent
 		// create/delete for the SAME id can never interleave mid-eviction.
+		//
+		// Defect-2 fix: onDisk above is a SNAPSHOT from the os.ReadDir call
+		// at the top of this method — it is stale the instant a concurrent
+		// goroutine creates a new session between that ReadDir and this loop
+		// reaching its id. Such a session is NOT a deletion (its directory
+		// exists right now); evicting it unconditionally would silently and
+		// permanently drop any cache-only-dirty stats delta it had accrued
+		// (u6MarkStatsDirtyLocked/D12 defers the stats.json write, so the
+		// cache entry can be the ONLY copy of a token/cost update) and its
+		// FR-097 parent-index edge, with no re-add path — the exact
+		// "success-shaped" silent data loss this whole spec exists to close
+		// out. So each candidate is RE-STAT'd, under its own shard, right
+		// before eviction — mirroring ClearAll's own re-stat pattern
+		// (unified.go, ClearAll's "remaining" sweep) — and only evicted when
+		// the directory is confirmed genuinely gone (os.ErrNotExist). An
+		// ambiguous stat error (e.g. a permission blip) also skips eviction,
+		// erring on the side of not losing data; a genuine deletion missed
+		// this way is simply re-observed as stale on a later ListSessions
+		// call once its absence is stable across an entire ReadDir snapshot.
 		us.cacheMu.RLock()
 		staleIDs := make([]string, 0)
 		for id := range us.metaCache {
@@ -1651,6 +1716,13 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 		us.cacheMu.RUnlock()
 		for _, id := range staleIDs {
 			h := us.lockSession(id)
+			if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); !errors.Is(statErr, os.ErrNotExist) {
+				// The directory exists now (created/recreated after the
+				// ReadDir snapshot above) or the stat was inconclusive —
+				// this is a live session, not a deletion. Do not evict.
+				h.Unlock()
+				continue
+			}
 			us.cacheMu.Lock()
 			delete(us.metaCache, id)
 			delete(us.dirtyStats, id)
