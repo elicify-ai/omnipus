@@ -739,7 +739,19 @@ func NewAgentLoop(
 	rootDelegationCap, rootDelegationCapErr := ResolveRootDelegationCap(cfg)
 	if rootDelegationCapErr != nil {
 		rootDelegationCap = config.DefaultSubTurnMaxConcurrent
-		logger.ErrorCF("agent",
+		// Severity splits on WHICH failure this is, because the two are not
+		// equally alarming. A NEGATIVE value is an operator who wrote
+		// something wrong and needs to see it. An unset/zero value is the
+		// ordinary shape of a config literal that never went through the
+		// load pipeline where U28 seeds the key — every test in this package
+		// builds one, and a production boot always carries the seed. Logging
+		// both at ERROR made the common, harmless case spam CI badly enough
+		// to bury real errors, which is its own failure mode.
+		severity := logger.DebugCF
+		if cfg != nil && cfg.Agents.Defaults.SubTurn.MaxConcurrent < 0 {
+			severity = logger.ErrorCF
+		}
+		severity("agent",
 			"Root-delegation cap unresolvable — falling back to the seeded default so root-level delegate() fan-out stays GATED; set agents.defaults.subturn.max_concurrent to a positive value",
 			map[string]any{"error": rootDelegationCapErr.Error(), "fallback_cap": rootDelegationCap})
 	}
