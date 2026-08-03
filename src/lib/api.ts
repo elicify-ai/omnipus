@@ -1418,7 +1418,7 @@ function rawToMessage(raw: RawMessage): Message {
 // UsageScreen's "By session" tab is the one caller that passes true, so
 // verifier LLM spend is auditable per-session there (SC-014), not just in
 // the unfiltered token-stats aggregate.
-export interface FetchSessionsOptions {
+export interface FetchSessionsOptions { // not-wire-format: client-side call-options bag for fetchSessionPage/fetchSessions; each field becomes an individual query-string param on the request, never a serialized JSON object sent or received over the wire
   includeVerifier?: boolean
   /** ADR-057 FR-091/US-19: direct children of this session id, paged. */
   parentSessionId?: string
@@ -1437,7 +1437,7 @@ export interface FetchSessionsOptions {
 // requests (cross-unit request, spec line ~1033) — fetchSessions() below
 // remains the simple array-returning convenience wrapper for callers that
 // don't need cursoring (Sidebar, SearchModal, UsageScreen all use that).
-export interface SessionListPage {
+export interface SessionListPage { // not-wire-format: SPA-internal paged envelope produced by fetchSessionPage() from the wire SessionPage; sessions is post-mapped Session[] (not RawSession[]) and fields are camelCase (nextCursor/partialErrors) vs the wire's next_cursor/partial_errors
   sessions: Session[]
   /** Present unless this is the last page. Opaque — pass back as `offset`. */
   nextCursor?: string
@@ -1490,13 +1490,46 @@ export async function fetchSessionPage(
   }
 }
 
+// ADR-057 FR-091/FR-098 (post-review fix): GET /sessions is paginated
+// server-side (default limit 50, pkg/gateway/rest.go's
+// u18DefaultSessionPageLimit) — a single fetchSessionPage() call is no longer
+// "every session". fetchSessions() is the "give me the COMPLETE set"
+// convenience wrapper its three production callers (Sidebar's workspace
+// accordion, SearchModal's cross-workspace search, UsageScreen's spend
+// audit) have always relied on since before pagination existed — none of
+// them implement their own paging loop, and two of them (SearchModal's find
+// results, UsageScreen's cost totals) actively regress into silent data loss
+// if handed only page 1. So this wrapper exhausts every page via
+// `next_cursor` (a numeric offset, re-sent as the next `offset`) before
+// returning, rather than reproducing the truncation one layer up.
+// fetchSessionPage() remains the single-page primitive for callers that DO
+// want to control paging themselves — SessionTree.tsx's useSessionForest
+// fetches one node's children a page at a time by design (BDD-103).
 export async function fetchSessions(
   agentId?: string,
   type?: Session['type'],
   opts?: FetchSessionsOptions,
 ): Promise<Session[]> {
-  const page = await fetchSessionPage(agentId, type, opts)
-  return page.sessions
+  const sessions: Session[] = []
+  let offset = opts?.offset
+  // Safety valve, not a normal exit: the server's own default page size is
+  // 50, so 1000 pages is 50,000 sessions — far past any real install. If a
+  // buggy/malicious server never stops returning next_cursor, this stops the
+  // tab from fetch-looping forever instead of quietly capping the result
+  // (callers must not mistake "we gave up" for "here is the complete set").
+  const MAX_PAGES = 1000
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const page = await fetchSessionPage(agentId, type, { ...opts, offset })
+    sessions.push(...page.sessions)
+    if (!page.nextCursor) return sessions
+    offset = Number(page.nextCursor)
+  }
+  console.warn(`[api] fetchSessions: aborted after ${MAX_PAGES} pages — server kept returning next_cursor; result is INCOMPLETE`)
+  void maybeDevToast(
+    `[api] Session list exceeded ${MAX_PAGES} pages — showing a partial set`,
+    'GET:/sessions:max-pages',
+  )
+  return sessions
 }
 
 // ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────
@@ -1509,7 +1542,7 @@ export async function fetchSessions(
 // of. All three are immutable (return a new tree) so they drop directly
 // into React/Zustand state without extra cloning at the call site.
 
-export interface SessionTreeNode {
+export interface SessionTreeNode { // not-wire-format: SPA-internal tree node assembled client-side from paged GET /sessions responses; childrenLoaded is a UI-only fetch-state flag with no wire counterpart, never sent to or received from the gateway
   session: Session
   children: SessionTreeNode[]
   /**

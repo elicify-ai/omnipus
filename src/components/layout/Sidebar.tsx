@@ -453,11 +453,23 @@ export function Sidebar() {
             // the parent chat itself. Delegate children (`parent_session_id`
             // set) are never top-level rows — they render nested under their
             // real parent via WorkspaceSessionTree below, fetched on expand.
-            // This filter is enforced here defensively (not merely assumed
-            // from the backend's roots-only default) — see hard constraint 1
-            // in the ADR-057 spec's own analysis of this exact line.
+            //
+            // `allSessions` (fetchSessions() with no opts, above) already IS
+            // the server's roots-only page — FR-091's orphan clause
+            // (pkg/agent/loop.go's u9FilterSessionHierarchy) returns a
+            // session as a root when it has no parent OR its declared parent
+            // no longer resolves, and it does NOT null out that stale
+            // `parent_session_id` field on the wire. A prior version of this
+            // filter re-checked `!s.parent_session_id` here as a defensive
+            // measure, which actively broke that orphan promotion: an
+            // orphaned session (parent deleted) still carries its old
+            // parent_session_id, so it was silently re-excluded from every
+            // workspace — permanently invisible even though the server
+            // correctly classified it as a root. Trust the server contract
+            // instead of re-deriving root-ness from a field that doesn't
+            // reliably indicate it once a parent can be deleted.
             const workspaceSessions = allSessions
-              .filter((s) => s.workspace_id === project.id && !s.parent_session_id)
+              .filter((s) => s.workspace_id === project.id)
               .sort((a, b) => {
                 // Heartbeat sessions on top, then recent-first
                 if (a.type === 'heartbeat' && b.type !== 'heartbeat') return -1
@@ -814,7 +826,15 @@ function WorkspaceSessionTree({
   activeSessionId: string | null
   selectSession: (session: Session) => void
 }) {
-  const { tree, expandedIds, toggleExpand, isLoadingChildren, isErrorChildren } = useSessionForest(rootSessions)
+  const {
+    tree,
+    expandedIds,
+    toggleExpand,
+    isLoadingChildren,
+    isErrorChildren,
+    hasMoreChildren,
+    loadMoreChildren,
+  } = useSessionForest(rootSessions)
 
   return (
     <SessionTree
@@ -826,7 +846,9 @@ function WorkspaceSessionTree({
           isActive={row.node.session.id === activeSessionId}
           isLoading={isLoadingChildren(row.node.session.id)}
           isError={isErrorChildren(row.node.session.id)}
+          hasMore={hasMoreChildren(row.node.session.id)}
           onToggleExpand={() => toggleExpand(row.node.session.id)}
+          onLoadMore={() => loadMoreChildren(row.node.session.id)}
           onSelect={() => selectSession(row.node.session)}
         />
       )}
@@ -839,55 +861,91 @@ function SidebarSessionRow({
   isActive,
   isLoading,
   isError,
+  hasMore,
   onToggleExpand,
+  onLoadMore,
   onSelect,
 }: {
   row: SessionTreeFlatRow
   isActive: boolean
   isLoading: boolean
   isError: boolean
+  /** True iff this node's children are loaded but the server has more (child_count > loaded count). */
+  hasMore: boolean
   onToggleExpand: () => void
+  onLoadMore: () => void
   onSelect: () => void
 }) {
-  const { node, depth, hasChildren, isExpanded } = row
+  const { node, depth, hasChildren, isExpanded, childrenEmpty } = row
   const session = node.session
   const title = session.title || 'Untitled'
+  const indent = depth > 0 ? 12 + depth * 14 : 12
   return (
-    <div className="flex items-center pr-4" style={depth > 0 ? { paddingLeft: 12 + depth * 14 } : { paddingLeft: 12 }}>
-      {hasChildren ? (
-        <SessionExpandToggle
-          expanded={isExpanded}
-          onToggle={onToggleExpand}
-          loading={isLoading}
-          error={isError}
-          expandLabel={`Expand ${title} delegated sessions`}
-          collapseLabel={`Collapse ${title} delegated sessions`}
-        />
-      ) : (
-        <span className="w-[18px] shrink-0" aria-hidden="true" />
+    <>
+      <div className="flex items-center pr-4" style={{ paddingLeft: indent }}>
+        {hasChildren ? (
+          <SessionExpandToggle
+            expanded={isExpanded}
+            onToggle={onToggleExpand}
+            loading={isLoading}
+            error={isError}
+            expandLabel={`Expand ${title} delegated sessions`}
+            collapseLabel={`Collapse ${title} delegated sessions`}
+          />
+        ) : (
+          <span className="w-[18px] shrink-0" aria-hidden="true" />
+        )}
+        <button tabIndex={0}
+          type="button"
+          onClick={onSelect}
+          aria-current={isActive ? 'page' : undefined}
+          className={cn(
+            'flex items-center gap-1.5 flex-1 min-w-0 py-1.5 pl-1 text-[13px] transition-colors text-left',
+            isActive
+              ? 'text-[var(--color-accent)] font-medium'
+              : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
+          )}
+        >
+          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
+          <span className="flex-1 truncate">{title}</span>
+          {session.type === 'heartbeat' && (
+            <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+          )}
+          {hasChildren && (
+            <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
+              {session.child_count}
+            </span>
+          )}
+        </button>
+      </div>
+      {/* childrenEmpty: expanded, fetched, and the fetch came back with zero
+          rows despite child_count > 0 — a stale/incorrect server count must
+          not render as an open toggle with nothing beneath it and no
+          explanation. */}
+      {childrenEmpty && (
+        <p
+          className="py-1 text-[12px] text-[var(--color-muted)] opacity-70"
+          style={{ paddingLeft: indent + 18 }}
+        >
+          No delegated sessions found
+        </p>
       )}
-      <button tabIndex={0}
-        type="button"
-        onClick={onSelect}
-        aria-current={isActive ? 'page' : undefined}
-        className={cn(
-          'flex items-center gap-1.5 flex-1 min-w-0 py-1.5 pl-1 text-[13px] transition-colors text-left',
-          isActive
-            ? 'text-[var(--color-accent)] font-medium'
-            : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
-        )}
-      >
-        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-        <span className="flex-1 truncate">{title}</span>
-        {session.type === 'heartbeat' && (
-          <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-        )}
-        {hasChildren && (
-          <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
-            {session.child_count}
-          </span>
-        )}
-      </button>
-    </div>
+      {/* hasMore: this node has additional children pages beyond what's
+          currently loaded (ADR-057 FR-092 continued paging) — the
+          child_count badge above can report a total larger than what's
+          rendered; this is the explicit "load the rest" affordance rather
+          than silently capping the fan-out at one page. */}
+      {isExpanded && hasMore && (
+        <button tabIndex={0}
+          type="button"
+          onClick={onLoadMore}
+          disabled={isLoading}
+          style={{ paddingLeft: indent + 18 }}
+          className="flex items-center gap-1 py-1 pr-4 text-[12px] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
+        >
+          {isLoading ? 'Loading…' : 'Load more'}
+        </button>
+      )}
+    </>
   )
 }

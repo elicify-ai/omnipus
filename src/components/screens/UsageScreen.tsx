@@ -285,6 +285,8 @@ export function UsageScreen() {
   const {
     data: sessions = [],
     isLoading: sessionsLoading,
+    isError: sessionsError,
+    refetch: refetchSessions,
   } = useQuery({
     queryKey: ['sessions', 'includeVerifier', 'flat'],
     queryFn: () => fetchSessions(undefined, undefined, { includeVerifier: true, flat: true }),
@@ -494,7 +496,28 @@ export function UsageScreen() {
               </TabsContent>
 
               <TabsContent value="session" data-testid="tab-content-session">
-                <SessionsTable rows={sessionRows} />
+                {sessionsError ? (
+                  // Distinguish "the per-session fetch failed" from a
+                  // genuinely empty install — SessionsTable's own empty
+                  // state ("No session data.") is indistinguishable from an
+                  // HTTP failure unless this branch intercepts it first.
+                  <div
+                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]"
+                    data-testid="usage-session-error"
+                    role="alert"
+                  >
+                    <span>Could not load per-session data.</span>
+                    <button tabIndex={0}
+                      type="button"
+                      onClick={() => void refetchSessions()}
+                      className="shrink-0 font-medium underline hover:no-underline"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
+                  <SessionsTable rows={sessionRows} />
+                )}
               </TabsContent>
             </Tabs>
           </>

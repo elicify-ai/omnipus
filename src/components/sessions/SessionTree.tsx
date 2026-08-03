@@ -51,6 +51,16 @@ export interface SessionTreeFlatRow {
   hasChildren: boolean
   /** True iff this node is both expandable AND currently in the expanded set. */
   isExpanded: boolean
+  /**
+   * True iff this node is expanded, its children have actually been fetched
+   * (`childrenLoaded`), and the fetch resolved to zero children — i.e.
+   * `child_count` said there should be at least one but none resolved. A
+   * stale/incorrect server count (see the backend fix tracked separately)
+   * must not render as an expanded toggle with nothing beneath it and no
+   * explanation — callers should show an explicit "no children found"
+   * notice when this is true, distinct from the loading/error states.
+   */
+  childrenEmpty: boolean
 }
 
 /**
@@ -69,7 +79,8 @@ export function flattenSessionTree(
   for (const node of nodes) {
     const hasChildren = (node.session.child_count ?? 0) > 0
     const isExpanded = hasChildren && expandedIds.has(node.session.id)
-    rows.push({ node, depth, hasChildren, isExpanded })
+    const childrenEmpty = isExpanded && node.childrenLoaded && node.children.length === 0
+    rows.push({ node, depth, hasChildren, isExpanded, childrenEmpty })
     if (isExpanded && node.children.length > 0) {
       rows.push(...flattenSessionTree(node.children, expandedIds, depth + 1))
     }
@@ -85,25 +96,51 @@ export interface SessionForest {
   toggleExpand: (sessionId: string) => void
   isLoadingChildren: (sessionId: string) => boolean
   isErrorChildren: (sessionId: string) => boolean
+  /**
+   * True iff this expanded node's children are fully loaded but the server
+   * reported more via `next_cursor` — the "badge says 120, only 50 rendered"
+   * gap. Drives a caller-rendered "Load more" affordance; false for a
+   * collapsed/unfetched/fully-loaded node.
+   */
+  hasMoreChildren: (sessionId: string) => boolean
+  /**
+   * Fetches this node's NEXT page of children (BDD-103's per-expand paging,
+   * continued past page 1). No-op if the node isn't expanded, has no
+   * further page, or the next page is already loading/loaded.
+   */
+  loadMoreChildren: (sessionId: string) => void
 }
 
 /**
  * Owns the "click a chevron, fetch that node's direct children a page at a
  * time" half of US-19 (FR-092/FR-097's per-expand paging: BDD-103's O
  * (expanded nodes) request count, never O(all sessions)). Each currently
- * expanded root gets its own `fetchSessionPage(undefined, undefined,
- * { parentSessionId })` query via `useQueries` — the hook itself always runs
- * (fixed call site), only the *array passed to it* grows/shrinks with the
- * expand set, which is the supported way to run a dynamic number of queries.
+ * expanded root gets one query PER FETCHED PAGE of its children via
+ * `useQueries` — the hook itself always runs (fixed call site), only the
+ * *array passed to it* grows/shrinks with the expand set and the per-node
+ * page offsets, which is the supported way to run a dynamic number of
+ * queries.
  *
- * Collapsing and re-expanding a node whose fetch previously errored is the
- * retry affordance: the query is dropped from `useQueries`' input entirely
- * on collapse and re-added fresh on re-expand.
+ * A node starts at its first page (offset 0) the moment it's expanded;
+ * `loadMoreChildren` appends the next offset (from the prior page's
+ * `next_cursor`) so a wide fan-out (e.g. 120 children, default page size 50)
+ * can be paged through instead of silently stopping at page 1 while the
+ * `child_count` badge still reports the true total.
+ *
+ * Collapsing and re-expanding a node whose fetch previously errored (or
+ * whose pages the user wants to re-fetch fresh) is the retry affordance: all
+ * pages are dropped from `useQueries`' input entirely on collapse and
+ * re-added fresh (starting at page 1) on re-expand.
  */
 export function useSessionForest(roots: Session[]): SessionForest {
   const rootTree = useMemo(() => buildSessionTree(roots), [roots])
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const expandedList = useMemo(() => Array.from(expandedIds), [expandedIds])
+  // Per-parent list of offsets whose page has been requested, in fetch
+  // order. An expanded id with no entry here implicitly means "just page
+  // 1" (offset 0) — the map only grows an entry once loadMoreChildren is
+  // actually called, so the common (single-page) case never touches it.
+  const [pageOffsets, setPageOffsets] = useState<Map<string, number[]>>(new Map())
 
   const toggleExpand = useCallback((sessionId: string) => {
     setExpandedIds((prev) => {
@@ -112,46 +149,119 @@ export function useSessionForest(roots: Session[]): SessionForest {
       else next.add(sessionId)
       return next
     })
+    // Always clear accumulated pages on toggle: collapsing drops them (so a
+    // re-expand starts fresh — the documented retry affordance), and
+    // expanding a node that had no prior entry is a no-op delete.
+    setPageOffsets((prev) => {
+      if (!prev.has(sessionId)) return prev
+      const next = new Map(prev)
+      next.delete(sessionId)
+      return next
+    })
   }, [])
 
+  // Flat list of (parentId, offset) descriptors — one per query — built from
+  // every currently-expanded node's requested pages, in fetch order.
+  const descriptors = useMemo(() => {
+    const list: { parentId: string; offset: number }[] = []
+    for (const parentId of expandedList) {
+      const offsets = pageOffsets.get(parentId) ?? [0]
+      for (const offset of offsets) list.push({ parentId, offset })
+    }
+    return list
+  }, [expandedList, pageOffsets])
+
   const childQueries = useQueries({
-    queries: expandedList.map((parentId) => ({
-      queryKey: ['sessions', 'children', parentId] as const,
-      queryFn: () => fetchSessionPage(undefined, undefined, { parentSessionId: parentId }),
+    queries: descriptors.map(({ parentId, offset }) => ({
+      queryKey: ['sessions', 'children', parentId, offset] as const,
+      queryFn: () => fetchSessionPage(undefined, undefined, { parentSessionId: parentId, offset }),
       staleTime: 15_000,
     })),
   })
 
-  // Deliberately NOT wrapped in useMemo: `useQueries` returns a fresh result
-  // array on every render (its entries are not referentially stable even
-  // when the underlying data hasn't changed), so a dependency array built
-  // from it would either recompute every render anyway or under-fire on a
-  // same-shape refetch. The inputs here are small (a session's own root
-  // list plus whichever nodes are currently expanded) and
-  // `buildSessionTree`/`attachSessionChildren` are cheap, pure, immutable
-  // merges — recomputing plainly is simpler and strictly correct.
+  // Reduce the flat (descriptor, query-result) pairs back to one aggregate
+  // per parent id: concatenated sessions across all its loaded pages (in
+  // offset order, since descriptors is built in fetch order), the most
+  // recent page's next_cursor (undefined once the last fetched page has
+  // none), and loading/error/loaded flags across the whole set.
+  // `useQueries` returns a fresh result ARRAY every render (its entries are
+  // not referentially stable even when the underlying data hasn't changed),
+  // so this recomputes most renders regardless of the useMemo — the point of
+  // wrapping it is a clean, correctly-tracked dependency for the callbacks
+  // below, not avoiding recomputation.
+  const byParent = useMemo(() => {
+    const map = new Map<
+      string,
+      { sessions: Session[]; nextCursor?: string; loadedAnyPage: boolean; isLoading: boolean; isError: boolean }
+    >()
+    descriptors.forEach((desc, i) => {
+      const q = childQueries[i]
+      const entry = map.get(desc.parentId) ?? {
+        sessions: [],
+        nextCursor: undefined,
+        loadedAnyPage: false,
+        isLoading: false,
+        isError: false,
+      }
+      if (q?.data) {
+        entry.sessions = entry.sessions.concat(q.data.sessions)
+        entry.nextCursor = q.data.nextCursor
+        entry.loadedAnyPage = true
+      }
+      if (q?.isLoading) entry.isLoading = true
+      if (q?.isError) entry.isError = true
+      map.set(desc.parentId, entry)
+    })
+    return map
+  }, [descriptors, childQueries])
+
   let tree = rootTree
-  expandedList.forEach((parentId, i) => {
-    const data = childQueries[i]?.data
-    if (data) tree = attachSessionChildren(tree, parentId, data.sessions)
+  expandedList.forEach((parentId) => {
+    const entry = byParent.get(parentId)
+    // Attach as soon as ANY page has resolved — including a genuinely empty
+    // result (SessionTreeFlatRow.childrenEmpty then flags the mismatch to
+    // the renderer) — so "loaded, zero children" is distinguishable from
+    // "not fetched yet".
+    if (entry?.loadedAnyPage) tree = attachSessionChildren(tree, parentId, entry.sessions)
   })
 
   const isLoadingChildren = useCallback(
-    (sessionId: string) => {
-      const i = expandedList.indexOf(sessionId)
-      return i >= 0 && childQueries[i]?.isLoading === true
-    },
-    [expandedList, childQueries],
+    (sessionId: string) => byParent.get(sessionId)?.isLoading === true,
+    [byParent],
   )
   const isErrorChildren = useCallback(
+    (sessionId: string) => byParent.get(sessionId)?.isError === true,
+    [byParent],
+  )
+  const hasMoreChildren = useCallback(
+    (sessionId: string) => byParent.get(sessionId)?.nextCursor !== undefined,
+    [byParent],
+  )
+  const loadMoreChildren = useCallback(
     (sessionId: string) => {
-      const i = expandedList.indexOf(sessionId)
-      return i >= 0 && childQueries[i]?.isError === true
+      const entry = byParent.get(sessionId)
+      if (!entry?.nextCursor || entry.isLoading) return
+      const nextOffset = Number(entry.nextCursor)
+      setPageOffsets((prev) => {
+        const current = prev.get(sessionId) ?? [0]
+        if (current.includes(nextOffset)) return prev
+        const next = new Map(prev)
+        next.set(sessionId, [...current, nextOffset])
+        return next
+      })
     },
-    [expandedList, childQueries],
+    [byParent],
   )
 
-  return { tree, expandedIds, toggleExpand, isLoadingChildren, isErrorChildren }
+  return {
+    tree,
+    expandedIds,
+    toggleExpand,
+    isLoadingChildren,
+    isErrorChildren,
+    hasMoreChildren,
+    loadMoreChildren,
+  }
 }
 
 // ── Expand/collapse control (shared visual) ───────────────────────────────────
