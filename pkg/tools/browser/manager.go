@@ -326,6 +326,15 @@ type BrowserManager struct {
 	// default, in which case createTab runs its normal chromedp body.
 	createTabFn func(allocCtx context.Context, targetID target.ID) (*tabEntry, error)
 
+	// activateTabFn is the test seam for activateTabInChrome's single CDP
+	// call (Page.bringToFront), mirroring createTabFn's rationale exactly:
+	// the fake tab contexts unit tests build (tabs_test.go's fakeTabFactory)
+	// are chromedp contexts with no CDP connection behind them, so a real
+	// chromedp.Run against one would block until PageTimeout rather than
+	// doing anything observable. nil by default, in which case
+	// activateTabInChrome runs its normal chromedp body.
+	activateTabFn func(tabCtx context.Context) error
+
 	// tabsChanged is invoked (ADR-041 D4) whenever a browsing context's tab
 	// set changes shape or its active tab moves — open/close/switch/adopt,
 	// and best-effort title/url updates observed via the passive target
@@ -1331,6 +1340,12 @@ func (m *BrowserManager) ListTabs(sessionID string) (tabs []Tab, activeIdx int, 
 // SwitchTab makes tab `index` the active tab of sessionID's browsing
 // context (ADR-041 D3). Subsequent tool calls (via Session) and the live
 // screencast (via the ADR-041 D4 tabs-changed callback) follow it.
+//
+// activateTabInChrome is what makes the switch visible to CHROME, not just to
+// this manager's own se.activeIdx bookkeeping — see its doc comment. Without
+// it the WebRTC capture path silently keeps streaming the PREVIOUS tab
+// (live-measured 2026-08-03; the three-way desync where the tab strip said one
+// tab, the URL bar said another, and the pixels showed a third).
 func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	m.mu.Lock()
 	se, err := m.lookupTabLocked(sessionID, index)
@@ -1340,10 +1355,69 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	}
 	se.activeIdx = index
 	tabs := snapshotTabsLocked(se)
+	// Capture the newly-active tab's context under the SAME lock that just
+	// moved activeIdx, so the BringToFront below targets exactly the tab this
+	// call activated even if a concurrent switch/close lands right after the
+	// unlock (it would then run its own activation for its own tab).
+	tabCtx := se.tabs[index].ctx
 	m.mu.Unlock()
+
+	// Before notifyTabsChanged: the tabs-changed callback triggers the WebRTC
+	// recapture, whose encoder resolves its capture target via
+	// chrome.tabs.query({active:true}) — so Chrome must already agree about
+	// which tab is active by the time that fires, or the recapture re-binds to
+	// the old tab and the stream never moves.
+	m.activateTabInChrome(tabCtx, sessionID, index)
 
 	m.notifyTabsChanged(sessionID, tabs, index)
 	return tabs[index], nil
+}
+
+// activateTabInChrome makes tabCtx's tab the one Chrome itself considers
+// active, via CDP Page.bringToFront.
+//
+// Why this is load-bearing (root-caused live on UAT, 2026-08-03): switching
+// tabs used to update ONLY this manager's se.activeIdx. The JPEG screencast
+// path happened to survive that because it calls page.BringToFront() itself
+// before every StartScreencast (live.go's attach/rebindScreencastOnce), but
+// the WebRTC path does not: its encoder picks a capture target with
+// chrome.tabs.query({active: true, lastFocusedWindow: true})
+// (captureext/embedded/encoder.js findActiveTargetTab). With Chrome never told
+// about the switch, that query kept returning the OLD tab, so every recapture
+// re-bound chrome.tabCapture to the tab the user had just switched AWAY from —
+// a completely silent failure (track stayed live, zero console errors, only a
+// stalled-RTP watchdog warning downstream).
+//
+// Best-effort by design: a failure here is logged, never fatal. The switch has
+// already been recorded in se.activeIdx, so every server-side consumer
+// (Session(), tool calls, the JPEG path) still follows the new tab correctly;
+// only the WebRTC capture's own tab resolution degrades to its previous
+// behavior. Runs with NO BrowserManager lock held — the same ADR-038 rule
+// every other CDP call in this file follows.
+func (m *BrowserManager) activateTabInChrome(tabCtx context.Context, sessionID string, index int) {
+	if tabCtx == nil || tabCtx.Err() != nil {
+		return
+	}
+
+	m.mu.Lock()
+	fn := m.activateTabFn
+	m.mu.Unlock()
+
+	var err error
+	if fn != nil {
+		// Test seam — see activateTabFn's doc comment.
+		err = fn(tabCtx)
+	} else {
+		runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
+		defer cancel()
+		err = chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+			return page.BringToFront().Do(c)
+		}))
+	}
+	if err != nil {
+		logger.WarnCF("browser", "switch tab: bring new active tab to front failed (WebRTC capture may keep streaming the previous tab)",
+			map[string]any{"error": err.Error(), "session_id": sessionID, "index": index})
+	}
 }
 
 // CloseTab closes tab `index` in sessionID's browsing context (cancels its
