@@ -88,7 +88,7 @@ func TestSubTurnFanOutCap_ChildSemaphoreCapacity(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 	agentHome := filepath.Join(tmpDir, "agents", "main")
-	if err := os.MkdirAll(agentHome, 0o700); err != nil {
+	if err = os.MkdirAll(agentHome, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll(%q): %v", agentHome, err)
 	}
 	agentCfg := &config.Config{

@@ -491,7 +491,6 @@ func TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3(t *testing.T
 	// The durable walk runs on its own goroutine (FR-025) — poll until all
 	// three depths have transitioned.
 	for _, id := range []string{d1, d2, d3} {
-		id := id
 		require.Eventually(t, func() bool {
 			rec, err := lifecycleStore.Load(id)
 			return err == nil && rec.State == session.LifecycleCancelled

@@ -306,7 +306,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -584,7 +584,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -896,7 +896,7 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 

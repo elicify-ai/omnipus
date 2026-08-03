@@ -1037,14 +1037,14 @@ func spawnSubTurn(
 	if sharedStore == nil {
 		return nil, fmt.Errorf("subturn: no shared session store wired — cannot mint a real session for delegated child %q", childID)
 	}
-	if _, err := sharedStore.CreateSessionWithID(
+	if _, createErr := sharedStore.CreateSessionWithID(
 		childID,
 		parentTS.transcriptSessionID,
 		session.SessionTypeDelegate,
 		parentTS.channel,
 		agent.ID,
-	); err != nil {
-		return nil, fmt.Errorf("subturn: create child session %q: %w", childID, err)
+	); createErr != nil {
+		return nil, fmt.Errorf("subturn: create child session %q: %w", childID, createErr)
 	}
 	// FR-008 (the parent->child edge itself): CreateSessionWithID mints the
 	// session but never persists ParentSessionID (grep -c ParentSessionID
@@ -1058,8 +1058,8 @@ func spawnSubTurn(
 	// or runtime signal — the exact silent-success shape this migration
 	// exists to end.
 	childParentSessionID := parentTS.transcriptSessionID
-	if err := sharedStore.SetMeta(childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); err != nil {
-		return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", childID, err)
+	if setMetaErr := sharedStore.SetMeta(childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); setMetaErr != nil {
+		return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", childID, setMetaErr)
 	}
 
 	// Create processOptions for the child turn.

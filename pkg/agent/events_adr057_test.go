@@ -110,6 +110,9 @@ func TestToolExecPayloads_RoutingAndProducingSessionIDsAreIndependent(t *testing
 		p := ToolExecEndPayload{
 			SessionID: routingID,
 		}
+		if p.SessionID != routingID {
+			t.Fatalf("SessionID: got %q, want %q", p.SessionID, routingID)
+		}
 		if p.ProducingSessionID != "" {
 			t.Fatalf("ProducingSessionID: got %q, want the zero value for a root turn", p.ProducingSessionID)
 		}

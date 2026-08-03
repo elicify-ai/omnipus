@@ -331,11 +331,11 @@ func TestDelegateTool_Steer_TerminalCheck_RoutesThroughMutate(t *testing.T) {
 	steer := &fakeSteeringSink{}
 	tool.SetSteeringSink(steer)
 
-	real := session.NewLifecycleStore(t.TempDir())
-	wrapper := &callCountingLifecycleStore{LifecycleStore: real}
+	backing := session.NewLifecycleStore(t.TempDir())
+	wrapper := &callCountingLifecycleStore{LifecycleStore: backing}
 	tool.SetLifecycleStore(wrapper)
 
-	if err := real.Persist(&session.LifecycleRecord{
+	if err := backing.Persist(&session.LifecycleRecord{
 		SessionID: "child-mutate-check", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
 		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,

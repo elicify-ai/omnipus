@@ -58,7 +58,7 @@ import (
 // (passing) unit test, which is exactly why that test passed while
 // production stayed broken.
 func TestWiring_DelegateToolSessionManager_KillsRealBackgroundProcess(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	inst := al.GetRegistry().GetDefaultAgent()

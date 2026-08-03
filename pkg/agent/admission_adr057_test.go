@@ -109,15 +109,15 @@ func TestRootDelegationCap_DefaultInstallIsGatedAt16(t *testing.T) {
 			cfg.Agents.Defaults.SubTurn.MaxConcurrent)
 	}
 
-	cap, err := ResolveRootDelegationCap(cfg)
+	rootCap, err := ResolveRootDelegationCap(cfg)
 	if err != nil {
 		t.Fatalf("ResolveRootDelegationCap on a fresh-install config: unexpected error: %v", err)
 	}
-	if cap != 16 {
-		t.Fatalf("ResolveRootDelegationCap = %d, want 16", cap)
+	if rootCap != 16 {
+		t.Fatalf("ResolveRootDelegationCap = %d, want 16", rootCap)
 	}
 
-	gate := NewRootDelegationAdmission(cap)
+	gate := NewRootDelegationAdmission(rootCap)
 	var releases []func()
 	for i := 0; i < 16; i++ {
 		ok, release := gate.TryAdmit()
@@ -147,18 +147,18 @@ func TestRootDelegationCap_DefaultInstallIsGatedAt16(t *testing.T) {
 // slog.Error record naming the cap/delegating agent/target, mirroring
 // pkg/tools/delegate.go:1150-1159's existing shape).
 func TestRootDelegationAdmission_RefusesNotQueues(t *testing.T) {
-	const cap = 24
-	gate := NewRootDelegationAdmission(cap)
+	const rootCap = 24
+	gate := NewRootDelegationAdmission(rootCap)
 
-	for i := 0; i < cap; i++ {
+	for i := 0; i < rootCap; i++ {
 		ok, release := gate.TryAdmit()
 		if !ok {
-			t.Fatalf("admission %d/%d unexpectedly refused", i+1, cap)
+			t.Fatalf("admission %d/%d unexpectedly refused", i+1, rootCap)
 		}
 		t.Cleanup(release)
 	}
-	if gate.Active() != cap {
-		t.Fatalf("Active() = %d, want %d after admitting to cap", gate.Active(), cap)
+	if gate.Active() != rootCap {
+		t.Fatalf("Active() = %d, want %d after admitting to cap", gate.Active(), rootCap)
 	}
 
 	// BDD-75's "But it is not queued behind the session-store lock": TryAdmit
@@ -179,17 +179,17 @@ func TestRootDelegationAdmission_RefusesNotQueues(t *testing.T) {
 		t.Fatal("TryAdmit for the 25th delegation did not return within 500ms — it appears to be QUEUEING, which BDD-75 forbids")
 	}
 
-	// Operator-visible refusal shape (BDD-77): an ErrorResult naming the cap,
+	// Operator-visible refusal shape (BDD-77): an ErrorResult naming the rootCap,
 	// returned to the calling agent.
-	res := RefuseRootDelegation(cap, "delegating-agent-1", "target-agent-1")
+	res := RefuseRootDelegation(rootCap, "delegating-agent-1", "target-agent-1")
 	if res == nil {
 		t.Fatal("RefuseRootDelegation returned nil")
 	}
 	if !res.IsError {
 		t.Fatal("RefuseRootDelegation's ToolResult does not report IsError")
 	}
-	if !strings.Contains(res.ForLLM, strconv.Itoa(cap)) {
-		t.Fatalf("RefuseRootDelegation's error content %q does not name the cap (%d)", res.ForLLM, cap)
+	if !strings.Contains(res.ForLLM, strconv.Itoa(rootCap)) {
+		t.Fatalf("RefuseRootDelegation's error content %q does not name the cap (%d)", res.ForLLM, rootCap)
 	}
 }
 
@@ -291,9 +291,9 @@ func TestNestedDelegationGating_Unchanged(t *testing.T) {
 // cap at any observed point — the core safety property FR-069's refusal
 // depends on.
 func TestRootDelegationAdmission_ConcurrentAdmitNeverExceedsCap(t *testing.T) {
-	const cap = 8
+	const rootCap = 8
 	const attempts = 200
-	gate := NewRootDelegationAdmission(cap)
+	gate := NewRootDelegationAdmission(rootCap)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -320,11 +320,11 @@ func TestRootDelegationAdmission_ConcurrentAdmitNeverExceedsCap(t *testing.T) {
 	}
 	wg.Wait()
 
-	if admittedCount != cap {
-		t.Fatalf("total admitted across %d concurrent attempts = %d, want exactly %d (cap)", attempts, admittedCount, cap)
+	if admittedCount != rootCap {
+		t.Fatalf("total admitted across %d concurrent attempts = %d, want exactly %d (cap)", attempts, admittedCount, rootCap)
 	}
-	if maxObservedActive > cap {
-		t.Fatalf("observed Active() = %d, exceeds cap %d", maxObservedActive, cap)
+	if maxObservedActive > rootCap {
+		t.Fatalf("observed Active() = %d, exceeds cap %d", maxObservedActive, rootCap)
 	}
 	if gate.Active() != 0 {
 		t.Fatalf("Active() = %d after every admitted caller released, want 0", gate.Active())

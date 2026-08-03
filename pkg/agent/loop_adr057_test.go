@@ -433,7 +433,7 @@ func TestListAllSessions_PagesStablyAcrossSharedStore(t *testing.T) {
 	// reproduce the SAME sequence of ids the unpaged call returned — no
 	// duplicate, no skip, no reorder — across independent calls with no
 	// intervening write.
-	var paged []string
+	paged := make([]string, 0, len(page1.Sessions)+len(page2.Sessions)+len(page3.Sessions))
 	for _, m := range page1.Sessions {
 		paged = append(paged, m.ID)
 	}
@@ -443,7 +443,7 @@ func TestListAllSessions_PagesStablyAcrossSharedStore(t *testing.T) {
 	for _, m := range page3.Sessions {
 		paged = append(paged, m.ID)
 	}
-	var unpaged []string
+	unpaged := make([]string, 0, len(full.Sessions))
 	for _, m := range full.Sessions {
 		unpaged = append(unpaged, m.ID)
 	}
@@ -523,7 +523,7 @@ func TestListAllSessions_HierarchyRootsOrphansAndParentFilter(t *testing.T) {
 
 	rootsPage, errs := al.ListAllSessions(0, 0, "", false)
 	require.Empty(t, errs)
-	var rootIDs []string
+	rootIDs := make([]string, 0, len(rootsPage.Sessions))
 	for _, m := range rootsPage.Sessions {
 		rootIDs = append(rootIDs, m.ID)
 	}
@@ -581,7 +581,7 @@ func TestListAllSessions_PartialErrorDoesNotHaltPage(t *testing.T) {
 	require.Len(t, errs, 1, "the broken legacy store must contribute exactly one partial error")
 	assert.NotEmpty(t, errs[0].Error())
 
-	var ids []string
+	ids := make([]string, 0, len(page.Sessions))
 	for _, m := range page.Sessions {
 		ids = append(ids, m.ID)
 	}

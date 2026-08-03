@@ -75,9 +75,25 @@ func u17bStatsJSONPath(store *session.UnifiedStore, sessionID string) string {
 // the file does not exist yet — the pre-flush state for a brand-new session,
 // since createSessionLocked never writes stats.json (it is created lazily by
 // the first write that actually touches the Stats group).
+//
+// Also returns (0, false) when the path exists but is a DIRECTORY rather
+// than a regular file: TestCloseSession_FlushFailure_DoesNotStrandRetryByEvictingCache
+// (session_end_fix_test.go) deliberately pre-creates stats.json's own path as
+// an empty directory to force a deterministic, uid-independent write failure
+// (os.OpenFile(O_CREATE) on a path that is already a directory fails with
+// EISDIR regardless of privilege level — unlike a chmod'd read-only
+// directory, which root's CAP_DAC_OVERRIDE silently bypasses). A stray
+// directory at this path is never a valid stats.json in the sense every
+// caller of this helper cares about ("is there a readable message_count on
+// disk"), so folding it into the same not-found branch is a genuine
+// generalization, not a test-specific carve-out — no other test in this file
+// ever creates a directory here, so this branch is unreachable for them.
 func u17bReadStatsMessageCount(t *testing.T, store *session.UnifiedStore, sessionID string) (int, bool) {
 	t.Helper()
 	path := u17bStatsJSONPath(store, sessionID)
+	if fi, statErr := os.Stat(path); statErr == nil && fi.IsDir() {
+		return 0, false
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -123,7 +139,7 @@ func TestCloseSession_ForcesStatsFlushOnTeardown(t *testing.T) {
 	}
 	sessionID := meta.ID
 
-	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+	if err = store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:    "user",
 		Content: "hello",
 		Tokens:  42,
@@ -197,7 +213,7 @@ func TestCloseSession_EvictsMetaCacheOnTeardown(t *testing.T) {
 		t.Fatalf("read meta.json: %v", err)
 	}
 	var identity map[string]any
-	if err := json.Unmarshal(raw, &identity); err != nil {
+	if err = json.Unmarshal(raw, &identity); err != nil {
 		t.Fatalf("unmarshal meta.json: %v", err)
 	}
 	identity["title"] = mutatedOnDiskTitle
@@ -205,7 +221,7 @@ func TestCloseSession_EvictsMetaCacheOnTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mutated meta.json: %v", err)
 	}
-	if err := os.WriteFile(metaPath, mutated, 0o600); err != nil {
+	if err = os.WriteFile(metaPath, mutated, 0o600); err != nil {
 		t.Fatalf("write mutated meta.json: %v", err)
 	}
 

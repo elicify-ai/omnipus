@@ -130,7 +130,7 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -1957,7 +1957,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2093,7 +2093,7 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2330,7 +2330,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2419,7 +2419,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2467,7 +2467,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2540,7 +2540,7 @@ func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2591,7 +2591,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 
@@ -2653,7 +2653,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 	// never the shared OS temp root — see loop_test.go's
 	// newTestAgentLoop doc comment for the leak this closes.
 	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("Failed to create nested home dir: %v", err)
 	}
 

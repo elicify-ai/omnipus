@@ -100,7 +100,7 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 	// with a real transcript — the exact shape subturn.go produces (one
 	// synthetic user turn, the task prompt) — so a skip cannot be explained
 	// away as "there was nothing to recap anyway".
-	if err := store.AppendTranscript(delegateSessionID, session.TranscriptEntry{
+	if err = store.AppendTranscript(delegateSessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "[SubTurn Task] summarize the repository README",
 		Timestamp: time.Now().UTC(),
@@ -227,9 +227,38 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 // meta to flush, and silently no-op'd forever: the pending delta was lost
 // and could never be recovered, even once the underlying disk error cleared.
 //
-// This test reproduces a REAL disk write failure (a read-only session
-// directory — no mock/spy) deterministically, no race required, matching
-// the fix-wave brief's "deterministic path (no race needed)" framing.
+// This test reproduces a REAL disk write failure deterministically, no race
+// required, matching the fix-wave brief's "deterministic path (no race
+// needed)" framing.
+//
+// Failure-injection mechanism (uid-independent): an earlier version of this
+// test chmod'd the session directory to 0500 (read-only) to force
+// u5WriteStatsLocked's WithFlock/os.OpenFile(O_CREATE) to fail. That passed
+// locally but was REPORTED as a real (non-flaky, failed-twice) CI failure —
+// root-caused here to running as root: the ci-worker Fly machine
+// (deploy/ci-worker/Dockerfile, `FROM golang:1.26-bookworm`, no `USER`
+// directive) runs its go-test gate as uid 0 (confirmed via
+// `fly ssh console --app ci-omnipus -C id` → "uid=0(root)"), and root's
+// CAP_DAC_OVERRIDE bypasses directory permission bits entirely — verified
+// empirically in this repo's devpod: `echo x > <0500-dir>/f` fails EACCES as
+// a normal user but SUCCEEDS under `sudo`, writing the file. So the
+// "injected failure" silently never happened in CI: the write went through,
+// stats.json existed where the RED-baseline assertion expected it to be
+// absent, and that assertion (not the property under test) is what failed.
+//
+// Fixed by pre-creating stats.json's OWN path as an empty directory instead
+// of chmod'ing its parent. os.OpenFile(O_RDWR|O_CREATE) on a path that is
+// already a directory fails with EISDIR — a structural filesystem
+// constraint, not a discretionary permission check, so it is NOT bypassable
+// by root (verified the same way: the identical probe fails EISDIR for both
+// a normal user and under sudo). This mirrors the pkg/session precedent
+// (writeFileAtomicFn/removeAllFn's doc comments, unified.go — "root bypasses
+// chmod-based failure injection via CAP_DAC_OVERRIDE, making a chmod-based
+// failure-injection test a no-op in CI") and the pre-existing ENOTDIR idiom
+// already used elsewhere in this package (plan_engine_test.go's
+// TestGlobalCap_AdmitFailsClosedOnPlanListError replaces a directory with a
+// file; this test replaces a would-be file's path with a directory — the
+// same "make the OS itself refuse the operation" family of technique).
 func TestCloseSession_FlushFailure_DoesNotStrandRetryByEvictingCache(t *testing.T) {
 	al, store := u17bNewTeardownLoop(t)
 
@@ -239,7 +268,7 @@ func TestCloseSession_FlushFailure_DoesNotStrandRetryByEvictingCache(t *testing.
 	}
 	sessionID := meta.ID
 
-	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+	if err = store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:    "user",
 		Content: "hello",
 		Tokens:  42,
@@ -257,17 +286,19 @@ func TestCloseSession_FlushFailure_DoesNotStrandRetryByEvictingCache(t *testing.
 			preClose.Stats.MessageCount)
 	}
 
-	// Inject a REAL disk write failure: strip write permission from the
-	// session's own directory so u5WriteStatsLocked's WithFlock(statsPath, ...)
-	// (which os.OpenFile(O_CREATE)s stats.json for the very first time here)
-	// fails with a permission error — no mock, a genuine fileutil/os failure.
-	sessionDir := filepath.Join(store.BaseDir(), sessionID)
-	if err := os.Chmod(sessionDir, 0o500); err != nil {
-		t.Fatalf("chmod session dir read-only: %v", err)
+	// Inject a REAL disk write failure: pre-create stats.json's OWN path as an
+	// empty directory, so u5WriteStatsLocked's WithFlock(statsPath, ...) —
+	// which os.OpenFile(O_RDWR|O_CREATE)s stats.json for the very first time
+	// here — fails with EISDIR ("is a directory"). No mock: this is a genuine
+	// fileutil/os failure, uid-independent (see the function doc comment
+	// above for why the previous chmod-based version was not).
+	statsPath := u17bStatsJSONPath(store, sessionID)
+	if err := os.Mkdir(statsPath, 0o700); err != nil {
+		t.Fatalf("pre-create stats.json path as a directory: %v", err)
 	}
-	// Restore write permission unconditionally so t.TempDir()'s cleanup can
-	// remove the directory regardless of how this test exits.
-	t.Cleanup(func() { _ = os.Chmod(sessionDir, 0o700) })
+	// Remove the placeholder directory unconditionally so t.TempDir()'s
+	// cleanup can remove the tree regardless of how this test exits.
+	t.Cleanup(func() { _ = os.RemoveAll(statsPath) })
 
 	// --- Act: the teardown under test, with the flush forced to fail. ---
 	al.CloseSession(sessionID, "test-trigger")
@@ -275,16 +306,17 @@ func TestCloseSession_FlushFailure_DoesNotStrandRetryByEvictingCache(t *testing.
 	// Confirm the injected failure genuinely blocked the write — otherwise
 	// the rest of this test would be meaningless (RED precondition).
 	if _, existed := u17bReadStatsMessageCount(t, store, sessionID); existed {
-		t.Fatal("fixture broken: stats.json exists despite a read-only session directory — the injected disk failure did not take effect")
+		t.Fatal("fixture broken: stats.json exists despite the pre-created directory placeholder — the injected disk failure did not take effect")
 	}
 
-	// Restore write permission and retry the flush — exactly what the next
-	// periodic flusher tick or forced-flush point would do.
-	if err := os.Chmod(sessionDir, 0o700); err != nil {
-		t.Fatalf("chmod session dir writable: %v", err)
+	// Remove the placeholder and retry the flush — exactly what the next
+	// periodic flusher tick or forced-flush point would do once the
+	// underlying disk fault clears.
+	if err := os.Remove(statsPath); err != nil {
+		t.Fatalf("remove stats.json directory placeholder: %v", err)
 	}
 	if err := store.FlushSessionStats(sessionID); err != nil {
-		t.Fatalf("retry flush after restoring permissions failed: %v", err)
+		t.Fatalf("retry flush after clearing the injected failure failed: %v", err)
 	}
 
 	// --- GREEN: the retry must have found the cache entry and the dirty

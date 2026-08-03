@@ -302,9 +302,15 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	fset := token.NewFileSet()
 	agentDir := "."
 
-	var all []u19RoutingSessionIDRead
+	perFile := make([][]u19RoutingSessionIDRead, 0, len(u19RoutingSessionIDScanFiles))
+	total := 0
 	for _, f := range u19RoutingSessionIDScanFiles {
 		reads := u19FindRoutingSessionIDReads(t, fset, filepath.Join(agentDir, f))
+		perFile = append(perFile, reads)
+		total += len(reads)
+	}
+	all := make([]u19RoutingSessionIDRead, 0, total)
+	for _, reads := range perFile {
 		all = append(all, reads...)
 	}
 

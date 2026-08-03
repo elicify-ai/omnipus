@@ -391,9 +391,9 @@ func TestNaiveCollapse_RoutingIDOnlyRegressesIssue577(t *testing.T) {
 	// The real, shipped resolver does NOT have this gap: it tries the point
 	// Load first (which hits — B's own sessionKey is a real activeTurnStates
 	// key) before ever consulting routingSessionID.
-	real := al.resolveInterruptAnchors(b.sessionKey)
-	if len(real) != 1 || real[0].turnID != b.turnID {
-		t.Fatalf("resolveInterruptAnchors(B) = %v, want exactly [B] (%s) — the shipped resolver must not reproduce the naive gap just demonstrated", real, b.turnID)
+	actual := al.resolveInterruptAnchors(b.sessionKey)
+	if len(actual) != 1 || actual[0].turnID != b.turnID {
+		t.Fatalf("resolveInterruptAnchors(B) = %v, want exactly [B] (%s) — the shipped resolver must not reproduce the naive gap just demonstrated", actual, b.turnID)
 	}
 
 	_, _ = c, d // C and D are part of the shared fixture tree; not addressed directly by this test
