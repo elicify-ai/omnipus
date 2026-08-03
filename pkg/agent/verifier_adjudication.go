@@ -390,22 +390,25 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 // renderTranscriptEntriesForWindow converts raw session.TranscriptEntry
 // records into a flat, chronological []providers.Message the same shape
 // every other in-package rendering/estimation helper already understands
-// (context_budget.go's estimateMessageTokens). A delegated child sub-turn's
-// own narration is skipped (IsDelegateChildEntry) — it is not part of the
-// reviewed unit's own top-level thread, mirroring the same server-side
-// suppression the live chat surfaces already apply. Tool calls are rendered
-// as compact one-line summaries (tool name + status) so the deterministic
-// "called X N times" style of evidence still survives a subjective/prose
-// verifier's transcript window even though the dedicated `behavior`
-// criteria kind (behavior_scan.go) already resolves that same class of
-// criterion deterministically, with no LLM verifier dispatch at all — this
-// rendering exists for whatever a prose criterion's own window still needs.
+// (context_budget.go's estimateMessageTokens). ADR-057 D1/W11 (FR-034/
+// FR-038): a delegated child now owns its own real store-backed session
+// (FR-005), so its narration lives in the CHILD's OWN transcript.jsonl and
+// is never present in the entries this function is handed — the old
+// retired child-entry visibility predicate's skip (mirroring the now-deleted
+// server-side suppression, FR-034) is removed outright, not reapplied;
+// BDD-39 requires the verifier window see the adjudicated session's own
+// entries and nothing else, which this window's `entries` slice already
+// scopes to by
+// construction. Tool calls are rendered as compact one-line summaries (tool
+// name + status) so the deterministic "called X N times" style of evidence
+// still survives a subjective/prose verifier's transcript window even
+// though the dedicated `behavior` criteria kind (behavior_scan.go) already
+// resolves that same class of criterion deterministically, with no LLM
+// verifier dispatch at all — this rendering exists for whatever a prose
+// criterion's own window still needs.
 func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []providers.Message {
 	out := make([]providers.Message, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDelegateChildEntry() {
-			continue
-		}
 		if strings.TrimSpace(e.Content) != "" {
 			role := e.Role
 			if role == "" {

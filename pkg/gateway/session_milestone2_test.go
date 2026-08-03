@@ -393,8 +393,14 @@ func TestHandleSessions_DeleteRemovedFromList(t *testing.T) {
 	api.HandleSessions(wList1, rList1)
 	require.Equal(t, http.StatusOK, wList1.Code)
 
-	var sessions1 []session.UnifiedMeta
-	require.NoError(t, json.Unmarshal(wList1.Body.Bytes(), &sessions1))
+	// ADR-057 FR-091 (grill2 M2-10): listSessions now always returns the
+	// named gen.SessionPage envelope ({"sessions": [...], ...}), not a bare
+	// array — unwrap it before the identical field-level assertions below.
+	var page1 struct {
+		Sessions []session.UnifiedMeta `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(wList1.Body.Bytes(), &page1))
+	sessions1 := page1.Sessions
 	found := false
 	for _, s := range sessions1 {
 		if s.ID == sessionID {
@@ -418,8 +424,11 @@ func TestHandleSessions_DeleteRemovedFromList(t *testing.T) {
 	api.HandleSessions(wList2, rList2)
 	require.Equal(t, http.StatusOK, wList2.Code)
 
-	var sessions2 []session.UnifiedMeta
-	require.NoError(t, json.Unmarshal(wList2.Body.Bytes(), &sessions2))
+	var page2 struct {
+		Sessions []session.UnifiedMeta `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(wList2.Body.Bytes(), &page2))
+	sessions2 := page2.Sessions
 	for _, s := range sessions2 {
 		assert.NotEqual(t, sessionID, s.ID,
 			"deleted session must not appear in list after DELETE")

@@ -201,9 +201,17 @@ func TestInspectSession_ToolCallSummary(t *testing.T) {
 	}
 }
 
-// TestInspectSession_FiltersDelegateChildEntries proves a child delegation
-// sub-turn's raw entries are never surfaced.
-func TestInspectSession_FiltersDelegateChildEntries(t *testing.T) {
+// TestInspectSession_ReturnsDelegateChildEntriesUnfiltered is the
+// ADR-057-U18-inverted replacement for the pre-ADR-057
+// TestInspectSession_FiltersDelegateChildEntries: FR-034/FR-035/FR-038
+// delete the old ParentSpawnCallID-based visibility filter outright (a
+// delegated child now owns its own real store-backed session, FR-005, so
+// under the post-cutover design its own entries never land in another
+// session's transcript to begin with; for a legacy/pre-cutover entry, no
+// read boundary may reintroduce the filter — BDD-40). inspect_session must
+// now surface every entry it is handed, unfiltered, same as the other three
+// read boundaries in BDD-37's table.
+func TestInspectSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	t.Parallel()
 	store := newFakeInspectSessionStore()
 	store.seed("sess-1", "worker-agent", []session.TranscriptEntry{
@@ -218,8 +226,8 @@ func TestInspectSession_FiltersDelegateChildEntries(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_session: %s", res.ForLLM)
 	}
-	if strings.Contains(res.ForLLM, "child narration") {
-		t.Fatal("delegate child entry content must not be surfaced")
+	if !strings.Contains(res.ForLLM, "child narration") {
+		t.Fatal("the ParentSpawnCallID-tagged entry's content must be surfaced unfiltered (FR-034/FR-038)")
 	}
 	if !strings.Contains(res.ForLLM, "top-level") {
 		t.Fatal("top-level entry content must be surfaced")

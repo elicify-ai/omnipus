@@ -1,19 +1,23 @@
-// W1 regression coverage: REST cold-load session reads must withhold
-// delegation-child transcript entries (ParentSpawnCallID != "") exactly like
-// the live-reconnect replay path (pkg/gateway/replay.go) already does.
+// ADR-057-U18-inverted: this file pinned the PRE-ADR-057 contract — REST
+// cold-load session reads withheld delegation-child transcript entries
+// (ParentSpawnCallID != "") exactly like the live-reconnect replay path did.
+// D1/W11 (FR-034/FR-035/FR-038) retires that filter outright: a delegated
+// child now owns its own real store-backed session (FR-005), so under the
+// post-cutover design a child's own entries never land in another session's
+// transcript to begin with — but for a PRE-cutover transcript (or any
+// transcript carrying a legacy ParentSpawnCallID-tagged entry), no read
+// boundary may reintroduce a visibility filter (FR-038, BDD-40: "a
+// pre-cutover session shows previously-hidden delegate narration" is the
+// accepted outcome, not a bug). This file is inverted, not deleted
+// (FR-072/US-17 AS-1) — the assertions below now require BOTH entries to be
+// returned unfiltered, matching BDD-37's "each read boundary returns the
+// child's transcript unfiltered" for every one of the four read boundaries
+// this suite already covered.
 //
-// Root cause: a delegated sub-turn shares its parent's transcript session;
-// each child entry is tagged ParentSpawnCallID. replay.go's live/reconnect
-// path skips these (see IsDelegateChildEntry's doc comment,
-// pkg/session/daypartition.go), but the REST cold-load path
-// (getSessionMessages / getSession) previously returned the raw transcript
-// via store.ReadTranscript with no such filter — so on a fresh page
-// load/reopen, subagent narration (including "[external-cli permission]"
-// lines) dumped as raw inline main-chat messages that a live reconnect never
-// showed.
-//
-// Traces to: pkg/gateway/rest.go filterDelegateChildEntries,
-// pkg/session/daypartition.go TranscriptEntry.IsDelegateChildEntry.
+// Traces to: pkg/gateway/rest.go (getSession/getSessionMessages, U18),
+// pkg/session/daypartition.go TranscriptEntry.ParentSpawnCallID (retained
+// for provenance, FR-036) — the retired IsDelegateChildEntry predicate this
+// file originally named no longer exists (FR-034).
 
 package gateway
 
@@ -31,10 +35,11 @@ import (
 )
 
 // seedParentAndChildTranscript appends one genuine top-level ("parent")
-// assistant entry and one delegation-child entry (ParentSpawnCallID set) to
-// the given session, mirroring the exact shape spawnSubTurn/turn.go produce:
-// the child carries the same Role/Content/AgentID/TurnID/Model shape as any
-// other assistant entry, distinguishable ONLY by ParentSpawnCallID.
+// assistant entry and one legacy delegation-child-shaped entry
+// (ParentSpawnCallID set) to the given session, mirroring the shape a
+// pre-cutover spawnSubTurn/turn.go produced: the child carries the same
+// Role/Content/AgentID/TurnID/Model shape as any other assistant entry,
+// distinguishable only by ParentSpawnCallID (now provenance-only, FR-036).
 func seedParentAndChildTranscript(t *testing.T, store *session.UnifiedStore, sessionID string) {
 	t.Helper()
 
@@ -61,14 +66,16 @@ func seedParentAndChildTranscript(t *testing.T, store *session.UnifiedStore, ses
 	require.NoError(t, store.AppendTranscript(sessionID, parentEntry),
 		"seeding the parent entry must succeed")
 	require.NoError(t, store.AppendTranscript(sessionID, childEntry),
-		"seeding the delegation-child entry must succeed")
+		"seeding the delegation-child-shaped entry must succeed")
 }
 
-// TestGetSessionMessages_OmitsDelegateChildEntries is the REST cold-load
-// regression test for GET /api/v1/sessions/{id}/messages: a transcript with
-// a parent entry + a ParentSpawnCallID-tagged child entry must return ONLY
-// the parent on the wire.
-func TestGetSessionMessages_OmitsDelegateChildEntries(t *testing.T) {
+// TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered is the
+// inverted REST cold-load regression test for GET /api/v1/sessions/{id}/messages
+// (ADR-057 FR-034/FR-035/FR-038, BDD-37/BDD-40): a transcript with a parent
+// entry plus a ParentSpawnCallID-tagged entry must now return BOTH on the
+// wire — the pre-ADR-057 filter that withheld the second entry is deleted,
+// not reapplied.
+func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 
@@ -89,20 +96,34 @@ func TestGetSessionMessages_OmitsDelegateChildEntries(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
 		"response must unmarshal into a list of transcript entries")
 
-	require.Len(t, entries, 1,
-		"only the parent entry may be returned — the delegation-child entry "+
-			"(ParentSpawnCallID set) must be withheld, matching replay.go's live "+
-			"reconnect filter; got %d entries: %+v", len(entries), entries)
-	assert.Equal(t, "parent-msg-1", entries[0].ID)
-	assert.Empty(t, entries[0].ParentSpawnCallID)
-	assert.NotContains(t, entries[0].Content, "external-cli permission",
-		"the delegate child's raw narration must never leak into the returned messages")
+	// Positive lower bound (binding rule 4) before asserting anything about
+	// which entries survived: both seeded entries must actually be present.
+	require.Len(t, entries, 2,
+		"both the parent entry and the ParentSpawnCallID-tagged entry must be "+
+			"returned unfiltered (FR-034/FR-038) — got %d entries: %+v", len(entries), entries)
+
+	var sawParent, sawChild bool
+	for _, e := range entries {
+		switch e.ID {
+		case "parent-msg-1":
+			sawParent = true
+		case "child-msg-1":
+			sawChild = true
+			assert.Equal(t, "delegate-call-1", e.ParentSpawnCallID,
+				"ParentSpawnCallID is retained as provenance (FR-036), not stripped")
+			assert.Contains(t, e.Content, "external-cli permission",
+				"the tagged entry's content must reach the wire unfiltered")
+		}
+	}
+	assert.True(t, sawParent, "the parent entry must still be present")
+	assert.True(t, sawChild, "the ParentSpawnCallID-tagged entry must no longer be withheld")
 }
 
-// TestGetSession_OmitsDelegateChildEntries is the REST cold-load regression
-// test for GET /api/v1/sessions/{id}: the same filter must apply to the
-// session-detail envelope's `messages` field.
-func TestGetSession_OmitsDelegateChildEntries(t *testing.T) {
+// TestGetSession_ReturnsDelegateChildEntriesUnfiltered is the inverted REST
+// cold-load regression test for GET /api/v1/sessions/{id}: the same
+// unfiltered contract must apply to the session-detail envelope's `messages`
+// field.
+func TestGetSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 
@@ -125,12 +146,22 @@ func TestGetSession_OmitsDelegateChildEntries(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail),
 		"response must unmarshal into a session-detail envelope")
 
-	require.Len(t, detail.Messages, 1,
-		"only the parent entry may be present in the session-detail envelope's "+
-			"messages — the delegation-child entry must be withheld; got %d entries: %+v",
-		len(detail.Messages), detail.Messages)
-	assert.Equal(t, "parent-msg-1", detail.Messages[0].ID)
-	assert.Empty(t, detail.Messages[0].ParentSpawnCallID)
-	assert.NotContains(t, detail.Messages[0].Content, "external-cli permission",
-		"the delegate child's raw narration must never leak into the session-detail messages")
+	require.Len(t, detail.Messages, 2,
+		"both the parent entry and the ParentSpawnCallID-tagged entry must be "+
+			"present, unfiltered, in the session-detail envelope's messages — "+
+			"got %d entries: %+v", len(detail.Messages), detail.Messages)
+
+	var sawParent, sawChild bool
+	for _, e := range detail.Messages {
+		switch e.ID {
+		case "parent-msg-1":
+			sawParent = true
+		case "child-msg-1":
+			sawChild = true
+			assert.Contains(t, e.Content, "external-cli permission",
+				"the delegate-shaped entry's raw narration must reach the session-detail messages unfiltered")
+		}
+	}
+	assert.True(t, sawParent, "the parent entry must still be present")
+	assert.True(t, sawChild, "the ParentSpawnCallID-tagged entry must no longer be withheld")
 }

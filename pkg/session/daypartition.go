@@ -322,46 +322,6 @@ type TranscriptEntry struct {
 	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
 }
 
-// IsDelegateChildEntry is RETIRED by ADR-057 D1/W11 (FR-034): greenfield,
-// every delegated child owns its own real store-backed session (FR-005), so
-// its entries land in the CHILD's OWN transcript.jsonl, never the parent's —
-// there is nothing left for this predicate to match in the parent's
-// transcript for any post-cutover session (see ParentSpawnCallID's doc
-// comment above, kept for the field's own provenance/drill-down use, FR-036).
-//
-// This method is a COMPILE-TIME SHIM, not a working predicate — it always
-// returns false, which yields the exact same OBSERVABLE behavior as the four
-// non-test call sites (pkg/gateway/replay.go:298, pkg/gateway/rest.go:826,
-// pkg/agent/verifier_adjudication.go:406, pkg/tools/inspect_session.go:172)
-// being fully deleted (`if entry.IsDelegateChildEntry() { skip }` never skips
-// — FR-038, no read boundary may reintroduce a transcript visibility
-// filter), WITHOUT actually deleting the method or touching those four
-// call sites, which this unit (U5) does not own.
-//
-// Why the shim exists at all (ADR-057 spec, hard ordering 6, line ~1000):
-// U5 (this unit, Wave C) owns daypartition.go; the four call sites above are
-// U18's (Wave F). Deleting both the definition and the call sites in one
-// commit is impossible across three intervening waves without leaving the
-// tree uncompilable the whole time, so U5 lands the deletion BEHIND this
-// shim and U18's commit removes the shim AND the four call sites together —
-// only then does FR-034's "MUST be deleted... zero references outside
-// tests" become literally true. Test #58
-// (TestIsDelegateChildEntry_ZeroNonTestReferences) is the enforcement: its
-// positive lower bound is satisfied today (this shim still compiles and is
-// still referenced by the four call sites), but its zero-reference
-// assertion stays red until U18 removes both halves — that redness is
-// intentional, not a defect in this commit.
-//
-// Deprecated: retained ONLY for cross-wave build compatibility; U18 (Wave F)
-// deletes this method and its 4 call sites together in one commit (ADR-057
-// W11a, hard ordering 6). Do not "fix" this by restoring real filtering
-// logic — FR-038 forbids it.
-//
-//lint:ignore U1000 kept alive by 4 non-test call sites this unit does not own; see doc comment above
-func (e TranscriptEntry) IsDelegateChildEntry() bool {
-	return false
-}
-
 // Attachment represents a file attached to a message.
 type Attachment struct {
 	Type     string `json:"type"`

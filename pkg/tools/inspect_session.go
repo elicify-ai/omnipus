@@ -164,14 +164,14 @@ func (t *InspectSessionTool) Execute(ctx context.Context, args map[string]any) *
 	out := make([]inspectSessionEntry, 0, len(entries))
 	totalChars := 0
 	truncated := false
+	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child now owns its own real
+	// store-backed session (FR-005), so its narration lives in the CHILD's
+	// OWN transcript.jsonl and never lands in this session's entries at all
+	// — the old retired child-entry visibility predicate's skip is removed
+	// outright, not reapplied (FR-034). inspect_session against a child's own sessionID now returns
+	// that child's full transcript unfiltered, same as every other read
+	// boundary (BDD-37).
 	for _, e := range entries {
-		// Never surface a child delegation sub-turn's raw internal narration
-		// as if it were a top-level entry (mirrors the shared server-side
-		// filter session.TranscriptEntry.IsDelegateChildEntry documents;
-		// applied at every session-reading boundary).
-		if e.IsDelegateChildEntry() {
-			continue
-		}
 		if roleFilter != "" && e.Role != roleFilter {
 			continue
 		}

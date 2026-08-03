@@ -38,11 +38,14 @@ const replayResultPreviewBytes = 10 * 1024
 //
 // Contract:
 //   - Compaction entries are skipped (FR-I-006).
-//   - Entries carrying ParentSpawnCallID (a delegation child sub-turn's own
-//     narration/final-turn text) are skipped entirely — never emitted as a
-//     top-level replay_message, matching live rendering's silent suppression
-//     of the same content (A-I4 live/reload parity fix). See
-//     session.TranscriptEntry.ParentSpawnCallID's doc comment.
+//   - ADR-057 D1/W11 (FR-034/FR-038): a delegated child now owns its own
+//     real store-backed session (FR-005), so its narration lands in the
+//     CHILD's OWN transcript.jsonl and never appears in these entries at
+//     all — there is no longer a same-transcript delegate-narration case
+//     for this function to withhold. The old ParentSpawnCallID-based skip
+//     (the retired child-entry visibility predicate that used to live on
+//     session.TranscriptEntry, FR-034) is deleted, not replaced; no read
+//     boundary may reintroduce a transcript visibility filter (FR-038).
 //   - For user/system entries: emit replay_message{role, content, agent_id}.
 //   - For assistant entries: emit replay_message if content is non-empty, then
 //     for each ToolCall emit tool_call_start + tool_call_result (FR-I-001).
@@ -266,36 +269,6 @@ func streamReplay(
 			if err2 := emitFrame(toJudgeVerdictFrame(verdict)); err2 != nil {
 				return framesEmitted, err2
 			}
-			continue
-		}
-
-		// A-I4 live/reload parity fix: an assistant-text entry stamped with
-		// ParentSpawnCallID was produced by a CHILD delegation sub-turn, not
-		// a genuine top-level turn — pkg/agent/subturn.go's spawnSubTurn
-		// shares its parent's transcriptSessionID (CoreTeam-scoped workspace
-		// design), so the delegate's own intermediate narration and its own
-		// final-turn text land in the SAME transcript.jsonl as the
-		// delegator's real messages. LIVE never shows this content as a chat
-		// bubble at all — wsStreamer.Update's shadow-stream ownership gate
-		// silently withholds the live TokenFrame for a child sub-turn's own
-		// streaming while still fully persisting it via Finalize (and the
-		// non-streaming appendIntermediateAssistantTranscript /
-		// appendAssistantTranscript paths never had a live-frame counterpart
-		// to begin with). Skip the ENTIRE entry here — before the
-		// lastSeenAgentID update and the entry.Content branch below — so
-		// reload matches: no top-level bubble, no stray model tag/avatar, and
-		// this entry's AgentID (the delegate's own identity) never leaks into
-		// lastSeenAgentID as a fallback for a later, unrelated flat tool
-		// call. See session.TranscriptEntry.ParentSpawnCallID's doc comment
-		// for the full root-cause writeup. A child sub-turn's own TOOL CALLS
-		// are unaffected by this branch — they carry ParentToolCallID (not
-		// ParentSpawnCallID) and are already correctly nested under the
-		// spawn/delegate span by the isNested/parentIsSpawn logic below.
-		// IsDelegateChildEntry() is the single shared predicate for this skip —
-		// pkg/gateway/rest.go's REST cold-load handlers (getSession/
-		// getSessionMessages) apply the exact same check via the exact same
-		// method so the two paths cannot drift out of sync again.
-		if entry.IsDelegateChildEntry() {
 			continue
 		}
 

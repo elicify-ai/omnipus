@@ -683,6 +683,14 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 	if m.ActiveAgentID != "" {
 		s.ActiveAgentId = &m.ActiveAgentID
 	}
+	// ADR-057 FR-008/FR-091: present only on a subordinate (delegated child)
+	// session; absent (never empty-string) on a root. A session whose
+	// ParentSessionID names an id that no longer resolves is still surfaced
+	// as a root by listSessions (FR-091, BDD-106) — that resolution happens
+	// at the listing layer, not here; this mapping is a pure field copy.
+	if m.ParentSessionID != "" {
+		s.ParentSessionId = &m.ParentSessionID
+	}
 	if len(m.AgentIDs) > 0 {
 		ids := make([]string, len(m.AgentIDs))
 		copy(ids, m.AgentIDs)
@@ -755,6 +763,31 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 	return &protected
 }
 
+// u18DefaultSessionPageLimit is the page size GET /api/v1/sessions uses when
+// the caller omits `limit` (ADR-057 FR-092). The response body scales with
+// this number, not with total session count (FR-092(b) — boundary cost is
+// O(page)), regardless of how many sessions the merged store set holds.
+const u18DefaultSessionPageLimit = 50
+
+// listSessions handles GET /api/v1/sessions (ADR-057 US-19/FR-091/FR-092/
+// FR-097/FR-098/FR-104, W16c). Replaces the pre-pagination "load everything,
+// filter, return" handler with the REST layer of the four-layer pagination
+// stack (store U6 -> loop U9 -> REST here -> client U12): it accepts paging
+// parameters, the parent_session_id / flat hierarchy switches, and returns
+// the single named gen.SessionPage envelope FR-091 decided on (replacing the
+// retired two-variant oneOf, gen.ListSessions200JSONResponseBody1 — see
+// ADR-034/grill2 M2-10; U10 owns the contract, this handler is the consumer).
+//
+// Division of labor: AgentLoop.ListAllSessions (U9) applies hierarchy
+// (roots-only / direct-children / flat) and FR-098's cross-store ordering +
+// cursor BEFORE pagination, over the full merged set, so a page boundary can
+// never split a parent from its child-count context. This handler's own job
+// is the REST-layer concerns FR-092/FR-104 explicitly leave here: parsing
+// and validating limit/offset, the flat+parent_session_id 400, narrowing by
+// agent_id/type/include_verifier (orthogonal filters that only ever shrink a
+// page, never grow it past limit), resolving each row's child_count from
+// whichever store's in-memory parent index owns it (FR-097, O(1) per row),
+// and building the SessionPage response.
 func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	agentFilter := r.URL.Query().Get("agent_id")
 	typeFilter := r.URL.Query().Get("type")
@@ -766,14 +799,47 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	// per the contract (ListSessionsParams.IncludeVerifier default: false).
 	includeVerifier, _ := strconv.ParseBool(r.URL.Query().Get("include_verifier"))
 
-	metas, partialErrs := a.agentLoop.ListAllSessions()
+	parentSessionID := r.URL.Query().Get("parent_session_id")
+	flat, _ := strconv.ParseBool(r.URL.Query().Get("flat"))
+	// FR-104: flat=true and parent_session_id are mutually exclusive — a 400,
+	// not a silent "flat wins" or "parent_session_id wins".
+	if flat && parentSessionID != "" {
+		jsonErr(w, http.StatusBadRequest, "flat and parent_session_id are mutually exclusive")
+		return
+	}
+
+	limit := u18DefaultSessionPageLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			jsonErr(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = n
+	}
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			jsonErr(w, http.StatusBadRequest, "offset must be a non-negative integer")
+			return
+		}
+		offset = n
+	}
+
+	page, partialErrs := a.agentLoop.ListAllSessions(limit, offset, parentSessionID, flat)
 	for _, pe := range partialErrs {
 		slog.Warn("rest: list sessions: partial error", "error", pe)
 	}
 
-	// Apply filters.
-	filtered := make([]*session.UnifiedMeta, 0, len(metas))
-	for _, m := range metas {
+	// Apply the orthogonal agent_id/type/include_verifier filters over this
+	// page's rows. These narrow AFTER hierarchy+pagination (ListAllSessions'
+	// own doc comment: "the 400 for supplying both is a REST-layer concern,
+	// not this method's" applies equally to these filters) — they can only
+	// shrink a page below `limit`, never grow it past `limit`, so FR-092(b)'s
+	// "response body scales with limit, not total session count" still holds.
+	filtered := make([]*session.UnifiedMeta, 0, len(page.Sessions))
+	for _, m := range page.Sessions {
 		if agentFilter != "" && m.AgentID != agentFilter {
 			continue
 		}
@@ -795,40 +861,35 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		// FR-021/028: compute the `protected` flag for heartbeat sessions.
 		// Non-heartbeat sessions get nil (field omitted from the wire response).
 		s.Protected = computeSessionProtected(a.homePath, m)
+		// FR-091/FR-097: child_count is resolved from whichever store's
+		// in-memory parent index owns this session — O(1) per row, no disk
+		// read, regardless of listing mode (roots-only, parent_session_id, or
+		// flat). A session this handler cannot resolve a store for (should
+		// not happen — it just came from ListAllSessions) is left at zero
+		// rather than surfacing a spurious count.
+		if store := a.resolveSessionStore(m.ID); store != nil {
+			cc := store.ChildCount(m.ID)
+			s.ChildCount = &cc
+		}
 		genSessions = append(genSessions, s)
 	}
-	if len(partialErrs) == 0 {
-		jsonOK(w, genSessions)
-		return
-	}
-	sanitized := make([]string, len(partialErrs))
-	for i, pe := range partialErrs {
-		sanitized[i] = sanitizePartialError(pe)
-	}
-	jsonOK(w, gen.ListSessions200JSONResponseBody1{
-		Sessions:      genSessions,
-		PartialErrors: sanitized,
-	})
-}
 
-// filterDelegateChildEntries drops every transcript entry produced by a CHILD
-// delegation sub-turn (session.TranscriptEntry.IsDelegateChildEntry()) before
-// a REST cold-load response is built. This mirrors pkg/gateway/replay.go's
-// live-reconnect replay filter (same shared predicate, see
-// IsDelegateChildEntry's doc comment) — without it, a fresh page load/reopen
-// of a session that included a delegation dumped the delegate's own raw
-// intermediate narration and final report (plus any "[external-cli
-// permission]" lines) as top-level main-chat bubbles that a live reconnect
-// never showed.
-func filterDelegateChildEntries(entries []session.TranscriptEntry) []session.TranscriptEntry {
-	filtered := make([]session.TranscriptEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDelegateChildEntry() {
-			continue
-		}
-		filtered = append(filtered, e)
+	resp := gen.SessionPage{Sessions: genSessions}
+	if page.NextOffset >= 0 {
+		nc := strconv.Itoa(page.NextOffset)
+		resp.NextCursor = &nc
 	}
-	return filtered
+	if len(partialErrs) > 0 {
+		// FR-098(c): a store that errored mid-merge still yields a valid page
+		// plus next_cursor — partial_errors composes with paging rather than
+		// halting it.
+		sanitized := make([]string, len(partialErrs))
+		for i, pe := range partialErrs {
+			sanitized[i] = sanitizePartialError(pe)
+		}
+		resp.PartialErrors = &sanitized
+	}
+	jsonOK(w, resp)
 }
 
 func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
@@ -848,7 +909,12 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
-	messages = filterDelegateChildEntries(messages)
+	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
+	// session (FR-005), so its narration lives in the CHILD's OWN
+	// transcript.jsonl and is simply never present here — the old REST-side
+	// visibility filter helper is deleted, not reapplied (FR-035). This
+	// boundary now returns id's full transcript unfiltered, same as every
+	// other read boundary (FR-035/FR-037/FR-038, BDD-37).
 	// Detect ghost sessions: if the session references an agent that no longer
 	// exists in the current config, surface agent_removed=true so the frontend
 	// can show the read-only "Agent removed" banner (#103).
@@ -884,7 +950,10 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
-	messages = filterDelegateChildEntries(messages)
+	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
+	// the old delegate-narration visibility filter is deleted outright, not
+	// reapplied; a child's own entries never land in another session's
+	// transcript to begin with under the post-D1 design.
 	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
 	// fetchSessionMessages validates via z.array(WireMessageSchema), which
 	// rejects null — a fresh session with no transcript would surface as
@@ -1031,10 +1100,39 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 		}
 	}
 
+	// ADR-057 W18b (FR-071/BDD-78): resolve id's full descendant set BEFORE
+	// deleting anything, over the DURABLE lifecycle store — every delegation,
+	// live or not, has a LifecycleRecord (User Story 4), so this walk is
+	// authoritative independent of turn liveness and survives a restart.
+	// Reuses U11's already-tested u11CollectDescendantSessionIDs (same
+	// package, pkg/gateway/websocket.go), which walks U13's ParentDurableKey
+	// index (pkg/session/lifecycle.go) exactly as the cancel/approval-cascade
+	// paths do — this handler does not reimplement the walk. A nil lifecycle
+	// store (no delegation store wired — most webchat-only installs never
+	// mint one) degrades to zero descendants, matching that helper's
+	// documented nil-store behavior.
+	descendantIDs := u11CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+
 	if err := store.DeleteSession(id); err != nil {
 		slog.Error("rest: delete session", "session_id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
 		return
+	}
+
+	// ADR-057 W18b (FR-071): id's OWN <home>/uploads/<id>/ was already
+	// removed by store.DeleteSession above (pre-existing ADR-017 cascade,
+	// unified.go's DeleteSession). Under D1 each delegated descendant now
+	// owns its OWN session — and therefore its OWN uploads/<descendantID>/
+	// directory (FR-010) — which that per-id cascade cannot reach. Sweep
+	// every descendant's upload tree here so deleting a parent chat does not
+	// leave every delegated child's uploaded media permanently orphaned on
+	// disk (US-16: "a silent disk leak, not a correctness break" — hence
+	// best-effort, logged, non-fatal, matching the media-store release below).
+	if len(descendantIDs) > 0 {
+		if err := media.RemoveSessionUploadsTree(descendantIDs); err != nil {
+			slog.Warn("rest: delete session: cascade-delete descendant uploads failed",
+				"session_id", id, "descendant_count", len(descendantIDs), "error", err)
+		}
 	}
 
 	// Release in-memory media store refs for any tool-generated inline media
@@ -5422,7 +5520,14 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 
 	// Collect session_start events from all agent stores (last 24h).
 	{
-		metas, partialErrs := a.agentLoop.ListAllSessions()
+		// ADR-057 FR-092/FR-098 (U9's new paginated signature): this feed
+		// scans every session across every store, hierarchy notwithstanding
+		// (it existed before FR-091's roots/children split), so flat=true
+		// preserves the pre-pagination "all agent stores" semantics exactly.
+		// limit=0 means "no limit" (FR-098(b)) — the 24h cutoff below is
+		// itself the real bound on how much of the result actually surfaces.
+		page, partialErrs := a.agentLoop.ListAllSessions(0, 0, "", true)
+		metas := page.Sessions
 		if len(partialErrs) > 0 {
 			agentIDs := make([]string, 0, len(partialErrs))
 			for _, pe := range partialErrs {
@@ -8796,14 +8901,19 @@ func (a *restAPI) HandleStorageStats(w http.ResponseWriter, r *http.Request) {
 	var sessionCount int
 	var workspaceSize int64
 	var warnings []string
-	if metas, partialErrs := a.agentLoop.ListAllSessions(); len(partialErrs) > 0 {
+	// ADR-057 FR-092/FR-098: this only ever needed a COUNT, never the rows —
+	// page.Total is the full merged sequence length computed before slicing
+	// (session.SessionListPage's doc comment), so limit=1 avoids copying the
+	// whole session set into this handler just to discard it. flat=true
+	// preserves the pre-pagination "every session, every store" semantics.
+	if page, partialErrs := a.agentLoop.ListAllSessions(1, 0, "", true); len(partialErrs) > 0 {
 		for _, pe := range partialErrs {
 			slog.Warn("rest: storage stats: list sessions partial error", "error", pe)
 			warnings = append(warnings, sanitizePartialError(pe))
 		}
-		sessionCount = len(metas)
+		sessionCount = page.Total
 	} else {
-		sessionCount = len(metas)
+		sessionCount = page.Total
 	}
 	// Walk the home directory for workspace size.
 	homeDir := a.homePath

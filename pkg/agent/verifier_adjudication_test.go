@@ -199,17 +199,27 @@ func TestRunVerifierAdjudication_RegistersSessionBeforeDispatch(t *testing.T) {
 
 // --- window feed (FR-032) ---------------------------------------------------
 
-func TestVerifierWindowFeed_RenderSkipsDelegateChildEntries(t *testing.T) {
+// TestVerifierWindowFeed_RenderIncludesDelegateChildEntries is the
+// ADR-057-U18-inverted replacement for the pre-ADR-057
+// TestVerifierWindowFeed_RenderSkipsDelegateChildEntries: FR-034/FR-035/
+// FR-038 delete the old ParentSpawnCallID-based skip in
+// renderTranscriptEntriesForWindow outright — a delegated child now owns
+// its own real store-backed session (FR-005), so under the post-cutover
+// design its own entries never land in another session's `entries` window
+// to begin with; for a legacy/pre-cutover entry, no read boundary may
+// reintroduce the filter (FR-038, BDD-40). The window renders every entry
+// it is handed.
+func TestVerifierWindowFeed_RenderIncludesDelegateChildEntries(t *testing.T) {
 	entries := []session.TranscriptEntry{
 		{Role: "user", Content: "top-level question"},
 		{Role: "assistant", Content: "delegated narration", ParentSpawnCallID: "call-1"},
 		{Role: "assistant", Content: "top-level answer"},
 	}
 	msgs := renderTranscriptEntriesForWindow(entries)
-	if len(msgs) != 2 {
-		t.Fatalf("got %d messages, want 2 (delegate-child entry must be skipped): %+v", len(msgs), msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("got %d messages, want 3 (the ParentSpawnCallID-tagged entry must no longer be skipped, FR-034/FR-038): %+v", len(msgs), msgs)
 	}
-	if msgs[0].Content != "top-level question" || msgs[1].Content != "top-level answer" {
+	if msgs[0].Content != "top-level question" || msgs[1].Content != "delegated narration" || msgs[2].Content != "top-level answer" {
 		t.Errorf("unexpected messages: %+v", msgs)
 	}
 }

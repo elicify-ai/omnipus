@@ -34,17 +34,20 @@ type wireSession struct {
 	Type string `json:"type"`
 }
 
-// decodeSessionList decodes a listSessions response body, which is either a
-// bare JSON array (no partial errors) or {"sessions": [...], "partial_errors": [...]}
-// (gen.ListSessions200JSONResponseBody1). Tests in this file never trigger
-// partial errors, so a bare-array decode is expected; we fail loudly if the
-// shape is unexpectedly the object form so the test doesn't silently pass on
-// an empty slice.
+// decodeSessionList decodes a listSessions response body. ADR-057 FR-091
+// (grill2 M2-10) retired the pre-existing two-variant oneOf (a bare JSON
+// array, or {"sessions": [...], "partial_errors": [...]}
+// gen.ListSessions200JSONResponseBody1) in favor of a single named
+// gen.SessionPage envelope ({"sessions": [...], "next_cursor"?,
+// "partial_errors"?}) that listSessions now always returns — greenfield
+// permits retiring the bare-array variant outright (operator decision 1).
 func decodeSessionList(t *testing.T, body []byte) []wireSession {
 	t.Helper()
-	var out []wireSession
-	require.NoError(t, json.Unmarshal(body, &out), "listSessions response must decode as a bare array; body=%s", string(body))
-	return out
+	var page struct {
+		Sessions []wireSession `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(body, &page), "listSessions response must decode as a SessionPage envelope; body=%s", string(body))
+	return page.Sessions
 }
 
 func sessionIDs(sessions []wireSession) []string {

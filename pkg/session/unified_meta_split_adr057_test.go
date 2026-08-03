@@ -512,27 +512,23 @@ func TestSessionTypeDelegate_IsValidAndLiteral(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// W11a: the IsDelegateChildEntry compile shim
+// W11a/W11b: the IsDelegateChildEntry compile shim — REMOVED
 // ---------------------------------------------------------------------
-
-// TestIsDelegateChildEntry_ShimAlwaysReturnsFalse pins the W11a shim's own
-// mechanical behavior — NOT test #58 (TestIsDelegateChildEntry_ZeroNonTestReferences),
-// which is jointly owned by U5/U18 and is EXPECTED to stay red until U18
-// (Wave F) removes both this shim and its four non-test call sites in
-// pkg/gateway/pkg/agent/pkg/tools (hard ordering 6) — this unit does not own
-// those packages and must not touch them. This test instead proves the
-// narrower, in-scope property: the shim always returns false regardless of
-// ParentSpawnCallID, which is what makes the four surviving call sites
-// behave as "never filter" (functionally equivalent to deletion) rather
-// than "still filter, just via dead code".
-func TestIsDelegateChildEntry_ShimAlwaysReturnsFalse(t *testing.T) {
-	withParentSpawn := TranscriptEntry{ParentSpawnCallID: "call-123"}
-	assert.False(t, withParentSpawn.IsDelegateChildEntry(),
-		"the shim must return false even when ParentSpawnCallID is non-empty — it is retired, not reimplemented")
-
-	withoutParentSpawn := TranscriptEntry{}
-	assert.False(t, withoutParentSpawn.IsDelegateChildEntry())
-}
+//
+// TestIsDelegateChildEntry_ShimAlwaysReturnsFalse (this unit, U5) pinned the
+// W11a compile shim's own mechanical behavior for the cross-wave window
+// hard ordering 6 required: U5 (Wave C) landed IsDelegateChildEntry as a
+// shim that always returns false, keeping the tree compiling until U18
+// (Wave F) could remove both the shim and its four non-test call sites in
+// pkg/gateway/pkg/agent/pkg/tools in one commit. U18 has now landed that
+// removal (FR-034: "MUST be deleted and MUST have zero references outside
+// tests") — the method this test called no longer exists, so the test
+// pinning its mechanical behavior is removed together with it, in the same
+// commit that removes the shim, rather than left as a dangling compile
+// break in a package U18 does not otherwise own. Test #58
+// (TestIsDelegateChildEntry_ZeroNonTestReferences) is the surviving,
+// broader gate for this requirement — see its own file for the
+// now-satisfied zero-reference assertion.
 
 // ---------------------------------------------------------------------
 // Shared helpers
