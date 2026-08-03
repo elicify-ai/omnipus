@@ -35,77 +35,88 @@ RUN CGO_ENABLED=0 go build -tags goolm,stdjson \
 # ============================================================
 # Stage 3: Runtime with browser + MCP support (Chromium, Python, uv)
 # ============================================================
-FROM node:24-alpine3.23
+FROM node:24-bookworm-slim
 
-RUN apk add --no-cache \
-  ca-certificates \
-  curl \
-  git \
-  python3 \
-  py3-pip \
-  chromium \
-  jq
+# glibc base, NOT Alpine/musl (changed 2026-08-03 — operator-reported
+# regression: "we get captchas on google and youtube and streaming videos is
+# not working at all").
+#
+# The previous image installed Alpine's `apk add chromium`. That build is
+# open-source Chromium WITHOUT the proprietary codecs — no H.264, no AAC —
+# which is exactly what YouTube and most of the web serve, so video loaded a
+# player and then decoded nothing. It also fingerprints as an unusual browser,
+# which compounds bot-detection challenges.
+#
+# Real Chrome-for-Testing is the fix (and what ADR-052 D2 already specifies as
+# the runtime), but its Linux build is glibc-linked and cannot run on musl.
+# Alpine's gcompat shim is documented as unreliable for exactly this
+# headless/automation use, so the base image moves to Debian slim rather than
+# trying to shim it.
+#
+# DISTRIBUTION NOTE (operator-approved 2026-08-03): Chrome-for-Testing is a
+# Google binary under Google's terms, redistributed inside this MIT-licensed
+# image. That is a deliberate product decision — the proprietary codecs are
+# precisely what makes the browser usable — and is recorded here so it is not
+# re-litigated as an accident.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      jq \
+      python3 \
+      python3-pip \
+      unzip \
+      fonts-liberation \
+      fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
 
-# B2a: give the apk-installed Chromium a verified chrome.sha256 manifest
-# in the on-disk layout pkg/tools/browser's resolver treats as the trusted
-# "package Chrome" floor (ADR-052 D2 step 3 — findPackageChrome in
-# package_chrome.go probes <dir(omnipus binary)>/../chromium/chrome +
-# a companion chrome.sha256).
+# Chrome-for-Testing runtime shared libraries. Chrome links these directly;
+# without them the binary exists but exits immediately, which the resolver
+# reports as a missing-shared-library warning rather than anything obvious.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 \
+      libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 \
+      libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+      libxfixes3 libxkbcommon0 libxrandr2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fetch full Chrome-for-Testing (Stable) and lay it out exactly where the
+# runtime resolver expects the trusted "package Chrome" (ADR-052 D2 step 3 —
+# findPackageChrome probes <dir(omnipus binary)>/../chromium/chrome plus a
+# companion chrome.sha256).
 #
-# DO NOT flip tools.browser.trust_path_chrome to make the resolver accept
-# a bare $PATH Chrome instead — pkg/config/defaults.go seeds it false by
-# design (SEC-ADR052-002) and ADR-052
-# (docs/internal/architecture/ADR-052-phase1-security-review.md:26-32,146,185,198)
-# is explicit that trusting ANY $PATH match for the container's whole life
-# is a Blocker (planted-binary risk on shared/CI hosts); a $PATH Chrome is
-# still recorded (WARN-BROWSER-007) but refused, exactly as it is on a
-# native install.
+# Mirrors scripts/cft-bundle.sh's contract (same CfT manifest URL the runtime
+# installer uses, full `chrome` build not chrome-headless-shell, chrome.sha256
+# written BESIDE the binary). Kept inline rather than COPYing the script so the
+# image builds from a bare context on any machine — this pod has no Docker
+# daemon, so the build only ever runs remotely.
 #
-# Chose apk chromium + a generated manifest over bundling real
-# Chrome-for-Testing (scripts/cft-bundle.sh, the release-binary precedent)
-# for THIS base image specifically: node:24-alpine3.23 is musl libc, and
-# CfT's Linux build is glibc-linked. Alpine's glibc-compat shim (gcompat)
-# is a documented, per-binary-fragile workaround — flagged unreliable
-# specifically for headless/automation use, which is exactly this
-# use case — and this dev pod has no Docker daemon to verify it
-# empirically before shipping. Alpine's own chromium package is
-# musl-native and already the binary this image ran before this fix, so
-# generating chrome.sha256 for it satisfies the verified step-3 path with
-# zero new binary-compatibility risk. Nothing apk-managed is removed —
-# this only ADDS the verified layout alongside the existing
-# /usr/lib/chromium install and its /usr/bin/chromium* symlinks.
-#
-# MUST be verified via a Fly remote build (no Docker daemon on this pod):
-# after building, `docker run --rm <image> omnipus doctor` checks exactly
-# this ("Package-bundled Chrome (ADR-052): missing required host shared
-# libraries... and a SHA-256 mismatch" per its own --help) and should
-# report the package Chrome clean, with no missing-shared-library or
-# SHA-256-mismatch warning; a live browser_navigate tool call should show
-# no WARN-BROWSER-007 and no managed chrome-for-testing download attempt.
-#
-# NOTE (live-verified post-deploy): this layout stages chrome FLAT at
-# <root>/chrome — Alpine's apk chromium package has no chrome-linux64/
-# extraction subdir, that subdir is a Chrome-for-Testing goreleaser-archive
-# artifact only. This is layout #3 in
-# pkg/tools/browser/package_chrome.go's binaryLayoutsForRoot (the flat
-# layout install.sh's fallback also uses) and the runtime resolver
-# (findPackageChrome) has always accepted it. A Fly deployment from this
-# exact Dockerfile initially showed `omnipus doctor` reporting
-# WARN-BROWSER-008 ("chrome binary is missing") despite the binary and a
-# byte-for-byte-matching chrome.sha256 both being present — that was a bug
-# in cmd/omnipus/internal/doctor/command.go's packageChromeBinaryPath
-# (a duplicate, narrower layout probe that only checked chrome-linux64/
-# chrome, out of sync with binaryLayoutsForRoot), now fixed there. Do NOT
-# reintroduce a chrome-linux64/ subdir or symlink here to work around a
-# doctor regression — that would be masking, not fixing, a future drift.
+# Layout is FLAT (<root>/chrome), which is binaryLayoutsForRoot's layout #3 and
+# accepted by findPackageChrome. Do NOT add a chrome-linux64/ subdir to satisfy
+# a doctor regression — that masks drift instead of fixing it.
+ARG TARGETARCH=amd64
 RUN set -eux; \
-    mkdir -p /usr/local/chromium; \
-    cp -rL /usr/lib/chromium/. /usr/local/chromium/; \
+    case "$TARGETARCH" in \
+      amd64) CFT_PLATFORM=linux64 ;; \
+      arm64) CFT_PLATFORM=linux-arm64 ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    URL="$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
+        | jq -r --arg p "$CFT_PLATFORM" '.channels.Stable.downloads.chrome[] | select(.platform==$p) | .url')"; \
+    test -n "$URL"; \
+    echo "fetching Chrome-for-Testing: $URL"; \
+    curl -fsSL -o /tmp/chrome.zip "$URL"; \
+    mkdir -p /tmp/cft /usr/local/chromium; \
+    unzip -q /tmp/chrome.zip -d /tmp/cft; \
+    cp -a "/tmp/cft/chrome-$CFT_PLATFORM/." /usr/local/chromium/; \
+    rm -rf /tmp/chrome.zip /tmp/cft; \
     test -f /usr/local/chromium/chrome; \
     test ! -L /usr/local/chromium/chrome; \
     sha256sum /usr/local/chromium/chrome | awk '{printf "%s  %s\n", $1, $2}' > /usr/local/chromium/chrome.sha256; \
     chmod -R go-w /usr/local/chromium; \
-    chmod 0755 /usr/local/chromium
+    chmod 0755 /usr/local/chromium; \
+    ln -sf /usr/local/chromium/chrome /usr/local/bin/chrome; \
+    /usr/local/chromium/chrome --version
 
 # Install uv (used by Python MCP servers)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
@@ -133,10 +144,21 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Copy binary
 COPY --from=go-builder /out/omnipus /usr/local/bin/omnipus
 
-# Reuse existing node user (UID/GID 1000) — rename to omnipus
-RUN deluser node 2>/dev/null; delgroup node 2>/dev/null; \
-    addgroup -g 1000 omnipus 2>/dev/null; \
-    adduser -D -u 1000 -G omnipus -h /home/omnipus omnipus 2>/dev/null || true
+# Reuse existing node user (UID/GID 1000) — rename to omnipus.
+#
+# Debian/shadow syntax, NOT BusyBox (the base moved Alpine → Debian slim,
+# above). The previous `addgroup -g` / `adduser -D` form is BusyBox-only: on
+# Debian those flags are invalid, and because the whole chain ended in
+# `|| true` the failure would have been SILENT — leaving no omnipus user, so
+# `USER omnipus` fails the build (or, worse on a variant that tolerates it,
+# runs the gateway as root). Verified explicitly with `id omnipus` rather
+# than trusting the exit status.
+RUN set -eux; \
+    userdel -r node 2>/dev/null || true; \
+    groupdel node 2>/dev/null || true; \
+    groupadd -g 1000 omnipus; \
+    useradd -u 1000 -g omnipus -m -d /home/omnipus -s /usr/sbin/nologin omnipus; \
+    id omnipus
 
 USER omnipus
 
