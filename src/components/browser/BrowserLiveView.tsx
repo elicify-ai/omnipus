@@ -274,6 +274,13 @@ const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite
 // firstFrameTimedOut for the silent-failure this bounds.
 const FIRST_FRAME_TIMEOUT_MS = 15_000
 
+// BLANK_TAB_URL is the placeholder a not-yet-navigated tab reports. The address
+// bar must not display it: showing "about:blank" to a user who is looking at the
+// Omnipus start page is noise, and it would also overwrite a url the user is
+// about to submit on a fresh tab. Kept in sync with pkg/tools/browser's
+// BlankPageURL.
+const BLANK_TAB_URL = 'about:blank'
+
 /**
  * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
  * hostname parsed from `url`, fall back to "New tab". The wire type carries
@@ -398,6 +405,13 @@ export function BrowserLiveView({
   // somewhere useful instead of on a container that just stopped capturing
   // keys (see releaseWheel below).
   const addressBarRef = useRef<HTMLInputElement | null>(null)
+  // urlBarEditingRef guards the address bar against being overwritten while the
+  // user is mid-typing. The bar now follows the ACTIVE TAB's url (see the
+  // effect below), and without this guard a tab/url update arriving between
+  // keystrokes would yank a half-typed address away — the "URL bar clears
+  // itself" symptom from the 2026-08-03 recordings. Set on focus, cleared on
+  // blur and on submit.
+  const urlBarEditingRef = useRef(false)
   const frameRef = useRef<BrowserScreencastFrame | null>(null)
   const controllingRef = useRef(false)
   // ── ADR-040 D2 implicit control model ───────────────────────────────────
@@ -552,6 +566,7 @@ export function BrowserLiveView({
   // ── Omnibox (ADR-039 D-A2, ADR-040 D5 — always visible) ──────────────────
   const [urlInput, setUrlInput] = useState('')
 
+
   // ── Tab strip (ADR-041 D4) — the latest known tab list + active index,
   // straight off the most recent `browser_tabs` frame. `null` until the
   // first one arrives (the strip stays unrendered — never shown empty).
@@ -568,6 +583,27 @@ export function BrowserLiveView({
   // would also be acceptable — this "reconcile from the next frame" choice
   // is a local implementation decision, not something the ADR mandates.)
   const [tabState, setTabState] = useState<{ tabs: BrowserTabsFrame['tabs']; activeIndex: number } | null>(null)
+  // Keep the address bar in sync with the ACTIVE TAB's real url.
+  //
+  // Before this, setUrlInput was called in exactly one place: the omnibox's own
+  // submit handler. So the bar only ever showed what the USER typed, and every
+  // other navigation left it stale — Back and Refresh (operator report:
+  // "back button and refresh button do not work"), agent-driven navigation, and
+  // ordinary in-page link clicks. Measured on v53: after pressing Back the page
+  // and tab title correctly moved to example.com while the bar still read
+  // en.wikipedia.org/wiki/Octopus, which is why the buttons LOOKED broken —
+  // they had in fact navigated.
+  //
+  // tabState is the same source of truth the tab strip renders from (ADR-041
+  // D4), so the bar can never disagree with the strip again.
+  useEffect(() => {
+    if (urlBarEditingRef.current) return // never clobber a half-typed address
+    const active = tabState?.tabs?.[tabState.activeIndex]
+    const url = active?.url
+    if (typeof url === 'string' && url !== '' && url !== BLANK_TAB_URL) {
+      setUrlInput(url)
+    }
+  }, [tabState])
 
   // ── Annotate mode (ADR-039 D-B1/B2) — container-relative CSS coords for
   // the live selection-box overlay; frozen (not cleared) once a selection
@@ -1714,6 +1750,9 @@ export function BrowserLiveView({
       takeWheelIfNeeded()
       wsRef.current?.sendInput({ kind: 'navigate', url: resolved })
       setUrlInput(resolved)
+      // Submit ends the edit: the tab-follow effect may now correct this to the
+      // url the browser actually landed on (a redirect, a normalised form).
+      urlBarEditingRef.current = false
     },
     [urlInput, takeWheelIfNeeded],
   )
@@ -2447,6 +2486,12 @@ export function BrowserLiveView({
           type="text"
           value={urlInput}
           onChange={(e) => setUrlInput(e.target.value)}
+          onFocus={() => {
+            urlBarEditingRef.current = true
+          }}
+          onBlur={() => {
+            urlBarEditingRef.current = false
+          }}
           placeholder="Search or enter a URL…"
           aria-label="Address bar"
           className="h-8 flex-1 text-xs"

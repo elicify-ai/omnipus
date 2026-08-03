@@ -359,3 +359,93 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
     expect(useUiStore.getState().toasts.some((t) => /could not switch tabs/i.test(t.message))).toBe(true)
   })
 })
+
+// Regression coverage for the address bar going stale (operator report,
+// 2026-08-03: "back button and refresh button do not work").
+//
+// They DID work. Measured on v53: pressing Back moved the page and the tab
+// title to example.com while the address bar still read
+// en.wikipedia.org/wiki/Octopus — so the buttons looked broken because the bar
+// contradicted the page. Cause: setUrlInput was called in exactly ONE place,
+// the omnibox's own submit handler, so the bar only ever reflected what the
+// USER typed. Every other navigation — Back, Refresh, agent-driven, in-page
+// links — left it behind.
+//
+// The bar now follows the active tab's url from the same browser_tabs frame the
+// strip renders from, so the two can never disagree.
+describe('BrowserLiveView — address bar follows the active tab', () => {
+  const addressBar = () => screen.getByLabelText('Address bar') as HTMLInputElement
+
+  it('shows the active tab url without the user typing anything', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+
+    expect(addressBar().value).toBe('https://example.com/')
+  })
+
+  it('updates when navigation happens without the omnibox — the Back/Refresh case', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Octopus', url: 'https://en.wikipedia.org/wiki/Octopus', active: true }])
+    expect(addressBar().value).toBe('https://en.wikipedia.org/wiki/Octopus')
+
+    // Back: the server reports the tab now sits on the previous entry.
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+    expect(addressBar().value).toBe('https://example.com/')
+  })
+
+  it('follows the active tab when the user switches tabs', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const tabs = [
+      { index: 0, title: 'Example Domain', url: 'https://example.com/' },
+      { index: 1, title: 'Octopus', url: 'https://en.wikipedia.org/wiki/Octopus' },
+    ]
+    emitTabs(0, tabs)
+    expect(addressBar().value).toBe('https://example.com/')
+
+    emitTabs(1, tabs)
+    expect(addressBar().value).toBe('https://en.wikipedia.org/wiki/Octopus')
+  })
+
+  // The guard that keeps this fix from becoming the FIRST bug reported in this
+  // series ("the URL bar clears itself while I type").
+  it('never overwrites a url the user is midway through typing', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+
+    const bar = addressBar()
+    fireEvent.focus(bar)
+    fireEvent.change(bar, { target: { value: 'https://my-half-typed-ur' } })
+
+    // A tabs frame lands mid-typing (a background title refresh, the agent
+    // navigating another tab, a periodic re-broadcast).
+    emitTabs(0, [{ index: 0, title: 'Something Else', url: 'https://unrelated.example/', active: true }])
+
+    expect(bar.value).toBe('https://my-half-typed-ur')
+  })
+
+  it('resumes following the active tab once the user leaves the bar', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const bar = addressBar()
+    fireEvent.focus(bar)
+    fireEvent.change(bar, { target: { value: 'typing…' } })
+    fireEvent.blur(bar)
+
+    emitTabs(0, [{ index: 0, title: 'Example Domain', url: 'https://example.com/', active: true }])
+    expect(bar.value).toBe('https://example.com/')
+  })
+
+  // about:blank is what a not-yet-navigated tab reports; showing it to a user
+  // looking at the Omnipus start page is noise.
+  it('does not display the blank-tab placeholder', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'Omnipus Browser', url: 'about:blank', active: true }])
+
+    expect(addressBar().value).toBe('')
+  })
+})
