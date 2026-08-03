@@ -229,7 +229,7 @@ func TestDefaultConfig_SetsIdleTTL(t *testing.T) {
 // a new tab actually NAVIGATED there. It did not — chromedp.NewContext opens a
 // bare about:blank — so the feature was inert in production while its unit
 // tests passed. Caught only by driving the live panel (UAT v39, 2026-08-03:
-// a brand-new tab measured luma 255 / 1 colour bucket, i.e. pure white).
+// a brand-new tab measured luma 255 / 1 color bucket, i.e. pure white).
 
 func TestNewTab_NavigatesToStartPage(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
@@ -294,7 +294,7 @@ func TestNewTab_StartPageNavigationFailureIsNonFatal(t *testing.T) {
 // so rather than add a second production seam purely for this test, this
 // asserts on the SOURCE: createTab must contain the call. A source assertion is
 // weak by nature, but it fails loudly on the one edit that caused the outage —
-// removing the wiring — which no behavioural test in this file can see.
+// removing the wiring — which no behavioral test in this file can see.
 func TestCreateTab_CallsStartPageNavigation(t *testing.T) {
 	src, err := os.ReadFile("manager.go")
 	require.NoError(t, err)

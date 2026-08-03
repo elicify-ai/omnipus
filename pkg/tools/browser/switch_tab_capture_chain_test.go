@@ -145,11 +145,15 @@ func TestSwitchTab_EverySwitchActivatesAndNotifies(t *testing.T) {
 func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t, 5)
 
+	// Capture the activated context via a slice rather than assigning a
+	// context.Context into a captured variable — the latter trips fatcontext
+	// ("nested context in function literal") and, more substantively, storing a
+	// context for later comparison is exactly the pattern that lint discourages.
 	var mu sync.Mutex
-	var activated context.Context
+	activatedCtxs := make([]context.Context, 0, 1)
 	m.activateTabFn = func(tabCtx context.Context) error {
 		mu.Lock()
-		activated = tabCtx
+		activatedCtxs = append(activatedCtxs, tabCtx)
 		mu.Unlock()
 		return nil
 	}
@@ -170,7 +174,8 @@ func TestSwitchTab_ActivatesTabMatchingResolvedSession(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Same(t, resolved, activated,
+	require.Len(t, activatedCtxs, 1, "exactly one activation expected")
+	assert.Same(t, resolved, activatedCtxs[0],
 		"the tab activated in Chrome must be the same context Session() resolves, or the "+
 			"panel and the capture disagree about which tab is live")
 }

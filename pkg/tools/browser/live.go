@@ -74,13 +74,14 @@ const viewportSetTimeout = 5 * time.Second
 // See the compensation step in SetViewport's mechanism doc comment.
 const viewportDriftTolerancePx = 8
 
-// viewportCompensationMaxAttempts bounds the chrome-delta convergence loop in
-// SetViewport. A deficit that is itself scaled (deviceScaleFactor 2) needs more
-// than the original single pass; a dimension Chrome genuinely refuses to grant
-// (a real ceiling, not an offset) must still cost only a fixed, small number of
-// CDP round trips. Three covers the measured DSF-2 case with headroom while
-// keeping the worst case bounded on the resize path.
-const viewportCompensationMaxAttempts = 3
+// viewportFetchFailureEscalation is how many CONSECUTIVE viewport-read failures
+// turn a silently-dropped pointer event into a user-visible error. Two, not
+// one: a single miss is routinely transient (a cache invalidated by a legitimate
+// resize, a lost race with a reflow) and surfacing it would be noise. A second
+// consecutive failure — a full viewportInputFetchBackoff later — is no longer
+// plausibly transient, and silence there is precisely the "dead browser looks
+// idle" failure ADR-038 finding #4 exists to prevent.
+const viewportFetchFailureEscalation = 2
 
 // viewportInputFetchTimeout bounds rescaleToCSSViewport's best-effort
 // cache-miss fetch of the tab's CSS viewport. Deliberately much shorter than
@@ -633,7 +634,7 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 	// NOT iterated (investigated 2026-08-03): a DSF-2 client logged requested
 	// 512 -> actual 369 WITH compensated:true, which looks like a failure to
 	// converge. Every deficit model that reproduces those numbers, however, is
-	// closed by this single pass arithmetically — so the observed behaviour is
+	// closed by this single pass arithmetically — so the observed behavior is
 	// NOT explained by "one pass isn't enough", and a convergence loop was
 	// reverted rather than shipped on an unverified theory. The real mechanism
 	// is still open; see the compensated_* fields logged below, which exist so
@@ -1074,6 +1075,15 @@ type LiveView struct {
 	// doesn't repeat the same failing round trip — and its WARN log — once
 	// per input event. See rescaleToCSSViewport's doc comment.
 	nextFetchAfter time.Time
+	// viewportFetchFailures counts CONSECUTIVE cache-miss fetch failures in
+	// rescaleToCSSViewport, reset on any success. A single failure is a
+	// transient the user simply retries past; a sustained streak means the CDP
+	// transport is wedged or the tab is dead, which LiveInputErrorReal's own
+	// doc comment names as the single most important thing to surface ("a dead
+	// browser looked identical to a healthy, idle one" — ADR-038 finding #4).
+	// Escalating on the streak keeps a routine hiccup quiet while ensuring a
+	// genuinely dead tab still reaches the user.
+	viewportFetchFailures int
 
 	// pausedForWebRTC (ADR-047 fix-wave finding 3, pod-CPU-saturation UAT:
 	// "inputs feel dead / choppy under heavy video") is true when the CDP
@@ -2100,10 +2110,25 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 				// DROP rather than dispatch at an unmapped coordinate — see
 				// rescaleToCSSViewport's doc comment: unscaled coordinates
 				// land ~34% off (measured), i.e. on the wrong element, and a
-				// mis-aimed click can navigate away, delete or submit. Benign
-				// so the client is not shown an error for a transient
-				// viewport read it can simply retry past; the next event
-				// after the backoff maps correctly.
+				// mis-aimed click can navigate away, delete or submit.
+				//
+				// Classification matters as much as the drop. A one-off miss
+				// is a transient the user retries past, so it stays benign and
+				// silent. But a SUSTAINED streak means the CDP transport is
+				// wedged or the tab is dead — and LiveInputErrorReal's own doc
+				// comment names exactly that as the thing that must reach the
+				// user ("a dead browser looked identical to a healthy, idle
+				// one", ADR-038 finding #4). Without this escalation a crashed
+				// tab would swallow every click forever with no error, since
+				// pointer kinds bail out here and never reach the real-error
+				// CDP dispatch below.
+				lv.mu.Lock()
+				failures := lv.viewportFetchFailures
+				lv.mu.Unlock()
+				if failures >= viewportFetchFailureEscalation {
+					return realInputError(
+						"browser live: cannot read the tab's CSS viewport after %d consecutive attempts — the browser tab may have crashed or the CDP transport is wedged", failures)
+				}
 				return benignInputError("browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch", in.Kind)
 			}
 			in.X, in.Y = rx, ry
@@ -2172,7 +2197,7 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 // timeout per event.
 //
 // On fetch failure it reports ok=false and the caller DROPS the event.
-// This reverses the previous behaviour, which dispatched unscaled on the
+// This reverses the previous behavior, which dispatched unscaled on the
 // reasoning that "a slightly-off click still beats a completely dead panel".
 // Measurement killed that argument (2026-08-03): the capture frame and the CSS
 // viewport differed by 562 vs 369 px, so an unscaled click lands ~34% below
@@ -2183,7 +2208,7 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 //
 // Failure backoff (item 3b): a failed fetch arms lv.nextFetchAfter
 // viewportInputFetchBackoff into the future. While that window is open,
-// further cache-miss calls dispatch unscaled WITHOUT retrying the fetch or
+// further cache-miss calls are DROPPED (see above) WITHOUT retrying the fetch or
 // re-logging the failure — before this fix, a sustained CDP hiccup meant
 // every subsequent input event repeated the same (bounded, but non-zero
 // cost) failing round trip and logged a fresh WARN, collapsing input
@@ -2212,6 +2237,7 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 			})
 			lv.mu.Lock()
 			lv.nextFetchAfter = time.Now().Add(viewportInputFetchBackoff)
+			lv.viewportFetchFailures++
 			lv.mu.Unlock()
 			return 0, 0, false
 		}
@@ -2219,6 +2245,7 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 		lv.mu.Lock()
 		lv.cssViewportW, lv.cssViewportH = int(w), int(h)
 		lv.nextFetchAfter = time.Time{}
+		lv.viewportFetchFailures = 0
 		lv.mu.Unlock()
 		cssW, cssH = int(w), int(h)
 	}

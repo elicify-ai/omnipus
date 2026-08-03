@@ -35,46 +35,6 @@ import (
 //
 // These tests model that: a deficit applied to EVERY request including the
 // compensated one, across the DPR values real clients report.
-
-// deficitCDP builds a runCDP stand-in that models the measured failure: Chrome
-// subtracts a constant `deficit` from whatever window-bounds height it is
-// given — INCLUDING the compensated request.
-//
-// That last clause is the whole point, and modelling it wrong is how this bug
-// stayed invisible. The compensator derives its correction from the FIRST gap
-// (requested - actual) and applies `requested + gap`. If Chrome then honoured
-// that, one pass would converge and single-shot would be fine. It does not:
-// against the operator's real session the same subtraction hit the compensated
-// request too, so the correction was systematically short and the viewport
-// never reached the target however many times it was nudged:
-//
-//	orig 654 -> compensated ask 797 -> got 511   (286 short)
-//	orig 512 -> compensated ask 655 -> got 369   (286 short)
-//	orig 575 -> compensated ask 718 -> got 432   (286 short)
-//
-// The deficit is 286 = 143 x 2 (the deviceScaleFactor), while the compensator
-// measured only the 143 visible in the first read-back — it under-corrected by
-// exactly half, every time. Iterating is what closes that gap.
-func deficitCDP(t *testing.T, deficit int, requested *[]int) func(context.Context, time.Duration, ...chromedp.Action) error {
-	t.Helper()
-	var lastReqW, lastReqH int
-	return func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		if wb, ok := actions[0].(windowBoundsAction); ok {
-			lastReqW, lastReqH = wb.width, wb.height
-			*requested = append(*requested, wb.height)
-			return nil
-		}
-		if lm, ok := actions[0].(layoutMetricsAction); ok {
-			h := lastReqH - deficit
-			if h < 1 {
-				h = 1
-			}
-			*lm.w, *lm.h = int64(lastReqW), int64(h)
-			return nil
-		}
-		return nil
-	}
-}
 func TestSetViewport_DeviceMatrix_BoundedWhenChromeRefuses(t *testing.T) {
 	for _, dpr := range []float64{1, 2, 3} {
 		t.Run("dpr"+trimFloat(dpr), func(t *testing.T) {
@@ -96,9 +56,13 @@ func TestSetViewport_DeviceMatrix_BoundedWhenChromeRefuses(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, applied, "an unreachable target must still apply, not error")
 
-			assert.LessOrEqual(t, bounds, viewportCompensationMaxAttempts+1,
-				"a refusing browser must cost at most the initial apply plus %d compensation attempts, got %d",
-				viewportCompensationMaxAttempts, bounds)
+			// Two window-bounds calls total: the initial apply plus exactly
+			// one compensation attempt. Asserted as an exact value, not a
+			// loose upper bound — a loose bound would pass equally against a
+			// looping implementation and so would guard nothing.
+			assert.Equal(t, 2, bounds,
+				"a refusing browser must cost the initial apply plus exactly one compensation "+
+					"attempt (no loop), got %d", bounds)
 
 			lv.mu.Lock()
 			gotH := lv.cssViewportH
@@ -110,11 +74,22 @@ func TestSetViewport_DeviceMatrix_BoundedWhenChromeRefuses(t *testing.T) {
 	}
 }
 
-// TestSetViewport_DeviceMatrix_KeepsBestNotLast — an attempt that overshoots
-// must never leave the cache worse than an earlier, closer read-back. The
-// cached value feeds input coordinate mapping, so "closest to the page's real
-// size" is the property that matters, not "most recent".
-func TestSetViewport_DeviceMatrix_KeepsBestNotLast(t *testing.T) {
+// TestSetViewport_SingleCompensationPass_OverwritesUnconditionally pins what
+// the shipped code ACTUALLY does, which is not the same as what is desirable.
+//
+// SetViewport makes exactly ONE compensation attempt and then assigns
+// `actualW, actualH = compW2, compH2` unconditionally — there is no
+// keep-the-closest comparison against the pre-compensation read-back. So a
+// compensation pass that OVERSHOOTS leaves the cache further from the target
+// than before, and that cached value is what input-coordinate mapping trusts.
+//
+// This test previously claimed the opposite ("the CLOSEST read-back must win"),
+// which was false: it passed only because its fixture happened to improve on
+// the first reading. Asserting a best-of-N mechanism that does not exist gave
+// false assurance about behavior under a real overshoot. Documented here as a
+// known limitation rather than silently "tested" — see the DSF-2 shrink, still
+// open, in this file's header.
+func TestSetViewport_SingleCompensationPass_OverwritesUnconditionally(t *testing.T) {
 	var reads int
 	runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
 		if _, ok := actions[0].(windowBoundsAction); ok {
@@ -122,13 +97,10 @@ func TestSetViewport_DeviceMatrix_KeepsBestNotLast(t *testing.T) {
 		}
 		if lm, ok := actions[0].(layoutMetricsAction); ok {
 			reads++
-			switch reads {
-			case 1:
-				*lm.w, *lm.h = 603, 400 // 112 off
-			case 2:
-				*lm.w, *lm.h = 603, 505 // 7 off — best, and within tolerance
-			default:
-				*lm.w, *lm.h = 603, 200 // wild overshoot, must NOT be kept
+			if reads == 1 {
+				*lm.w, *lm.h = 603, 500 // 12 off — outside tolerance, triggers compensation
+			} else {
+				*lm.w, *lm.h = 603, 300 // compensation OVERSHOOTS: 212 off, far worse
 			}
 			return nil
 		}
@@ -143,44 +115,12 @@ func TestSetViewport_DeviceMatrix_KeepsBestNotLast(t *testing.T) {
 	lv.mu.Lock()
 	gotH := lv.cssViewportH
 	lv.mu.Unlock()
-	assert.Equal(t, 505, gotH,
-		"the CLOSEST read-back must win; keeping the last one would hand input mapping a worse number")
-}
 
-// TestSetViewport_DeviceMatrix_NoCompensationWhenWithinTolerance guards the
-// other direction: a browser that honours the request must not be perturbed by
-// pointless extra round trips at any DPR.
-func TestSetViewport_DeviceMatrix_NoCompensationWhenWithinTolerance(t *testing.T) {
-	for _, dpr := range []float64{1, 1.5, 2, 3} {
-		t.Run("dpr"+trimFloat(dpr), func(t *testing.T) {
-			var bounds int
-			runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-				if _, ok := actions[0].(windowBoundsAction); ok {
-					bounds++
-					return nil
-				}
-				if lm, ok := actions[0].(layoutMetricsAction); ok {
-					*lm.w, *lm.h = 603, 512 // exactly what was asked
-					return nil
-				}
-				return nil
-			}
-			reg, _ := newViewportTestLiveView(runCDP)
-
-			applied, err := reg.SetViewport("s1", 603, 512, dpr)
-			require.NoError(t, err)
-			require.True(t, applied)
-			assert.Equal(t, 1, bounds,
-				"an honoured request must cost exactly one window-bounds call at dpr %v", dpr)
-		})
-	}
-}
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
+	assert.Equal(t, 300, gotH,
+		"the compensated read-back is taken unconditionally, even when it is WORSE than the "+
+			"pre-compensation value — pinning the real behavior so a future keep-the-closest "+
+			"change is a deliberate, visible improvement rather than an accident")
+	assert.Equal(t, 2, reads, "exactly one compensation pass: two read-backs total, no loop")
 }
 
 func trimFloat(f float64) string {

@@ -2,6 +2,8 @@ package browser
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,4 +124,103 @@ func TestSharedControl_ControllerRemainsPresentational(t *testing.T) {
 	lv.releaseControl("viewerA")
 	require.NoError(t, lv.dispatchInput("viewerB", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"}))
 	require.Equal(t, before+2, dispatched, "releasing control must likewise change nothing about dispatch")
+}
+
+// --- viewport-read failure escalation (silent-failure review, 2026-08-03) ---
+//
+// Dropping an unmappable pointer event is right (an unscaled coordinate lands
+// ~34% off, i.e. on the WRONG element). But classifying every such drop as
+// benign reopened ADR-038 finding #4: pointer kinds bail out before the
+// real-error CDP dispatch, so a crashed tab would swallow every click forever
+// with no error anywhere the user could see — "a dead browser looked identical
+// to a healthy, idle one". A sustained streak must escalate.
+
+func TestDispatchInput_TransientViewportMiss_StaysBenign(t *testing.T) {
+	lv := &LiveView{
+		sessionID: "s1",
+		viewers:   make(map[string]FrameSink),
+		tabCtx:    context.Background(),
+		runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
+			return errors.New("simulated one-off CDP hiccup")
+		},
+	}
+
+	err := lv.dispatchInput("v1", LiveInput{
+		Kind: "mouse_down", HasXY: true, X: 10, Y: 10, CaptureWidth: 562, CaptureHeight: 562,
+	})
+	require.Error(t, err)
+	require.True(t, IsBenignLiveInputError(err),
+		"a FIRST viewport-read miss is routinely transient (a cache invalidated by a legitimate "+
+			"resize) — surfacing it to the user would be noise")
+}
+
+func TestDispatchInput_SustainedViewportFailure_EscalatesToRealError(t *testing.T) {
+	lv := &LiveView{
+		sessionID: "s1",
+		viewers:   make(map[string]FrameSink),
+		tabCtx:    context.Background(),
+		runCDP: func(context.Context, time.Duration, ...chromedp.Action) error {
+			return errors.New("simulated wedged CDP transport")
+		},
+	}
+	in := LiveInput{Kind: "mouse_down", HasXY: true, X: 10, Y: 10, CaptureWidth: 562, CaptureHeight: 562}
+
+	// First failure: benign, and it arms the backoff.
+	require.True(t, IsBenignLiveInputError(lv.dispatchInput("v1", in)))
+
+	// Clear the backoff so the next event actually retries the fetch, the way
+	// a real client's event would once viewportInputFetchBackoff has elapsed.
+	lv.mu.Lock()
+	lv.nextFetchAfter = time.Time{}
+	lv.mu.Unlock()
+
+	err := lv.dispatchInput("v1", in)
+	require.Error(t, err)
+	require.False(t, IsBenignLiveInputError(err),
+		"a SECOND consecutive failure is no longer plausibly transient — it must reach the user, "+
+			"or a crashed tab silently swallows every click (ADR-038 finding #4)")
+	require.Contains(t, err.Error(), "may have crashed",
+		"the escalated error must name the likely cause so the user knows to reload, not just retry")
+}
+
+func TestDispatchInput_ViewportRecovery_ResetsTheFailureStreak(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	lv := &LiveView{
+		sessionID: "s1",
+		viewers:   make(map[string]FrameSink),
+		tabCtx:    context.Background(),
+		runCDP: func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+			if fail.Load() {
+				return errors.New("simulated CDP hiccup")
+			}
+			if lm, ok := actions[0].(layoutMetricsAction); ok {
+				*lm.w, *lm.h = 603, 512
+			}
+			return nil
+		},
+	}
+
+	// Drive rescaleToCSSViewport directly rather than through dispatchInput:
+	// the streak is entirely that function's state, and the full dispatch path
+	// would continue into a real CDP call that needs a BrowserManager this
+	// hand-built LiveView deliberately does not have.
+	_, _, ok := lv.rescaleToCSSViewport(context.Background(), 10, 10, 562, 562)
+	require.False(t, ok)
+	lv.mu.Lock()
+	require.Equal(t, 1, lv.viewportFetchFailures, "the failure must be counted")
+	lv.nextFetchAfter = time.Time{} // simulate the backoff window elapsing
+	lv.mu.Unlock()
+
+	// Transport recovers. A successful read must clear the streak so a LATER
+	// isolated hiccup is treated as transient again rather than inheriting a
+	// stale count and escalating spuriously.
+	fail.Store(false)
+	_, _, ok = lv.rescaleToCSSViewport(context.Background(), 10, 10, 562, 562)
+	require.True(t, ok, "the recovered transport must map successfully")
+
+	lv.mu.Lock()
+	streak := lv.viewportFetchFailures
+	lv.mu.Unlock()
+	require.Zero(t, streak, "a successful viewport read must reset the consecutive-failure streak")
 }
