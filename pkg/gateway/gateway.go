@@ -2615,6 +2615,13 @@ func setupAndStartServices(
 	// All handlers live in rest_preview.go.
 	api.registerPreviewEndpoints(runningServices.ChannelManager)
 
+	// Omnipus start page — what a fresh browser tab opens instead of
+	// about:blank. Registered bare (no auth) for the same structural reason as
+	// /preview/: the client is the managed headless Chrome, which carries no
+	// session cookie, and the page is static and non-sensitive. See
+	// browser_start_page.go.
+	api.registerBrowserStartPage(runningServices.ChannelManager)
+
 	// Catch-all for any /api/ path not registered — returns JSON 404 instead of SPA HTML.
 	// Do not echo r.URL.Path in the response; that leaks internal routing details.
 	runningServices.ChannelManager.RegisterHTTPHandler(

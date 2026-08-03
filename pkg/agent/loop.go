@@ -1799,8 +1799,21 @@ func registerSharedTools(
 				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
 					browserCfg.IdleTTL = 0
 				}
+				// Start page: an operator override wins; otherwise default to
+				// the gateway's own served start page so a fresh tab lands
+				// somewhere branded and legible instead of about:blank (a blank
+				// void is indistinguishable from a broken panel on this
+				// surface). Addressed over LOOPBACK deliberately — the client
+				// is the managed headless Chrome running on this same host, so
+				// localhost is reachable even when the gateway binds a wildcard
+				// address (where the canonical public origin is empty) and even
+				// with no public URL configured at all. The same
+				// localhost:port origin is already granted through the SSRF
+				// checker just above.
 				if cfg.Tools.Browser.StartPageURL != "" {
 					browserCfg.StartPageURL = cfg.Tools.Browser.StartPageURL
+				} else if cfg.Gateway.Port > 0 {
+					browserCfg.StartPageURL = fmt.Sprintf("http://localhost:%d/browser-start", cfg.Gateway.Port)
 				}
 				// ADR-052 D2/M1: PreferPackaged and TrustPathChrome are
 				// ALWAYS copied (bool fields, no "unset vs explicit false"
