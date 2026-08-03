@@ -1498,7 +1498,11 @@ components:
 
     SessionStartedFrame:
       title: SessionStartedFrame
-      description: Server → client new session minted.
+      description: >
+        Server → client new session minted. Session-scoped (registered in
+        SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit
+        (FR-089) — a chat-lifecycle frame, not turn output — so
+        producing_session_id is absent (FR-013).
       type: object
       required:
         - type
@@ -1513,10 +1517,19 @@ components:
           minLength: 1
         agent_id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (b) (FR-089): absent for this frame type.
 
     TokenFrame:
       title: TokenFrame
-      description: Server → client partial LLM response token.
+      description: >
+        Server → client partial LLM response token. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the
+        ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
         - type
@@ -1536,6 +1549,13 @@ components:
           maxLength: 65536
         agent_id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (a) (FR-089): the child turn's own session id when this
+            frame crosses the wire from a delegated child.
 
     DoneStats:
       title: DoneStats
@@ -1576,7 +1596,10 @@ components:
 
     DoneFrame:
       title: DoneFrame
-      description: Server → client turn complete.
+      description: >
+        Server → client turn complete. Session-scoped (registered in
+        SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit
+        (FR-089) — genuinely child-turn-produced.
       type: object
       required:
         - type
@@ -1591,6 +1614,13 @@ components:
           minLength: 1
         stats:
           $ref: '#/components/schemas/DoneStats'
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (a) (FR-089): the child turn's own session id when this
+            frame crosses the wire from a delegated child.
 
     ErrorFrame:
       title: ErrorFrame
@@ -1616,7 +1646,9 @@ components:
       title: ToolCallStartFrame
       description: >
         Server → client tool execution started. params MUST be object (never null) —
-        nil-safety contract to prevent Object.keys(params) crash.
+        nil-safety contract to prevent Object.keys(params) crash. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057
+        W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
         - type
@@ -1648,6 +1680,13 @@ components:
           type: string
         agent_id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (a) (FR-089): the child turn's own session id when this
+            frame crosses the wire from a delegated child.
 
     TruncatedResult:
       title: TruncatedResult
@@ -1755,7 +1794,10 @@ components:
 
     ToolCallResultFrame:
       title: ToolCallResultFrame
-      description: Server → client tool execution completed.
+      description: >
+        Server → client tool execution completed. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the
+        ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
         - type
@@ -1803,10 +1845,23 @@ components:
           type: string
         agent_id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (a) (FR-089): the child turn's own session id when this
+            frame crosses the wire from a delegated child.
 
     SubagentStartFrame:
       title: SubagentStartFrame
-      description: Server → client subagent span opened (FR-H-004).
+      description: >
+        Server → client subagent span opened (FR-H-004). Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
+        ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child
+        (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing
+        key, so producing_session_id would equal session_id and is
+        therefore absent (FR-013's "iff it differs").
       type: object
       required:
         - type
@@ -1833,12 +1888,24 @@ components:
           maxLength: 100
         agent_id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (b) (FR-089): absent for this frame type — producing ==
+            routing by construction (FR-017).
 
     SubagentEndFrame:
       title: SubagentEndFrame
       description: >
         Server → client subagent span closed (FR-H-004). status MUST be one of
         the five allowed values — the SPA drops frames with invalid status (W4-6).
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b)
+        per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the
+        child (pkg/agent/subturn.go); FR-017 pins its SessionID to the
+        routing key, so producing_session_id would equal session_id and is
+        therefore absent (FR-013's "iff it differs").
       type: object
       required:
         - type
@@ -1881,6 +1948,13 @@ components:
           type: string
         message:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (b) (FR-089): absent for this frame type — producing ==
+            routing by construction (FR-017).
 
     SubagentMessageFrame:
       title: SubagentMessageFrame
@@ -2000,7 +2074,11 @@ components:
 
     TaskStatusChangedFrame:
       title: TaskStatusChangedFrame
-      description: Server → client task status updated.
+      description: >
+        Server → client task status updated. Session-scoped (registered in
+        SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057
+        W5 audit (FR-089) — do not assume presence or absence of
+        producing_session_id for this type until the audit classifies it.
       type: object
       required:
         - type
@@ -2029,10 +2107,20 @@ components:
             - failed
         agent_id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+            (FR-089) — see TaskStatusChangedFrame's description.
 
     ReplayMessageFrame:
       title: ReplayMessageFrame
-      description: Server → client replayed transcript entry.
+      description: >
+        Server → client replayed transcript entry. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
+        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path,
+        not by a turn, so producing_session_id is absent (FR-013).
       type: object
       required:
         - type
@@ -2078,6 +2166,13 @@ components:
             message it cancels, without relying on stream adjacency (async
             delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (b) (FR-089): absent for this frame type — emitted by the
+            gateway replay path, not by a turn.
 
     ReplayErrorFrame:
       title: ReplayErrorFrame
@@ -2136,7 +2231,17 @@ components:
 
     RateLimitFrame:
       title: RateLimitFrame
-      description: Server → client rate limit applied (SEC-26).
+      description: >
+        Server → client rate limit applied (SEC-26). Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the
+        ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited
+        and recorded here rather than fixed (operator decision 11): the
+        underlying RateLimitPayload (pkg/agent/events.go) carries no
+        SessionID field at all, so there is no child-provenance signal to
+        stamp a producing_session_id from; this frame's session_id is
+        reconstructed downstream from the connection's chat→session map at
+        serialization time. No producing_session_id property is added to
+        this schema.
       type: object
       required:
         - type
@@ -2207,7 +2312,9 @@ components:
       title: MediaFrame
       description: >
         Server → client media attachments. parts MUST be a non-empty array (never
-        null) — nil-safety contract to prevent parts.map() crash.
+        null) — nil-safety contract to prevent parts.map() crash. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057
+        W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
         - type
@@ -2227,10 +2334,21 @@ components:
           maxItems: 32
           items:
             $ref: '#/components/schemas/MediaPart'
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (a) (FR-089): the child turn's own session id when this
+            frame crosses the wire from a delegated child.
 
     AgentSwitchedFrame:
       title: AgentSwitchedFrame
-      description: Server → client active agent changed.
+      description: >
+        Server → client active agent changed. Session-scoped (registered
+        in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the
+        ADR-057 W5 audit (FR-089) — do not assume presence or absence of
+        producing_session_id for this type until the audit classifies it.
       type: object
       required:
         - type
@@ -2247,6 +2365,12 @@ components:
           type: string
         message:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+            (FR-089) — see this frame's description.
 
     ToolApprovalRequiredFrame:
       title: ToolApprovalRequiredFrame
@@ -2254,6 +2378,8 @@ components:
         Server → client tool approval needed (FR-011, FR-082).
         CRITICAL: args MUST be object (never null). Backend coerces nil → {}.
         SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug).
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a)
+        per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
       type: object
       required:
         - type
@@ -2299,6 +2425,13 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (a) (FR-089): the child turn's own session id when this
+            frame crosses the wire from a delegated child.
 
     SessionStatePendingApproval:
       title: SessionStatePendingApproval
@@ -2361,7 +2494,12 @@ components:
 
     SystemOverloadFrame:
       title: SystemOverloadFrame
-      description: Server → client system at capacity (FR-016, MAJ-009).
+      description: >
+        Server → client system at capacity (FR-016, MAJ-009). Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned
+        by the ADR-057 W5 audit (FR-089) — do not assume presence or
+        absence of producing_session_id for this type until the audit
+        classifies it.
       type: object
       required:
         - type
@@ -2376,6 +2514,12 @@ components:
           minLength: 1
         message:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+            (FR-089) — see this frame's description.
 
     ReplayWarningStats:
       title: ReplayWarningStats
@@ -2413,6 +2557,10 @@ components:
       description: >
         Server → client cancel progress notification (B3). stage MUST be one of
         three values — SPA validates via isValidFrame() and drops invalid stages.
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not
+        yet assigned by the ADR-057 W5 audit (FR-089) — do not assume
+        presence or absence of producing_session_id for this type until the
+        audit classifies it.
       type: object
       required:
         - type
@@ -2432,10 +2580,20 @@ components:
             - graceful
             - hard
             - detached
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+            (FR-089) — see this frame's description.
 
     SessionCloseAckFrame:
       title: SessionCloseAckFrame
-      description: Server → client session close acknowledged.
+      description: >
+        Server → client session close acknowledged. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
+        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn
+        output, so producing_session_id is absent (FR-013).
       type: object
       required:
         - type
@@ -2450,6 +2608,12 @@ components:
           minLength: 1
         id:
           type: string
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
+            Class (b) (FR-089): absent for this frame type.
 
     DevicePairingRequestFrame:
       title: DevicePairingRequestFrame
@@ -3207,6 +3371,9 @@ components:
         completion, state change, and clear/stop. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep
         in sync by hand with components/schemas/GoalStatusFrame.yaml.
+        Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not
+        assume presence or absence of producing_session_id until the audit
+        classifies it.
       type: object
       required:
         - type
@@ -3274,13 +3441,22 @@ components:
             collapses into `failed`). See
             components/schemas/GoalStatusFrame.yaml for the full
             per-state crosswalk description.
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+            (FR-089) — see this frame's description.
 
     LoopStatusFrame:
       title: LoopStatusFrame
       description: >
         Server → client. Status push for a session's active /loop (ADR-049
         D6/D7/US-9). Emitted on run completion, state change, and stop.
-        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class
+        not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume
+        presence or absence of producing_session_id until the audit
+        classifies it.
       type: object
       required:
         - type
@@ -3323,6 +3499,12 @@ components:
             contract wave rather than a closed enum (unlike
             GoalStatusFrame.state) so naming it does not require a
             breaking change once Part B's implementation lands.
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: >
+            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+            (FR-089) — see this frame's description.
 
     PlanStatusFrame:
       title: PlanStatusFrame

@@ -3531,6 +3531,7 @@ func (e SessionStatus) Valid() bool {
 const (
 	SessionTypeChannel   SessionType = "channel"
 	SessionTypeChat      SessionType = "chat"
+	SessionTypeDelegate  SessionType = "delegate"
 	SessionTypeHeartbeat SessionType = "heartbeat"
 	SessionTypeScheduled SessionType = "scheduled"
 	SessionTypeTask      SessionType = "task"
@@ -3543,6 +3544,8 @@ func (e SessionType) Valid() bool {
 	case SessionTypeChannel:
 		return true
 	case SessionTypeChat:
+		return true
+	case SessionTypeDelegate:
 		return true
 	case SessionTypeHeartbeat:
 		return true
@@ -3771,6 +3774,7 @@ func (e SessionDetailSessionStatus) Valid() bool {
 const (
 	SessionDetailSessionTypeChannel   SessionDetailSessionType = "channel"
 	SessionDetailSessionTypeChat      SessionDetailSessionType = "chat"
+	SessionDetailSessionTypeDelegate  SessionDetailSessionType = "delegate"
 	SessionDetailSessionTypeHeartbeat SessionDetailSessionType = "heartbeat"
 	SessionDetailSessionTypeScheduled SessionDetailSessionType = "scheduled"
 	SessionDetailSessionTypeTask      SessionDetailSessionType = "task"
@@ -3783,6 +3787,8 @@ func (e SessionDetailSessionType) Valid() bool {
 	case SessionDetailSessionTypeChannel:
 		return true
 	case SessionDetailSessionTypeChat:
+		return true
+	case SessionDetailSessionTypeDelegate:
 		return true
 	case SessionDetailSessionTypeHeartbeat:
 		return true
@@ -5415,6 +5421,7 @@ func (e RestoreBackup200JSONResponseBodyStatus) Valid() bool {
 const (
 	ListSessionsParamsTypeChannel   ListSessionsParamsType = "channel"
 	ListSessionsParamsTypeChat      ListSessionsParamsType = "chat"
+	ListSessionsParamsTypeDelegate  ListSessionsParamsType = "delegate"
 	ListSessionsParamsTypeScheduled ListSessionsParamsType = "scheduled"
 	ListSessionsParamsTypeTask      ListSessionsParamsType = "task"
 	ListSessionsParamsTypeVerifier  ListSessionsParamsType = "verifier"
@@ -5426,6 +5433,8 @@ func (e ListSessionsParamsType) Valid() bool {
 	case ListSessionsParamsTypeChannel:
 		return true
 	case ListSessionsParamsTypeChat:
+		return true
+	case ListSessionsParamsTypeDelegate:
 		return true
 	case ListSessionsParamsTypeScheduled:
 		return true
@@ -10467,6 +10476,9 @@ type Session struct {
 	// Channel Channel identifier that initiated this session (e.g. "webchat", "telegram"). Always present (may be empty string for legacy sessions).
 	Channel string `json:"channel"`
 
+	// ChildCount Computed field (ADR-057 FR-091/FR-097/FR-104): count of this session's DIRECT children, resolved from the in-memory parent index in O(1) per row. Populated on GET /api/v1/sessions (both the default roots-only listing and flat=true) and on GET /api/v1/sessions?parent_session_id=... listings; zero for a session with no children. Not necessarily present on GET /api/v1/sessions/{id} single-session detail.
+	ChildCount *int `json:"child_count,omitempty"`
+
 	// CompactionSummaries Per-agent compaction summaries (multi-agent sessions only).
 	CompactionSummaries *map[string]string `json:"compaction_summaries,omitempty"`
 
@@ -10481,6 +10493,9 @@ type Session struct {
 
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
+
+	// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
+	ParentSessionId *string `json:"parent_session_id,omitempty"`
 
 	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
@@ -10545,7 +10560,7 @@ type Session struct {
 	// Title Human-readable session title. May be auto-generated or user-renamed.
 	Title string `json:"title"`
 
-	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
+	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 	Type *SessionType `json:"type,omitempty"`
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -10558,7 +10573,7 @@ type Session struct {
 // SessionStatus Current lifecycle status of the session.
 type SessionStatus string
 
-// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
+// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
@@ -10730,6 +10745,9 @@ type SessionDetail struct {
 		// Channel Channel identifier that initiated this session (e.g. "webchat", "telegram"). Always present (may be empty string for legacy sessions).
 		Channel string `json:"channel"`
 
+		// ChildCount Computed field (ADR-057 FR-091/FR-097/FR-104): count of this session's DIRECT children, resolved from the in-memory parent index in O(1) per row. Populated on GET /api/v1/sessions (both the default roots-only listing and flat=true) and on GET /api/v1/sessions?parent_session_id=... listings; zero for a session with no children. Not necessarily present on GET /api/v1/sessions/{id} single-session detail.
+		ChildCount *int `json:"child_count,omitempty"`
+
 		// CompactionSummaries Per-agent compaction summaries (multi-agent sessions only).
 		CompactionSummaries *map[string]string `json:"compaction_summaries,omitempty"`
 
@@ -10744,6 +10762,9 @@ type SessionDetail struct {
 
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
+
+		// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
+		ParentSessionId *string `json:"parent_session_id,omitempty"`
 
 		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
@@ -10808,7 +10829,7 @@ type SessionDetail struct {
 		// Title Human-readable session title. May be auto-generated or user-renamed.
 		Title string `json:"title"`
 
-		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
+		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 		Type *SessionDetailSessionType `json:"type,omitempty"`
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
@@ -10843,7 +10864,7 @@ type SessionDetailMessagesVerdictScope string
 // SessionDetailSessionStatus Current lifecycle status of the session.
 type SessionDetailSessionStatus string
 
-// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
+// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 type SessionDetailSessionType string
 
 // SessionLifecycleRecord The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
@@ -11347,6 +11368,16 @@ type SessionMessageSteerDirection string
 
 // SessionMessageSteerKind defines model for SessionMessageSteer.Kind.
 type SessionMessageSteerKind string
+
+// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+type SessionPage struct {
+	// NextCursor Opaque pagination cursor for the next page. Absent when this is the last page.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// PartialErrors Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed.
+	PartialErrors *[]string `json:"partial_errors,omitempty"`
+	Sessions      []Session `json:"sessions"`
+}
 
 // SessionRenameRequest Body for PUT /sessions/{id}. Renames a session.
 type SessionRenameRequest struct {
@@ -12760,25 +12791,22 @@ type ListSessionsParams struct {
 
 	// IncludeVerifier When true, includes sessions of type "verifier" in the response (ADR-052 FR-036). Defaults to false so verifier-role adjudication sessions stay hidden from the general session list (Sidebar, SearchModal); UsageScreen passes true to surface verifier LLM spend.
 	IncludeVerifier *bool `form:"include_verifier,omitempty" json:"include_verifier,omitempty"`
+
+	// ParentSessionId ADR-057 FR-091/US-19: return only the DIRECT children of this session id, a page at a time, instead of the default roots-only listing. A parent_session_id that does not resolve to any session returns an empty page (HTTP 200), not a 404 — "no children" is not distinguishable from "no such session" at this layer. Mutually exclusive with flat=true (400 if both are supplied, FR-104).
+	ParentSessionId *string `form:"parent_session_id,omitempty" json:"parent_session_id,omitempty"`
+
+	// Flat ADR-057 FR-104: when true, returns every session — roots AND subordinates — as a single flat, paged list, with child_count still populated on each row, instead of the default roots-only nesting. Used by UsageScreen's "By session" tab so per-session token/cost accounting for delegated children stays auditable (ADR-052 SC-014). Mutually exclusive with parent_session_id (400 if both are supplied).
+	Flat *bool `form:"flat,omitempty" json:"flat,omitempty"`
+
+	// Limit ADR-057 FR-092: maximum number of rows to return in this page. The response body scales with limit, not with total session count. Omitted/absent uses the server's default page size.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset ADR-057 FR-098: offset-based pagination — skip this many rows of the recency-ordered (updated_at descending, session id stable tiebreak) sequence before returning up to limit rows. Also accepted opaquely as the value of a prior response's next_cursor.
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // ListSessionsParamsType defines parameters for ListSessions.
 type ListSessionsParamsType string
-
-// ListSessions200JSONResponseBody0 defines parameters for ListSessions.
-type ListSessions200JSONResponseBody0 = []Session
-
-// ListSessions200JSONResponseBody1 defines parameters for ListSessions.
-type ListSessions200JSONResponseBody1 struct {
-	// PartialErrors Opaque error tokens (agent ID + sanitized reason).
-	PartialErrors []string  `json:"partial_errors"`
-	Sessions      []Session `json:"sessions"`
-}
-
-// ListSessions200JSONResponseBody defines parameters for ListSessions.
-type ListSessions200JSONResponseBody struct {
-	union json.RawMessage
-}
 
 // SearchSkillsParams defines parameters for SearchSkills.
 type SearchSkillsParams struct {
@@ -14809,68 +14837,6 @@ func (t SessionMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (t *SessionMessage) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsListSessions200JSONResponseBody0 returns the union data inside the ListSessions200JSONResponseBody as a ListSessions200JSONResponseBody0
-func (t ListSessions200JSONResponseBody) AsListSessions200JSONResponseBody0() (ListSessions200JSONResponseBody0, error) {
-	var body ListSessions200JSONResponseBody0
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromListSessions200JSONResponseBody0 overwrites any union data inside the ListSessions200JSONResponseBody as the provided ListSessions200JSONResponseBody0
-func (t *ListSessions200JSONResponseBody) FromListSessions200JSONResponseBody0(v ListSessions200JSONResponseBody0) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeListSessions200JSONResponseBody0 performs a merge with any union data inside the ListSessions200JSONResponseBody, using the provided ListSessions200JSONResponseBody0
-func (t *ListSessions200JSONResponseBody) MergeListSessions200JSONResponseBody0(v ListSessions200JSONResponseBody0) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsListSessions200JSONResponseBody1 returns the union data inside the ListSessions200JSONResponseBody as a ListSessions200JSONResponseBody1
-func (t ListSessions200JSONResponseBody) AsListSessions200JSONResponseBody1() (ListSessions200JSONResponseBody1, error) {
-	var body ListSessions200JSONResponseBody1
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromListSessions200JSONResponseBody1 overwrites any union data inside the ListSessions200JSONResponseBody as the provided ListSessions200JSONResponseBody1
-func (t *ListSessions200JSONResponseBody) FromListSessions200JSONResponseBody1(v ListSessions200JSONResponseBody1) error {
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeListSessions200JSONResponseBody1 performs a merge with any union data inside the ListSessions200JSONResponseBody, using the provided ListSessions200JSONResponseBody1
-func (t *ListSessions200JSONResponseBody) MergeListSessions200JSONResponseBody1(v ListSessions200JSONResponseBody1) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t ListSessions200JSONResponseBody) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *ListSessions200JSONResponseBody) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

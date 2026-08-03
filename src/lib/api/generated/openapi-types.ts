@@ -253,7 +253,7 @@ export interface paths {
         };
         /**
          * List sessions across all agents
-         * @description Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed.
+         * @description Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
          */
         get: operations["listSessions"];
         put?: never;
@@ -2748,11 +2748,11 @@ export interface components {
              */
             id: string;
             /**
-             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand.
+             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
              * @example chat
              * @enum {string}
              */
-            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat" | "verifier";
+            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat" | "verifier" | "delegate";
             /**
              * @description Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
              * @example false
@@ -2841,6 +2841,16 @@ export interface components {
             compaction_summaries?: {
                 [key: string]: string;
             };
+            /**
+             * @description ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
+             * @example 660e8400-e29b-41d4-a716-446655440000
+             */
+            parent_session_id?: string;
+            /**
+             * @description Computed field (ADR-057 FR-091/FR-097/FR-104): count of this session's DIRECT children, resolved from the in-memory parent index in O(1) per row. Populated on GET /api/v1/sessions (both the default roots-only listing and flat=true) and on GET /api/v1/sessions?parent_session_id=... listings; zero for a session with no children. Not necessarily present on GET /api/v1/sessions/{id} single-session detail.
+             * @example 3
+             */
+            child_count?: number;
         };
         /** @description Aggregated statistics for a session transcript. */
         SessionStats: {
@@ -2900,6 +2910,20 @@ export interface components {
              * @example false
              */
             agent_removed?: boolean;
+        };
+        /**
+         * SessionPage
+         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+         */
+        SessionPage: {
+            sessions: components["schemas"]["Session"][];
+            /**
+             * @description Opaque pagination cursor for the next page. Absent when this is the last page.
+             * @example 20
+             */
+            next_cursor?: string;
+            /** @description Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed. */
+            partial_errors?: string[];
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
         SessionCreateRequest: {
@@ -10453,12 +10477,32 @@ export interface operations {
                  * @description Filter by session type.
                  * @example chat
                  */
-                type?: "chat" | "task" | "channel" | "scheduled" | "verifier";
+                type?: "chat" | "task" | "channel" | "scheduled" | "verifier" | "delegate";
                 /**
                  * @description When true, includes sessions of type "verifier" in the response (ADR-052 FR-036). Defaults to false so verifier-role adjudication sessions stay hidden from the general session list (Sidebar, SearchModal); UsageScreen passes true to surface verifier LLM spend.
                  * @example false
                  */
                 include_verifier?: boolean;
+                /**
+                 * @description ADR-057 FR-091/US-19: return only the DIRECT children of this session id, a page at a time, instead of the default roots-only listing. A parent_session_id that does not resolve to any session returns an empty page (HTTP 200), not a 404 — "no children" is not distinguishable from "no such session" at this layer. Mutually exclusive with flat=true (400 if both are supplied, FR-104).
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                parent_session_id?: string;
+                /**
+                 * @description ADR-057 FR-104: when true, returns every session — roots AND subordinates — as a single flat, paged list, with child_count still populated on each row, instead of the default roots-only nesting. Used by UsageScreen's "By session" tab so per-session token/cost accounting for delegated children stays auditable (ADR-052 SC-014). Mutually exclusive with parent_session_id (400 if both are supplied).
+                 * @example false
+                 */
+                flat?: boolean;
+                /**
+                 * @description ADR-057 FR-092: maximum number of rows to return in this page. The response body scales with limit, not with total session count. Omitted/absent uses the server's default page size.
+                 * @example 20
+                 */
+                limit?: number;
+                /**
+                 * @description ADR-057 FR-098: offset-based pagination — skip this many rows of the recency-ordered (updated_at descending, session id stable tiebreak) sequence before returning up to limit rows. Also accepted opaquely as the value of a prior response's next_cursor.
+                 * @example 0
+                 */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -10466,19 +10510,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description List of sessions. When partial errors occur, the response body is {"sessions": [...], "partial_errors": ["agent=X: session_list_failed"]}. When no errors, the response body is a plain JSON array of Session objects. */
+            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Session"][] | {
-                        sessions: components["schemas"]["Session"][];
-                        /** @description Opaque error tokens (agent ID + sanitized reason). */
-                        partial_errors: string[];
-                    };
+                    "application/json": components["schemas"]["SessionPage"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             500: components["responses"]["500InternalServerError"];
         };
@@ -15318,6 +15359,7 @@ export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse
 export type Session = components["schemas"]["Session"];
 export type SessionStats = components["schemas"]["SessionStats"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
+export type SessionPage = components["schemas"]["SessionPage"];
 export type SessionCreateRequest = components["schemas"]["SessionCreateRequest"];
 export type SessionRenameRequest = components["schemas"]["SessionRenameRequest"];
 export type Message = components["schemas"]["Message"];

@@ -6,7 +6,9 @@ description: >
   lives inline in contracts/asyncapi.yaml components.schemas (AsyncAPI does
   not resolve cross-file $ref for its own codegen) — this file exists for
   the Constraint #8 5-step process and the inboundschemas sync; keep both
-  in sync by hand.
+  in sync by hand. Class not yet assigned by the ADR-057 W5 audit (FR-089)
+  — do not assume presence or absence of producing_session_id until the
+  audit classifies it.
 type: object
 required:
   - type
@@ -63,3 +65,11 @@ properties:
       when the runtime lands; this field stays a plain string so the wire
       shape does not need a breaking change when it does.
     example: "active"
+  producing_session_id:
+    type: string
+    minLength: 1
+    description: >
+      ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
+      (FR-089) — do not assume presence or absence until the audit
+      classifies this frame type. Keep in sync by hand with
+      contracts/asyncapi.yaml's inline LoopStatusFrame.

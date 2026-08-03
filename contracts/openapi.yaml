@@ -99,6 +99,49 @@ components:
       $ref: ./components/schemas/SessionStats.yaml
     SessionDetail:
       $ref: ./components/schemas/SessionDetail.yaml
+    # SessionPage is the paged envelope for GET /sessions (ADR-057 FR-091,
+    # grill2 M2-10). It REPLACES the historic two-variant oneOf (a bare
+    # Session array, or {sessions, partial_errors}) with one shape. Hosted
+    # INLINE here (not in its own contracts/components/schemas/ file),
+    # following the ADR-034 precedent for the AgentCreateRequest wrapper:
+    # this schema is no longer itself a oneOf, but the spec (ADR-057 FR-091)
+    # explicitly pins its physical location to match that precedent rather
+    # than introduce a new one.
+    SessionPage:
+      title: SessionPage
+      description: >
+        Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098).
+        `sessions` is this page's rows: root sessions by default, that
+        node's direct children when parent_session_id is supplied, or every
+        session (roots and subordinates) when flat=true (FR-104).
+        `partial_errors` composes with paging: a page whose merge hit a
+        failing legacy per-agent store still returns its healthy rows,
+        still returns next_cursor, and populates partial_errors — a failing
+        store contributes zero rows and does not halt the page or
+        invalidate the cursor (FR-098).
+      type: object
+      required:
+      - sessions
+      additionalProperties: false
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        next_cursor:
+          type: string
+          description: >
+            Opaque pagination cursor for the next page. Absent when this is
+            the last page.
+          example: "20"
+        partial_errors:
+          type: array
+          items:
+            type: string
+          description: >
+            Opaque error tokens (agent ID + sanitized reason) from any
+            store that failed during this page's merge. Present only when
+            at least one store failed.
     SessionCreateRequest:
       $ref: ./components/schemas/SessionCreateRequest.yaml
     SessionRenameRequest:
@@ -1232,7 +1275,7 @@ paths:
     get:
       operationId: listSessions
       summary: List sessions across all agents
-      description: 'Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed.
+      description: 'Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
 
         '
       tags:
@@ -1257,6 +1300,7 @@ paths:
           - channel
           - scheduled
           - verifier
+          - delegate
         example: chat
       - name: include_verifier
         in: query
@@ -1270,32 +1314,64 @@ paths:
           type: boolean
           default: false
         example: false
+      - name: parent_session_id
+        in: query
+        description: >
+          ADR-057 FR-091/US-19: return only the DIRECT children of this
+          session id, a page at a time, instead of the default roots-only
+          listing. A parent_session_id that does not resolve to any session
+          returns an empty page (HTTP 200), not a 404 — "no children" is not
+          distinguishable from "no such session" at this layer. Mutually
+          exclusive with flat=true (400 if both are supplied, FR-104).
+        schema:
+          type: string
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      - name: flat
+        in: query
+        description: >
+          ADR-057 FR-104: when true, returns every session — roots AND
+          subordinates — as a single flat, paged list, with child_count
+          still populated on each row, instead of the default roots-only
+          nesting. Used by UsageScreen's "By session" tab so per-session
+          token/cost accounting for delegated children stays auditable
+          (ADR-052 SC-014). Mutually exclusive with parent_session_id (400
+          if both are supplied).
+        schema:
+          type: boolean
+          default: false
+        example: false
+      - name: limit
+        in: query
+        description: >
+          ADR-057 FR-092: maximum number of rows to return in this page.
+          The response body scales with limit, not with total session count.
+          Omitted/absent uses the server's default page size.
+        schema:
+          type: integer
+          minimum: 1
+        example: 20
+      - name: offset
+        in: query
+        description: >
+          ADR-057 FR-098: offset-based pagination — skip this many rows of
+          the recency-ordered (updated_at descending, session id stable
+          tiebreak) sequence before returning up to limit rows. Also
+          accepted opaquely as the value of a prior response's next_cursor.
+        schema:
+          type: integer
+          minimum: 0
+        example: 0
       responses:
         '200':
-          description: 'List of sessions. When partial errors occur, the response body is {"sessions": [...], "partial_errors": ["agent=X: session_list_failed"]}. When no errors, the response body is a plain JSON array of Session objects.
+          description: 'A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node''s direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page''s rows and next_cursor stay valid regardless (FR-098).
 
             '
           content:
             application/json:
               schema:
-                oneOf:
-                - type: array
-                  items:
-                    $ref: '#/components/schemas/Session'
-                - type: object
-                  required:
-                  - sessions
-                  - partial_errors
-                  properties:
-                    sessions:
-                      type: array
-                      items:
-                        $ref: '#/components/schemas/Session'
-                    partial_errors:
-                      type: array
-                      items:
-                        type: string
-                      description: Opaque error tokens (agent ID + sanitized reason).
+                $ref: '#/components/schemas/SessionPage'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '500':
