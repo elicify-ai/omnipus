@@ -22,12 +22,21 @@ import (
 // (standalone tasks assigned to or created by this agent). It is strictly
 // read-only.
 //
-// The ADR's fourth kind, `shell`, is DELIBERATELY NOT IMPLEMENTED. A
-// background shell carries no agent id, and a delegated child shares its
-// parent's transcript session, so a shell row cannot be attributed to a
-// principal at all. Emitting one would mean either guessing an owner or
-// showing a caller another principal's command lines — both unacceptable
-// against this tool's primary security property. Deferred as issue #564.
+// The ADR's fourth kind, `shell`, is NOT implemented by this file.
+//
+// [ADR-057 FR-022 doc correction] This comment used to justify that
+// omission as an architectural impossibility: "a background shell carries
+// no agent id, and a delegated child shares its parent's transcript
+// session, so a shell row cannot be attributed to a principal at all."
+// That premise is FALSE post-ADR-057 FR-027 — see pkg/tools/shell.go's
+// runBackground doc comment: a background shell's OwnerSessionID is
+// ToolTranscriptSessionID(ctx) at launch time, which inside a delegated
+// sub-turn is the CHILD's own distinct session id, not a shared parent
+// id. A shell row CAN be attributed to a principal via that session id's
+// own lifecycle record (ParentAgentID/AgentID) — the same resolution
+// collectSubagentRows already does for kind=subagent. The conclusion —
+// kind=shell is not implemented here — still holds; it is simply undone
+// work, tracked as issue #564, not an architectural dead end.
 type ListJobsTool struct {
 	BaseTool
 

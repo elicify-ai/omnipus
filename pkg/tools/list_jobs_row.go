@@ -50,11 +50,19 @@ const (
 	attentionElsewhere = "elsewhere"
 )
 
-// Job kinds. The `shell` kind of ADR-056 is deliberately NOT implemented:
-// background shells carry no agent id and a delegated child shares its
-// parent's transcript session, so a shell row cannot be attributed to a
-// principal at all — which would breach FR-008's fail-closed posture. Tracked
-// as issue #564.
+// Job kinds. The `shell` kind of ADR-056 is NOT implemented here.
+//
+// [ADR-057 FR-022 doc correction] This comment used to justify that
+// omission as an FR-008 fail-closed necessity: "background shells carry no
+// agent id and a delegated child shares its parent's transcript session,
+// so a shell row cannot be attributed to a principal at all — which would
+// breach FR-008's fail-closed posture." That premise is FALSE post-
+// ADR-057 FR-027 — see pkg/tools/shell.go's runBackground doc comment: a
+// background shell's OwnerSessionID is the CHILD's own distinct session id
+// when launched inside a delegated sub-turn, so it CAN be attributed to a
+// principal via that session's own lifecycle record. The conclusion — not
+// implemented here — still holds, for the ordinary reason of scope, not
+// attribution impossibility. Tracked as issue #564.
 const (
 	jobKindPlan     = "plan"
 	jobKindSubagent = "subagent"
