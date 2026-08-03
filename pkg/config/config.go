@@ -1284,6 +1284,36 @@ type AgentBinding struct {
 type SessionConfig struct {
 	DMScope       string              `json:"dm_scope,omitempty"`
 	IdentityLinks map[string][]string `json:"identity_links,omitempty"`
+
+	// StatsFlushInterval controls how often UnifiedStore's periodic flusher
+	// persists a dirty session's stats.json to disk when no forced flush
+	// point (SetMeta/DeleteSession/Close/teardown) has fired (ADR-057 FR-067,
+	// promoted from the spec's only SHOULD to a MUST — grill m-5, operator
+	// decision 2). Zero means "unset" — EffectiveStatsFlushInterval
+	// substitutes DefaultSessionStatsFlushInterval (5s). Accepts a JSON
+	// string ("5s", "10s") or a bare number interpreted as seconds, mirroring
+	// SessionMessagingConfig's duration fields (CancelGrace, NeedsInputTTL).
+	// Owned by U28 (pkg/config/**); U6 (pkg/session/unified.go) reads it —
+	// U28 does not wire it into the store.
+	StatsFlushInterval duration `json:"stats_flush_interval,omitempty"`
+}
+
+// DefaultSessionStatsFlushInterval is the FR-067 default: unforced periodic
+// flush of a dirty session's stats.json fires every 5 seconds. Seeded
+// explicitly in DefaultConfig (defaults.go) so a fresh install's config.json
+// is self-documenting; EffectiveStatsFlushInterval re-applies it for any
+// zeroed-out value.
+const DefaultSessionStatsFlushInterval = 5 * time.Second
+
+// EffectiveStatsFlushInterval resolves the FR-067 stats-flush throttle
+// period: the configured value when positive, else the 5s default. A test
+// MUST be able to assert the key exists, defaults to 5s, and that a
+// non-default value is honoured end to end (#105, SC-048).
+func (c SessionConfig) EffectiveStatsFlushInterval() time.Duration {
+	if c.StatsFlushInterval > 0 {
+		return time.Duration(c.StatsFlushInterval)
+	}
+	return DefaultSessionStatsFlushInterval
 }
 
 // RoutingConfig controls the intelligent model routing feature.
@@ -1300,12 +1330,41 @@ type RoutingConfig struct {
 
 // SubTurnConfig configures the SubTurn execution system.
 type SubTurnConfig struct {
-	MaxDepth              int `json:"max_depth"               env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
+	MaxDepth int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
+	// MaxConcurrent is read from two, deliberately different places (ADR-057
+	// FR-095, operator decision 4):
+	//   - getSubTurnConfig (pkg/agent/subturn.go) uses it, when > 0, as the
+	//     per-parent-turn in-turn fan-out semaphore, falling back to
+	//     Performance.EffectiveMaxParallelAgents() (clamped to 16) when <= 0.
+	//   - The W17 root-delegation admission gate (pkg/agent/admission.go,
+	//     owned by U19) reads this field DIRECTLY — never via
+	//     Performance.EffectiveMaxParallelAgents() — as the process-global
+	//     root-level admission cap, and MUST treat a configured value <= 0 as
+	//     a boot-time configuration error, never as "no gate".
+	// Seeded to DefaultSubTurnMaxConcurrent (16) in DefaultConfig
+	// (defaults.go) so a fresh install never takes the
+	// EffectiveMaxParallelAgents() branch FR-095 forbids for the root gate.
+	// Before this seed existed, a fresh install left this field at its Go
+	// zero value, so getSubTurnConfig's `if maxConcurrent <= 0` fell through
+	// to the hardware-autodetected, un-seeded EffectiveMaxParallelAgents()
+	// value (verified 2026-08-03 on this environment: 6, not any documented
+	// number) — grill #2 finding M2-1.
 	MaxConcurrent         int `json:"max_concurrent"          env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
 	DefaultTokenBudget    int `json:"default_token_budget"    env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
 	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
+
+// DefaultSubTurnMaxConcurrent is the ADR-057 FR-095 seeded default for
+// agents.defaults.subturn.max_concurrent (operator decision 4). 16 matches
+// what clampParallelExplicit already caps the Performance.
+// EffectiveMaxParallelAgents() fallback at on capable hardware, so seeding it
+// explicitly changes no shipped behaviour on such hardware — it only makes
+// the value explicit, keeps the W17 root-delegation gate off the branch
+// FR-095 forbids, and gives an operator one number to raise. Two scopes
+// share this one number intentionally (see SubTurnConfig.MaxConcurrent's
+// doc comment).
+const DefaultSubTurnMaxConcurrent = 16
 
 type ToolFeedbackConfig struct {
 	Enabled       bool `json:"enabled"         env:"OMNIPUS_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`

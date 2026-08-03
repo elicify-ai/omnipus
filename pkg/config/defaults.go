@@ -37,6 +37,15 @@ func DefaultConfig() *Config {
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
 				SteeringMode:              "one-at-a-time",
+				// ADR-057 FR-095 (grill #2 M2-1): seed the root-delegation cap
+				// explicitly so a fresh install never falls through to the
+				// hardware-autodetected Performance.EffectiveMaxParallelAgents()
+				// fallback getSubTurnConfig's `if maxConcurrent <= 0` branch
+				// would otherwise take (pkg/agent/subturn.go:64-69) — the
+				// branch FR-095 forbids for the W17 root-delegation gate.
+				SubTurn: SubTurnConfig{
+					MaxConcurrent: DefaultSubTurnMaxConcurrent,
+				},
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:       false,
 					MaxArgsLength: 300,
@@ -48,6 +57,11 @@ func DefaultConfig() *Config {
 		Bindings: []AgentBinding{},
 		Session: SessionConfig{
 			DMScope: "per-channel-peer",
+			// ADR-057 FR-067 (grill m-5, operator decision 2): seeded
+			// explicitly so a fresh install's config.json is
+			// self-documenting; EffectiveStatsFlushInterval re-applies the
+			// same default for any zeroed-out value.
+			StatsFlushInterval: duration(DefaultSessionStatsFlushInterval),
 		},
 		// Channels starts as an empty map; no default instances are pre-seeded
 		// (greenfield — FR-2.9). Channels are added via REST PUT /api/v1/channels/{id}/configure.
