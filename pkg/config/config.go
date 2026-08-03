@@ -2821,7 +2821,8 @@ type GatewayConfig struct {
 	// (b) is what protects a Critical/background delegate: RequestCancel's
 	// own PHASE-B/PHASE-C hard-abort escalation
 	// (InterruptSessionHard/sessionTurnsStillAlive) is SESSION-WIDE by
-	// construction — note PHASE-A/InterruptSession's own graceful cascade is
+	// construction — note PHASE-A's own graceful cascade (Interrupt; ADR-057
+	// FR-041 collapsed the retired InterruptSession into it) is
 	// ALSO session-wide, just harmless there because a Critical delegate is
 	// designed to ignore a mere graceful nudge — so rather than reuse it while
 	// a delegate is still working, the watchdog defers reaping entirely for

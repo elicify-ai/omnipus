@@ -456,7 +456,20 @@ The Judge is a real verifier agent in its own session, with a three-rung AND-com
 
 ### 11.5 Session-control plane — typed messaging, isolated message history
 
-Child sessions are **isolated-but-linked**: own durable `SessionID`, a typed `SessionMessage` channel as the only bridge, a curated context snapshot at spawn, with **isolated message history** (the child's turn content lives in an ephemeral, in-memory store and never persists into the parent's session history). Note the transcript *session id* IS shared — a child inherits its parent's `transcriptSessionID` (FR-6a, `pkg/agent/subturn.go`) so the chat-wide `/cancel` cascade can reach sub-turns; what is isolated is the message *history*, not the transcript *namespace*. (The earlier "no shared transcript (FR-6a dropped)" wording here and in ADR-053 D1 was corrected 2026-07-31 — FR-6a is live and load-bearing for cascade cancel; see ADR-053 D1 as amended and `cancel-cross-channel-spec` FR-6a.) The bus gained a 4th channel (`bus.SessionMessageChan`); `pkg/agent/session_messaging_wire.go:61` (`SetSessionMessagingStores`) wires the inbox + lifecycle stores, `:125` (`wireSessionMessagingForAgent`) wires per-agent, and `:228` (`filterSessionMessage`) applies the content-egress filter to every free-text/path field of every bus-delivered message. Ad-hoc `delegate` inboxes are keyed to the durable chat/plan id (survives a parent Stop/Play, D16); message ceiling is per-child (D15).
+Child sessions are **isolated-but-linked**: own durable `SessionID`, a typed `SessionMessage` channel as the only bridge, a curated context snapshot at spawn, with **isolated message history**.
+
+> **Superseded by ADR-057 (verified against code at `d364a5f8`).** This paragraph previously stated that "the transcript *session id* IS shared — a child inherits its parent's `transcriptSessionID` (FR-6a) so the chat-wide `/cancel` cascade can reach sub-turns." **That is now the exact inverse of shipped behaviour**, and the shared-namespace design it described is retired. ADR-057 splits the one overloaded id into **two independent fields**:
+>
+> | Field | Delegated child gets | Purpose | Code |
+> |---|---|---|---|
+> | `transcriptSessionID` | its **OWN** (`childID`) — *not* the parent's | persistence: the child owns a real store-backed session and its own `transcript.jsonl`; the parent's transcript is deliberately **empty** of the child's writes | `pkg/agent/subturn.go:1113` (`TranscriptSessionID: childID`) |
+> | `routingSessionID` | **inherited verbatim** from the parent, through the whole subtree | cancel/interrupt reachability — this, not the transcript id, is what lets a chat-wide Stop reach sub-turns | `pkg/agent/subturn.go:1130` (`childTS.routingSessionID = parentTS.routingSessionID`) |
+>
+> So the cascade guarantee the old wording attributed to a *shared transcript id* is real, but it is carried by `routingSessionID`. `subturn.go:1130` looks like a copy-paste bug and is load-bearing: delete it and every chat-wide Stop silently stops reaching delegated sub-turns. Defaulting happens at `pkg/agent/turn.go:406` (a root turn's `routingSessionID` = its own transcript id); the full contract is in `routingSessionID`'s doc comment at `turn.go:251-288`.
+>
+> Consequently the transcript **visibility filter is deleted, not replaced**, at all four former read sites (FR-034), and FR-038 forbids reintroducing one at any read boundary — there is no longer a shared transcript for a filter to act on. See `pkg/gateway/replay.go`'s `streamReplay` contract and `session.TranscriptEntry.ParentSpawnCallID`'s doc comment.
+
+What is isolated is therefore both the message *history* (the child's turn content lives in an ephemeral in-memory store and never persists into the parent's session history) **and** the transcript *namespace*. The bus gained a 4th channel (`bus.SessionMessageChan`); `pkg/agent/session_messaging_wire.go:61` (`SetSessionMessagingStores`) wires the inbox + lifecycle stores, `:125` (`wireSessionMessagingForAgent`) wires per-agent, and `:228` (`filterSessionMessage`) applies the content-egress filter to every free-text/path field of every bus-delivered message. Ad-hoc `delegate` inboxes are keyed to the durable chat/plan id (survives a parent Stop/Play, D16); message ceiling is per-child (D15).
 
 ### 11.6 Git evidence layer (go-git, spike-gated GO)
 

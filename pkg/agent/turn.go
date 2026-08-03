@@ -137,10 +137,12 @@ type turnState struct {
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
 	hardAbort             bool
-	// providerCancel is fired by the graceful cascade (InterruptSession) to
-	// abort the in-flight LLM/provider call immediately; turnCancel is fired
-	// by the hard-abort cascade (InterruptSessionHard/requestHardAbort) to
-	// tear down the whole turn. For a NATIVE turn these are two genuinely
+	// providerCancel is fired by the graceful cascade (Interrupt — ADR-057
+	// FR-041 collapsed the retired InterruptSession into it) to abort the
+	// in-flight LLM/provider call immediately; turnCancel is fired by the
+	// hard-abort cascade (InterruptSessionHard/requestHardAbort, still live
+	// under that name with a mandatory InterruptScope) to tear down the
+	// whole turn. For a NATIVE turn these are two genuinely
 	// distinct cancel funcs (turnCtx's cancel is a superset of the
 	// provider-call's own). For an EXTERNAL-CLI sub-turn
 	// (pkg/agent/external_dispatch.go's runExternalCLISubTurn) both slots are
@@ -281,10 +283,11 @@ type turnState struct {
 	// above). Within this file the only reads are the three role-B
 	// predicates FR-015 names: GetActiveTurnHookForSession,
 	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession.
-	// The remaining closed-set readers land in later ADR-057 units: the
+	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
+	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
 	// subturn.go/cancel_prearm.go (U7/U15), and the WS payload stamping in
-	// loop.go (U9).
+	// loop.go (U9) all read routingSessionID today.
 	routingSessionID session.RoutingSessionID
 
 	// askPendingToolCalls holds the tool-call IDs for which a "pending"
@@ -435,7 +438,7 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// turnState is CURRENTLY stored under that key — which may by then be the
 	// new generation's own live, running turnState, not this one. That turn
 	// then becomes permanently unreachable to GetActiveTurnHookForSession/
-	// InterruptSession/InterruptSessionHard/sessionTurnsStillAlive: no Stop
+	// Interrupt/InterruptSessionHard/sessionTurnsStillAlive: no Stop
 	// click (graceful, hard-abort, or detach) can ever find it again, and it
 	// runs unchecked until its own MaxIterations ceiling. CompareAndDelete
 	// only removes the entry if it is STILL this exact ts, so a

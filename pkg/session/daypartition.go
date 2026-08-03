@@ -295,30 +295,63 @@ type TranscriptEntry struct {
 	// (non-delegated) turn, so existing/legacy transcripts round-trip
 	// unchanged.
 	//
-	// WHY this field exists: a delegated child sub-turn shares its parent's
-	// transcriptSessionID (spawnSubTurn sets
-	// TranscriptSessionID: parentTS.transcriptSessionID, CoreTeam-scoped
-	// workspace design — there is no separate per-sub-turn transcript file),
-	// so the delegate's own intermediate narration and its own final-turn
-	// text land in the exact same transcript.jsonl as the delegator's real
-	// top-level messages, indistinguishable by any OTHER field (Role,
-	// Content, AgentID, TurnID are all populated normally for these entries
-	// too). LIVE rendering never shows this content as a chat bubble at all
-	// — pkg/gateway/websocket.go's wsStreamer.Update silently withholds the
-	// live TokenFrame for a child sub-turn's own streaming (the
-	// "shadow-stream" ownership gate: a different, still-live turn already
-	// owns TokenFrame delivery for the chatID) while still fully persisting
-	// the content via Finalize. Without this field, pkg/gateway/replay.go had
-	// no signal to replicate that suppression on reload — it flattened every
-	// entry with non-empty Content into a top-level replay_message frame,
-	// which doubled the visible bubble count and leaked the delegate's raw
-	// internal report text (plus a stray model tag/avatar it never carried
-	// live) as if each were a separate top-level turn.
+	// [ADR-057 FR-037 doc correction] The paragraph that used to sit here
+	// described the PRE-ADR-057 world and is retained below only as history,
+	// because two of its load-bearing claims are now FALSE:
 	//
-	// Backend-only: never serialized onto a wire frame. replay.go uses it to
-	// withhold the entry from replay entirely (matching live's silent
-	// suppression) rather than exposing it as a NEW nested-narration UI
-	// element that live rendering doesn't have either.
+	//   (1) "a delegated child sub-turn shares its parent's
+	//       transcriptSessionID (spawnSubTurn sets
+	//       TranscriptSessionID: parentTS.transcriptSessionID … there is no
+	//       separate per-sub-turn transcript file)" — FALSE since FR-007.
+	//       spawnSubTurn now sets TranscriptSessionID: childID
+	//       (pkg/agent/subturn.go), so a delegated child owns its OWN
+	//       store-backed session and its OWN transcript.jsonl. The parent's
+	//       transcript is deliberately EMPTY of the child's writes. (What a
+	//       child DOES inherit verbatim from its parent is the separate
+	//       routingSessionID field — the cancel/interrupt reachability key,
+	//       subturn.go:1130 — which is a different concept from this one and
+	//       must not be conflated with it.)
+	//
+	//   (2) "replay.go uses it to withhold the entry from replay entirely" —
+	//       FALSE since FR-034/FR-038. That skip is DELETED, not replaced,
+	//       at all four former read sites. Because the child's narration no
+	//       longer lands in the parent's transcript at all, there is nothing
+	//       left for a read boundary to withhold, and FR-038 explicitly
+	//       FORBIDS reintroducing a transcript visibility filter at any read
+	//       boundary. See pkg/gateway/replay.go's streamReplay contract.
+	//
+	// THIS FIELD IS NOT DEAD — do not delete it on discovering that replay.go
+	// no longer reads it. Post-ADR-057 it is written by three sites
+	// (pkg/agent/turn.go's appendIntermediateAssistantTranscript :1328 and
+	// appendAssistantTranscript :1394, plus pkg/gateway/websocket.go's
+	// wsStreamer.Finalize :4471) and READ by pkg/tools/delegate.go's
+	// recentActivityLines (:2173, ADR-057 FR-043), which reads the CHILD's
+	// own durable session and filters to ParentSpawnCallID == spawnCallID so
+	// a `delegate` status poll reports only THIS delegate call's activity.
+	// Its post-057 job is therefore per-spawn-call attribution WITHIN a
+	// child's own transcript, not parent/child separation ACROSS one shared
+	// transcript. (Distinct from the identically-named ParentSpawnCallID on
+	// the ToolExec*/SubTurnSpawn/SubTurnEnd event payloads —
+	// pkg/agent/events.go:326/372/479/512, type session.ToolCallID — which
+	// drives subagent span framing in websocket.go. Same name, different
+	// field; changing one does not change the other.)
+	//
+	// HISTORICAL root cause (pre-ADR-057, retained because pkg/agent/turn.go
+	// :896 and :1325 still cite this comment for it): when the child DID
+	// share the parent's transcript, its narration landed in the same
+	// transcript.jsonl as the delegator's real top-level messages,
+	// indistinguishable by any OTHER field (Role, Content, AgentID, TurnID
+	// were all populated normally). Live rendering never showed it as a chat
+	// bubble — wsStreamer.Update withheld the live TokenFrame for a child
+	// sub-turn's streaming (the "shadow-stream" ownership gate) while still
+	// persisting via Finalize — so without this field replay.go had no signal
+	// to replicate that suppression on reload: it flattened every entry with
+	// non-empty Content into a top-level replay_message frame, doubling the
+	// visible bubble count and leaking the delegate's raw internal report
+	// text as if each were a separate top-level turn. The own-session split
+	// (FR-007) removes that whole failure mode at the source.
+	//
+	// Backend-only: never serialized onto a wire frame.
 	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
 }
 

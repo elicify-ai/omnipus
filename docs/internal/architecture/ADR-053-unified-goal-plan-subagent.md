@@ -1,6 +1,7 @@
 # ADR-053: Unified goal / plan / subagent system — one goal core, three bindings
 
-- **Status:** **Accepted** (2026-07-22). This ADR ratifies an interview-locked, twice-grilled design; it does not re-open it. The `/grill-spec` gate returned **PASS** (0 CRITICAL / 0 MAJOR / 0 MINOR after one REVISE cycle addressing F-1..F-6; review file adjacent), satisfying delivery-brief DoD-1.
+- **Status:** **Accepted** (2026-07-22), **superseded in part by [ADR-057](ADR-057-session-parent-child-parity.md)** (see banner below). This ADR ratifies an interview-locked, twice-grilled design; it does not re-open it. The `/grill-spec` gate returned **PASS** (0 CRITICAL / 0 MAJOR / 0 MINOR after one REVISE cycle addressing F-1..F-6; review file adjacent), satisfying delivery-brief DoD-1.
+- **Superseded in part by:** [ADR-057](ADR-057-session-parent-child-parity.md) §8 — **D1** (superseded outright), **D5**, **D15**, **D16** (each changed). Details in the banner immediately below.
 - **Date:** 2026-07-22
 - **Deciders:** Operator (Daniel Piatkowski); architect (ratification)
 - **Evidence level (highest used):** 1 (operator-locked — 17 interview decisions D1–D17 + ~46 folded review findings) + design `[DESIGN]` grounding (the v2.2 target design) + codebase `[FACT]` grounding carried from ADR-049/052
@@ -10,6 +11,21 @@
 - **Related:** ADR-034 (inline `oneOf` discriminated-union precedent — governs the `SessionMessage` contract), ADR-035/ADR-037 (raw-body-reject precedent for forbidden fields, no back-compat), ADR-043 (completion-signal marker protocol this extends), ADR-046 (System-Agent implicit workspace membership), ADR-028 (context paging).
 
 > **Ratification mode.** The direction was decided across an extended operator design conversation, folded from a v2.1 assessment, and grilled twice (grill-31 · architect F1–F9 · third-pass N-1..N-15 — ~46 findings folded into v2.2). This ADR **records and grounds** the decision, records per-decision confidence, and names what it supersedes. It is deliberately concise: the design HTML holds the node-by-node detail; this ADR authorizes it as one system.
+
+> ## ⚠️ SUPERSEDED IN PART BY [ADR-057](ADR-057-session-parent-child-parity.md) — read before implementing anything below
+>
+> **Do not implement D1 as written.** ADR-057 §8 changes four decisions. The table in **D1 (§4, "two identity namespaces")** describes a **retired** design, and its 2026-07-31 amendment (which added *"the transcript namespace IS shared — FR-6a retained, not dropped"*) is **exactly what ADR-057 deliberately supersedes**: it fixed the description; ADR-057 changed the system so D1's original "isolated-but-linked" intent is now literally true in code.
+>
+> | ADR-053 | Status under ADR-057 | What is now true |
+> |---|---|---|
+> | **D1** — dual namespace; child inherits parent's `transcriptSessionID` | **Superseded** | A delegated child gets its **OWN** `transcriptSessionID` (`pkg/agent/subturn.go:1113`, `TranscriptSessionID: childID`). The cascade-cancel key is a **separate, inherited** `routingSessionID` (`subturn.go:1130`). The transcript **visibility filter is deleted, not replaced** (FR-034), and FR-038 **forbids** reintroducing one at any read boundary. |
+> | **D5** — ownership gate | **Changed** | Equality → depth-bounded ancestor walk (ADR-057 D7). |
+> | **D15** — per-child message ceiling | **Changed** | Per-direct-parent, not per-chat-subtree. |
+> | **D16** — ad-hoc inboxes keyed to the durable chat/plan id | **Changed** | `ParentDurableKey` now names the **immediate** parent. |
+>
+> **The four interrupt entry points D1 names no longer exist.** `InterruptSession`, `InterruptBySessionKey` and `InterruptBySessionKeyHard` are **retired** (`func InterruptSession` returns zero hits); ADR-057 FR-041 collapses them into **`Interrupt(id, scope, hint)`** (`pkg/agent/steering.go:667`, graceful) and **`InterruptSessionHard(id, scope, hint)`** (`:729`, hard) — both taking a **mandatory `InterruptScope`** (`ScopeSubtree` / `ScopeSelfOnly`). The per-delegation `delegate cancel` path D1 describes is now `ScopeSelfOnly`, not a separate function. (Not to be confused with the unrelated, still-live process-wide `InterruptGraceful(hint)` / `InterruptHard()`.)
+>
+> Everything else in this ADR — the S1–S6 spine, the evidence-ladder Judge, the goal core, the git evidence layer, the budget model — **stands unchanged**.
 
 ---
 
