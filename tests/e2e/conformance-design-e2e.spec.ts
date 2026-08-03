@@ -2344,13 +2344,31 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
     // reconciled from its non-terminal state to `interrupted` — the
     // Session wire enum's crash-recovery terminus (contracts/components/
     // schemas/Session.yaml: active | archived | interrupted).
-    const sessionsAfter = await gw.apiFetch<Array<{ id: string; status: string }>>('GET', '/api/v1/sessions')
+    //
+    // ADR-057 U18 (commit 664633b9, "fix(gateway): ADR-057 U18 — read
+    // boundaries + REST pagination/nesting"): GET /api/v1/sessions now
+    // ALWAYS returns the named gen.SessionPage envelope
+    // ({"sessions": [...], "next_cursor"?, "partial_errors"?}), retiring the
+    // old bare-array response this assertion used to assume. That commit
+    // fixed three pkg/gateway tests with the identical bare-array decode
+    // (and a sibling fix landed for tests/integration's
+    // getMostRecentSessionID, commit e5d3a25c), but this e2e assertion was
+    // outside both file lists and was missed — the same cross-package
+    // ownership gap flagged elsewhere in this wave. Without this fix,
+    // `sessionsAfter.body.find` throws ("find is not a function") because
+    // the body is the envelope object, not an array, before this assertion
+    // ever gets to check the reconciled status.
+    const sessionsAfter = await gw.apiFetch<{ sessions: Array<{ id: string; status: string }> }>(
+      'GET',
+      '/api/v1/sessions',
+    )
     expect(sessionsAfter.ok, `bootsweep: GET /sessions post-restart failed ${sessionsAfter.status}`).toBe(true)
-    const preKillSession = sessionsAfter.body.find((s) => s.id === preKillSessionId)
+    const sessionRows = sessionsAfter.body.sessions ?? []
+    const preKillSession = sessionRows.find((s) => s.id === preKillSessionId)
     expect(
       preKillSession,
       `bootsweep: the pre-kill session ${preKillSessionId} must still be present in the session list post-restart ` +
-        `(observed ids: ${sessionsAfter.body.map((s) => s.id).join(', ')})`,
+        `(observed ids: ${sessionRows.map((s) => s.id).join(', ')})`,
     ).toBeDefined()
     expect(
       preKillSession?.status,
@@ -2361,7 +2379,7 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
     // Differentiation/no-wedge check across every OTHER session too — none
     // may sit outside the wire enum (a phantom status the sweep missed).
     const KNOWN_STATES = new Set(['active', 'archived', 'interrupted'])
-    for (const s of new Set(sessionsAfter.body.map((s) => s.status))) {
+    for (const s of new Set(sessionRows.map((s) => s.status))) {
       expect(
         KNOWN_STATES.has(s),
         `bootsweep: observed session status "${s}" outside the Session wire enum {active, archived, interrupted}.`,
