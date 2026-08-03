@@ -274,12 +274,20 @@ export function UsageScreen() {
   // SC-014 gap: their aggregate spend was already counted in the hero/
   // by-agent/by-model views above via the unfiltered token-stats endpoint,
   // and now the per-session row list is complete too.
+  //
+  // ADR-057 FR-104 (W16h): also passes flat:true. GET /sessions defaults to
+  // ROOTS ONLY under US-19's nested-listing design, which would silently
+  // drop every delegated child's spend from this per-session accounting —
+  // a real audit regression, not a display nuance (a chat that delegated
+  // most of its work would show only its own small share). flat:true
+  // returns every session — roots and subordinates — as one flat page, so
+  // the sum of per-session totals stays equal to the true total (BDD-111).
   const {
     data: sessions = [],
     isLoading: sessionsLoading,
   } = useQuery({
-    queryKey: ['sessions', 'includeVerifier'],
-    queryFn: () => fetchSessions(undefined, undefined, { includeVerifier: true }),
+    queryKey: ['sessions', 'includeVerifier', 'flat'],
+    queryFn: () => fetchSessions(undefined, undefined, { includeVerifier: true, flat: true }),
     staleTime: 30_000,
   })
 

@@ -343,10 +343,48 @@ describe('UsageScreen', () => {
       expect(screen.getByTestId('usage-hero-row')).toHaveTextContent(formatTokens(15000 + 3000 + 1000))
     })
 
-    it('the "By session" tab calls fetchSessions with includeVerifier:true so verifier session rows are auditable (SC-014)', async () => {
+    // ADR-057 FR-104 (M2-9, W16h): GET /sessions now defaults to ROOTS ONLY
+    // under US-19's nested-listing design, which would silently drop every
+    // delegated child's spend from this tab. This test is DELIBERATELY
+    // INVERTED (not deleted) from its pre-ADR-057 form, which asserted
+    // fetchSessions was called WITHOUT flat:true — that assertion is now
+    // the audit regression FR-104 exists to close. See the spec's
+    // "SPA tests that MUST be deliberately inverted" list.
+    it('the "By session" tab calls fetchSessions with includeVerifier:true AND flat:true so delegated-child spend stays auditable (SC-014, FR-104)', async () => {
       renderUsage()
       await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
-      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith(undefined, undefined, { includeVerifier: true })
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith(undefined, undefined, { includeVerifier: true, flat: true })
+    })
+
+    // ADR-057 BDD-111: the flat listing must actually surface child rows,
+    // not just be requested with the right flag — a mock that never returns
+    // any delegate-type session would let the assertion above pass while
+    // the real regression (child spend silently vanishing from this table)
+    // stayed live.
+    it('shows delegated child session rows in the "By session" tab when the flat listing includes them (FR-104)', async () => {
+      const user = userEvent.setup()
+      vi.mocked(fetchSessions).mockResolvedValue([
+        ...mockSessions,
+        {
+          id: 'sess-child-1',
+          agent_id: 'agent-1',
+          title: 'Delegated research task',
+          type: 'delegate',
+          parent_session_id: 'sess-1',
+          created_at: '2026-06-01T00:10:00Z',
+          updated_at: '2026-06-01T00:20:00Z',
+          message_count: 6,
+          total_tokens: 9000,
+        },
+      ])
+      renderUsage()
+      await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
+      await user.click(screen.getByTestId('tab-session'))
+      await waitFor(
+        () => expect(screen.getByTestId('sessions-table')).toBeInTheDocument(),
+        { timeout: 5000 },
+      )
+      expect(screen.getByText('Delegated research task')).toBeInTheDocument()
     })
 
     it('shows a verifier session row tagged "Verifier" in the "By session" tab', async () => {

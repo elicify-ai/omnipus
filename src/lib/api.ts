@@ -113,6 +113,10 @@ import {
   Message as WireMessageSchema,
   Session as WireSessionSchema,
   SessionDetail as WireSessionDetailSchema,
+  // ADR-057 FR-091/FR-098 (U10, W16e): GET /sessions now returns one named
+  // SessionPage envelope ({sessions, next_cursor?, partial_errors?}) instead
+  // of the retired two-variant oneOf (bare array | {sessions, partial_errors}).
+  SessionPage as WireSessionPageSchema,
   // Newly promoted from inline openapi.yaml schemas:
   SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
   PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
@@ -1000,7 +1004,10 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // 'verifier' (ADR-052 FR-036) tags a verifier-role adjudication session
   // (the Judge). Hidden from GET /sessions by default; fetchSessions()'s
   // includeVerifier opt-in surfaces it (UsageScreen's "By session" tab only).
-  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier'
+  // 'delegate' (ADR-057 FR-008/W2c) tags a subordinate session minted by a
+  // delegation — it always carries a non-empty parent_session_id below.
+  // Like 'scheduled'/'heartbeat'/'verifier' it is server-minted only.
+  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -1022,13 +1029,27 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // When true the SPA pins the session at the top of the panel and hides its
   // delete (trash) button; DELETE /sessions/{id} returns 409 server-side.
   protected?: boolean
+  // ADR-057 FR-008/FR-091. The direct parent's session id — present only on
+  // a subordinate ('delegate') session. Absent (never empty-string) on a
+  // root session. A session whose parent no longer resolves is surfaced by
+  // GET /sessions as a ROOT rather than being silently dropped (BDD-106) —
+  // so a session with parent_session_id set but not findable in a locally
+  // held tree should be treated as "not yet expanded into", never as an
+  // error.
+  parent_session_id?: string
+  // ADR-057 FR-091/FR-097/FR-104. Count of this session's DIRECT children,
+  // resolved server-side from the in-memory parent index in O(1) per row.
+  // Populated on GET /sessions (default roots-only listing, flat=true
+  // listing, and parent_session_id-filtered listing); zero for a session
+  // with no children. Not necessarily present on GET /sessions/{id} detail.
+  child_count?: number
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier'
+  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
   status?: 'active' | 'archived' | 'interrupted'
   task_id?: string
   workspace_id?: string
@@ -1038,6 +1059,8 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   agent_ids?: string[]
   active_agent_id?: string
   protected?: boolean
+  parent_session_id?: string
+  child_count?: number
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -1071,6 +1094,13 @@ function rawToSession(raw: RawSession): Session {
     active_agent_id: raw.active_agent_id,
     // Computed server-side: true while the heartbeat member is enabled (FR-028).
     protected: raw.protected,
+    // ADR-057 FR-008/FR-091/FR-097: passed through verbatim — a root session
+    // simply never has parent_session_id set (never empty-string per the
+    // contract, so no coercion needed), and child_count defaults via the
+    // consuming code's own `?? 0`, not here, so "absent" (detail endpoint)
+    // and "explicitly zero" (list endpoint) stay distinguishable.
+    parent_session_id: raw.parent_session_id,
+    child_count: raw.child_count,
   }
 }
 
@@ -1368,62 +1398,194 @@ function rawToMessage(raw: RawMessage): Message {
 
 // The 3rd-arg opts object is opt-in and additive only — every existing
 // zero/one/two-arg call site (Sidebar, SearchModal) is byte-for-byte
-// unaffected and keeps excluding verifier sessions by construction, since
-// `opts` (and therefore `opts?.includeVerifier`) is simply undefined.
+// unaffected and keeps excluding verifier sessions (and getting the default
+// roots-only page) by construction, since `opts` is simply undefined.
+//
+// ADR-057 US-19/FR-091/FR-092/FR-104 (W16d/W16h): grew four more fields —
+//   - parentSessionId: GET /sessions?parent_session_id=<id> — that node's
+//     DIRECT children only, a page at a time, instead of roots. Mutually
+//     exclusive with `flat` (server 400s if both are supplied).
+//   - flat: GET /sessions?flat=true — every session (roots AND
+//     subordinates) as one flat paged list, child_count still populated.
+//     UsageScreen's "By session" tab passes this so delegated children's
+//     spend stays auditable (FR-104) instead of silently disappearing
+//     under the default roots-only listing.
+//   - limit / offset: ADR-057 FR-092/FR-098 paging. Omitted uses the
+//     server's default page size / first page.
 // includeVerifier maps 1:1 to the generated `include_verifier` query param
 // (contracts/openapi.yaml `listSessions`, ADR-052 FR-036): omitted/false
 // excludes type:"verifier" sessions from the response; true opts them in.
 // UsageScreen's "By session" tab is the one caller that passes true, so
 // verifier LLM spend is auditable per-session there (SC-014), not just in
 // the unfiltered token-stats aggregate.
-export async function fetchSessions(
+export interface FetchSessionsOptions {
+  includeVerifier?: boolean
+  /** ADR-057 FR-091/US-19: direct children of this session id, paged. */
+  parentSessionId?: string
+  /** ADR-057 FR-104: every session (roots + subordinates), flat, paged. */
+  flat?: boolean
+  /** ADR-057 FR-092: page size. Server default applies when omitted. */
+  limit?: number
+  /** ADR-057 FR-098: offset into the recency-ordered sequence, or a prior next_cursor's value. */
+  offset?: number
+}
+
+// ADR-057 FR-091/FR-098 (W16d): the paged envelope GET /sessions now always
+// returns — SPA-shaped (Session[], not RawSession[]) so callers never see
+// the wire's nested `stats`. This is the seam U24 consumes to drive the
+// sidebar/search session tree's "load next page" and "expand this node"
+// requests (cross-unit request, spec line ~1033) — fetchSessions() below
+// remains the simple array-returning convenience wrapper for callers that
+// don't need cursoring (Sidebar, SearchModal, UsageScreen all use that).
+export interface SessionListPage {
+  sessions: Session[]
+  /** Present unless this is the last page. Opaque — pass back as `offset`. */
+  nextCursor?: string
+  /** Sanitized per-store failure tokens from a partial legacy-store merge (FR-098). */
+  partialErrors?: string[]
+}
+
+export async function fetchSessionPage(
   agentId?: string,
   type?: Session['type'],
-  opts?: { includeVerifier?: boolean },
-): Promise<Session[]> {
+  opts?: FetchSessionsOptions,
+): Promise<SessionListPage> {
   const params: Record<string, string> = {}
   if (agentId) params.agent_id = agentId
   if (type) params.type = type
   if (opts?.includeVerifier) params.include_verifier = 'true'
+  if (opts?.parentSessionId) params.parent_session_id = opts.parentSessionId
+  if (opts?.flat) params.flat = 'true'
+  if (opts?.limit !== undefined) params.limit = String(opts.limit)
+  if (opts?.offset !== undefined) params.offset = String(opts.offset)
   const qs = Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : ''
-  // The OpenAPI contract for GET /sessions describes a oneOf response: a
-  // plain JSON array when there are no partial errors, OR
-  // {sessions: [...], partial_errors: [...]} when one or more agents failed
-  // to list. The previous code validated only the array variant — when
-  // partial_errors fired (e.g. a session with a missing .context entry),
-  // Zod rejected the whole response and the session panel showed empty.
-  // Accept both shapes so legitimate sessions still render alongside any
-  // partial-error info.
-  const unionSchema = z.union([
-    z.array(WireSessionSchema),
-    z.object({
-      sessions: z.array(WireSessionSchema),
-      partial_errors: z.array(z.string()).optional(),
-    }),
-  ])
-  const resp = await request<unknown>(`/sessions${qs}`, undefined, unionSchema as ZodType<unknown>)
-  const raw: RawSession[] = Array.isArray(resp)
-    ? (resp as RawSession[])
-    : ((resp as { sessions: RawSession[] }).sessions ?? [])
+  // ADR-057 FR-091/grill2 M2-10: the historic two-variant oneOf (a bare
+  // Session array, or {sessions, partial_errors}) is retired — the wire now
+  // always returns one named SessionPage envelope
+  // ({sessions, next_cursor?, partial_errors?}), validated against U10's
+  // generated schema rather than a hand-rolled union.
+  const resp = await request<{ sessions: RawSession[]; next_cursor?: string; partial_errors?: string[] }>(
+    `/sessions${qs}`,
+    undefined,
+    WireSessionPageSchema as ZodType<{ sessions: RawSession[]; next_cursor?: string; partial_errors?: string[] }>,
+  )
   // A non-empty `partial_errors` means one or more agents failed to list
-  // their sessions — the array above is a real but INCOMPLETE enumeration,
+  // their sessions — `resp.sessions` is a real but INCOMPLETE enumeration,
   // not a full one. Silently returning it made a partial listing read as
   // complete everywhere fetchSessions is consulted (worst on UsageScreen's
   // spend-audit tab, which sums sessions to report cost/usage). Surface it
   // the same way a schema mismatch does (console.warn + dev toast) rather
-  // than dropping it on the floor — this does not change the return
-  // signature, so every existing caller keeps working unmodified.
-  if (!Array.isArray(resp) && resp && typeof resp === 'object') {
-    const partialErrors = (resp as { partial_errors?: string[] }).partial_errors
-    if (partialErrors && partialErrors.length > 0) {
-      console.warn('[api] GET /sessions returned partial_errors — the list is incomplete:', partialErrors)
-      void maybeDevToast(
-        `[api] Session list incomplete: ${partialErrors.length} agent(s) failed to enumerate`,
-        'GET:/sessions:partial_errors',
-      )
-    }
+  // than dropping it on the floor.
+  if (resp.partial_errors && resp.partial_errors.length > 0) {
+    console.warn('[api] GET /sessions returned partial_errors — the list is incomplete:', resp.partial_errors)
+    void maybeDevToast(
+      `[api] Session list incomplete: ${resp.partial_errors.length} agent(s) failed to enumerate`,
+      'GET:/sessions:partial_errors',
+    )
   }
-  return raw.map(rawToSession)
+  return {
+    sessions: resp.sessions.map(rawToSession),
+    nextCursor: resp.next_cursor,
+    partialErrors: resp.partial_errors,
+  }
+}
+
+export async function fetchSessions(
+  agentId?: string,
+  type?: Session['type'],
+  opts?: FetchSessionsOptions,
+): Promise<Session[]> {
+  const page = await fetchSessionPage(agentId, type, opts)
+  return page.sessions
+}
+
+// ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────
+//
+// GET /sessions never returns a whole forest — it pages over roots (or one
+// node's direct children via parentSessionId, or a flat list under
+// flat=true). The client assembles the tree incrementally as the user
+// expands nodes; these are the pure, exported primitives U24 (sidebar tree,
+// search tree — cross-unit request, spec line ~1033) builds that UI on top
+// of. All three are immutable (return a new tree) so they drop directly
+// into React/Zustand state without extra cloning at the call site.
+
+export interface SessionTreeNode {
+  session: Session
+  children: SessionTreeNode[]
+  /**
+   * True once this node's children have actually been fetched (vs merely
+   * known about via child_count). A leaf (child_count === 0) starts
+   * "loaded" with an empty array — there is nothing to fetch.
+   */
+  childrenLoaded: boolean
+}
+
+/** Wraps a flat page of sessions (roots, or any page) as top-level tree nodes with no children fetched yet. */
+export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
+  return sessions.map((session) => ({
+    session,
+    children: [],
+    childrenLoaded: (session.child_count ?? 0) === 0,
+  }))
+}
+
+/**
+ * Finds the node for `sessionId` anywhere in the tree (any depth), or
+ * undefined if it is not present — e.g. a session known only by id from a
+ * search hit before its ancestor chain has been fetched.
+ */
+export function findSessionNode(tree: SessionTreeNode[], sessionId: string): SessionTreeNode | undefined {
+  for (const node of tree) {
+    if (node.session.id === sessionId) return node
+    const found = findSessionNode(node.children, sessionId)
+    if (found) return found
+  }
+  return undefined
+}
+
+/**
+ * Returns a NEW tree with `children` attached under the node whose session
+ * id is `parentId`, at whatever depth it is found (US-19 AS-3: a depth-3
+ * tree expands one level at a time, each expansion touching only that
+ * node). If `parentId` is not present anywhere in the tree, the tree is
+ * returned unchanged — callers should have inserted that node (e.g. via
+ * buildSessionTree for a freshly-expanded root, or insertOrphanSessionAsRoot
+ * for BDD-106's orphan case) before attaching its children.
+ */
+export function attachSessionChildren(
+  tree: SessionTreeNode[],
+  parentId: string,
+  children: Session[],
+): SessionTreeNode[] {
+  return tree.map((node) => {
+    if (node.session.id === parentId) {
+      return { ...node, children: buildSessionTree(children), childrenLoaded: true }
+    }
+    if (node.children.length > 0) {
+      const updatedChildren = attachSessionChildren(node.children, parentId, children)
+      if (updatedChildren !== node.children) {
+        return { ...node, children: updatedChildren }
+      }
+    }
+    return node
+  })
+}
+
+/**
+ * BDD-106: a session whose parent_session_id names a session that no longer
+ * resolves is shown as a root-level row rather than silently dropped — "a
+ * session that exists and is not reachable in the tree is the R-7 shape
+ * again". The default roots-only listing already satisfies this for the
+ * common case server-side (FR-091 returns such a session AS a root, so it
+ * simply appears in the normal root page). This helper covers the narrower
+ * client-side case: a session encountered as somebody's declared child (or
+ * a search hit) whose own id is not yet present anywhere in the local tree
+ * — it is appended as a new root rather than discarded. A no-op if the
+ * session is already present anywhere in the tree.
+ */
+export function insertOrphanSessionAsRoot(tree: SessionTreeNode[], orphan: Session): SessionTreeNode[] {
+  if (findSessionNode(tree, orphan.id)) return tree
+  return [...tree, ...buildSessionTree([orphan])]
 }
 
 export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {

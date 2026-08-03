@@ -88,6 +88,20 @@ interface SubagentSpanBase {
    * delegate call's own agent_id param.
    */
   agentId?: string
+  /**
+   * ADR-057 FR-013/W5c: the real, store-backed child session this span's
+   * sub-turn ran as (`producing_session_id` off the subagent_start /
+   * subagent_end frame — present iff it differs from the routing
+   * `session_id`, which self-delegation and same-session edge cases can
+   * make equal). Absent on a pre-ADR-057 gateway that hasn't been upgraded
+   * yet (the field is optional on the wire), in which case this span has
+   * only its inline steps and no navigable child session. Populated so a
+   * renderer CAN link out to the drill-down surface
+   * (`/sessions/{childSessionId}`, FR-046) for the child's own full
+   * transcript — deliberately NOT derived from `subagent_message` /
+   * `subagent_state`, which have zero Go emitters (Explicit Non-Behaviors).
+   */
+  childSessionId?: string
 }
 
 export interface SubagentSpanRunning extends SubagentSpanBase {
@@ -3936,6 +3950,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 status: 'running',
                 steps: [],
                 agentId: sf.agent_id,
+                // ADR-057 FR-013/W5c: the child's own routable session id,
+                // when the gateway sent one (see SubagentSpanBase's doc).
+                childSessionId: sf.producing_session_id,
               }
               const bufferKey = `${targetSid}:${sf.parent_call_id}`
               const buffered = pendingByParentCallId[bufferKey] ?? []
@@ -3990,6 +4007,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // agent_id; prefer it if the server ever populates it, else
                   // keep the value already stamped by subagent_start.
                   agentId: ef.agent_id ?? existingSpan.agentId,
+                  // Same fallback shape for the child session id (FR-013):
+                  // prefer whatever subagent_end itself carries, else keep
+                  // what subagent_start already stamped.
+                  childSessionId: ef.producing_session_id ?? existingSpan.childSessionId,
                   status: ef.status,
                   durationMs: ef.duration_ms ?? 0,
                   finalResult: ef.final_result,
