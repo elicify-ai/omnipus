@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -2235,67 +2238,158 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 	}
 }
 
-// TestSubTurnInheritsTranscriptSessionID is T0 — the gate test for FR-6a.
+// TestSpawnSubTurn_TranscriptSessionIDIsChildsOwn_RoutingSessionIDInheritsFromParent
+// is the ADR-057 W22 inversion of the pre-ADR-057 T0 gate test for FR-6a
+// (formerly TestSubTurnInheritsTranscriptSessionID, which asserted the exact
+// OPPOSITE of the current contract: that the child's transcriptSessionID
+// equals the parent's).
 //
-// BDD: Given a parent turnState with transcriptSessionID "S",
-// When processOptions for a child (sub-turn) are built via the same code path
-// that spawnSubTurn uses (buildSubTurnOpts helper mirroring the production logic),
-// Then the child's transcriptSessionID equals "S".
+// BDD (current contract, ADR-057 D1/D2):
 //
-// This test MUST fail on the unpatched codebase (where subturn.go did not set
-// TranscriptSessionID on the child's processOptions) and MUST pass after the
-// FR-6a fix in subturn.go.
+//	Given a parent turnState whose OWN transcriptSessionID is a real,
+//	  store-backed session, and whose routingSessionID is a THIRD, distinct
+//	  value (simulating a parent that is itself mid-subtree — a delegated
+//	  child of some root chat — so the routing id can never be confused with
+//	  either session's own identity by coincidence),
+//	When spawnSubTurn — the REAL production function, not a hand-built
+//	  copy of its logic — spawns a child sub-turn,
+//	Then the child's OWN transcriptSessionID is a NEW, distinct, real
+//	  session (D1: "own identity" is never shared), while the child's
+//	  routingSessionID equals the PARENT's routingSessionID, inherited
+//	  verbatim (D2: the one field that stays inherited).
 //
-// Refs: docs/internal/specs/cancel-cross-channel-spec.md FR-6a, TDD Plan T0.
-func TestSubTurnInheritsTranscriptSessionID(t *testing.T) {
-	al, cleanup := newAL(t)
+// Why this replaces the old contract: pre-ADR-057, FR-6a made the CHILD's
+// transcriptSessionID EQUAL the parent's — one shared transcript file, one
+// shared identity serving both the "own identity" role and the
+// "cascade/routing" role. ADR-057 D1 splits those roles apart: D1 gives the
+// child its own real session for role A (pkg/agent/subturn.go:1113,
+// `TranscriptSessionID: childID`); D2 keeps ONLY the routing role (B/C)
+// inherited, under its own distinct field, routingSessionID
+// (pkg/agent/subturn.go:1130, `childTS.routingSessionID =
+// parentTS.routingSessionID`).
+//
+// Non-tautological by construction: the pre-inversion version of this test
+// hand-built a `childOpts` literal "mirroring the production logic" instead
+// of calling spawnSubTurn — it could never have failed on a production
+// regression, only on a regression to this test file itself. This version
+// calls the REAL spawnSubTurn, then reads back (a) the child's actual
+// persisted transcript file via the shared store (proving D1: a real,
+// distinct, store-backed session, not merely a different string) and (b) the
+// REAL EventKindSubTurnSpawn WS event payload the production code path
+// itself emits (proving D2: pkg/agent/events.go's SubTurnSpawnPayload.
+// SessionID doc comment names this exact field the "FROZEN CONTRACT" for
+// routing inheritance) — neither of which this test constructs itself.
+//
+// Traces to: ADR-057 D1, D2; subturn.go:1113 (own id), :1130 (routing
+// inheritance); events.go's SubTurnSpawnPayload.SessionID. Supersedes the
+// pre-ADR-057 TestSubTurnInheritsTranscriptSessionID (FR-6a T0 gate,
+// docs/internal/specs/cancel-cross-channel-spec.md; see also
+// docs/internal/specs/adr-057-session-unification-spec.md's Regression Test
+// Requirements table, which names this exact anchor for inversion: "The
+// child's transcript session id is its own; the routing id is inherited").
+func TestSpawnSubTurn_TranscriptSessionIDIsChildsOwn_RoutingSessionIDInheritsFromParent(t *testing.T) {
+	al, _, _, provider, cleanup := newTestAgentLoop(t)
+	_ = provider
 	defer cleanup()
 
-	const sid = "S"
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
 
-	// Construct a minimal parent processOptions with TranscriptSessionID set.
-	parentOpts := processOptions{
-		SessionKey:          "parent-session",
-		Channel:             "test",
-		ChatID:              "chat1",
-		TranscriptSessionID: sid,
-		// TranscriptStore intentionally nil — we only test the ID inheritance here.
+	// The parent's OWN real, store-backed session (role A). This is what
+	// spawnSubTurn's CreateSessionWithID validates against as "the parent".
+	parentMeta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	require.NoError(t, err, "store.NewSession (parent)")
+	parentSessionID := parentMeta.ID
+
+	// The routing key this parent was itself given — deliberately a THIRD,
+	// distinct literal (neither the parent's own session id nor anything
+	// spawnSubTurn could derive from it). This makes the inheritance proof
+	// unambiguous below: if the child's observed routing id equals this
+	// exact literal, it can only be because spawnSubTurn copied
+	// parentTS.routingSessionID verbatim.
+	const rootRoutingID = "root-chat-routing-key-distinct-from-any-session-id"
+	require.NotEqual(t, parentSessionID, rootRoutingID,
+		"test setup: routing key must be distinct from the parent's own session id")
+
+	parentTS := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "parent-T0-inverted",
+		depth:               1, // itself a delegated child of the simulated root
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		session:             &ephemeralSessionStore{},
+		agent:               al.registry.GetDefaultAgent(),
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(rootRoutingID),
+		transcriptStore:     store,
 	}
 
-	// Build a minimal parent turnState.
-	parentAgent := al.registry.GetDefaultAgent()
-	if parentAgent == nil {
-		t.Fatal("expected default agent from registry")
-	}
-	parentScope := al.newTurnEventScope(parentAgent.ID, parentOpts.SessionKey)
-	parentTS := newTurnState(parentAgent, parentOpts, parentScope)
+	collector, collectCleanup := newEventCollector(t, al)
+	defer collectCleanup()
 
-	// Verify the parent has transcriptSessionID set correctly.
-	if parentTS.transcriptSessionID != sid {
-		t.Fatalf("parent transcriptSessionID = %q, want %q", parentTS.transcriptSessionID, sid)
-	}
+	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-T0")
+	// ADR-057 FR-005/FR-096 fixture note (same hazard U21/U30 fixed
+	// elsewhere): newTestAgentLoop's shared session store resolves to the
+	// OS's flat temp root, not a per-test directory, so spawnSubTurn's
+	// auto-generated "subturn-N" counter (al.generateSubTurnID()) can collide
+	// with an identically-numbered child left behind by an earlier test in
+	// the same process. Pin an explicit, per-run-unique DelegateSessionID
+	// derived from the freshly-minted parent ULID instead of relying on the
+	// counter.
+	expectedChildID := "child-of-" + parentSessionID
+	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}, DelegateSessionID: expectedChildID}
 
-	// Mirror the production processOptions construction from spawnSubTurn (subturn.go).
-	// This is the exact code path patched by FR-6a.
-	childOpts := processOptions{
-		SessionKey:              "child-session",
-		Channel:                 parentTS.channel,
-		ChatID:                  parentTS.chatID,
-		SenderID:                parentTS.opts.SenderID,
-		SenderDisplayName:       parentTS.opts.SenderDisplayName,
-		UserMessage:             "child task",
-		NoHistory:               true,
-		SkipInitialSteeringPoll: true,
-		TranscriptSessionID:     parentTS.transcriptSessionID, // FR-6a: must be set
-		TranscriptStore:         parentTS.transcriptStore,
-	}
+	result, err := spawnSubTurn(spawnCtx, al, parentTS, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result, "expected the child's turn to actually run and return a result")
 
-	// Build the child turnState.
-	childScope := al.newTurnEventScope(parentAgent.ID, childOpts.SessionKey)
-	childTS := newTurnState(parentAgent, childOpts, childScope)
+	time.Sleep(10 * time.Millisecond) // let the event-collector goroutine flush
 
-	// Gate assertion: child must inherit parent's transcriptSessionID.
-	if childTS.transcriptSessionID != sid {
-		t.Fatalf("child transcriptSessionID = %q, want %q (FR-6a fix missing)", childTS.transcriptSessionID, sid)
+	// Extract the REAL production SubTurnSpawnPayload — not a value this test
+	// constructs — to learn the child's own id (Label) and observed routing
+	// id (SessionID), per events.go's documented field meanings.
+	var payload SubTurnSpawnPayload
+	var found bool
+	collector.mu.Lock()
+	for _, e := range collector.events {
+		if e.Kind == EventKindSubTurnSpawn {
+			p, ok := e.Payload.(SubTurnSpawnPayload)
+			require.True(t, ok, "EventKindSubTurnSpawn payload must be a SubTurnSpawnPayload, got %T", e.Payload)
+			payload = p
+			found = true
+			break
+		}
 	}
+	collector.mu.Unlock()
+	require.True(t, found, "spawnSubTurn must emit EventKindSubTurnSpawn")
+
+	childID := payload.Label
+	require.NotEmpty(t, childID, "child id (payload.Label) must be set")
+	require.Equal(t, expectedChildID, childID,
+		"payload.Label must be the exact DelegateSessionID this test pinned")
+
+	// ── D1: the child's transcriptSessionID is its OWN, distinct, real session ──
+	assert.NotEqual(t, parentSessionID, childID,
+		"ADR-057 D1: the child must NEVER share the parent's transcriptSessionID — this "+
+			"is the exact invariant the pre-ADR-057 test asserted the OPPOSITE of")
+
+	childEntries, err := store.ReadTranscript(childID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, childEntries,
+		"the child's OWN transcript file must contain its own writes — proving childID "+
+			"names a real, distinct, store-backed session, not a placeholder value")
+
+	parentEntries, err := store.ReadTranscript(parentSessionID)
+	require.NoError(t, err)
+	assert.Empty(t, parentEntries,
+		"the parent's own transcript must contain NONE of the child's writes — the "+
+			"negative-space proof that the two are genuinely separate files, not merely "+
+			"differently-named views onto the same one")
+
+	// ── D2: the child's ROUTING id is the PARENT's routingSessionID, inherited verbatim ──
+	assert.Equal(t, rootRoutingID, payload.SessionID,
+		"ADR-057 D2: routingSessionID is the ONE field that stays inherited verbatim from "+
+			"the parent — SubTurnSpawnPayload.SessionID is FROZEN to carry exactly this "+
+			"value (events.go's doc comment); got %q, want the parent's routing key %q",
+		payload.SessionID, rootRoutingID)
 }
