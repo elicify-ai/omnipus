@@ -266,6 +266,14 @@ type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 // a capability gate).
 const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite_build'])
 
+// FIRST_FRAME_TIMEOUT_MS bounds how long the panel shows "Waiting for the first
+// frame…" before admitting failure. Generous on purpose: a cold Chrome launch
+// plus WebRTC negotiation can legitimately take several seconds on a small box,
+// and a premature error on a session that was about to work is worse than a few
+// extra seconds of spinner. What is NOT acceptable is waiting forever — see
+// firstFrameTimedOut for the silent-failure this bounds.
+const FIRST_FRAME_TIMEOUT_MS = 15_000
+
 /**
  * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
  * hostname parsed from `url`, fall back to "New tab". The wire type carries
@@ -590,7 +598,38 @@ export function BrowserLiveView({
   // (the "error while controlling" case below). This is what actually
   // renders (both before and after the first frame arrives) — see the
   // "!frame" branch and the persistent error strip below.
-  const displayError = connError ?? (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null)
+  // firstFrameTimedOut (2026-08-03): the connection can be fully established —
+  // WS connected, video track live and unmuted, ZERO console errors — while no
+  // frame ever arrives, because the capture bound to a tab that is no longer
+  // the one being shown. Live-measured on UAT: the panel sat on "Waiting for
+  // the first frame…" and then fell to indistinguishable black, with nothing
+  // anywhere telling the user it had failed. Silence is the bug: without a
+  // deadline this state is visually identical to "still loading" forever.
+  //
+  // Only armed once `connected` is true — before that the honest message is
+  // "Connecting…", and a slow connect is not a first-frame failure.
+  const [firstFrameTimedOut, setFirstFrameTimedOut] = useState(false)
+  useEffect(() => {
+    if (frame) {
+      // A frame arrived (possibly after a previous timeout — a recapture can
+      // recover): clear the deadline state so the error does not stick.
+      setFirstFrameTimedOut(false)
+      return
+    }
+    if (!connected) {
+      setFirstFrameTimedOut(false)
+      return
+    }
+    const timer = setTimeout(() => setFirstFrameTimedOut(true), FIRST_FRAME_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [frame, connected])
+
+  const displayError =
+    connError ??
+    (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null) ??
+    (firstFrameTimedOut && !frame
+      ? 'No video received from the browser. The capture may be bound to a tab that is no longer active — try switching tabs or reloading the page.'
+      : null)
 
   // ── ADR-040 D2 — "agent working" signal ───────────────────────────────────
   // Read directly from the per-session bucket (`sessionsById[sessionId]`),
