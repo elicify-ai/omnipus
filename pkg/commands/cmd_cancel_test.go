@@ -49,16 +49,24 @@ func TestCancelDefinition_NotAliased(t *testing.T) {
 }
 
 // stubAgentLoop is a minimal AgentLoopInterface implementation used in tests.
+//
+// ADR-057 FR-041/D8: AgentLoopInterface no longer declares InterruptSession
+// (it was dead surface — see runtime.go's AgentLoopInterface doc comment).
+// This stub keeps an unexported simulateInterrupt helper, renamed off the
+// retired name, purely for its own internal test-glue reuse between the two
+// exported behaviours (record the call, then let RequestCancelForSession
+// answer from the recorded state) — it is not part of, and does not need to
+// satisfy, any interface.
 type stubAgentLoop struct {
 	calledSessionID string
 	calledHint      string
 	callCount       int
-	returnErr       error // if non-nil, returned by InterruptSession and RequestCancelForSession
+	returnErr       error // if non-nil, returned by simulateInterrupt and RequestCancelForSession
 	returnFired     *bool // if non-nil, overrides the fired return value from RequestCancelForSession
 	returnArmed     bool  // returned as the armed return value from RequestCancelForSession
 }
 
-func (s *stubAgentLoop) InterruptSession(sessionID, hint string) ([]string, error) {
+func (s *stubAgentLoop) simulateInterrupt(sessionID, hint string) ([]string, error) {
 	s.calledSessionID = sessionID
 	s.calledHint = hint
 	s.callCount++
@@ -66,10 +74,10 @@ func (s *stubAgentLoop) InterruptSession(sessionID, hint string) ([]string, erro
 }
 
 func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, bool, error) {
-	// Delegate to InterruptSession for test coverage continuity.
+	// Delegate to simulateInterrupt for test coverage continuity.
 	// Include both userID and channel in the hint so tests can assert on both.
 	hint := "cancel from " + userID + " via " + channel
-	_, err := s.InterruptSession(sessionID, hint)
+	_, err := s.simulateInterrupt(sessionID, hint)
 	if err != nil {
 		return false, false, err
 	}
@@ -80,8 +88,10 @@ func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, 
 }
 
 // TestCancelHandler_CallsInterruptSession verifies that the /cancel handler
-// invokes InterruptSession on the agent loop with the correct session ID and a
-// hint that contains the canceller identity (spec FR-27, FR-1).
+// invokes the agent loop's cancel path with the correct session ID and a
+// hint that contains the canceller identity (spec FR-27, FR-1). The name is
+// kept (pre-ADR-057) even though the underlying stub method is now
+// simulateInterrupt, not InterruptSession — see stubAgentLoop's doc comment.
 func TestCancelHandler_CallsInterruptSession(t *testing.T) {
 	stub := &stubAgentLoop{}
 
@@ -110,10 +120,10 @@ func TestCancelHandler_CallsInterruptSession(t *testing.T) {
 	}
 
 	if stub.callCount != 1 {
-		t.Fatalf("InterruptSession call count = %d, want 1", stub.callCount)
+		t.Fatalf("simulateInterrupt call count = %d, want 1", stub.callCount)
 	}
 	if stub.calledSessionID != "session-abc" {
-		t.Errorf("InterruptSession sessionID = %q, want %q", stub.calledSessionID, "session-abc")
+		t.Errorf("simulateInterrupt sessionID = %q, want %q", stub.calledSessionID, "session-abc")
 	}
 
 	// The hint must contain the canceller identity (UserID and Channel).
@@ -126,7 +136,7 @@ func TestCancelHandler_CallsInterruptSession(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("InterruptSession hint %q must contain %q", stub.calledHint, want)
+			t.Errorf("simulateInterrupt hint %q must contain %q", stub.calledHint, want)
 		}
 	}
 
@@ -187,7 +197,7 @@ func TestCancelHandler_NilAgentLoopRepliesNothingToCancel(t *testing.T) {
 }
 
 // TestCancelActiveTurn_PropagatesRealError verifies that a genuine
-// InterruptSession failure (e.g., fsync error) is not swallowed (C-3 fix).
+// agent-loop cancel failure (e.g., fsync error) is not swallowed (C-3 fix).
 func TestCancelActiveTurn_PropagatesRealError(t *testing.T) {
 	stub := &stubAgentLoop{
 		returnErr: errors.New("audit fsync failed"),
@@ -199,7 +209,7 @@ func TestCancelActiveTurn_PropagatesRealError(t *testing.T) {
 
 	err := rt.CancelActiveTurn(context.Background(), "sess-x", Canceller{UserID: "u", Channel: "c"})
 	if err == nil {
-		t.Fatal("expected non-nil error for real InterruptSession failure, got nil")
+		t.Fatal("expected non-nil error for real cancel failure, got nil")
 	}
 	if !errors.Is(err, stub.returnErr) {
 		// The error must wrap the original.

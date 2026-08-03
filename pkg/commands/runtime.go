@@ -31,12 +31,21 @@ var ErrCancelArmed = errors.New("cancel acknowledged, pending turn registration"
 // AgentLoopInterface is a minimal interface for the agent-loop methods needed by
 // the commands runtime. Using an interface here avoids a hard import cycle
 // between pkg/commands and pkg/agent.
+//
+// ADR-057 FR-041/D8 note: this interface used to also declare
+// InterruptSession(sessionID, hint string) ([]string, error), mirroring the
+// pre-collapse agent.AgentLoop.InterruptSession. It was dead surface —
+// CancelActiveTurn below has only ever called RequestCancelForSession, and
+// no other pkg/commands code referenced it (only pkg/commands/cmd_cancel_test.go's
+// stub, for its own internal test-glue reuse). FR-041 collapses the four
+// pre-existing agent-side entry points into agent.AgentLoop.Interrupt /
+// InterruptSessionHard, both of which take a new agent.InterruptScope
+// argument; adding a matching method here would force this package to
+// import pkg/agent for that type, reintroducing exactly the import cycle
+// this interface exists to avoid. Since the method was unused, the correct
+// resolution is removal, not a primitive-typed stand-in for a capability
+// nothing calls.
 type AgentLoopInterface interface {
-	// InterruptSession requests a graceful interrupt for the turn associated with
-	// the given session ID, attaching hint to the audit trail. Returns the list
-	// of canceled turn IDs (parent + sub-turns) which the gateway uses for the
-	// turn_canceled audit entry; the commands runtime discards it.
-	InterruptSession(sessionID, hint string) ([]string, error)
 	// RequestCancelForSession runs the full cancel state machine (audit, transcript,
 	// abuse-detection, approval auto-deny, 2-stage timer) for the given session.
 	// All parameters are primitive types so this interface can be defined without
