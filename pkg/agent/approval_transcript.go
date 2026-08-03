@@ -36,13 +36,51 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
+
+// transcriptMutateMissed is incremented each time mutateToolCallInTranscript
+// (below) cannot find a target to mutate — either the session's transcript
+// file does not exist yet (ADR-057 FR-099's "session not found" case) or an
+// existing transcript has no tool_call entry matching the given
+// callID/expectStatus ("entry not found"). This is the read-modify-write
+// twin of AC-1's silent-append fix (mirrors pkg/agent/turn.go's
+// abandonedWritesSuppressed / TranscriptSuppressedErrors pattern): before
+// FR-099, both cases returned a bare `false` with no operator-visible
+// signal — the exact success-shaped failure this migration exists to close,
+// on the mutation side.
+var transcriptMutateMissed atomic.Uint64
+
+// TranscriptMutateMissed returns the current value of the
+// omnipus_transcript_mutate_missed_total counter (FR-099). Used by tests and
+// operator tooling.
+func TranscriptMutateMissed() uint64 {
+	return transcriptMutateMissed.Load()
+}
+
+// u22RecordTranscriptMutateMissed increments transcriptMutateMissed and
+// emits the matching WARN naming the session id and call id (FR-099). Shared
+// by mutateToolCallInTranscript's three miss sites (the common
+// directory-does-not-exist case, the narrow post-open-deletion race, and the
+// entry-not-found case) so the log fields cannot drift out of sync between
+// them. Uses slog (not this file's other logger.WarnCF call, used for a
+// genuinely different, non-FR-099 I/O-error class below) so tests can
+// assert the record via slog.SetDefault capture — this package's own
+// established technique for exactly this class of requirement (see
+// wave3_fix5b_test.go).
+func u22RecordTranscriptMutateMissed(msg, sessionID string, callID session.ToolCallID, extra ...any) {
+	transcriptMutateMissed.Add(1)
+	args := append([]any{"session_id", sessionID, "tool_call_id", string(callID)}, extra...)
+	slog.Warn(msg, args...)
+}
 
 // Transcript ToolCall.Status values used by the approval gate. `pending` and
 // `denied` are both in the wire enum (contracts/components/schemas/ToolCall.yaml);
@@ -208,6 +246,17 @@ func mutateToolCallInTranscript(
 		data, err := os.ReadFile(transcriptPath)
 		if err != nil {
 			if os.IsNotExist(err) {
+				// Narrow race window: the flock's own os.OpenFile (below,
+				// via WithFlock) already succeeded — meaning transcriptPath
+				// existed a moment ago — but this fresh, independent
+				// os.ReadFile(transcriptPath) now sees it gone. That can
+				// only happen if the session's directory was removed
+				// concurrently (e.g. DeleteSession) between the flock open
+				// and this read. Classified the same as "session not
+				// found" (FR-099) — the session is, for this call's
+				// purposes, gone.
+				u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
+					"reason", "session_not_found")
 				return nil // no transcript yet — nothing to update
 			}
 			return err
@@ -249,6 +298,14 @@ func mutateToolCallInTranscript(
 			}
 		}
 		if targetIdx == -1 {
+			// FR-099: "entry not found" — session exists but no tool_call
+			// entry matches callID/expectStatus. Distinguishable from the
+			// session-not-found case above via the "reason" field, per
+			// BDD-109. Surfaced as a counter increment plus a WARN naming
+			// the session id and call id, rather than the bare false this
+			// used to return silently.
+			u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", sessionID, callID,
+				"expect_status", expectStatus, "reason", "entry_not_found")
 			return nil // no matching entry — signal fallback to the caller
 		}
 
@@ -276,6 +333,24 @@ func mutateToolCallInTranscript(
 	})
 
 	if rewriteErr != nil {
+		// FR-099: the MAIN "session not found" path. fileutil.WithFlock opens
+		// transcriptPath with os.O_CREATE, which can create the leaf FILE but
+		// not a missing PARENT directory — so for a session id that was never
+		// minted (no per-session directory at all, matching BDD-109's "no
+		// meta.json exists"), WithFlock's own open fails with ENOENT and the
+		// closure above never runs at all. Verified: reproduced against a
+		// real UnifiedStore with an unminted session id — the closure's own
+		// os.IsNotExist(err) branch on os.ReadFile is NOT reached for this
+		// case; only this outer branch is. Distinguish it from a genuine I/O
+		// failure (permission denied, disk error, flock contention) via
+		// errors.Is, so only the true "does not exist" case gets FR-099's
+		// specific counter+reason — a real I/O error keeps the existing
+		// generic WARN below, which is a different failure class entirely.
+		if errors.Is(rewriteErr, os.ErrNotExist) {
+			u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
+				"reason", "session_not_found")
+			return false
+		}
 		logger.WarnCF("agent", "in-place tool_call transcript update failed; caller will append instead",
 			map[string]any{
 				"session_id":   sessionID,

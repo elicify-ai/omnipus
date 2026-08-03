@@ -163,6 +163,14 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 	stderrR, stderrW := io.Pipe()
 	cmd.Stderr = stderrW
 
+	// FR-029 (ADR-057 U22, W9c): put the child in its own process group and
+	// make cancellation (runCtx via cancelFn/Cancel below) signal the whole
+	// group — see procgroup_unix.go / procgroup_windows.go. Without this a
+	// subprocess tree the CLI spawns (e.g. a tool it shells out to) survives
+	// as a silent orphan after Cancel().
+	u22SetupProcessGroup(cmd)
+	u22InstallGroupCancel(cmd)
+
 	if err := cmd.Start(); err != nil {
 		cancelFn()
 		return nil, fmt.Errorf("claude driver: failed to start: %w", err)
