@@ -222,10 +222,14 @@ type LifecycleRecord struct {
 	// with no counter anywhere. Do not add `omitempty` to this tag.
 	//
 	// MUST NOT be inferred from any other field, ever:
-	//   - ParentDurableKey is the TRANSCRIPT session id, which a parent
-	//     SHARES with its child and with every cousin in the subtree
-	//     (pkg/agent/subturn.go's childID reuse) — inferring from it returns
-	//     siblings, cousins and grandchildren, not "my children";
+	//   - ParentDurableKey (D1) is the caller's own live routing/session id
+	//     at spawn time. Post-ADR-057 it is a STRICT direct-parent EDGE
+	//     (LifecycleFilter.ParentDurableKey, FR-019/FR-020, answers
+	//     "children of X" one level deep) — but it says nothing about WHICH
+	//     AGENT delegated, and it is legitimately shared by every SIBLING a
+	//     single parent starts. Inferring ParentAgentID from it would
+	//     collapse every sibling onto one value regardless of which agent
+	//     actually ran each `delegate.run` call;
 	//   - OwnerScopeID is "" for a top-level delegation (OwnerScopeHuman);
 	//   - AgentID is the CHILD's id (the delegate target), not the parent's.
 	// The mint site fails closed on an empty value, so an empty
@@ -234,15 +238,27 @@ type LifecycleRecord struct {
 
 	// ParentDurableKey is the durable chat/plan id (D16) this session's
 	// PARENT inbox is keyed to — ALWAYS populated at spawn time with the
-	// parent's own live transcript/chat session id, regardless of
+	// caller's own live transcript/routing session id, regardless of
 	// OwnerScopeKind (unlike OwnerScopeID, which per the wire contract is
 	// empty when OwnerScopeKind==human — see that field's own doc comment).
 	// A durable inbox routing key must always resolve to something
 	// addressable even for a human-owned top-level parent, which is exactly
-	// the case OwnerScopeID cannot serve. NOTE: this is SHARED between a
-	// parent and its children — it is a routing key, NOT an ownership or
-	// parentage predicate (see ParentAgentID). Not part of the generated
-	// wire shape.
+	// the case OwnerScopeID cannot serve.
+	//
+	// Post-ADR-057 (D1) this is ALSO the durable PARENTAGE edge:
+	// LifecycleFilter.ParentDurableKey (FR-019) matches records whose OWN
+	// ParentDurableKey equals a given session id, and List maintains a
+	// secondary in-memory index keyed on it (FR-020, lifecycle_index.go) so
+	// "children of X" is one indexed lookup rather than a full-store scan.
+	// A child's ParentDurableKey names its DIRECT parent only — it is NOT
+	// re-inherited down the chain, so a grandchild's value is its own
+	// parent's id, never the grandparent's (this is what makes "children of
+	// X" return exactly depth-1, never siblings' descendants). It IS,
+	// correctly, shared by every SIBLING a single parent starts — that is
+	// the mechanism, not a defect — which is why this remains a
+	// parentage-by-SESSION predicate and is never a substitute for
+	// ParentAgentID's parentage-by-AGENT predicate (see that field's own doc
+	// comment). Not part of the generated wire shape.
 	ParentDurableKey string `json:"parent_durable_key,omitempty"`
 
 	// OriginChannel/OriginChatID are the channel + chat_id the delegating
@@ -300,6 +316,14 @@ func validateLifecycleSessionID(id string) error {
 type LifecycleStore struct {
 	dir  string
 	lock *lifecycleStripedLock
+
+	// parentIndex is the ADR-057 W6/FR-020 secondary parent index: an
+	// in-memory map from ParentDurableKey to its direct children's
+	// session_ids, maintained inside Persist (persistLocked) and consulted
+	// by List when LifecycleFilter.ParentDurableKey is set — see
+	// lifecycle_index.go. It is a property of THIS store instance (like
+	// lock), not shared across LifecycleStore values.
+	parentIndex *lifecycleParentIndex
 }
 
 // NewLifecycleStore creates a LifecycleStore rooted at dir. By convention
@@ -308,7 +332,11 @@ type LifecycleStore struct {
 // should use that path so every consumer of the durable record agrees on
 // its location.
 func NewLifecycleStore(dir string) *LifecycleStore {
-	return &LifecycleStore{dir: dir, lock: &lifecycleStripedLock{}}
+	return &LifecycleStore{
+		dir:         dir,
+		lock:        &lifecycleStripedLock{},
+		parentIndex: newLifecycleParentIndex(),
+	}
 }
 
 // Dir returns the store's root directory.
@@ -482,7 +510,17 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 	}
 	rec.UpdatedAt = now
 
-	return fileutil.AppendJSONL(s.path(rec.SessionID), rec)
+	if err := fileutil.AppendJSONL(s.path(rec.SessionID), rec); err != nil {
+		return err
+	}
+	// FR-020 — maintain the secondary parent index inside Persist, under the
+	// per-session striped lock persistLocked's caller (Persist/Mutate)
+	// already holds. add() itself is a no-op when ParentDurableKey is empty
+	// (an unattributable record, FR-015's degraded-mode mint), and is
+	// idempotent across a session's later generations, which all carry the
+	// same ParentDurableKey.
+	s.parentIndex.add(rec.ParentDurableKey, rec.SessionID)
+	return nil
 }
 
 // Mutate is the atomic read-modify-write primitive for one session's
@@ -553,6 +591,17 @@ type LifecycleFilter struct {
 	// answers "sessions run BY x", filtering by ParentAgentID answers
 	// "sessions x STARTED".
 	ParentAgentID string
+	// ParentDurableKey, when non-empty, restricts results to records whose
+	// OWN ParentDurableKey equals this value — the DIRECT children of the
+	// session/chat this key names (D1's strict-direct-parent edge,
+	// FR-019/FR-020). Backed by an in-memory secondary index maintained
+	// inside Persist (lifecycle_index.go), so setting this field routes
+	// List through an O(descendants) index lookup instead of a full-store
+	// scan. This is a DIFFERENT axis from ParentAgentID: ParentDurableKey
+	// answers "children of X" (session hierarchy, one level deep);
+	// ParentAgentID answers "sessions x STARTED" (agent identity). Empty
+	// means "filter off", like every other field on this struct.
+	ParentDurableKey string
 	// States, when non-empty, restricts results to records whose State is
 	// in this set.
 	States map[LifecycleState]bool
@@ -570,10 +619,20 @@ func (f LifecycleFilter) matches(r *LifecycleRecord) bool {
 		return false
 	}
 	// ParentAgentID is matched against the record's OWN ParentAgentID and
-	// nothing else — never against ParentDurableKey (shared parent↔child),
-	// OwnerScopeID ("" at top level) or AgentID (the child's id). Inferring
-	// from any of those re-opens the sibling/cousin/grandchild leak.
+	// nothing else — never against ParentDurableKey (a same-level SESSION
+	// parentage edge post-D1, matched separately below by its own filter
+	// field), OwnerScopeID ("" at top level) or AgentID (the child's id).
+	// Inferring from any of those answers "which session is my direct
+	// parent" or "who am I", not "which agent started me".
 	if f.ParentAgentID != "" && r.ParentAgentID != f.ParentAgentID {
+		return false
+	}
+	// ParentDurableKey answers a DIFFERENT question — "is r a DIRECT child
+	// of session X" (D1/FR-019/FR-020) — matched against the record's OWN
+	// ParentDurableKey, never inferred from ParentAgentID, OwnerScopeID or
+	// AgentID. This is the sole clause FR-023's static gate (#106) expects
+	// to find reading ParentDurableKey inside this function.
+	if f.ParentDurableKey != "" && r.ParentDurableKey != f.ParentDurableKey {
 		return false
 	}
 	if len(f.States) > 0 && !f.States[r.State] {
@@ -614,7 +673,16 @@ func (s *LifecycleStore) scanSessionIDs() ([]string, error) {
 // matching filter. This is the primitive a boot sweep (another wave) uses
 // to enumerate every non-terminal session with no live runtime turn
 // (FR-118) — pass LifecycleFilter{NonTerminalOnly: true}.
+//
+// FR-019/FR-020 — when filter.ParentDurableKey is set, List is routed
+// through listByParentDurableKey, which resolves the candidate id set from
+// the in-memory parent index (lifecycle_index.go) instead of scanning every
+// persisted session_id: the "children of X" query's file-read count is
+// O(descendants of X), never O(all sessions ever) — see BDD-19.
 func (s *LifecycleStore) List(filter LifecycleFilter) ([]LifecycleRecord, error) {
+	if filter.ParentDurableKey != "" {
+		return s.listByParentDurableKey(filter)
+	}
 	ids, err := s.scanSessionIDs()
 	if err != nil {
 		return nil, err
@@ -624,6 +692,40 @@ func (s *LifecycleStore) List(filter LifecycleFilter) ([]LifecycleRecord, error)
 		rec, err := s.Load(id)
 		if err != nil {
 			if err == ErrLifecycleNotFound {
+				continue
+			}
+			return nil, err
+		}
+		if filter.matches(rec) {
+			out = append(out, *rec)
+		}
+	}
+	return out, nil
+}
+
+// listByParentDurableKey implements the FR-020 index-backed path for
+// List(LifecycleFilter{ParentDurableKey: X, ...}). It never calls
+// scanSessionIDs: the candidate child ids come entirely from the in-memory
+// parent index (warmed once per store instance from disk, then kept current
+// incrementally by every Persist call — see lifecycle_index.go), so cost
+// scales with len(candidates), not with the total number of persisted
+// session_ids. Every other filter field is still applied via filter.matches
+// exactly as the full-scan path does, so combining ParentDurableKey with
+// e.g. NonTerminalOnly or States behaves identically either way.
+func (s *LifecycleStore) listByParentDurableKey(filter LifecycleFilter) ([]LifecycleRecord, error) {
+	if err := s.parentIndex.ensureWarm(s); err != nil {
+		return nil, err
+	}
+	childIDs := s.parentIndex.children(filter.ParentDurableKey)
+	out := make([]LifecycleRecord, 0, len(childIDs))
+	for _, id := range childIDs {
+		rec, err := s.Load(id)
+		if err != nil {
+			if err == ErrLifecycleNotFound {
+				// Stale index entry — e.g. PruneTerminal removed this
+				// child's file between children() snapshotting the set and
+				// this Load. Self-heal rather than fail the whole query.
+				s.parentIndex.remove(filter.ParentDurableKey, id)
 				continue
 			}
 			return nil, err
@@ -750,5 +852,11 @@ func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
 		slog.Warn("session: lifecycle: prune_terminal: remove failed", "session_id", id, "error", rmErr)
 		return false
 	}
+	// Keep the FR-020 parent index consistent with disk: id's own file is
+	// gone, so it must stop being returned as a child of its ParentDurableKey
+	// (listByParentDurableKey also self-heals on a stale hit, but removing it
+	// here means a query issued after this prune never has to pay that
+	// ErrLifecycleNotFound round trip at all).
+	s.parentIndex.remove(rec.ParentDurableKey, id)
 	return true
 }
