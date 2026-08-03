@@ -14,7 +14,9 @@ cmd/**/workspace
 
 # Omnipus data
 .omnipus/
-sessions/
+# Anchored: an unanchored `sessions/` also matches src/components/sessions/,
+# silently hiding SPA source from git status and `add -A`.
+/sessions/
 
 # Coverage
 coverage.txt
