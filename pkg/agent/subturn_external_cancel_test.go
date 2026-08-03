@@ -147,10 +147,10 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 	}
 
 	// Drive the REAL graceful cancel cascade — NOT parentTS.Finish directly.
-	// Before the fix, childTS.providerCancel is nil and InterruptSession's
+	// Before the fix, childTS.providerCancel is nil and Interrupt's
 	// field-fire is a silent no-op.
-	if _, err := al.InterruptSession(sessionID, "test cancel (async)"); err != nil {
-		t.Fatalf("InterruptSession: %v", err)
+	if _, err := al.Interrupt(sessionID, ScopeSubtree, "test cancel (async)"); err != nil {
+		t.Fatalf("Interrupt: %v", err)
 	}
 
 	select {
@@ -162,7 +162,7 @@ func TestExternalCLISubTurn_CancelPropagates_Async(t *testing.T) {
 			t.Errorf("result.Err = %v, want context.Canceled", res.Err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("runExternalCLISubTurn did not return after InterruptSession — " +
+		t.Fatal("runExternalCLISubTurn did not return after Interrupt — " +
 			"cancel did not propagate to the external-cli child (async/background delegation)")
 	}
 
@@ -205,7 +205,7 @@ func TestExternalCLISubTurn_CancelPropagates_Sync(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			return
 		}
-		if _, err := al.InterruptSessionHard(sessionID, "test cancel (sync)"); err != nil {
+		if _, err := al.InterruptSessionHard(sessionID, ScopeSubtree, "test cancel (sync)"); err != nil {
 			t.Errorf("InterruptSessionHard: %v", err)
 		}
 	}()
@@ -350,7 +350,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 	// Fire the REAL hard-abort cascade against the SECOND session while it is
 	// queued behind the first (still-running, still-locked) same-workspace
 	// run.
-	if _, err := al.InterruptSessionHard(secondTS.transcriptSessionID, "test cancel while queued"); err != nil {
+	if _, err := al.InterruptSessionHard(secondTS.transcriptSessionID, ScopeSubtree, "test cancel while queued"); err != nil {
 		t.Fatalf("InterruptSessionHard (second, queued): %v", err)
 	}
 
@@ -374,7 +374,7 @@ func TestExternalCLISubTurn_CancelDuringWorkspaceLockWait(t *testing.T) {
 
 	// Clean up: cancel the FIRST run too so the test doesn't leak a blocked
 	// goroutine/driver.
-	if _, err := al.InterruptSessionHard(firstTS.transcriptSessionID, "test cleanup"); err != nil {
+	if _, err := al.InterruptSessionHard(firstTS.transcriptSessionID, ScopeSubtree, "test cleanup"); err != nil {
 		t.Fatalf("InterruptSessionHard (first, cleanup): %v", err)
 	}
 	select {

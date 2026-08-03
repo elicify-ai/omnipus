@@ -8,11 +8,78 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// ddiNewTestAgentLoop mirrors loop_test.go's newTestAgentLoop but nests Home
+// under tmpDir/agents/main rather than using tmpDir directly. ADR-057 FR-005/
+// FR-096 fixture repair: AgentLoop resolves its shared-session-store root as
+// filepath.Dir(cfg.AgentHomeBasePath()); a flat Home resolves that to the OS
+// temp root shared by every test process in this package, so a deterministic
+// child id like "subturn-1" (al.generateSubTurnID's per-AgentLoop counter
+// restarts at 1 for every fresh *AgentLoop) can collide with a leftover
+// session directory from another test. Nesting isolates each test's store.
+func ddiNewTestAgentLoop(t *testing.T) *AgentLoop {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "agent-ddi-test-*")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	agentHome := filepath.Join(tmpDir, "agents", "main")
+	if err := os.MkdirAll(agentHome, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q): %v", agentHome, err)
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              agentHome,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(al.Close)
+	return al
+}
+
+// ddiRealParentTurnState mints a real, store-backed session and returns a
+// bare parent turnState literal referencing it — ADR-057 FR-005 fixture
+// repair: spawnSubTurn's sharedStore.CreateSessionWithID(childID,
+// parentTS.transcriptSessionID, ...) now requires the parent id to resolve
+// to a real session in al.GetSessionStore().
+func ddiRealParentTurnState(t *testing.T, al *AgentLoop, turnID string, depth int) *turnState {
+	t.Helper()
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+	return &turnState{
+		ctx:                 context.Background(),
+		turnID:              turnID,
+		depth:               depth,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 10),
+		session:             &ephemeralSessionStore{},
+		agent:               al.registry.GetDefaultAgent(),
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
+	}
+}
 
 // TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop is the real
 // bug-fix proof for #477 (FR-D10): an operator who configures a delegation-
@@ -36,24 +103,14 @@ func TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop(t *testing.T
 	})
 	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
 
-	al, _, _, provider, cleanup := newTestAgentLoop(t)
-	_ = provider
-	defer cleanup()
+	al := ddiNewTestAgentLoop(t)
 
 	spawnAt := func(depth int) (*tools.ToolResult, error) {
 		resolved := resolver(ctxWS(testWS, depth), "ray")
 		if resolved == nil {
 			t.Fatalf("expected a resolved depth cap for mia->ray at chain depth %d, got nil", depth)
 		}
-		parent := &turnState{
-			ctx:            context.Background(),
-			turnID:         "parent-1",
-			depth:          depth,
-			childTurnIDs:   []string{},
-			pendingResults: make(chan *tools.ToolResult, 10),
-			session:        &ephemeralSessionStore{},
-			agent:          al.registry.GetDefaultAgent(),
-		}
+		parent := ddiRealParentTurnState(t, al, "parent-1", depth)
 		cfg := SubTurnConfig{
 			Model:            "gpt-4o-mini",
 			Tools:            []tools.Tool{},
@@ -92,20 +149,10 @@ func TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop(t *testing.T
 // getSubTurnConfig's global-only default (which would otherwise apply the
 // safety-backstop default of 3 regardless of any delegation-graph edge).
 func TestSpawnSubTurn_ResolvedMaxDepthOverridesGlobalOnlyBackstop(t *testing.T) {
-	al, _, _, provider, cleanup := newTestAgentLoop(t)
-	_ = provider
-	defer cleanup()
+	al := ddiNewTestAgentLoop(t)
 
 	resolved := 5
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-1",
-		depth:          4, // past the global default-3 backstop
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 10),
-		session:        &ephemeralSessionStore{},
-		agent:          al.registry.GetDefaultAgent(),
-	}
+	parent := ddiRealParentTurnState(t, al, "parent-1", 4) // past the global default-3 backstop
 	cfg := SubTurnConfig{
 		Model:            "gpt-4o-mini",
 		Tools:            []tools.Tool{},

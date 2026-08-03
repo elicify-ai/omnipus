@@ -45,8 +45,14 @@ import (
 func TestSpawnSubTurn_PersistsDelegateResult_Success(t *testing.T) {
 	al := newWave5bTestAgentLoop(t, &slowMockProvider{delay: 20 * time.Millisecond})
 
-	store, err := session.NewUnifiedStore(t.TempDir())
-	require.NoError(t, err)
+	// ADR-057 FR-005 fixture repair: an independent session.NewUnifiedStore
+	// rooted at its own t.TempDir() is a DIFFERENT store instance than the one
+	// spawnSubTurn actually validates the parent against (al.GetSessionStore()
+	// — subturn.go's sharedStore.CreateSessionWithID call) — a session minted
+	// there is invisible to spawnSubTurn, which fails "resolve parent ...: no
+	// such file or directory". Use the AgentLoop's own shared store instead.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
 	meta, err := store.NewSession(session.SessionTypeChat, "", "jim")
 	require.NoError(t, err)
 	sessionID := meta.ID
@@ -107,8 +113,14 @@ func TestSpawnSubTurn_PersistsDelegateResult_Success(t *testing.T) {
 func TestSpawnSubTurn_PersistsDelegateResult_Error(t *testing.T) {
 	al := newWave5bTestAgentLoop(t, &mockProvider{}) // provider is never invoked on this path
 
-	store, err := session.NewUnifiedStore(t.TempDir())
-	require.NoError(t, err)
+	// ADR-057 FR-005 fixture repair: an independent session.NewUnifiedStore
+	// rooted at its own t.TempDir() is a DIFFERENT store instance than the one
+	// spawnSubTurn actually validates the parent against (al.GetSessionStore()
+	// — subturn.go's sharedStore.CreateSessionWithID call) — a session minted
+	// there is invisible to spawnSubTurn, which fails "resolve parent ...: no
+	// such file or directory". Use the AgentLoop's own shared store instead.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
 	meta, err := store.NewSession(session.SessionTypeChat, "", "jim")
 	require.NoError(t, err)
 	sessionID := meta.ID
@@ -189,8 +201,14 @@ func TestSpawnSubTurn_PersistsDelegateResult_Error(t *testing.T) {
 func TestSpawnSubTurn_PersistsDelegateResult_NativeError_MergesIsError(t *testing.T) {
 	al := newWave5bTestAgentLoop(t, &alwaysErrorProvider{})
 
-	store, err := session.NewUnifiedStore(t.TempDir())
-	require.NoError(t, err)
+	// ADR-057 FR-005 fixture repair: an independent session.NewUnifiedStore
+	// rooted at its own t.TempDir() is a DIFFERENT store instance than the one
+	// spawnSubTurn actually validates the parent against (al.GetSessionStore()
+	// — subturn.go's sharedStore.CreateSessionWithID call) — a session minted
+	// there is invisible to spawnSubTurn, which fails "resolve parent ...: no
+	// such file or directory". Use the AgentLoop's own shared store instead.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
 	meta, err := store.NewSession(session.SessionTypeChat, "", "jim")
 	require.NoError(t, err)
 	sessionID := meta.ID

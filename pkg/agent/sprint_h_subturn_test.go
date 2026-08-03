@@ -40,6 +40,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -70,8 +73,33 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	// BDD: Then child.Tools.List() contains hand_off's exclusion only; delegate remains
 	// Traces to: temporal-puzzling-melody.md W2-3; FR-H-006 REVERSAL (live UAT, 2026-07-12)
 
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
-	defer cleanup()
+	// ADR-057 FR-005/FR-096 fixture repair: Part 2 below drives a REAL
+	// spawnSubTurn call, which mints the child via
+	// al.GetSessionStore().CreateSessionWithID(childID,
+	// parentTS.transcriptSessionID, ...) against the REAL shared store — the
+	// parent turnState needs a real, store-backed transcriptSessionID.
+	// Separately, newTestAgentLoop's flat os.MkdirTemp("", "agent-test-*")
+	// Home resolves the shared session-store root (filepath.Dir(cfg.
+	// AgentHomeBasePath())) to the OS temp root shared by every test process
+	// in this package, so the deterministic child id "subturn-1" can collide
+	// with a leftover session directory from a different test/run once
+	// CreateSessionWithID is actually reached (FR-096 refuses the collision
+	// loudly). Build a dedicated AgentLoop with Home: t.TempDir() instead —
+	// t.TempDir() already nests one level below the OS temp root via its own
+	// per-test-random directory, which is what keeps
+	// subturn_cancel_status_test.go's spawnSubTurn calls collision-free.
+	agentCfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              t.TempDir(),
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, agentCfg, bus.NewMessageBus(), &mockProvider{})
+	t.Cleanup(al.Close)
 
 	// ── Part 1: Registry-level wiring check ─────────────────────────────────────
 	// Build a parent registry with both delegation-adjacent tools + one neutral tool.
@@ -128,14 +156,25 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	baseAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, baseAgent, "default agent must exist")
 
+	// ADR-057 FR-005 fixture repair: spawnSubTurn's sharedStore.CreateSessionWithID
+	// requires parentTS.transcriptSessionID to resolve to a real session in
+	// al.GetSessionStore() — mint one via the AgentLoop's own shared store.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "test harness did not wire a shared session store")
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	require.NoError(t, err)
+
 	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-reg-check",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 10),
-		session:        &ephemeralSessionStore{},
-		agent:          baseAgent,
+		ctx:                 context.Background(),
+		turnID:              "parent-reg-check",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 10),
+		session:             &ephemeralSessionStore{},
+		agent:               baseAgent,
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 
 	collector, collectCleanup := newEventCollector(t, al)
@@ -148,8 +187,8 @@ func TestSpawnSubTurn_ChildRegistry_OmitsDelegationTools(t *testing.T) {
 	// W1-12: inject a parentSpawnCallID so the span lifecycle events emit
 	// (mirrors the production path where the delegate tool provides the call ID).
 	ctx := withSpawnToolCallID(context.Background(), "test-subturn-spawn-call")
-	_, err := spawnSubTurn(ctx, al, parent, cfg)
-	require.NoError(t, err, "spawnSubTurn must succeed with mockProvider")
+	_, spawnErr := spawnSubTurn(ctx, al, parent, cfg)
+	require.NoError(t, spawnErr, "spawnSubTurn must succeed with mockProvider")
 
 	// SubTurnSpawn event proves the production code path (including CloneExcept wiring) ran.
 	require.Eventually(t, func() bool {

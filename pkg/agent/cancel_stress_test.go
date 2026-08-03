@@ -201,8 +201,8 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 				default:
 				}
 				for _, sid := range sessionIDs {
-					_, _ = al.InterruptSession(sid, "stress cancel")
-					_, _ = al.InterruptSessionHard(sid, "stress cancel")
+					_, _ = al.Interrupt(sid, ScopeSubtree, "stress cancel")
+					_, _ = al.InterruptSessionHard(sid, ScopeSubtree, "stress cancel")
 				}
 				time.Sleep(time.Millisecond)
 			}

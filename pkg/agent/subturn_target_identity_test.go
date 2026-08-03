@@ -27,8 +27,83 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// stiMintParentSession mints a REAL, store-backed session in al's shared
+// session store and returns its id plus the store itself, for use as a
+// parent turnState's transcriptSessionID/routingSessionID/transcriptStore.
+//
+// ADR-057 FR-005 fixture repair: spawnSubTurn now mints the child via
+// al.GetSessionStore().CreateSessionWithID(childID,
+// parentTS.transcriptSessionID, ...) against the REAL shared store
+// (subturn.go ~1036-1048) — a parent turnState literal with no
+// transcriptSessionID (the `session: &ephemeralSessionStore{}` field on
+// these literals is a DIFFERENT, unrelated concept — the turn's in-memory
+// chat-history store, not the transcript-persistence session id) fails
+// before spawnSubTurn does anything else with "subturn: create child
+// session ...: unified_store: create session with id: invalid parent id:
+// unified_store: invalid session ID \"\"".
+func stiMintParentSession(t *testing.T, al *AgentLoop) (id string, store *session.UnifiedStore) {
+	t.Helper()
+	store = al.GetSessionStore()
+	if store == nil {
+		t.Fatal("test harness did not wire a shared session store")
+	}
+	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
+	if err != nil {
+		t.Fatalf("store.NewSession: %v", err)
+	}
+	return meta.ID, store
+}
+
+// stiNewNestedHomeAgentLoop mirrors loop_test.go's newTestAgentLoop but nests
+// Home under tmpDir/agents/main rather than using tmpDir directly.
+//
+// ADR-057 FR-005/FR-096 fixture repair: AgentLoop resolves its shared
+// session-store root as filepath.Dir(cfg.AgentHomeBasePath()) (loop.go:724).
+// newTestAgentLoop's Home is a FLAT os.MkdirTemp("", "agent-test-*") result,
+// so that root resolves to the literal OS temp directory — shared by EVERY
+// test in this package that uses the same flat-Home pattern. Because
+// CreateSessionWithID's sessions/ directory is a SIBLING of Home (not a
+// child of it), newTestAgentLoop's cleanup (a bare os.RemoveAll(Home)) never
+// removes it, so it accumulates real session directories across test runs.
+// A deterministic child id like "subturn-1" (al.generateSubTurnID's
+// per-AgentLoop counter restarts at 1 for every fresh *AgentLoop) then
+// collides with a same-named leftover from any other test/run that reached
+// CreateSessionWithID via the same flat-Home pattern (FR-096 refuses the
+// collision). Nesting Home under its own private tmpDir isolates each
+// test's session store so this test — which must actually reach a
+// successful CreateSessionWithID, unlike the sibling
+// TestSpawnSubTurn_TargetIdentity_UnresolvedTargetAborts, which aborts
+// before ever reaching it and is unaffected — does not depend on that
+// shared, never-cleaned directory being empty.
+func stiNewNestedHomeAgentLoop(t *testing.T) *AgentLoop {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "agent-sti-test-*")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	agentHome := filepath.Join(tmpDir, "agents", "main")
+	if err := os.MkdirAll(agentHome, 0o700); err != nil {
+		t.Fatalf("os.MkdirAll(%q): %v", agentHome, err)
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              agentHome,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProviderAPI{response: "ok"})
+	t.Cleanup(al.Close)
+	return al
+}
 
 // TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig proves
 // the ADR-032 fix B routing bug is fixed: a NATIVE parent (no Subagents.Executor
@@ -101,15 +176,19 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 		t.Fatalf("test setup invariant broken: parent must have no Subagents.Executor, got %+v", parent.Subagents)
 	}
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-target-identity",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-target-identity",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	go func() {
@@ -222,15 +301,19 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 	// spawn time and not merely "some int flows through".
 	target.MaxIterations = parent.MaxIterations + 137
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-full-identity",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-full-identity",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	collector, collectCleanup := newEventCollector(t, al)
@@ -404,15 +487,19 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 		)
 	}
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-native-keeps-config",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-native-keeps-config",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-native-keeps-config")
@@ -597,15 +684,19 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 		t.Fatalf("test setup invariant broken: target's own %q policy = %q, want deny", probeTool, got)
 	}
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-native-policy",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-native-policy",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-native-policy")
@@ -797,15 +888,19 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 		t.Fatal("test setup: target agent not registered")
 	}
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-native-fs-scope",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-native-fs-scope",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-native-fs-scope")
@@ -959,15 +1054,19 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 		)
 	}
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-provider-pool",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-provider-pool",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	spawnCtx := withSpawnToolCallID(context.Background(), "test-spawn-call-provider-pool")
@@ -1075,15 +1174,19 @@ func TestSpawnSubTurn_TargetIdentity_ConcurrentModelSwitchRace(t *testing.T) {
 		}
 	}()
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-race",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-race",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	go func() {
@@ -1183,23 +1286,32 @@ func TestSpawnSubTurn_TargetIdentity_UnresolvedTargetAborts(t *testing.T) {
 // at all). A regression that fired the warning unconditionally would spam
 // every plain spawn/subagent call with a bogus "delegation warning".
 func TestSpawnSubTurn_TargetIdentity_SelfDelegationNoFallbackWarning(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
-	defer cleanup()
+	// ADR-057 FR-005/FR-096 fixture repair: this test's spawnSubTurn call is
+	// expected to SUCCEED (unlike TestSpawnSubTurn_TargetIdentity_UnresolvedTargetAborts,
+	// which aborts before ever reaching CreateSessionWithID), so it cannot
+	// use newTestAgentLoop's flat, shared-OS-temp-root Home — see
+	// stiNewNestedHomeAgentLoop's doc comment for why that collides on a
+	// deterministic "subturn-1" child id.
+	al := stiNewNestedHomeAgentLoop(t)
 
 	parent := al.registry.GetDefaultAgent()
 	if parent == nil {
 		t.Fatal("test setup: no default agent")
 	}
 
+	parentSessionID, sessionStore := stiMintParentSession(t, al)
 	parentTS := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-self-delegation",
-		depth:          0,
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 4),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		session:        &ephemeralSessionStore{},
-		agent:          parent,
+		ctx:                 context.Background(),
+		turnID:              "parent-self-delegation",
+		depth:               0,
+		childTurnIDs:        []string{},
+		pendingResults:      make(chan *tools.ToolResult, 4),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		session:             &ephemeralSessionStore{},
+		agent:               parent,
+		transcriptSessionID: parentSessionID,
+		routingSessionID:    session.RoutingSessionID(parentSessionID),
+		transcriptStore:     sessionStore,
 	}
 
 	collector, collectCleanup := newEventCollector(t, al)

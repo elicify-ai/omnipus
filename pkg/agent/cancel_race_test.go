@@ -79,9 +79,12 @@ func TestRequestCancel_CallbackFiresWhenFinishRacesRegistration(t *testing.T) {
 	// SetOnCancelFinish is called, orphaning the callback. With the fix,
 	// SetOnCancelFinish is called before InterruptSession, so Finish always
 	// finds the registered callback.
+	// ADR-057 fixture repair: the role-B predicates (GetActiveTurnHookForSession
+	// et al.) match on routingSessionID, not transcriptSessionID.
 	ts := &turnState{
 		turnID:              "turn-race-001",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 		transcriptStore:     store,

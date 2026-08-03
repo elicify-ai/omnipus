@@ -45,16 +45,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // newPreArmTestTurnState builds the same minimal bare turnState shape the
 // existing cancel_test.go / cancel_race_test.go suites already use to drive
 // RequestCancel without a full runTurn lifecycle.
+//
+// ADR-057 fixture repair: preArmKeysForTurn (cancel_prearm.go) now derives
+// its "s:"+... key from ts.routingSessionID, not transcriptSessionID (FR-016).
+// A root turn's routingSessionID defaults to its own transcriptSessionID
+// (turn.go newTurnState, FR-011) — mirrored explicitly here since this
+// fixture bypasses that constructor.
 func newPreArmTestTurnState(turnID, sessionKey, transcriptSessionID, channel, chatID string) *turnState {
 	return &turnState{
 		turnID:              turnID,
 		sessionKey:          sessionKey,
 		transcriptSessionID: transcriptSessionID,
+		routingSessionID:    session.RoutingSessionID(transcriptSessionID),
 		channel:             channel,
 		chatID:              chatID,
 		depth:               0,

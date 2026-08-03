@@ -1692,7 +1692,7 @@ func stubTurnStateForCancel(t *testing.T, al *AgentLoop, sessionKey, transcriptS
 //
 // BDD: Given a parent turn and 2 sub-turns all sharing transcriptSessionID "S"
 // registered in activeTurnStates,
-// When InterruptSession("S", "hint") is called,
+// When Interrupt("S", ScopeSubtree, "hint") is called,
 // Then all 3 turnStates receive requestGracefulInterrupt (gracefulInterrupt=true)
 // AND all 3 providerCancel stubs fire within 200ms.
 //
@@ -1709,8 +1709,8 @@ func TestInterruptSession_CascadeToSubTurns(t *testing.T) {
 	_ = ts2
 	_ = ts3
 
-	if _, err := al.InterruptSession(sid, "wrap up"); err != nil {
-		t.Fatalf("InterruptSession returned unexpected error: %v", err)
+	if _, err := al.Interrupt(sid, ScopeSubtree, "wrap up"); err != nil {
+		t.Fatalf("Interrupt returned unexpected error: %v", err)
 	}
 
 	// All three providerCancel stubs must have fired (FR-12a).
@@ -1753,9 +1753,9 @@ func TestInterruptSession_NoActiveTurnIsAttemptOnly(t *testing.T) {
 	defer cleanup()
 
 	// activeTurnStates is empty by construction.
-	_, err := al.InterruptSession("nonexistent-session", "hint")
+	_, err := al.Interrupt("nonexistent-session", ScopeSubtree, "hint")
 	if err != nil {
-		t.Fatalf("InterruptSession on empty activeTurnStates returned error: %v (want nil)", err)
+		t.Fatalf("Interrupt on empty activeTurnStates returned error: %v (want nil)", err)
 	}
 }
 
@@ -1864,7 +1864,7 @@ func TestRequestCancelByChannelChat_EmptyArgsError(t *testing.T) {
 //
 // BDD: Given a parent turn and 2 sub-turns all sharing transcriptSessionID "S"
 // registered in activeTurnStates,
-// When InterruptSessionHard("S", "hard abort") is called,
+// When InterruptSessionHard("S", ScopeSubtree, "hard abort") is called,
 // Then all 3 turnStates receive requestHardAbort (hardAbort=true)
 // AND all 3 providerCancel stubs fire within 200ms.
 //
@@ -1879,7 +1879,7 @@ func TestInterruptSessionHard_CascadesAcrossSession(t *testing.T) {
 	_, pc2 := stubTurnStateForCancel(t, al, "hard-sub1", sid)
 	_, pc3 := stubTurnStateForCancel(t, al, "hard-sub2", sid)
 
-	if _, err := al.InterruptSessionHard(sid, "hard abort"); err != nil {
+	if _, err := al.InterruptSessionHard(sid, ScopeSubtree, "hard abort"); err != nil {
 		t.Fatalf("InterruptSessionHard returned unexpected error: %v", err)
 	}
 

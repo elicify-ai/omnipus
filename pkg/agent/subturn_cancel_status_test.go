@@ -49,9 +49,13 @@ import (
 // "error") against the pre-fix binary success/error computation before the
 // fix was applied — see the delivery report.
 func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
+	// ADR-057 fixture repair: spawnSubTurn's child registration now also
+	// creates the child agent's real workspace directory under Home — an
+	// empty Home fails "mkdir : no such file or directory" and spawnSubTurn
+	// returns before ever appending to parentTS.childTurnIDs.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -59,6 +63,17 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 	// LLM call is still blocked waiting on ctx.Done() (see slowMockProvider).
 	provider := &slowMockProvider{delay: 5 * time.Second}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+
+	// ADR-057 FR-005 fixture repair: spawnSubTurn now mints the child via
+	// al.GetSessionStore().CreateSessionWithID(childID, parentTS.transcriptSessionID,
+	// ...) against the REAL shared store — a parent turnState with no
+	// transcriptSessionID is an invalid parent and spawnSubTurn returns an
+	// error before ever registering the child, which is why the
+	// require.Eventually below used to time out waiting for childTurnIDs.
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be non-nil")
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	require.NoError(t, err)
 
 	var mu sync.Mutex
 	var subTurnEndEvents []SubTurnEndPayload
@@ -76,12 +91,15 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 
 	ctx := context.Background()
 	parentTS := &turnState{
-		turnID:         "parent-hard-abort",
-		depth:          0,
-		session:        newEphemeralSession(nil),
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		al:             al, // required: Finish(true)'s cascade reads ts.al to find children
+		turnID:              "parent-hard-abort",
+		depth:               0,
+		session:             newEphemeralSession(nil),
+		pendingResults:      make(chan *tools.ToolResult, 16),
+		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
+		al:                  al, // required: Finish(true)'s cascade reads ts.al to find children
+		transcriptSessionID: meta.ID,
+		routingSessionID:    session.RoutingSessionID(meta.ID),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 
@@ -168,9 +186,13 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 //
 //nolint:misspell // this func's doc comment + assertions reference the literal wire enum value
 func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t *testing.T) {
+	// ADR-057 fixture repair: spawnSubTurn's child registration now also
+	// creates the child agent's real workspace directory under Home — an
+	// empty Home fails "mkdir : no such file or directory" and spawnSubTurn
+	// returns before ever appending to parentTS.childTurnIDs.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -199,15 +221,19 @@ func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t
 	}()
 
 	ctx := context.Background()
+	// ADR-057 fixture repair: RequestCancel's role-B predicates match on
+	// routingSessionID, not transcriptSessionID.
 	parentTS := &turnState{
 		turnID:              "parent-explicit-cancel",
 		transcriptSessionID: sessionID,
+		routingSessionID:    session.RoutingSessionID(sessionID),
 		depth:               0,
 		session:             newEphemeralSession(nil),
 		pendingResults:      make(chan *tools.ToolResult, 16),
 		concurrencySem:      make(chan struct{}, testMaxConcurrentSubTurns),
 		al:                  al,
 		finishedChan:        make(chan struct{}),
+		transcriptStore:     store,
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 	al.activeTurnStates.Store(sessionID, parentTS)

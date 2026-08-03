@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ---------------------------------------------------------------------------
@@ -157,9 +158,13 @@ func TestRequestCancel_ActiveTurn_FiredTrue(t *testing.T) {
 	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
 
 	// Inject a minimal turnState for "sess-active" so RequestCancel finds it.
+	// ADR-057 fixture repair: the role-B predicates (GetActiveTurnHookForSession
+	// et al.) now match on routingSessionID, not transcriptSessionID — a
+	// hand-built literal that omits it is invisible to RequestCancel.
 	ts := &turnState{
 		turnID:              "turn-001",
 		transcriptSessionID: "sess-active",
+		routingSessionID:    session.RoutingSessionID("sess-active"),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -201,9 +206,12 @@ func TestRequestCancel_TierBPath_ResolvesByChannelChat(t *testing.T) {
 	auditDir := t.TempDir()
 	al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
 
+	// ADR-057 fixture repair: resolveSessionIDByChannelChat (Tier B) also
+	// matches on routingSessionID.
 	ts := &turnState{
 		turnID:              "turn-tier-b",
 		transcriptSessionID: "sess-tier-b",
+		routingSessionID:    session.RoutingSessionID("sess-tier-b"),
 		channel:             "telegram",
 		chatID:              "chat-42",
 		depth:               0,
@@ -233,9 +241,11 @@ func TestRequestCancel_DoubleCancelReturnsFiredFalse(t *testing.T) {
 
 	al := newCancelTestAgentLoop(t)
 
+	// ADR-057 fixture repair: see TestRequestCancel_ActiveTurn_FiredTrue.
 	ts := &turnState{
 		turnID:              "turn-double",
 		transcriptSessionID: "sess-double",
+		routingSessionID:    session.RoutingSessionID("sess-double"),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
@@ -261,9 +271,11 @@ func TestRequestCancel_HooksCalled(t *testing.T) {
 
 	al := newCancelTestAgentLoop(t)
 
+	// ADR-057 fixture repair: see TestRequestCancel_ActiveTurn_FiredTrue.
 	ts := &turnState{
 		turnID:              "turn-hooks",
 		transcriptSessionID: "sess-hooks",
+		routingSessionID:    session.RoutingSessionID("sess-hooks"),
 		depth:               0,
 		finishedChan:        make(chan struct{}),
 	}
