@@ -3795,6 +3795,38 @@ func cloneEventArguments(args map[string]any) map[string]any {
 	return cloned
 }
 
+// u9ToolExecSessionIDs computes the two identity fields ADR-057's W4 stamping
+// contract requires on the wire for a session-scoped frame, for the two Go
+// event payloads events.go (U23) gave a ProducingSessionID field —
+// ToolExecStartPayload and ToolExecEndPayload, the only two of the 19
+// SESSION_SCOPED_FRAME_TYPES classified as needing it at the Go-payload
+// level today (class (a) per the W5 audit, FR-089/BDD-16: a child turn
+// genuinely emits tool_call_start/tool_call_result, so the wire frame
+// carries both ids). Factored into one function, called from both
+// construction sites below, so this file has exactly one place that answers
+// "what goes on the wire" rather than two independently-maintained copies of
+// the same two-field contract.
+//
+//   - sessionID (FR-011/FR-012): the ROUTING identity — the id inherited
+//     verbatim from the root of the delegation subtree — never this turn's
+//     own transcriptSessionID, which for a delegated child differs from the
+//     root's.
+//   - producingSessionID (FR-013): the zero value when ts IS the routing
+//     session (producing == routing — the common non-delegated case, and
+//     every root turn), so the WS forwarder (pkg/gateway/websocket.go, U11)
+//     can implement the "present iff it differs from session_id" rule with a
+//     plain non-empty-and-unequal check before stamping the wire's optional
+//     producing_session_id. Otherwise this turn's own real, store-backed
+//     session id — see ToolExecStartPayload.ProducingSessionID's doc comment
+//     (events.go) for the full rationale.
+func u9ToolExecSessionIDs(ts *turnState) (sessionID string, producingSessionID session.SessionID) {
+	sessionID = string(ts.routingSessionID)
+	if ts.transcriptSessionID == sessionID {
+		return sessionID, ""
+	}
+	return sessionID, session.SessionID(ts.transcriptSessionID)
+}
+
 func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDecision) error {
 	reason := decision.Reason
 	if reason == "" {
@@ -5038,17 +5070,67 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 	return nil
 }
 
-// ListAllSessions returns sessions from the shared store merged with legacy
-// per-agent stores, deduplicated and sorted by UpdatedAt descending.
-// The second return value collects per-store errors so callers can distinguish
-// "no sessions" from "all stores failed". Callers should surface partial errors
-// as warnings rather than treating the entire response as a failure.
-func (al *AgentLoop) ListAllSessions() ([]*session.UnifiedMeta, []error) {
+// ListAllSessions returns a stably-ordered, paginated window of sessions from
+// the shared store merged with legacy per-agent stores, deduplicated
+// (ADR-057 FR-092/FR-098, W16b, owner U9 — the loop layer of the four-layer
+// pagination stack FR-068/FR-092 requires: UnifiedStore.ListSessions (U6) ->
+// AgentLoop.ListAllSessions (here) -> restAPI.listSessions (U18) ->
+// fetchSessions (U12)).
+//
+// Ordering and pagination contract (FR-098, stated once here as this
+// method's owner):
+//
+//   - (a) The merged sequence is ordered by UpdatedAt descending with the
+//     session id as a stable tiebreak, so two sessions sharing a timestamp
+//     cannot silently swap places between two calls with no intervening
+//     write — mirroring UnifiedStore.ListSessions' own post-FR-097a
+//     ordering exactly (pkg/session/unified.go).
+//   - (b) Paging is offset-based over that merged sequence. limit <= 0 means
+//     "no limit" — the remainder of the sequence from offset is returned in
+//     one page, matching UnifiedStore.ListSessionsPage's contract. offset <
+//     0 is treated as 0. An offset at or beyond the end of the sequence
+//     returns an empty, non-nil page with NextOffset == -1, not an error. A
+//     cursor built from NextOffset stays valid for the duration of a
+//     client's expansion even if a store's contents change in between — a
+//     shifted window is acceptable, a duplicated or skipped row within one
+//     already-served page is not, because this method never re-derives an
+//     already-returned row's position from anything but that same total
+//     order.
+//   - (c) A legacy per-agent store that errors mid-merge contributes zero
+//     rows, is appended to the returned errs, and does NOT halt the page or
+//     invalidate the cursor — the merge simply continues over the remaining
+//     stores (unchanged from this method's pre-pagination behavior; see the
+//     loop below). Callers should surface these as partial_errors rather
+//     than treating the whole response as a failure.
+//
+// Hierarchy (FR-091/FR-104) is applied BEFORE pagination, over the full
+// merged set, so a page boundary can never split a parent from its
+// child-count context or silently promote/demote a row depending on which
+// page it lands on:
+//
+//   - flat == true: no hierarchy filter — every merged, deduplicated session
+//     is a candidate row (FR-104's per-session usage-accounting listing).
+//     parentSessionID is ignored in this combination; the 400 for supplying
+//     both is a REST-layer concern (U18), not this method's.
+//   - flat == false, parentSessionID != "": only that session's DIRECT
+//     children (meta.ParentSessionID == parentSessionID) are returned.
+//   - flat == false, parentSessionID == "": only ROOT sessions are returned
+//     — meta.ParentSessionID == "", OR meta.ParentSessionID names a session
+//     absent from this merge (an orphan; FR-091: "a session whose
+//     ParentSessionID names a session that no longer resolves MUST be
+//     returned as a root"). Orphan detection is computed across the WHOLE
+//     merged id set rather than by delegating to UnifiedStore.IsOrphan
+//     (which is scoped to one store's own metaCache) because this method
+//     spans multiple stores — in practice every delegated child lives in
+//     the one shared store per FR-010, but resolving membership against the
+//     full merge is correct regardless of that placement detail.
+func (al *AgentLoop) ListAllSessions(limit, offset int, parentSessionID string, flat bool) (session.SessionListPage, []error) {
 	var all []*session.UnifiedMeta
 	var errs []error
 
 	// 1. Shared store (new sessions).
 	sharedIDs := make(map[string]bool)
+	allIDs := make(map[string]bool)
 	if al.sharedSessionStore != nil {
 		shared, err := al.sharedSessionStore.ListSessions()
 		if err != nil {
@@ -5058,12 +5140,14 @@ func (al *AgentLoop) ListAllSessions() ([]*session.UnifiedMeta, []error) {
 		} else {
 			for _, s := range shared {
 				sharedIDs[s.ID] = true
+				allIDs[s.ID] = true
 				all = append(all, s)
 			}
 		}
 	}
 
-	// 2. Legacy per-agent stores — deduplicate against shared.
+	// 2. Legacy per-agent stores — deduplicate against shared. FR-098(c): a
+	// store that errors here contributes zero rows and the merge continues.
 	for _, id := range al.GetRegistry().ListAgentIDs() {
 		store := al.getLegacyAgentStore(id)
 		if store == nil {
@@ -5078,15 +5162,79 @@ func (al *AgentLoop) ListAllSessions() ([]*session.UnifiedMeta, []error) {
 		}
 		for _, s := range sessions {
 			if !sharedIDs[s.ID] {
+				allIDs[s.ID] = true
 				all = append(all, s)
 			}
 		}
 	}
 
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].UpdatedAt.After(all[j].UpdatedAt)
-	})
-	return all, errs
+	all = u9FilterSessionHierarchy(all, allIDs, parentSessionID, flat)
+
+	// FR-098(a): stable total order.
+	sort.Slice(all, func(i, j int) bool { return u9SessionRecencyLess(all[i], all[j]) })
+
+	// FR-098(b): offset-based paging over the merged, filtered, sorted
+	// sequence — mirrors UnifiedStore.ListSessionsPage's contract exactly.
+	if offset < 0 {
+		offset = 0
+	}
+	total := len(all)
+	if offset >= total {
+		return session.SessionListPage{Sessions: []*session.UnifiedMeta{}, NextOffset: -1, Total: total}, errs
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	nextOffset := -1
+	if end < total {
+		nextOffset = end
+	}
+	page := make([]*session.UnifiedMeta, end-offset)
+	copy(page, all[offset:end])
+	return session.SessionListPage{Sessions: page, NextOffset: nextOffset, Total: total}, errs
+}
+
+// u9FilterSessionHierarchy applies FR-091/FR-104's hierarchy rule to a
+// merged, deduplicated session list, given the full set of ids present in
+// that same merge (allIDs) so the orphan clause of FR-091 ("a session whose
+// ParentSessionID names a session that no longer resolves MUST be returned
+// as a root") is evaluated across every store ListAllSessions merged, not
+// just one. See ListAllSessions' doc comment for the three cases.
+func u9FilterSessionHierarchy(all []*session.UnifiedMeta, allIDs map[string]bool, parentSessionID string, flat bool) []*session.UnifiedMeta {
+	if flat {
+		return all
+	}
+	filtered := make([]*session.UnifiedMeta, 0, len(all))
+	if parentSessionID != "" {
+		for _, s := range all {
+			if s.ParentSessionID == parentSessionID {
+				filtered = append(filtered, s)
+			}
+		}
+		return filtered
+	}
+	for _, s := range all {
+		if s.ParentSessionID == "" || !allIDs[s.ParentSessionID] {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
+// u9SessionRecencyLess is ListAllSessions' FR-098(a) total order, factored
+// into a named, directly-testable function rather than left as an inline
+// sort.Slice closure: UpdatedAt descending, with session id as a stable
+// tiebreak so two sessions sharing a timestamp (down to whatever resolution
+// the clock gives) cannot silently swap places between two calls with no
+// intervening write. Mirrors UnifiedStore.ListSessions' own post-FR-097a
+// comparator (pkg/session/unified.go) exactly, at the layer that merges
+// ACROSS stores rather than within one.
+func u9SessionRecencyLess(a, b *session.UnifiedMeta) bool {
+	if !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.ID < b.ID
 }
 
 // processTaskDirect runs the agent loop for a task, dispatching to the given agent.
@@ -6988,8 +7136,21 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				Duration:        time.Since(ts.startedAt),
 				FinalContentLen: ts.finalContentLen(),
 				ChatID:          ts.chatID,
-				SessionID:       ts.transcriptSessionID,
-				IsRoot:          ts.parentTurnID == "",
+				// ADR-057 FR-012 (W4/U9): the "done" frame is one of the 19
+				// SESSION_SCOPED_FRAME_TYPES (src/store/chat.ts), so its wire
+				// session_id MUST come from the ROUTING identity — the id
+				// inherited verbatim from the root of the delegation subtree
+				// — not this turn's own store-backed transcriptSessionID,
+				// which for a delegated child differs from the root's. No
+				// ProducingSessionID sibling exists on this payload today
+				// (events.go/U23 added that field only to
+				// ToolExecStart/EndPayload) even though the W5 audit already
+				// classifies "done" as carrying both ids on the wire schema
+				// (contracts/asyncapi.yaml) — closing that gap is events.go's
+				// (U23) and the WS forwarder's (U11) cross-unit follow-up,
+				// not something addable from this file.
+				SessionID: string(ts.routingSessionID),
+				IsRoot:    ts.parentTurnID == "",
 			},
 		)
 	}()
@@ -8679,17 +8840,23 @@ turnLoop:
 					"tool":      toolName,
 					"iteration": iteration,
 				})
+			toolExecSID, toolExecProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
 				EventKindToolExecStart,
 				ts.eventMeta("runTurn", "turn.tool.start"),
 				ToolExecStartPayload{
-					ToolCallID:        session.ToolCallID(tc.ID),
-					ChatID:            ts.chatID,
-					SessionID:         ts.transcriptSessionID,
-					Tool:              toolName,
-					Arguments:         cloneEventArguments(toolArgs),
-					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ToolCallID: session.ToolCallID(tc.ID),
+					ChatID:     ts.chatID,
+					// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see
+					// u9ToolExecSessionIDs and
+					// ToolExecStartPayload.SessionID/.ProducingSessionID's doc
+					// comments (events.go, U23) for the full rationale.
+					SessionID:          toolExecSID,
+					Tool:               toolName,
+					Arguments:          cloneEventArguments(toolArgs),
+					ParentSpawnCallID:  session.ToolCallID(ts.parentSpawnCallID),
+					AgentID:            ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ProducingSessionID: toolExecProducingSID,
 				},
 			)
 
@@ -9029,22 +9196,27 @@ turnLoop:
 					toolResultMsg.Media = append(toolResultMsg.Media, dataURL)
 				}
 			}
+			endSID, endProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
 				EventKindToolExecEnd,
 				ts.eventMeta("runTurn", "turn.tool.end"),
 				ToolExecEndPayload{
-					ToolCallID:        session.ToolCallID(toolCallID),
-					ChatID:            ts.chatID,
-					SessionID:         ts.transcriptSessionID,
-					Tool:              toolName,
-					Duration:          toolDuration,
-					ForLLMLen:         len(contentForLLM),
-					ForUserLen:        len(toolResult.ForUser),
-					IsError:           toolResult.IsError,
-					Async:             toolResult.Async,
-					Result:            contentForLLM,
-					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ToolCallID: session.ToolCallID(toolCallID),
+					ChatID:     ts.chatID,
+					// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see the
+					// matching ToolExecStartPayload construction above —
+					// identical contract on the result frame.
+					SessionID:          endSID,
+					Tool:               toolName,
+					Duration:           toolDuration,
+					ForLLMLen:          len(contentForLLM),
+					ForUserLen:         len(toolResult.ForUser),
+					IsError:            toolResult.IsError,
+					Async:              toolResult.Async,
+					Result:             contentForLLM,
+					ParentSpawnCallID:  session.ToolCallID(ts.parentSpawnCallID),
+					AgentID:            ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					ProducingSessionID: endProducingSID,
 				},
 			)
 			tcStatus := "success"
@@ -10863,7 +11035,13 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		rt.SessionID = func() string { return sessionKey }
 	}
 
-	// Inject the agent loop so CancelActiveTurn can call InterruptSession.
+	// Inject the agent loop so CancelActiveTurn can call
+	// RequestCancelForSession (ADR-057 FR-100/FR-041: InterruptSession, the
+	// symbol this comment used to name, was retired by U8's collapse of the
+	// four legacy interrupt entry points behind Interrupt/InterruptSessionHard
+	// plus a mandatory InterruptScope; CancelActiveTurn's own call has always
+	// gone through RequestCancelForSession, pkg/commands/runtime.go, never
+	// direct to an Interrupt* function).
 	rt = rt.WithAgentLoop(al)
 
 	return rt
@@ -11240,14 +11418,30 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // pkg/agent but cannot construct a *turnState — without spinning up a
 // WebSocket connection. See pkg/gateway/ws_approval_grants_test.go.
 //
-// Identity: sessionID MUST be the transcript-store session ID
-// (turnState.transcriptSessionID), NOT the session-store scope key
-// (turnState.sessionKey). transcriptSessionID is the identity
-// ApprovalGrantStore.Inherit and ClearSession already use, and the ONE
-// identity shared across a delegation chain: subturn.go's spawnSubTurn gives
-// every child turn its own distinct, per-child SessionKey but always threads
-// the PARENT's TranscriptSessionID through unchanged, so a grant recorded
-// under sessionKey would never be visible to a delegated child turn.
+// Identity (ADR-057 FR-031/FR-080, W10b — corrected from the pre-ADR-057
+// description this comment used to carry): sessionID MUST be the caller's
+// own ACTING session id — turnState.transcriptSessionID — NOT the
+// session-store scope key (turnState.sessionKey) and NOT the ROUTING
+// identity (turnState.routingSessionID, W4). This is a narrower requirement
+// than the pre-ADR-057 invariant it replaces: before D1, a delegated child's
+// transcriptSessionID was always threaded through unchanged from its parent
+// (subturn.go's spawnSubTurn), so "the one identity shared across a
+// delegation chain" and "the child's own identity" were the same value and
+// this distinction did not exist. Under ADR-057 the child gets its OWN
+// distinct, store-backed transcriptSessionID (FR-005/FR-007/FR-009), and
+// ApprovalGrantStore.InheritFrom (pkg/security/approvalgrants.go, U17a)
+// copies grants at spawn time INTO exactly that child key — {dstSessionID:
+// childID, dstAgentID} — never into the routing/root id. A grant read here
+// keyed on anything other than the calling turn's own transcriptSessionID
+// (in particular, keying on routingSessionID, which for a grandchild equals
+// the ROOT's session id) would silently miss every grant InheritFrom wrote
+// for THIS turn and force a real human through the 300s interactive
+// approval wait on every delegated call — the exact failure class FR-031's
+// two-key InheritFrom redesign exists to prevent on the write side; this is
+// its read-side half (see pkg/security/approvalgrants_adr057_test.go for the
+// write side, TestCheckGrantOrRequestApproval_UsesActingSessionKey below for
+// this one). ClearSession (session teardown, U17b) uses the same key for the
+// same reason: it is the acting session's own bucket, not a shared one.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,

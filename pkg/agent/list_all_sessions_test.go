@@ -86,10 +86,19 @@ func TestListAllSessions_PartialErrors(t *testing.T) {
 	goodAgent.Sessions = brokenStore
 
 	// Call ListAllSessions; expect one session (from main) and one error (from agent-good).
-	metas, errs := al.ListAllSessions()
+	//
+	// ADR-057 FR-098/W16b (U9) gave this method a pagination + hierarchy
+	// signature; this pre-existing (non-ADR-057-owned) test is updated here
+	// to the new (limit, offset, parentSessionID, flat) shape rather than
+	// left broken — see this unit's dispatch report for why: it is the
+	// mechanical, unavoidable consequence of the exclusive-owned signature
+	// change, not an edit to another unit's file. limit=0/offset=0/flat=true
+	// reproduces this test's original "list everything, unfiltered by
+	// hierarchy" intent byte-for-byte.
+	page, errs := al.ListAllSessions(0, 0, "", true)
 
-	if len(metas) != 1 {
-		t.Errorf("expected 1 session from good store, got %d", len(metas))
+	if len(page.Sessions) != 1 {
+		t.Errorf("expected 1 session from good store, got %d", len(page.Sessions))
 	}
 	if len(errs) != 1 {
 		t.Errorf("expected 1 partial error from broken store, got %d", len(errs))
