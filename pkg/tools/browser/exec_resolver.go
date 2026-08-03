@@ -186,7 +186,23 @@ func managedExecAllocatorOpts(cfg BrowserConfig) managedChromeCmdline {
 
 	args := chromeHardeningBaseFlags()
 	if cfg.Headless {
-		args = append(args, "--headless", "--hide-scrollbars")
+		// --headless=new, NOT bare --headless (which Chrome still resolves to
+		// OLD headless). Old headless is a separate, cut-down engine: it is
+		// the single strongest automation fingerprint a detector can read, it
+		// sets navigator.webdriver non-overridably (so stealthInitScript and
+		// --disable-blink-features=AutomationControlled cannot mask it — see
+		// stealthInitScript's own "effectiveness caveat"), and it lacks the
+		// full rendering/media stack.
+		//
+		// The rest of this package already ASSUMED new headless — live.go's
+		// screencast attach path documents it as "the WebRTC-capable build
+		// ADR-047 D2 switched managed launches to", and coordinator.go calls
+		// it "new headless" — while this launch site quietly asked for the old
+		// one. Paired with the runtime image now shipping full
+		// Chrome-for-Testing rather than codec-less Alpine Chromium
+		// (docker/Dockerfile.heavy), this is the other half of the operator's
+		// "captchas on google and youtube, video not working" report.
+		args = append(args, "--headless=new", "--hide-scrollbars")
 	}
 	if cfg.ExtensionID != "" {
 		args = append(
