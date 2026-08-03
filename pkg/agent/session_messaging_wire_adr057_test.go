@@ -6,17 +6,29 @@
 // for the W13d scope choice in wireSessionMessagingForAgent's
 // dt.SetCancelHooks(...) call (session_messaging_wire.go).
 //
-// U15's explicit guidance (carried into this unit's task brief) was: wire
-// the collapsed Interrupt/InterruptSessionHard pair with ScopeSelfOnly, NOT
-// ScopeSubtree, to match the retired InterruptBySessionKey/
-// InterruptBySessionKeyHard's point-lookup-only semantics — wrapping with
-// the wrong scope would silently widen a per-delegation cancel into a
-// subtree sweep. This file proves that claim rather than asserting it: it
-// drives the SAME exported Interrupt method session_messaging_wire.go's
-// closures call, once with each scope, against an identical
-// parent/child/grandchild fixture, and shows the two scopes produce
-// DIFFERENT reached-sets. Per binding Rule 5 this is a NEW file; per
-// binding Rule 6 its unexported helpers are prefixed u19.
+// [FIX-5, 2026-08-03] INVERTED. U15's original guidance (ScopeSelfOnly, NOT
+// ScopeSubtree) was itself superseded by ADR-057 D8/R-13 before this unit's
+// own task brief was written up-to-date: D1 gives every delegated child its
+// OWN distinct session id, so a subtree walk rooted at a CHILD's sessionKey
+// can no longer bleed into the parent or a sibling (ADR-057 architecture doc
+// line ~336, FR-042, AC-8) — the "wrong widening" the retired guidance
+// warned against. D8/R-13 additionally makes the wider reach a MANDATED
+// behavior change, not merely a now-safe option: "delegate action=cancel"
+// closing over just one turn silently leaked that child's own grandchildren
+// and background shells running forever (spec:2731, BDD-29/BDD-46). This
+// file previously asserted the retired ScopeSelfOnly contract as "green" and
+// the ADR-mandated ScopeSubtree contract as "red" — exactly backwards from
+// what session_messaging_wire.go must now wire. Per this task's binding
+// rule (invert, don't delete), the red/green halves below are swapped: this
+// file still proves the SAME two facts (what the two scopes actually reach,
+// against an identical fixture) — only which one is labeled correct has
+// changed.
+//
+// This file drives the SAME exported Interrupt/InterruptSessionHard methods
+// session_messaging_wire.go's SetCancelHooks closures invoke, once per
+// scope, against an identical parent/child/grandchild fixture, and shows the
+// two scopes produce DIFFERENT reached-sets. Per binding Rule 5 this is a
+// NEW file; per binding Rule 6 its unexported helpers are prefixed u19.
 //
 // Per binding Rule 1, every assertion runs against REAL *turnState values
 // registered in a REAL *AgentLoop's activeTurnStates via the actual
@@ -80,53 +92,33 @@ func u19FixtureTurns(t *testing.T, al *AgentLoop, tag string) (parent, child, gr
 	return parent, child, grandchild, cleanup
 }
 
-// TestSetCancelHooks_ScopeSelfOnlyNotSubtree is the mandated red/green proof
-// for W13d's scope choice. It calls al.Interrupt — the exact method
-// session_messaging_wire.go's SetCancelHooks closures invoke for a
-// delegate(action="cancel") soft stop — with the delegate CHILD's own
-// sessionKey, once per scope, and shows:
+// TestSetCancelHooks_ChildCancelReachesSubtree is the mandated red/green
+// proof for the ADR-057 D8/R-13 scope choice (formerly
+// TestSetCancelHooks_ScopeSelfOnlyNotSubtree, inverted — see file header).
+// It calls al.Interrupt — the exact method session_messaging_wire.go's
+// SetCancelHooks closures invoke for a delegate(action="cancel") soft stop —
+// with the delegate CHILD's own sessionKey, once per scope, and shows:
 //
-//   - ScopeSelfOnly (what is actually wired): reaches ONLY the named child.
-//     The grandchild is untouched — no descendants entry, no graceful-interrupt
-//     flag set. This is the byte-identical-to-InterruptBySessionKey behavior
-//     the wiring comment claims.
-//   - ScopeSubtree (what would be wired if this call were "simplified" back
-//     to the whole-chat-cascade scope by a future edit): reaches BOTH the
-//     child AND the grandchild — proving that scope choice would silently
-//     widen a per-delegation cancel into a subtree sweep, exactly the
-//     regression U15's guidance warns against.
+//   - ScopeSubtree (what is actually wired, post-fix): reaches the named
+//     child AND its own live descendant (the grandchild) — this is the
+//     ADR-mandated fix for the D8/R-13 leak: a per-delegation cancel must
+//     also reach that child's own subtree, not leave its grandchildren (and
+//     their background shells) running forever.
+//   - ScopeSelfOnly (the RETIRED wiring this fix replaces): reaches ONLY the
+//     named child. The grandchild is left untouched — this is the exact
+//     leak D8/R-13 exists to close, reproduced here so a future edit that
+//     "simplifies" the wiring back to ScopeSelfOnly fails this test instead
+//     of silently reintroducing the leak.
 //
 // Both scopes are exercised against structurally identical fixtures (same
 // parent/child/grandchild shape, distinct ids per scope so the two calls
 // cannot cross-contaminate each other's activeTurnStates entries), so the
-// ONLY variable between the "red" and "green" halves is the scope argument
-// itself.
-func TestSetCancelHooks_ScopeSelfOnlyNotSubtree(t *testing.T) {
+// ONLY variable between the two halves is the scope argument itself.
+func TestSetCancelHooks_ChildCancelReachesSubtree(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
-	t.Run("green: ScopeSelfOnly reaches only the named child", func(t *testing.T) {
-		_, child, grandchild, fixtureCleanup := u19FixtureTurns(t, al, "selfonly")
-		defer fixtureCleanup()
-
-		descendants, err := al.Interrupt(child.sessionKey, ScopeSelfOnly, "delegate cancel(hard=false)")
-		require.NoError(t, err)
-
-		assert.ElementsMatch(t, []string{child.turnID}, descendants,
-			"ScopeSelfOnly must reach EXACTLY the named child — this is the semantics "+
-				"session_messaging_wire.go's SetCancelHooks call relies on to match the retired "+
-				"InterruptBySessionKey's point-lookup-only behavior")
-
-		childInterrupted, _ := child.gracefulInterruptRequested()
-		assert.True(t, childInterrupted, "the named child's own graceful-interrupt flag must be set")
-
-		grandchildInterrupted, _ := grandchild.gracefulInterruptRequested()
-		assert.False(t, grandchildInterrupted,
-			"ScopeSelfOnly must NOT reach the grandchild — reaching it would be exactly the "+
-				"subtree-widening regression this scope choice exists to prevent")
-	})
-
-	t.Run("red: ScopeSubtree would additionally reach the grandchild", func(t *testing.T) {
+	t.Run("green: ScopeSubtree (now wired) reaches the child AND its grandchild", func(t *testing.T) {
 		_, child, grandchild, fixtureCleanup := u19FixtureTurns(t, al, "subtree")
 		defer fixtureCleanup()
 
@@ -134,37 +126,62 @@ func TestSetCancelHooks_ScopeSelfOnlyNotSubtree(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.ElementsMatch(t, []string{child.turnID, grandchild.turnID}, descendants,
-			"ScopeSubtree reaches the named child AND its live descendants — demonstrating that had "+
-				"session_messaging_wire.go's SetCancelHooks call been wired with ScopeSubtree instead of "+
-				"ScopeSelfOnly, a single delegate(action=\"cancel\") on the child would ALSO have cancelled "+
-				"the grandchild, silently widening a per-delegation cancel into a subtree sweep")
+			"ScopeSubtree must reach the named child AND its own live descendant — this is the "+
+				"semantics session_messaging_wire.go's SetCancelHooks call now relies on (ADR-057 "+
+				"D8/R-13, AC-8) to close the grandchild-leak a per-delegation cancel used to leave running")
 
 		childInterrupted, _ := child.gracefulInterruptRequested()
 		assert.True(t, childInterrupted, "ScopeSubtree must still reach the named child itself")
 
 		grandchildInterrupted, _ := grandchild.gracefulInterruptRequested()
 		assert.True(t, grandchildInterrupted,
-			"ScopeSubtree DOES reach the grandchild — this is the wrong behavior for a per-delegation "+
-				"cancel, which is exactly why session_messaging_wire.go wires ScopeSelfOnly, not this scope")
+			"ScopeSubtree MUST reach the grandchild — this is the D8/R-13 fix: a delegate cancel "+
+				"on the child must also cancel the child's own descendants, not leave them running")
+	})
+
+	t.Run("red: ScopeSelfOnly (the retired wiring) would miss the grandchild", func(t *testing.T) {
+		_, child, grandchild, fixtureCleanup := u19FixtureTurns(t, al, "selfonly")
+		defer fixtureCleanup()
+
+		descendants, err := al.Interrupt(child.sessionKey, ScopeSelfOnly, "delegate cancel(hard=false)")
+		require.NoError(t, err)
+
+		assert.ElementsMatch(t, []string{child.turnID}, descendants,
+			"ScopeSelfOnly reaches ONLY the named child — demonstrating that had "+
+				"session_messaging_wire.go's SetCancelHooks call stayed wired with ScopeSelfOnly "+
+				"instead of ScopeSubtree, a single delegate(action=\"cancel\") on the child would leave "+
+				"the grandchild (and any background shells it owns) running forever: the exact live "+
+				"leak ADR-057 D8/R-13 closes")
+
+		childInterrupted, _ := child.gracefulInterruptRequested()
+		assert.True(t, childInterrupted, "ScopeSelfOnly still reaches the named child itself")
+
+		grandchildInterrupted, _ := grandchild.gracefulInterruptRequested()
+		assert.False(t, grandchildInterrupted,
+			"ScopeSelfOnly does NOT reach the grandchild — this is the wrong behavior for a "+
+				"per-delegation cancel post-D1, which is exactly why session_messaging_wire.go now "+
+				"wires ScopeSubtree, not this scope")
 	})
 }
 
-// TestSetCancelHooks_HardVariantAlsoUsesScopeSelfOnly mirrors the green half
+// TestSetCancelHooks_HardVariantAlsoUsesScopeSubtree mirrors the green half
 // above for the HARD escalation path (InterruptSessionHard), which
-// SetCancelHooks wires as the second (hard) argument — the same scope
-// discipline applies to both halves of the collapsed pair.
-func TestSetCancelHooks_HardVariantAlsoUsesScopeSelfOnly(t *testing.T) {
+// SetCancelHooks wires as the second (hard) argument — the same ADR-057
+// D8/R-13 scope discipline applies to both halves of the collapsed pair.
+// Formerly TestSetCancelHooks_HardVariantAlsoUsesScopeSelfOnly, inverted —
+// see file header.
+func TestSetCancelHooks_HardVariantAlsoUsesScopeSubtree(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
-	_, child, grandchild, fixtureCleanup := u19FixtureTurns(t, al, "hard-selfonly")
+	_, child, grandchild, fixtureCleanup := u19FixtureTurns(t, al, "hard-subtree")
 	defer fixtureCleanup()
 
-	descendants, err := al.InterruptSessionHard(child.sessionKey, ScopeSelfOnly, "delegate cancel(hard=true)")
+	descendants, err := al.InterruptSessionHard(child.sessionKey, ScopeSubtree, "delegate cancel(hard=true)")
 	require.NoError(t, err)
 
-	assert.ElementsMatch(t, []string{child.turnID}, descendants,
-		"InterruptSessionHard with ScopeSelfOnly must reach EXACTLY the named child")
+	assert.ElementsMatch(t, []string{child.turnID, grandchild.turnID}, descendants,
+		"InterruptSessionHard with ScopeSubtree must reach the named child AND its own live descendant")
 
 	child.mu.RLock()
 	childHardAbort := child.hardAbort
@@ -174,6 +191,7 @@ func TestSetCancelHooks_HardVariantAlsoUsesScopeSelfOnly(t *testing.T) {
 	grandchild.mu.RLock()
 	grandchildHardAbort := grandchild.hardAbort
 	grandchild.mu.RUnlock()
-	assert.False(t, grandchildHardAbort,
-		"ScopeSelfOnly must NOT hard-abort the grandchild")
+	assert.True(t, grandchildHardAbort,
+		"ScopeSubtree MUST hard-abort the grandchild too — the hard escalation must close the "+
+			"same D8/R-13 leak the soft cancel does, not just the soft half")
 }

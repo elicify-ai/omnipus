@@ -120,8 +120,8 @@ func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
 // keeps its own kind switch. We inject: the inbox + lifecycle stores, the
 // steering sink (= the AgentLoop itself, via EnqueueSteeringMessage), the
 // cancel hooks (ADR-057 FR-041's collapsed Interrupt / InterruptSessionHard,
-// called with ScopeSelfOnly — see the delegate-tool wiring block below for
-// why), the waker (the process-wide asyncNotifier, which implements
+// called with ScopeSubtree per D8/R-13 — see the delegate-tool wiring block
+// below for why), the waker (the process-wide asyncNotifier, which implements
 // tools.MessageParentWaker), and the content-egress filter (the config's
 // SensitiveDataReplacer, N-10).
 func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
@@ -190,25 +190,48 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// delegateSessionID. Wiring those here unscoped meant every
 			// delegate.cancel silently no-op'd (zero Range matches, which
 			// Interrupt treats as a non-error no-op) while still reporting
-			// success. Calling Interrupt/InterruptSessionHard with
-			// ScopeSelfOnly instead routes through resolveInterruptAnchors'
-			// point-lookup half (a direct activeTurnStates.Load(sessionKey)),
-			// targeting EXACTLY the named delegate and nothing else —
-			// byte-identical to the retired InterruptBySessionKey/
-			// InterruptBySessionKeyHard's point-lookup-only semantics
-			// (ADR-057 FR-041 collapse). ScopeSubtree would additionally walk
-			// the target's own LIVE descendants via the in-memory
-			// parentTurnID chain — the wrong widening for a per-delegation
-			// cancel, which must reach exactly the named child and never a
-			// sibling or the parent (see InterruptScope's doc comment,
-			// steering.go, and TestSetCancelHooks_ScopeSelfOnlyNotSubtree,
-			// session_messaging_wire_adr057_test.go, for the red/green proof).
+			// success. Calling Interrupt/InterruptSessionHard with a scope routes
+			// through resolveInterruptAnchors' point-lookup half (a direct
+			// activeTurnStates.Load(sessionKey)) as its anchor — targeting the
+			// named delegate, never a sibling or the parent — byte-identical
+			// anchor resolution to the retired InterruptBySessionKey/
+			// InterruptBySessionKeyHard (ADR-057 FR-041 collapse).
+			//
+			// [FIX-5, 2026-08-03] The scope is ScopeSubtree, NOT ScopeSelfOnly.
+			// This was flipped from an earlier revision that wired ScopeSelfOnly
+			// on PRE-D1 reasoning ("cancel must reach exactly the named child and
+			// never a sibling or the parent, and ScopeSubtree would additionally
+			// walk descendants — the wrong widening"). That reasoning held only
+			// while a delegated child shared its parent's transcript/session id
+			// (pre-D1): a subtree walk rooted at "the child" then had no way to
+			// stop at the child's own boundary and would have bled into the
+			// parent/sibling's shared namespace. ADR-057 D1 gives every
+			// delegated child its OWN distinct session id (subturn.go), so
+			// ScopeSubtree rooted at a CHILD's sessionKey now reaches exactly
+			// that child's own descendants and structurally CANNOT reach the
+			// parent or a sibling (ADR-057 architecture doc line ~336, FR-042,
+			// AC-8) — the "wrong widening" the old comment warned against no
+			// longer applies to this call site.
+			//
+			// This is also a deliberate, ADR-mandated BEHAVIOR CHANGE (R-13/AC-8;
+			// spec "Operator decisions (settled — not re-litigated)" item 5;
+			// spec:3246 "R-13's behaviour change is INTENDED and confirmed"):
+			// delegate action="cancel" used to cancel one turn and leave that
+			// child's OWN grandchildren (and its own background shells) running
+			// — a live leak. Under D8/R-13 a per-delegation cancel becomes
+			// ScopeSubtree rooted at the child, exactly like a chat-root Stop
+			// already does in cancel.go's RequestCancel. See
+			// TestSetCancelHooks_ChildCancelReachesSubtree (this package's
+			// _adr057_test.go, inverted from the prior
+			// TestSetCancelHooks_ScopeSelfOnlyNotSubtree, which asserted the now-
+			// superseded ScopeSelfOnly contract) for the red/green proof of the
+			// NEW contract.
 			dt.SetCancelHooks(
 				func(sessionKey, hint string) ([]string, error) {
-					return al.Interrupt(sessionKey, ScopeSelfOnly, hint)
+					return al.Interrupt(sessionKey, ScopeSubtree, hint)
 				},
 				func(sessionKey, hint string) ([]string, error) {
-					return al.InterruptSessionHard(sessionKey, ScopeSelfOnly, hint)
+					return al.InterruptSessionHard(sessionKey, ScopeSubtree, hint)
 				},
 			)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions

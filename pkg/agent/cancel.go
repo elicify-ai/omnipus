@@ -79,6 +79,19 @@ type CancelOutcome struct {
 	// 0 even when Fired is false.
 	BackgroundSessionsKilled int
 	BackgroundSessionsFailed int
+
+	// DescendantWalkIncomplete is true when the durable descendant-set walk
+	// this cancel relied on (CollectDescendantSessionIDs, via
+	// resolveBackgroundKillSessionIDs) hit a lifecycleStore.List failure
+	// partway through and had to abandon that branch of the tree (FIX-5,
+	// Defect 2). When true, BackgroundSessionsKilled/BackgroundSessionsFailed
+	// and the turn.cancel.background_killed audit event reflect only the
+	// PARTIAL subtree actually reached — a caller MUST NOT read
+	// "BackgroundSessionsKilled: N, BackgroundSessionsFailed: 0" as "the
+	// whole subtree was swept clean" when this is true. Populated
+	// UNCONDITIONALLY, like BackgroundSessionsKilled/Failed above, since the
+	// walk that can fail runs before the ClaimCancel gate.
+	DescendantWalkIncomplete bool
 }
 
 // CancelHooks lets callers inject transport-specific side-effects. All fields
@@ -252,6 +265,15 @@ func (al *AgentLoop) RequestCancel(
 	// turn at all) would otherwise leave no audit trail whatsoever.
 	var backgroundSessionsKilled int64
 	var backgroundSessionsFailed int64
+	// [FIX-5, Defect 2] descendantWalkIncomplete is true when
+	// resolveBackgroundKillSessionIDs' underlying durable walk hit a
+	// lifecycleStore.List error partway through — the ids loop below then
+	// ran over a PARTIAL (truncated) view of the true descendant set, so
+	// killed/failed below must never be read as "the whole subtree was
+	// swept clean". This is threaded into both the background-kill audit
+	// event below AND the CancelOutcome this function returns, at every
+	// return site.
+	var descendantWalkIncomplete bool
 	if sessionID != "" && hooks.KillBackgroundSessions != nil {
 		// ADR-057 FR-027: cascade over sessionID's FULL descendant set, not
 		// sessionID alone — a delegated child now owns its OWN distinct
@@ -260,26 +282,37 @@ func (al *AgentLoop) RequestCancel(
 		// signature stays single-id (see its doc comment for why); this loop
 		// is what actually reaches every descendant, summing each call's
 		// result into the totals below.
-		for _, id := range al.resolveBackgroundKillSessionIDs(sessionID) {
+		ids, walkErr := al.resolveBackgroundKillSessionIDs(sessionID)
+		if walkErr != nil {
+			descendantWalkIncomplete = true
+			slog.Warn("agent: RequestCancel: descendant walk failed partway through — the background-kill cascade below is INCOMPLETE; some descendants' background bash/exec work may be left running undetected",
+				"session_id", sessionID, "error", walkErr)
+		}
+		for _, id := range ids {
 			killed, failed := hooks.KillBackgroundSessions(id)
 			atomic.AddInt64(&backgroundSessionsKilled, int64(killed))
 			atomic.AddInt64(&backgroundSessionsFailed, int64(failed))
 		}
 		killed := int(atomic.LoadInt64(&backgroundSessionsKilled))
 		failed := int(atomic.LoadInt64(&backgroundSessionsFailed))
-		// Gate emission on killed>0 || failed>0 (architect finding): a
-		// duplicate/no-op cancel that finds no background work at all (the
-		// common case — most cancels target a session with nothing running
-		// in the background) must not emit a no-op audit row. The outcome
-		// counts themselves are still populated on CancelOutcome
-		// unconditionally below, regardless of this gate.
-		if killed > 0 || failed > 0 {
+		// Gate emission on killed>0 || failed>0 || descendantWalkIncomplete
+		// (architect finding, widened by FIX-5/Defect 2): a duplicate/no-op
+		// cancel that finds no background work at all (the common case —
+		// most cancels target a session with nothing running in the
+		// background) must not emit a no-op audit row — UNLESS the walk
+		// itself failed, in which case "killed:0, failed:0" is not actually
+		// known to be a clean no-op; it might just be everything the walk
+		// could see before it broke. The outcome counts themselves are
+		// still populated on CancelOutcome unconditionally below,
+		// regardless of this gate.
+		if killed > 0 || failed > 0 || descendantWalkIncomplete {
 			audit.Emit(ctx, auditLogger, audit.EventTurnCancelBackgroundKilled, audit.SeverityInfo, map[string]any{
 				"session_id":                 sessionID,
 				"canceller_user":             canceller.UserID,
 				"canceller_channel":          canceller.Channel,
 				"background_sessions_killed": killed,
 				"background_sessions_failed": failed,
+				"descendant_walk_incomplete": descendantWalkIncomplete,
 			})
 		}
 	}
@@ -350,6 +383,7 @@ func (al *AgentLoop) RequestCancel(
 			Armed:                    armed,
 			BackgroundSessionsKilled: killedCount,
 			BackgroundSessionsFailed: failedCount,
+			DescendantWalkIncomplete: descendantWalkIncomplete,
 		}, nil
 	}
 
@@ -456,11 +490,27 @@ func (al *AgentLoop) RequestCancel(
 	// what Interrupt collected. A mismatch means a turn was added or removed
 	// in the narrow window between collectDescendantTurnIDs and Interrupt —
 	// this should never happen in practice but is worth a WARN if it does.
-	if len(interrupted) != len(descendants) {
-		slog.Warn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt",
+	//
+	// [FIX-5, Defect 3b, 2026-08-03] This USED to compare len(interrupted) !=
+	// len(descendants) only — a same-SIZE-but-different-MEMBERSHIP mismatch
+	// (e.g. turn X finished and was replaced by a new turn Y in the same
+	// instant, so both lists have length 1 but name different turn ids) was
+	// silent: the length-only check passed, no WARN fired, and the
+	// turn_canceled audit event's descendants_canceled field (set to
+	// `descendants`, the PRE-collected list, in the SetOnCancelFinish closure
+	// below) then named turn X as "cancelled" even though Interrupt actually
+	// reached only turn Y — an audit trail asserting a cancellation that
+	// never happened. Comparing actual set membership (not just count) below
+	// catches this class of mismatch and reports exactly which turn ids
+	// diverged, in which direction.
+	if missingFromInterrupted, extraInInterrupted := stringSliceSetDiff(descendants, interrupted); len(missingFromInterrupted) > 0 || len(extraInInterrupted) > 0 {
+		slog.Warn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt; "+
+			"turn_canceled's descendants_canceled field may name a turn Interrupt did not actually reach, or omit one it did",
 			"session_id", sessionID,
 			"pre_collected", descendants,
 			"interrupted", interrupted,
+			"missing_from_interrupted", missingFromInterrupted, // audited as cancelled but NOT actually reached by Interrupt
+			"extra_in_interrupted", extraInInterrupted, // reached by Interrupt but NOT named in the audit's descendants_canceled
 		)
 	}
 
@@ -579,50 +629,114 @@ func (al *AgentLoop) RequestCancel(
 		TurnID:                   turnID,
 		BackgroundSessionsKilled: int(atomic.LoadInt64(&backgroundSessionsKilled)),
 		BackgroundSessionsFailed: int(atomic.LoadInt64(&backgroundSessionsFailed)),
+		DescendantWalkIncomplete: descendantWalkIncomplete,
 	}, nil
+}
+
+// stringSliceSetDiff compares two string slices as SETS (not as ordered/
+// counted sequences) and returns (onlyInA, onlyInB): the elements present in
+// a but absent from b, and vice versa. Both returns are nil when the two
+// slices contain exactly the same set of elements, regardless of order or
+// duplicate count. Used by RequestCancel's PHASE-A/Interrupt consistency
+// check (FIX-5, Defect 3b) to catch a same-SIZE-but-different-MEMBERSHIP
+// mismatch that a bare len(a) != len(b) comparison cannot see.
+func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
+	setA := make(map[string]struct{}, len(a))
+	for _, v := range a {
+		setA[v] = struct{}{}
+	}
+	setB := make(map[string]struct{}, len(b))
+	for _, v := range b {
+		setB[v] = struct{}{}
+	}
+	for v := range setA {
+		if _, ok := setB[v]; !ok {
+			onlyInA = append(onlyInA, v)
+		}
+	}
+	for v := range setB {
+		if _, ok := setA[v]; !ok {
+			onlyInB = append(onlyInB, v)
+		}
+	}
+	return onlyInA, onlyInB
 }
 
 // ============================================================================
 // ADR-057 U15 — descendant-set helpers (W8, FR-024…FR-027)
 // ============================================================================
 
-// collectDescendantSessionIDs performs a breadth-first walk of the durable
+// CollectDescendantSessionIDs performs a breadth-first walk of the durable
 // ParentDurableKey edge (pkg/session/lifecycle.go, U13's FR-019/FR-020
 // index) starting at rootSessionID and returns every reachable descendant's
 // OWN session id (rootSessionID itself is never included).
 //
-// Mirrors pkg/gateway/websocket.go's u11CollectDescendantSessionIDs — the
-// same primitive that hook already uses to cascade a cancel's
-// approval-denial (FR-032) over a session's descendants — because a
-// background bash/exec session (FR-027, below) and a persisted lifecycle
-// record (FR-025/FR-026, below) can each OUTLIVE the in-memory turnState
-// that spawned them: a `delegate async=true` child's own turn frequently
-// finishes almost immediately while its spawned background bash job keeps
-// running for minutes. Deriving this set from al.activeTurnStates (which
-// only knows about turns still registered right now) would silently miss
-// exactly the descendants FR-027/FR-025 exist to reach. Reads no turnState
-// field at all — in particular never ts.routingSessionID, whose reader set
-// FR-014 closes to the seven role-B predicates plus WS-payload stamping plus
-// the three pre-arm reads — so this walk is unaffected by that restriction.
+// [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
+// duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
+// u11CollectDescendantSessionIDs, kept as a separate copy only because a
+// parallel-implementation ownership rule forbade that unit from editing
+// pkg/agent (or this unit from editing pkg/gateway). That rule has expired.
+// websocket.go's buildCancelHooks now calls this function directly;
+// u11CollectDescendantSessionIDs itself survives only as a signature-compat
+// shim (its exact pre-existing name/signature is called directly by
+// pkg/gateway/rest.go's deleteSession handler and by
+// pkg/gateway/websocket_adr057_test.go's U11 unit tests — both outside this
+// fix's file ownership, so the shim is kept rather than requiring edits
+// there).
 //
-// Returns nil when no lifecycle store is wired or rootSessionID is empty,
+// This is the same primitive the cancel/approval-cascade paths in both
+// packages share, because a background bash/exec session (FR-027, see
+// resolveBackgroundKillSessionIDs below) and a persisted lifecycle record
+// (FR-025/FR-026, see cancelDurableDescendantLifecycleRecords below) can
+// each OUTLIVE the in-memory turnState that spawned them: a `delegate
+// async=true` child's own turn frequently finishes almost immediately while
+// its spawned background bash job keeps running for minutes. Deriving this
+// set from al.activeTurnStates (which only knows about turns still
+// registered right now) would silently miss exactly the descendants
+// FR-027/FR-025 exist to reach. Reads no turnState field at all — in
+// particular never ts.routingSessionID, whose reader set FR-014 closes to
+// the seven role-B predicates plus WS-payload stamping plus the three
+// pre-arm reads — so this walk is unaffected by that restriction.
+//
+// Returns (nil, nil) when lifecycleStore is nil or rootSessionID is empty,
 // which degrades resolveBackgroundKillSessionIDs to exactly today's
-// single-id behavior (root only) rather than failing the cascade outright.
-func (al *AgentLoop) collectDescendantSessionIDs(rootSessionID string) []string {
-	lifecycleStore := al.GetSessionLifecycleStore()
+// single-id behavior (root only) rather than failing the cascade outright —
+// this is NOT an error case, it is the documented degrade-gracefully path
+// for an install that never wired a lifecycle store at all.
+//
+// [FIX-5, Defect 2, 2026-08-03] Returns a non-nil error when ANY
+// lifecycleStore.List call in the walk fails. Before this fix, a single
+// corrupt/unreadable record made the query for that one node fail, and the
+// walk silently `continue`d past it — treating "the query itself errored"
+// identically to "this node legitimately has zero children". Every
+// descendant beneath the failure point then vanished from the returned
+// slice with NO signal to the caller: resolveBackgroundKillSessionIDs would
+// report a clean-looking background-kill cascade that actually missed half
+// the tree, and the approval-cancel cascade (websocket.go's
+// buildCancelHooks) would leave a dropped grandchild's pending
+// RequestApproval hanging until its own multi-minute timeout while the UI
+// reported the cancel as complete. The returned descendants slice is still
+// the PARTIAL set successfully discovered before the failure — callers MUST
+// treat a non-nil error as "this is a truncated view of the true descendant
+// set", never as "clean success with fewer descendants than expected".
+func CollectDescendantSessionIDs(lifecycleStore *session.LifecycleStore, rootSessionID string) ([]string, error) {
 	if lifecycleStore == nil || rootSessionID == "" {
-		return nil
+		return nil, nil
 	}
 	visited := map[string]struct{}{rootSessionID: {}}
 	queue := []string{rootSessionID}
 	var descendants []string
+	var walkErrs []error
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
 		children, err := lifecycleStore.List(session.LifecycleFilter{ParentDurableKey: id})
 		if err != nil {
-			slog.Warn("agent: RequestCancel: descendant walk: could not list children",
-				"session_id", id, "root_session_id", rootSessionID, "error", err)
+			// This branch of the tree is now UNREACHABLE for this walk — every
+			// descendant beneath `id`, however many levels deep, is silently
+			// dropped from the returned slice. Recorded (not just logged) so
+			// the caller can distinguish this from "id has no children".
+			walkErrs = append(walkErrs, fmt.Errorf("list children of %q: %w", id, err))
 			continue
 		}
 		for _, rec := range children {
@@ -634,7 +748,19 @@ func (al *AgentLoop) collectDescendantSessionIDs(rootSessionID string) []string 
 			queue = append(queue, rec.SessionID)
 		}
 	}
-	return descendants
+	if len(walkErrs) > 0 {
+		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %d branch(es) failed to list children: %w",
+			rootSessionID, len(walkErrs), errors.Join(walkErrs...))
+	}
+	return descendants, nil
+}
+
+// collectDescendantSessionIDs is al's own lifecycle-store-bound wrapper
+// around the hoisted CollectDescendantSessionIDs (see that function's doc
+// comment for the full walk semantics and the FIX-5/Defect-2 error
+// contract).
+func (al *AgentLoop) collectDescendantSessionIDs(rootSessionID string) ([]string, error) {
+	return CollectDescendantSessionIDs(al.GetSessionLifecycleStore(), rootSessionID)
 }
 
 // resolveBackgroundKillSessionIDs returns the SET of real, store-backed
@@ -648,11 +774,18 @@ func (al *AgentLoop) collectDescendantSessionIDs(rootSessionID string) []string 
 // processes — U16's KillAllForSessions red/green proved exactly this
 // failure mode against the single-id KillAllForSession call, which still
 // compiles and so gives no build-time warning that it is now wrong.
-func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) []string {
+//
+// [FIX-5, Defect 2] Returns the descendant-walk error alongside the (still
+// usable, but possibly PARTIAL) id set — sessionID itself is always present
+// even on error, since it is prepended unconditionally and never depends on
+// the walk succeeding. The caller (RequestCancel) decides how to surface a
+// non-nil error; this function never silently drops it.
+func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string, error) {
 	if sessionID == "" {
-		return nil
+		return nil, nil
 	}
-	return append([]string{sessionID}, al.collectDescendantSessionIDs(sessionID)...)
+	descendants, err := al.collectDescendantSessionIDs(sessionID)
+	return append([]string{sessionID}, descendants...), err
 }
 
 // cancelDurableDescendantLifecycleRecords walks the durable ParentDurableKey
@@ -694,7 +827,22 @@ func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID strin
 	if lifecycleStore == nil {
 		return
 	}
-	for _, id := range al.collectDescendantSessionIDs(rootSessionID) {
+	ids, walkErr := al.collectDescendantSessionIDs(rootSessionID)
+	if walkErr != nil {
+		// [FIX-5, Defect 2] The walk itself failed partway through — ids is a
+		// PARTIAL view of the true descendant set. Every descendant beneath
+		// the failure point will NOT be transitioned to cancelled by the loop
+		// below and will sit on disk as running/queued until a future boot
+		// sweep catches it (the same class of staleness a kill -9 crash
+		// leaves, but produced here by normal cancel operation). This is a
+		// best-effort, fire-and-forget goroutine (FR-025) with no return
+		// value to propagate the failure through, so a clearly-worded WARN
+		// naming BOTH the root and the partial id count is the load-bearing
+		// signal for this path.
+		slog.Warn("agent: cancelDurableDescendantLifecycleRecords: descendant walk failed partway through — this cascade is INCOMPLETE, some durable lifecycle records beneath the failure point will NOT be transitioned to cancelled",
+			"root_session_id", rootSessionID, "partial_descendants_found", len(ids), "error", walkErr)
+	}
+	for _, id := range ids {
 		childStore := al.ResolveSessionStore(id)
 		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleCancelled, "")
 		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) && !errors.Is(err, session.ErrLifecycleTerminalImmutable) {

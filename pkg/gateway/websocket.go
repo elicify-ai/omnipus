@@ -1968,16 +1968,31 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 // approval by EXACT equality on the registry entry's own acting session id
 // (FR-080 — a delegated child's entry carries the CHILD's own id, never the
 // chat's), so a chat-level Stop that passed only the chat/root id would
-// cancel nothing inside any live child (BDD-33). Sourcing the descendant set
-// from a live, in-process turn registry would need a signature change to
-// agent.CancelHooks.CancelPendingApprovals (pkg/agent/cancel.go, owned by
-// U15) or to steering.go's unexported collectDescendantTurnIDs (owned by
-// U8) — neither of which this unit may edit (ownership Rule 2). The DURABLE
-// lifecycle store is reachable read-only through h.agentLoop's already
-// -exported GetSessionLifecycleStore() (pkg/agent/session_messaging_wire.go)
-// without touching any file this unit does not own, and every delegation —
-// live or not — has a LifecycleRecord (User Story 4), so this walk is
-// authoritative independent of what is still running.
+// cancel nothing inside any live child (BDD-33). The DURABLE lifecycle store
+// is reachable read-only through h.agentLoop's already-exported
+// GetSessionLifecycleStore() (pkg/agent/session_messaging_wire.go), and
+// every delegation — live or not — has a LifecycleRecord (User Story 4), so
+// this walk is authoritative independent of what is still running.
+//
+// [FIX-5, Defect 4, 2026-08-03] HOISTED: this used to be a byte-identical
+// duplicate of pkg/agent/cancel.go's collectDescendantSessionIDs, kept
+// separate only because a parallel-implementation ownership rule (then:
+// "neither of which this unit may edit") forbade this unit from touching
+// pkg/agent. That rule has expired — this is now a thin signature-compat
+// shim over the ONE hoisted implementation, agent.CollectDescendantSessionIDs
+// (pkg/agent/cancel.go), which also gained a real error return (Defect 2:
+// a lifecycleStore.List failure partway through the walk used to be
+// swallowed as "this node has no children" — silently truncating the
+// returned set with no signal). This shim is kept, rather than deleted and
+// inlined at every call site, because pkg/gateway/rest.go's deleteSession
+// handler and pkg/gateway/websocket_adr057_test.go's U11 unit tests call it
+// directly by this exact name/signature and are outside this fix's file
+// ownership — changing its signature would require edits there too. A
+// caller that CAN use the richer (typed-error) signature directly — see
+// buildCancelHooks's CancelPendingApprovals closure below — calls
+// agent.CollectDescendantSessionIDs itself instead of this shim, so it can
+// react to a partial-walk failure with a more specific diagnostic than the
+// generic one logged here.
 //
 // Guards against a corrupted or cyclic ParentDurableKey chain with a visited
 // set rather than trusting the system's own delegation-depth cap
@@ -1985,31 +2000,15 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 // even over on-disk state that predates or violates that cap. A nil store
 // (no delegation lifecycle store wired — most webchat-only installs never
 // mint one) yields an empty slice, so the caller degrades to exactly
-// cancelAllPendingForSession's documented single-id behavior.
+// cancelAllPendingForSession's documented single-id behavior. A walk error
+// is logged at WARN (never returned — see the shim rationale above) so this
+// call's INCOMPLETE-cascade case is never silent, even though it cannot be
+// propagated through this signature.
 func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) []string {
-	if ls == nil || rootID == "" {
-		return nil
-	}
-	visited := map[string]struct{}{rootID: {}}
-	queue := []string{rootID}
-	var descendants []string
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		children, err := ls.List(session.LifecycleFilter{ParentDurableKey: id})
-		if err != nil {
-			slog.Warn("ws: descendant walk: could not list children for approval cancel",
-				"session_id", id, "error", err)
-			continue
-		}
-		for _, rec := range children {
-			if _, seen := visited[rec.SessionID]; seen {
-				continue
-			}
-			visited[rec.SessionID] = struct{}{}
-			descendants = append(descendants, rec.SessionID)
-			queue = append(queue, rec.SessionID)
-		}
+	descendants, err := agent.CollectDescendantSessionIDs(ls, rootID)
+	if err != nil {
+		slog.Warn("ws: descendant walk: could not list children — the walk is INCOMPLETE; any descendant beyond the failure point is unreachable to this caller",
+			"session_id", rootID, "error", err)
 	}
 	return descendants
 }
@@ -2046,7 +2045,21 @@ func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 			if h.agentLoop != nil {
 				lifecycleStore = h.agentLoop.GetSessionLifecycleStore()
 			}
-			sessionIDs := append([]string{sid}, u11CollectDescendantSessionIDs(lifecycleStore, sid)...)
+			// [FIX-5, Defect 2, 2026-08-03] Calls agent.CollectDescendantSessionIDs
+			// directly (not the u11CollectDescendantSessionIDs shim above) so this
+			// call site can react to a partial-walk failure with the specific,
+			// user-visible consequence it has here: a lifecycleStore.List error
+			// partway through the walk used to be swallowed as "no more
+			// children" and the dropped descendant's pending RequestApproval was
+			// left standing — its blocked select only unblocks on ITS OWN
+			// multi-minute approval timeout, all while this Stop click's UI
+			// already reported the cancel as complete.
+			descendants, walkErr := agent.CollectDescendantSessionIDs(lifecycleStore, sid)
+			if walkErr != nil {
+				slog.Warn("ws: buildCancelHooks: descendant walk failed partway through — the approval-cancel cascade below is INCOMPLETE; a dropped descendant's pending approval will hang until its own timeout instead of being auto-denied by this Stop",
+					"session_id", sid, "error", walkErr)
+			}
+			sessionIDs := append([]string{sid}, descendants...)
 			h.approvalRegV2.cancelAllPendingForSessions(sessionIDs, reason)
 		},
 		KillBackgroundSessions: func(sid string) (killed, failed int) {
@@ -3912,10 +3925,20 @@ type wsStreamer struct {
 	// in the PARENT turn when this streamer belongs to a CHILD delegation
 	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent
 	// loop via SetParentSpawnCallID, mirroring SetTurnID's pattern exactly.
-	// Carried onto the transcript entry Finalize writes so
-	// pkg/gateway/replay.go can withhold a delegate's own streamed narration
-	// from top-level replay — see session.TranscriptEntry.ParentSpawnCallID's
-	// doc comment. Guarded by statsMu like turnID/agentID.
+	//
+	// [FIX-5, Defect 5, 2026-08-03] Carried onto the transcript entry
+	// Finalize writes for per-spawn-call attribution WITHIN the child's OWN
+	// durable transcript (read by pkg/tools/delegate.go's recentActivityLines,
+	// ADR-057 FR-043, to filter a `delegate` status poll to only THAT
+	// delegate call's activity) — NOT, as an earlier revision of this
+	// comment claimed, so pkg/gateway/replay.go could withhold the entry
+	// from top-level replay. That replay-side skip was DELETED by ADR-057
+	// FR-034/FR-038 (a delegated child now owns its own store-backed session
+	// and never lands in the parent's transcript at all, so there is
+	// nothing left for replay.go to withhold) — see
+	// session.TranscriptEntry.ParentSpawnCallID's doc comment
+	// (pkg/session/daypartition.go) for the authoritative, corrected
+	// post-ADR-057 role of this field. Guarded by statsMu like turnID/agentID.
 	parentSpawnCallID string
 	channel           *webchatChannel // to mark streaming complete and suppress duplicate Send()
 	accumulated       strings.Builder // accumulates full response text
@@ -4198,12 +4221,28 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// lazy shadowResolved=false) then finds the slot empty and legitimately
 	// "wins" it under the old rule — even though a child's own token stream
 	// is supposed to stay hidden unconditionally, exactly like the
-	// already-correct sync/await case and replay.go's ParentSpawnCallID skip
-	// (see that doc comment). Live-verified: reproduced the leak (a second,
-	// delegate-authored top-level bubble with raw narration) via a
-	// background delegation canceled mid-flight, confirmed the fix removes
-	// it. A root/non-delegated turn is unaffected — this branch only ever
-	// narrows behavior for parentSpawnCallID != "".
+	// already-correct sync/await case.
+	//
+	// [FIX-5, Defect 5, 2026-08-03] This gate's justification is
+	// SELF-CONTAINED and does not rest on replay.go: a delegated child's
+	// narration must never reach the user as its own top-level chat bubble,
+	// live-streamed or replayed. This function enforces the LIVE half of
+	// that invariant (withholding the live TokenFrame for a shadow stream);
+	// the DURABLE half no longer needs an analogous read-side filter at all
+	// (ADR-057 FR-034/FR-038 gave every delegated child its own store-backed
+	// session, so its narration never lands in the parent's transcript for
+	// replay.go to have to withhold in the first place — see
+	// session.TranscriptEntry.ParentSpawnCallID's doc comment,
+	// pkg/session/daypartition.go, for that mechanism's retirement). Do NOT
+	// read the historical replay.go comparison as this gate's justification
+	// and remove this gate on discovering replay.go no longer filters
+	// anything — this Update() gate is a DIFFERENT, still-live mechanism
+	// (the live-stream ownership claim, not a transcript read filter) with
+	// its own reason to exist, stated above. Live-verified: reproduced the
+	// leak (a second, delegate-authored top-level bubble with raw narration)
+	// via a background delegation canceled mid-flight, confirmed the fix
+	// removes it. A root/non-delegated turn is unaffected — this branch only
+	// ever narrows behavior for parentSpawnCallID != "".
 	if !s.shadowResolved {
 		if s.parentSpawnCallID != "" {
 			s.isShadowStream = true
@@ -4357,10 +4396,22 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// subagent_start (duration_ms matching that child's own subagent_end),
 	// well before the parent's real, final `done` — producing N+1 bubbles for
 	// N sequential delegate calls instead of one continuous bubble matching
-	// the child's own hidden-narration invariant (replay.go's
-	// ParentSpawnCallID skip / this same Update() shadow gate already treat a
-	// child's own text as never visible — Finalize simply never enforced
-	// that for the "done" signal it also sends).
+	// the child's own hidden-narration invariant (this same Update() shadow
+	// gate already treats a child's own text as never visible — Finalize
+	// simply never enforced that for the "done" signal it also sends).
+	//
+	// [FIX-5, Defect 5, 2026-08-03] The invariant this paragraph enforces —
+	// "a delegated child's own narration/signals are never visible as their
+	// own top-level chat event" — no longer needs replay.go as a supporting
+	// citation: that read-side skip was DELETED (ADR-057 FR-034/FR-038; see
+	// session.TranscriptEntry.ParentSpawnCallID's doc comment,
+	// pkg/session/daypartition.go, for why — a delegated child now owns its
+	// own store-backed session, so there is nothing left in the PARENT's
+	// transcript for a read boundary to withhold). This Finalize() gate and
+	// Update()'s shadow-stream gate are BOTH still live, LIVE-side
+	// mechanisms (withholding the "done" frame / the live TokenFrame,
+	// respectively) — each independently justified by the invariant stated
+	// above, not by the retired replay.go mechanism.
 	//
 	// Mirrors Update()'s lazy resolution exactly, including the same "a
 	// delegated child NEVER owns the live slot" rule Update() gained for
