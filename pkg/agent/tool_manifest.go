@@ -10,13 +10,39 @@ import (
 )
 
 // manifestSessionID derives the map key used to bucket loaded-tool state for a
-// session. It mirrors the fallback logic in pkg/tools/handoff.go:250-253:
-// prefer the transcript session ID when available (it is a stable, unique
-// session directory name); fall back to the session key when the transcript is
-// disabled (TranscriptSessionID == ""). Both the writer (markLoaded closure in
-// the agent loop) and the readers (buildCompressedToolDefs, buildToolManifestNote)
-// must call this helper with the same two inputs so they always resolve to the
-// same bucket — a mismatch causes loaded tools to become invisible to the model.
+// session. It mirrors the fallback logic in pkg/tools/handoff.go's
+// resolveSessionID: prefer the transcript session ID when available (it is a
+// stable, unique session directory name); fall back to the session key when the
+// transcript is disabled (TranscriptSessionID == ""). Both the writer
+// (markToolsLoaded, driven from the `load_tool` closure in the agent loop) and
+// the readers (buildCompressedToolDefs, buildToolManifestNote) must call this
+// helper with the same two inputs so they always resolve to the same bucket —
+// a mismatch causes loaded tools to become invisible to the model.
+//
+// # The bucket is the ACTING session, never a routing key (ADR-057)
+//
+// The returned key identifies whose loaded-tool set this is, so it must be the
+// id of the session actually running the turn. ADR-057 forbids using a routing
+// session id as a tool-manifest bucket, and the reason is a concrete cost, not
+// tidiness: a delegated child that resolved to its PARENT's bucket would start
+// every delegation pre-loaded with whatever lazy tools the parent had loaded,
+// paying their token and latency cost on a turn that may need none of them,
+// and it would write its own loads back into the parent's bucket.
+//
+// That is exactly what happened before ADR-057, and it happened at the CALLER,
+// not here: spawnSubTurn built the child's processOptions with
+// `TranscriptSessionID: parentTS.transcriptSessionID`, so this helper — behaving
+// correctly, preferring the transcript id — handed the child the parent's key.
+// Once each child owns a real session and carries its own transcript id, the
+// same preference gives the child its own empty bucket with no change here.
+// The invariant this helper must keep is therefore narrow and worth stating:
+// it derives a bucket from the two ids it is GIVEN and never widens the scope
+// of either. Any future caller that passes a chat/routing id as transcriptID
+// reintroduces the shared bucket regardless of what this function does.
+//
+// A both-empty call returns "", which is the deliberate no-op key:
+// markToolsLoaded and sessionLoadedTools both reject "" rather than creating a
+// shared unkeyed bucket.
 func manifestSessionID(transcriptID, sessionKey string) string {
 	if transcriptID != "" {
 		return transcriptID

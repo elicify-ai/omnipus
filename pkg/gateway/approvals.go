@@ -82,10 +82,29 @@ type approvalEntry struct {
 	ToolName   string
 	Args       map[string]any
 	AgentID    string
-	SessionID  string
-	TurnID     string
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
+
+	// SessionID is the ACTING session id — the id of the session whose turn
+	// is actually asking for approval (ADR-057 FR-080). For a delegated child
+	// turn that is the CHILD's own session id, never the chat's.
+	//
+	// This is a routing-relevant distinction, not a naming preference. The
+	// `tool_approval_required` WS frame is session-scoped, so its `session_id`
+	// carries the CHAT's routing key (so the SPA files the frame into the chat
+	// bucket the user is looking at) while this field carries the child's.
+	// Two consequences follow and both are load-bearing:
+	//
+	//  1. Cancellation matches on this field by exact equality (see
+	//     cancelAllPendingForSessions), so a chat-level Stop must pass the
+	//     chat's DESCENDANT SET, not the chat id alone — a chat id alone
+	//     matches nothing once a child's entry carries the child's id.
+	//  2. An approve/deny response MUST resolve by ApprovalID and never by
+	//     this field (FR-081), because the responding client only ever saw the
+	//     frame's routing `session_id`, which deliberately differs from it.
+	SessionID string
+
+	TurnID    string
+	CreatedAt time.Time
+	ExpiresAt time.Time
 
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
@@ -133,6 +152,17 @@ type approvalRegistryV2 struct {
 
 	// pendingGauge is a snapshot updated under mu; used for the Prometheus gauge.
 	pendingCount atomic.Int64
+
+	// missingActingSessionID counts requestApproval calls that supplied an
+	// empty acting session id (ADR-057 FR-080).
+	//
+	// An entry with an empty SessionID is unreachable by cancellation:
+	// cancelAllPendingForSessions matches by exact equality, and no caller
+	// ever asks to cancel "". Such an entry therefore survives every Stop and
+	// only resolves when the 300 s timeout fires — a hung turn with no signal.
+	// Counting it turns that into an observable defect rather than a mystery
+	// stall, and the counter is asserted by test rather than a log scrape.
+	missingActingSessionID atomic.Int64
 }
 
 // defaultTerminalRetention is the grace window during which a terminal-state
@@ -183,14 +213,31 @@ func (r *approvalRegistryV2) scheduleTerminalDelete(approvalID string) {
 
 // requestApproval creates a new pending approval entry and returns it.
 //
+// actingSessionID MUST be the session id of the turn actually asking — for a
+// delegated child turn, the CHILD's own session id, not the chat's routing key
+// (ADR-057 FR-080; see approvalEntry.SessionID for why the two differ and what
+// depends on the difference). The registry cannot derive it, so it records
+// what the caller supplies and counts an empty one as a defect rather than
+// creating a silently uncancellable entry.
+//
 // Returns (entry, true) if accepted.
 // Returns (saturatedEntry, false) if the saturation cap is reached; the returned
 // entry is already in denied_saturated state (FR-016, MAJ-009).
 func (r *approvalRegistryV2) requestApproval(
 	toolCallID, toolName string,
 	args map[string]any,
-	agentID, sessionID, turnID string,
+	agentID, actingSessionID, turnID string,
 ) (*approvalEntry, bool) {
+	if actingSessionID == "" {
+		total := r.missingActingSessionID.Add(1)
+		slog.Warn("approval: request has no acting session id — the entry cannot be cancelled and will only resolve on timeout",
+			"tool", toolName,
+			"tool_call_id", toolCallID,
+			"agent_id", agentID,
+			"turn_id", turnID,
+			"missing_acting_session_total", total)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -210,7 +257,7 @@ func (r *approvalRegistryV2) requestApproval(
 			ToolName:   toolName,
 			Args:       args,
 			AgentID:    agentID,
-			SessionID:  sessionID,
+			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
 			state:      ApprovalStateDeniedSaturated,
@@ -229,7 +276,7 @@ func (r *approvalRegistryV2) requestApproval(
 		ToolName:   toolName,
 		Args:       args,
 		AgentID:    agentID,
-		SessionID:  sessionID,
+		SessionID:  actingSessionID,
 		TurnID:     turnID,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
@@ -267,6 +314,15 @@ func (r *approvalRegistryV2) fireTimeout(approvalID string) {
 }
 
 // resolve applies an explicit action (approve/deny/cancel) to a pending approval.
+//
+// Resolution is BY APPROVAL ID and by nothing else (ADR-057 FR-081). The
+// registry map is keyed by approval id and this lookup is its only entry
+// point, so the round trip is independent of the entry's SessionID. That
+// independence is a requirement, not an accident: the client responding to a
+// delegated child's request only ever saw the frame's routing `session_id`
+// (the chat's), while the entry is keyed by the child's acting session id
+// (FR-080). Any future variant that matched on session id would break the
+// round trip on the first delegated approval.
 //
 // Returns:
 //   - resolveOK=true  → the state transitioned; HTTP 200 expected.
@@ -400,10 +456,25 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 	return canceled
 }
 
-// cancelAllPendingForSession auto-denies every pending approval whose SessionID
-// matches the given sessionID, using ApprovalStateDeniedCancel as the terminal
-// state. Called by the cancel handler after InterruptSession so that any agent
-// loop goroutine blocked on a resultCh select is unblocked immediately (FR-7).
+// cancelAllPendingForSessions auto-denies every pending approval whose
+// SessionID matches ANY id in sessionIDs, using ApprovalStateDeniedCancel as
+// the terminal state. Called by the cancel handler after the agent loop's
+// interrupt entry point so that any agent-loop goroutine blocked on a resultCh
+// select is unblocked immediately (FR-7).
+//
+// # Why this takes a SET (ADR-057 FR-032)
+//
+// Matching is by exact equality on SessionID, and under ADR-057 a delegated
+// child's pending entry carries the CHILD's own acting session id (FR-080),
+// not the chat's. A chat-level Stop that passed only the chat id would
+// therefore match nothing inside any child, and the child's goroutine would
+// stay blocked until its 300 s approval timeout fired. Callers MUST pass the
+// cancelled session's DESCENDANT SET — the session itself plus every session
+// beneath it — which is why the parameter is a slice.
+//
+// Empty ids in sessionIDs are ignored: no entry may be cancelled by "", or a
+// single malformed caller would auto-deny every entry that also failed to
+// record an acting session id.
 //
 // reason is the human-readable explanation delivered in ApprovalOutcome.Reason;
 // callers SHOULD pass "session canceled" (per FR-7 / EC-8).
@@ -411,12 +482,26 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 // Returns the count of approvals auto-denied (for audit / observability).
 // Approvals that are already terminal when this function runs are unaffected
 // (FR-8 contract: tools whose execution has already started are not killed here).
-func (r *approvalRegistryV2) cancelAllPendingForSession(sessionID, reason string) int {
+func (r *approvalRegistryV2) cancelAllPendingForSessions(sessionIDs []string, reason string) int {
+	targets := make(map[string]struct{}, len(sessionIDs))
+	for _, sid := range sessionIDs {
+		if sid == "" {
+			continue
+		}
+		targets[sid] = struct{}{}
+	}
+	if len(targets) == 0 {
+		return 0
+	}
+
 	r.mu.Lock()
 	var toDeliver []*approvalEntry
 	cancelledIDs := make([]string, 0)
 	for _, e := range r.entries {
-		if e.state != ApprovalStatePending || e.SessionID != sessionID {
+		if e.state != ApprovalStatePending {
+			continue
+		}
+		if _, hit := targets[e.SessionID]; !hit {
 			continue
 		}
 		e.state = ApprovalStateDeniedCancel
@@ -437,8 +522,19 @@ func (r *approvalRegistryV2) cancelAllPendingForSession(sessionID, reason string
 		e.resultCh <- ApprovalOutcome{Approved: false, Reason: reason}
 	}
 	slog.Info("approval: auto-denied pending approvals on session cancel",
-		"session_id", sessionID, "count", len(toDeliver), "reason", reason)
+		"session_ids", sessionIDs, "count", len(toDeliver), "reason", reason)
 	return len(toDeliver)
+}
+
+// cancelAllPendingForSession is the single-id convenience form of
+// cancelAllPendingForSessions.
+//
+// It is correct only for a session with no live descendants. A chat-level Stop
+// MUST use the plural form with the descendant set (ADR-057 FR-032) — see that
+// method's doc for why a chat id alone matches nothing inside a delegated
+// child.
+func (r *approvalRegistryV2) cancelAllPendingForSession(sessionID, reason string) int {
+	return r.cancelAllPendingForSessions([]string{sessionID}, reason)
 }
 
 // pendingCount returns a current count of pending approvals for the Prometheus gauge.
