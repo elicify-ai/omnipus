@@ -27,9 +27,10 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
 import { logError } from '@/lib/telemetry'
-import type { Workspace } from '@/lib/api'
+import type { Workspace, Session } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 import { useSelectSession } from '@/components/chat/useSelectSession'
+import { SessionTree, SessionExpandToggle, useSessionForest, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -445,8 +446,18 @@ export function Sidebar() {
             .map((project) => {
             const isActive = activeWorkspaceId === project.id
             const isExpanded = expandedWorkspaceIds.has(project.id)
+            // ADR-057 FR-093 (US-19, operator decision 1 — NESTED UNDER
+            // PARENT, not the `verifier` hidden-with-a-flag precedent): the
+            // `maxVisible` budget below MUST be spent on ROOT sessions only,
+            // so a wide delegation fan-out (e.g. 24 children) can never evict
+            // the parent chat itself. Delegate children (`parent_session_id`
+            // set) are never top-level rows — they render nested under their
+            // real parent via WorkspaceSessionTree below, fetched on expand.
+            // This filter is enforced here defensively (not merely assumed
+            // from the backend's roots-only default) — see hard constraint 1
+            // in the ADR-057 spec's own analysis of this exact line.
             const workspaceSessions = allSessions
-              .filter((s) => s.workspace_id === project.id)
+              .filter((s) => s.workspace_id === project.id && !s.parent_session_id)
               .sort((a, b) => {
                 // Heartbeat sessions on top, then recent-first
                 if (a.type === 'heartbeat' && b.type !== 'heartbeat') return -1
@@ -518,29 +529,17 @@ export function Sidebar() {
                       <p className="pl-3 pr-4 py-1 text-[13px] text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
                       // Pure navigation rows — manage lives behind "More…".
-                      visibleSessions.map((s) => {
-                        const sActive = s.id === activeSessionId
-                        return (
-                          <button tabIndex={0}
-                            key={s.id}
-                            type="button"
-                            onClick={() => selectSession(s)}
-                            aria-current={sActive ? 'page' : undefined}
-                            className={cn(
-                              'flex items-center gap-1.5 w-full pl-3 pr-4 py-1.5 text-[13px] transition-colors text-left',
-                              sActive
-                                ? 'text-[var(--color-accent)] font-medium'
-                                : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
-                            )}
-                          >
-                            {sActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-                            <span className="flex-1 truncate">{s.title || 'Untitled'}</span>
-                            {s.type === 'heartbeat' && (
-                              <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-                            )}
-                          </button>
-                        )
-                      })
+                      // ADR-057 US-19/FR-093: renders a TREE, not a flat list
+                      // — a root session with delegated children (child_count
+                      // > 0) gets an expand chevron; its children are fetched
+                      // a page at a time only once the user expands it
+                      // (WorkspaceSessionTree -> useSessionForest), never
+                      // loaded or counted against maxVisible up front.
+                      <WorkspaceSessionTree
+                        rootSessions={visibleSessions}
+                        activeSessionId={activeSessionId}
+                        selectSession={selectSession}
+                      />
                     )}
                     {/* Always the last entry — opens the session search pre-filtered to this workspace */}
                     {workspaceSessions.length > 0 && (
@@ -794,5 +793,101 @@ export function Sidebar() {
         )}
       </AnimatePresence>
     </>
+  )
+}
+
+// ── ADR-057 US-19/W16f: the workspace accordion's session TREE ───────────────
+//
+// Root sessions (already filtered + sorted + maxVisible-sliced by the
+// caller) rendered as a forest: a session with delegated children
+// (`child_count > 0`) gets an expand chevron; its children are fetched a
+// page at a time — never up front — only once the user expands it
+// (`useSessionForest`, SessionTree.tsx). Not virtualized: the sidebar's
+// visible-root budget already bounds the DOM (≤ 9 roots), unlike SearchModal
+// (FR-094), which can render far more nodes and virtualizes.
+function WorkspaceSessionTree({
+  rootSessions,
+  activeSessionId,
+  selectSession,
+}: {
+  rootSessions: Session[]
+  activeSessionId: string | null
+  selectSession: (session: Session) => void
+}) {
+  const { tree, expandedIds, toggleExpand, isLoadingChildren, isErrorChildren } = useSessionForest(rootSessions)
+
+  return (
+    <SessionTree
+      nodes={tree}
+      expandedIds={expandedIds}
+      renderRow={(row) => (
+        <SidebarSessionRow
+          row={row}
+          isActive={row.node.session.id === activeSessionId}
+          isLoading={isLoadingChildren(row.node.session.id)}
+          isError={isErrorChildren(row.node.session.id)}
+          onToggleExpand={() => toggleExpand(row.node.session.id)}
+          onSelect={() => selectSession(row.node.session)}
+        />
+      )}
+    />
+  )
+}
+
+function SidebarSessionRow({
+  row,
+  isActive,
+  isLoading,
+  isError,
+  onToggleExpand,
+  onSelect,
+}: {
+  row: SessionTreeFlatRow
+  isActive: boolean
+  isLoading: boolean
+  isError: boolean
+  onToggleExpand: () => void
+  onSelect: () => void
+}) {
+  const { node, depth, hasChildren, isExpanded } = row
+  const session = node.session
+  const title = session.title || 'Untitled'
+  return (
+    <div className="flex items-center pr-4" style={depth > 0 ? { paddingLeft: 12 + depth * 14 } : { paddingLeft: 12 }}>
+      {hasChildren ? (
+        <SessionExpandToggle
+          expanded={isExpanded}
+          onToggle={onToggleExpand}
+          loading={isLoading}
+          error={isError}
+          expandLabel={`Expand ${title} delegated sessions`}
+          collapseLabel={`Collapse ${title} delegated sessions`}
+        />
+      ) : (
+        <span className="w-[18px] shrink-0" aria-hidden="true" />
+      )}
+      <button tabIndex={0}
+        type="button"
+        onClick={onSelect}
+        aria-current={isActive ? 'page' : undefined}
+        className={cn(
+          'flex items-center gap-1.5 flex-1 min-w-0 py-1.5 pl-1 text-[13px] transition-colors text-left',
+          isActive
+            ? 'text-[var(--color-accent)] font-medium'
+            : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
+        )}
+      >
+        {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
+        <span className="flex-1 truncate">{title}</span>
+        {session.type === 'heartbeat' && (
+          <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+        )}
+        {hasChildren && (
+          <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
+            {session.child_count}
+          </span>
+        )}
+      </button>
+    </div>
   )
 }

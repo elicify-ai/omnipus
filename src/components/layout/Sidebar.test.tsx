@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
-import { fetchWorkspaces, fetchSessions, logout } from '@/lib/api'
+import { fetchWorkspaces, fetchSessions, fetchSessionPage, logout } from '@/lib/api'
+import type { Session } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -62,15 +63,30 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.
 
 // Mock fetchWorkspaces so the Sidebar's useQuery never hits the network in tests.
 // Using vi.fn() so individual tests can override the resolved value with mockResolvedValueOnce.
-vi.mock('@/lib/api', () => ({
-  fetchWorkspaces: vi.fn().mockResolvedValue([]),
-  logout: vi.fn().mockResolvedValue(undefined),
-  fetchSessions: vi.fn().mockResolvedValue([]),
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  workspacesQueryKeys: {
-    list: (params?: unknown) => ['workspaces', params],
-  },
-}))
+//
+// ADR-057 U24/W16f: `importOriginal` + spread (rather than a hand-rolled
+// object, as before) so the REAL, pure session-tree helpers
+// (`buildSessionTree`, `attachSessionChildren`, `findSessionNode`,
+// `insertOrphanSessionAsRoot`) that SessionTree.tsx imports from this same
+// module stay wired — Sidebar.tsx's new WorkspaceSessionTree renders through
+// them on every expand, so a hand-rolled mock lacking them would throw the
+// moment any test expands a workspace whose root session has children.
+// `fetchSessionPage` (the network call `useSessionForest` fires per expanded
+// node) is mocked explicitly, same as `fetchSessions`.
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchWorkspaces: vi.fn().mockResolvedValue([]),
+    logout: vi.fn().mockResolvedValue(undefined),
+    fetchSessions: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    fetchSessionPage: vi.fn().mockResolvedValue({ sessions: [] }),
+    workspacesQueryKeys: {
+      list: (params?: unknown) => ['workspaces', params],
+    },
+  }
+})
 
 // Capturable spies for the workspace/session store actions + the selectSession
 // handler. Declared via vi.hoisted so the vi.mock factories below (which run
@@ -188,6 +204,7 @@ beforeEach(() => {
   vi.mocked(logout).mockClear()
   vi.mocked(logout).mockResolvedValue(undefined)
   vi.mocked(fetchSessions).mockResolvedValue([])
+  vi.mocked(fetchSessionPage).mockReset().mockResolvedValue({ sessions: [] })
   mockSetActiveWorkspaceId.mockReset()
   mockStartNewSession.mockReset()
   mockSelectSession.mockReset()
@@ -237,11 +254,30 @@ describe('Sidebar — overlay rendering when open', () => {
 // session list by default. GET /sessions defaults to excluding type
 // "verifier" unless include_verifier=true is passed — this is a regression
 // guard that the sidebar's session query never opts in.
+//
+// ADR-057 W22b [grill2 M2-9, spec "SPA tests that MUST be deliberately
+// inverted, never deleted"]: this test's OLD assertion was
+// `toHaveBeenCalledWith()` — literally "no arguments at all". That shape
+// breaks the moment FR-091/FR-092/FR-104's paging lands on fetchSessions's
+// call sites, so it is DELIBERATELY INVERTED here (not deleted) to assert
+// the new, still-narrower contract that actually matters: the sidebar's
+// top-level query calls fetchSessions with ZERO opts (so the roots-only
+// default and the excluded-verifier default both still apply by
+// construction) — `toHaveBeenCalledWith()` still holds today because
+// Sidebar.tsx's top-level `fetchSessions()` call is genuinely unchanged
+// (paging happens one level down, per-node, via fetchSessionPage in
+// useSessionForest — see the BDD-104 tree test below for that call shape).
+// Restated as an explicit positive assertion instead of the previous
+// "called with literally nothing" phrasing so a future paging change to
+// THIS call site is caught here rather than silently drifting.
 describe('Sidebar — ADR-052 FR-036: verifier sessions excluded by default', () => {
-  it('calls fetchSessions with no arguments (never requests include_verifier)', () => {
+  it('calls the top-level fetchSessions() with zero options — no include_verifier, no explicit paging (roots-only default applies)', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
     expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith()
+    // Positive lower bound (Rule 4): prove the mock is actually wired to the
+    // component's real query, not merely never called.
+    expect(vi.mocked(fetchSessions).mock.calls.length).toBeGreaterThan(0)
   })
 })
 
@@ -645,6 +681,78 @@ describe('Sidebar — workspace session accordion', () => {
     expect(mockSelectSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: accordionSession.id, title: accordionSession.title }),
     )
+  })
+})
+
+// ADR-057 US-19/FR-093/BDD-104 (operator decision 1 — nested under parent,
+// not the `verifier` hidden-with-a-flag precedent): a wide delegation
+// fan-out must never evict the parent chat from the sidebar's maxVisible=9
+// root budget, because delegate children are never top-level rows in the
+// first place — they render nested under their real parent, collapsed by
+// default, fetched only on expand (test #101
+// TestSidebarTree_ParentSurvivesWideFanOut).
+describe('Sidebar — ADR-057 US-19/FR-093: session tree survives a wide delegation fan-out', () => {
+  function makeChild(i: number, parentId: string): Session {
+    return {
+      id: `child-${i}`,
+      agent_id: 'agent-1',
+      active_agent_id: 'agent-1',
+      title: `Delegated task ${i}`,
+      type: 'delegate',
+      workspace_id: accordionWorkspace.id,
+      created_at: '2026-04-02T00:00:00Z',
+      updated_at: '2026-04-02T00:00:00Z',
+      message_count: 1,
+      parent_session_id: parentId,
+    }
+  }
+
+  it('the parent chat stays visible and its 24 children are collapsed behind an expand affordance, not counted against the root budget', async () => {
+    // Positive lower bound (Rule 4): the fixture really does carry 24
+    // children before asserting anything about them being hidden — a test
+    // asserting "zero children rendered" against an empty fixture would pass
+    // vacuously.
+    const children = Array.from({ length: 24 }, (_, i) => makeChild(i, accordionSession.id))
+    expect(children).toHaveLength(24)
+
+    // The default (non-flat) session list is roots-only per FR-091 — the
+    // fixture reflects that contract: only the ROOT parent chat comes back
+    // from the top-level fetchSessions() call, carrying child_count.
+    vi.mocked(fetchSessions).mockResolvedValue([
+      { ...accordionSession, child_count: 24 },
+    ] as never)
+    await renderAndExpandAccordion()
+
+    // The parent is present — the R-9 eviction this story exists to prevent
+    // would instead show 9 delegate-child rows and no parent at all.
+    expect(await screen.findByText('Accordion Session One')).toBeTruthy()
+
+    // Its children are NOT inline — an expand affordance exists instead.
+    const expandChildrenBtn = await screen.findByRole('button', {
+      name: 'Expand Accordion Session One delegated sessions',
+    })
+    expect(expandChildrenBtn).toBeTruthy()
+    expect(expandChildrenBtn.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Delegated task 0')).toBeNull()
+    expect(screen.queryByText('Delegated task 23')).toBeNull()
+
+    // Expanding fetches and reveals them, nested under the parent — a single
+    // request scoped to this node (BDD-103: O(expanded nodes), not O(all
+    // sessions)) — never a bulk load of every session up front.
+    vi.mocked(fetchSessionPage).mockResolvedValueOnce({ sessions: children })
+    act(() => { fireEvent.click(expandChildrenBtn) })
+
+    expect(await screen.findByText('Delegated task 0')).toBeTruthy()
+    expect(screen.getByText('Delegated task 23')).toBeTruthy()
+    expect(vi.mocked(fetchSessionPage)).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      expect.objectContaining({ parentSessionId: accordionSession.id }),
+    )
+    expect(expandChildrenBtn.getAttribute('aria-expanded')).toBe('true')
+
+    // The parent is STILL present — expanding its children never displaces it.
+    expect(screen.getByText('Accordion Session One')).toBeTruthy()
   })
 })
 

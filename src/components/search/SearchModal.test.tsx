@@ -152,14 +152,34 @@ beforeEach(() => {
 
 // ADR-052 FR-036: verifier-role sessions must stay hidden from the search
 // modal's session list by default. GET /sessions defaults to excluding
-// type "verifier" unless include_verifier=true is passed — this is a
-// regression guard that the modal's session query never opts in.
-describe('SearchModal — ADR-052 FR-036: verifier sessions excluded by default', () => {
-  it('calls fetchSessions with no arguments (never requests include_verifier)', async () => {
+// type "verifier" unless include_verifier=true is passed.
+//
+// ADR-057 W22b [grill2 M2-9, spec "SPA tests that MUST be deliberately
+// inverted, never deleted"]: this test's OLD assertion was
+// `toHaveBeenCalledWith()` — literally "no arguments at all". That shape is
+// gone the moment FR-094/FR-104 land: SearchModal now fetches `flat: true`
+// (US-19) so a text search can find a match inside a delegated CHILD
+// session too, not just a root — the default roots-only page would
+// silently exclude every subordinate from the search space. DELIBERATELY
+// INVERTED (not deleted) to assert the new call shape, while the ORIGINAL
+// property this test protected — `include_verifier` is never requested by
+// this surface — is restated as its own explicit assertion so that
+// regression stays covered under the new call shape too.
+describe('SearchModal — ADR-052 FR-036 / ADR-057 US-19/FR-094/FR-104: session query call shape', () => {
+  it('calls fetchSessions with flat:true (search must see delegated children) and never requests include_verifier', async () => {
     renderModal()
     await waitFor(() => {
-      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith()
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith(undefined, undefined, { flat: true })
     })
+    // Positive lower bound (Rule 4): the mock really was invoked, not merely
+    // never called — and the FR-036 property survives under the new shape:
+    // no call ever asks for include_verifier.
+    const calls = vi.mocked(fetchSessions).mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    for (const call of calls) {
+      const opts = call[2] as { includeVerifier?: boolean } | undefined
+      expect(opts?.includeVerifier).not.toBe(true)
+    }
   })
 })
 
@@ -777,5 +797,156 @@ describe('SearchModal — workspaces mode (workspace switcher)', () => {
     await waitFor(() => expect(screen.getByText('Switch workspace')).toBeInTheDocument())
     expect(screen.getByPlaceholderText('Filter workspaces by name...')).toBeInTheDocument()
     expect(screen.queryByText('Search sessions')).not.toBeInTheDocument()
+  })
+})
+
+// ADR-057 US-19/FR-094/BDD-105 (operator decision 1 — nested under parent,
+// not the `verifier` hidden-with-a-flag precedent; test #102
+// TestSearchModalTree_NestedAndVirtualized): a search hit inside a
+// delegated CHILD session must surface its parent for context, and a large
+// fan-out must not mount every row.
+describe('SearchModal — ADR-057 US-19/FR-094/BDD-105: nests a child-only match under its parent and virtualizes a large fan-out', () => {
+  function makeChild(i: number, parentId: string, title = `Delegated task ${i}`): Session {
+    return {
+      id: `child-${i}`,
+      agent_id: 'agent-1',
+      active_agent_id: 'agent-1',
+      title,
+      type: 'delegate',
+      created_at: '2026-07-16T09:00:00Z',
+      updated_at: '2026-07-16T09:00:00Z',
+      message_count: 1,
+      workspace_id: 'ws-1',
+      parent_session_id: parentId,
+    }
+  }
+
+  it('a child-only match reveals its non-matching parent for context, nested underneath it', async () => {
+    // Below VIRTUALIZE_ROW_THRESHOLD — takes the PLAIN render path, which
+    // every other test in this file already relies on. Isolating the
+    // NESTING assertion from the virtualization one (below) keeps this test
+    // deterministic: it verifies BDD-105's core claim without depending on
+    // @tanstack/virtual-core's container-size measurement, which reads
+    // `element.offsetWidth`/`offsetHeight` — properties jsdom (no layout
+    // engine) cannot make behave like a real browser regardless of mocking.
+    const parent = makeSession({ id: 'parent-1', title: 'Parent Chat' })
+    const children = Array.from({ length: 5 }, (_, i) =>
+      i === 2 ? makeChild(i, parent.id, 'Special Delegated Match') : makeChild(i, parent.id),
+    )
+    // Positive lower bound (Rule 4): the fixture genuinely carries several
+    // children with exactly one match before asserting anything about
+    // nesting — a test that passed on an empty or all-matching fixture
+    // would prove nothing.
+    expect(children).toHaveLength(5)
+    expect(children.filter((c) => c.title === 'Special Delegated Match')).toHaveLength(1)
+
+    vi.mocked(fetchSessions).mockResolvedValue([parent, ...children])
+    const user = userEvent.setup()
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Parent Chat')).toBeInTheDocument())
+
+    const input = screen.getByRole('textbox', { name: 'Search sessions' })
+    await user.type(input, 'special')
+
+    // The matching child is revealed, nested under its parent — the parent
+    // is shown for context even though it did not itself match — and its
+    // non-matching siblings are NOT force-revealed as separate top-level
+    // rows (they only appear because the whole node got expanded).
+    await waitFor(() => expect(screen.getByText('Special Delegated Match')).toBeInTheDocument())
+    expect(screen.getByText('Parent Chat')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Collapse Parent Chat delegated sessions' }),
+    ).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('a fan-out past the row threshold mounts inside a virtualized viewport whose total scroll height reflects every descendant', async () => {
+    // @tanstack/virtual-core computes `getTotalSize() = count * estimateSize`
+    // from its full item count regardless of how many it actually mounts —
+    // this is a DETERMINISTIC, jsdom-safe way to prove the virtualizer
+    // received the correct full row count (1 parent + 30 children = 31,
+    // i.e. every descendant is logically present, none silently dropped)
+    // without depending on jsdom's absent layout engine to produce a
+    // specific mounted-DOM-node count. `ChatScreen.virtualization.test.tsx`
+    // documents the same underlying limitation ("We allow 0 as an
+    // acceptable outcome in jsdom (no layout engine)") for exactly this
+    // reason — a strict ">0 mounted rows" assertion is not reliable here,
+    // so this test asserts the height-derived row count instead, which is.
+    const parent = makeSession({ id: 'parent-1', title: 'Parent Chat', child_count: 30 })
+    const children = Array.from({ length: 30 }, (_, i) => makeChild(i, parent.id))
+    // Positive lower bound (Rule 4): the fixture really carries 30 children
+    // before asserting anything about bounded/virtualized rendering.
+    expect(children).toHaveLength(30)
+
+    vi.mocked(fetchSessions).mockResolvedValue([parent, ...children])
+
+    // SessionTree.tsx only takes the virtualized branch when `ResizeObserver`
+    // is defined (absent by default in this file's jsdom environment — the
+    // same feature-detect ChatScreen.tsx's VirtualizedMessageList uses, so
+    // every other test in this file, which does not stub it, keeps getting
+    // the plain fully-rendered list with zero behavior change). Only the
+    // STUB matters for this assertion — `getTotalSize()` is derived purely
+    // from item count × estimateSize, independent of the container's
+    // measured viewport size, so no offsetWidth/offsetHeight patching is
+    // needed for this particular check (unlike a mounted-row-count check).
+    class StubResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+
+    try {
+      const user = userEvent.setup()
+      renderModal()
+      await waitFor(() => expect(screen.getByText('Parent Chat')).toBeInTheDocument())
+
+      // Manually expand (no search text needed) — the group now has 31 rows
+      // (1 root + 30 children), crossing VIRTUALIZE_ROW_THRESHOLD (20).
+      const expandBtn = screen.getByRole('button', { name: 'Expand Parent Chat delegated sessions' })
+      await user.click(expandBtn)
+
+      const scrollEl = await screen.findByTestId('search-session-list-virtual-scroll')
+      const spacer = await waitFor(() => {
+        const el = scrollEl.querySelector<HTMLElement>('[data-testid="session-tree-virtual-spacer"]')
+        expect(el).not.toBeNull()
+        return el!
+      })
+
+      // FR-094: the group rendered inside a capped-height virtualized
+      // viewport (not the plain unbounded list every other fixture in this
+      // file takes), and the virtualizer's total scrollable height is
+      // exactly 31 rows' worth — proof the DOM never has to hold the whole
+      // fan-out at once the way the unvirtualized `groups.map(...)` used to
+      // (SearchModal.tsx:363/:687 per the ADR-057 spec's own citation),
+      // while still accounting for every one of the 30 children (none
+      // dropped or truncated to fit a page).
+      expect(spacer.style.height).toBe('1736px') // 31 rows * 56px estimateRowHeight
+      // Best-effort, jsdom-tolerant bound on the mounted DOM node count
+      // (never MORE than the full result count, whatever the environment's
+      // layout measurement yields it to be — 0 is an accepted outcome here,
+      // same caveat as ChatScreen.virtualization.test.tsx).
+      const mountedRows = scrollEl.querySelectorAll('[data-index]')
+      expect(mountedRows.length).toBeLessThan(31)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('with no active search, the fan-out stays collapsed behind an expand affordance (manual browse, no query typed)', async () => {
+    const parent = makeSession({ id: 'parent-1', title: 'Parent Chat', child_count: 30 })
+    const children = Array.from({ length: 30 }, (_, i) => makeChild(i, parent.id))
+    expect(children).toHaveLength(30)
+
+    vi.mocked(fetchSessions).mockResolvedValue([parent, ...children])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Parent Chat')).toBeInTheDocument())
+
+    // Not one of the 30 children renders until the user expands the parent.
+    expect(screen.queryByText('Delegated task 0')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delegated task 29')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Expand Parent Chat delegated sessions' }),
+    ).toHaveAttribute('aria-expanded', 'false')
   })
 })
