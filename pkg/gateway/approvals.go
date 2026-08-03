@@ -87,11 +87,36 @@ type approvalEntry struct {
 	// is actually asking for approval (ADR-057 FR-080). For a delegated child
 	// turn that is the CHILD's own session id, never the chat's.
 	//
-	// This is a routing-relevant distinction, not a naming preference. The
-	// `tool_approval_required` WS frame is session-scoped, so its `session_id`
-	// carries the CHAT's routing key (so the SPA files the frame into the chat
-	// bucket the user is looking at) while this field carries the child's.
-	// Two consequences follow and both are load-bearing:
+	// This is a routing-relevant distinction, not a naming preference.
+	//
+	// Doc correction (verified against the actual producer, 2026-08):
+	// the generated ToolApprovalRequiredFrame wire type (pkg/api/generated/
+	// asyncapi_types.gen.go) DOES define a session_id/producing_session_id
+	// split for exactly this class-(a) case ("producing_session_id ...
+	// present iff it differs from session_id ... the child turn's own
+	// session id when this frame crosses the wire from a delegated child"),
+	// but the actual WS frame producer — broadcastToolApprovalRequired,
+	// pkg/gateway/ws_tool_approval.go (NOT this file — read-only from here)
+	// — does NOT follow that split. It sets the frame's SessionId directly
+	// from this field (SessionId: entry.SessionID) and never sets
+	// ProducingSessionId at all. So AS ACTUALLY PRODUCED TODAY, the WS
+	// frame's `session_id` carries the SAME acting/child id this Go field
+	// does — never the chat's routing key — and `producing_session_id` is
+	// always omitted. The two-key design this comment used to describe (wire
+	// session_id = chat, this field = child) is the CONTRACT's intent, not
+	// the producer's current behavior; ws_tool_approval.go needs a fix (wire
+	// SessionId from the chat's routing key, ProducingSessionId from this
+	// field when it differs) to actually realize it. Reported, not fixed
+	// here: ws_tool_approval.go is outside this file's ownership. Impact is
+	// reported as contained (the SPA routes this frame into a global store
+	// and nothing reads its `sessionId`), so this is a doc/contract-fidelity
+	// gap, not a live user-facing bug — unlike Defects 1-4 above.
+	//
+	// What IS accurate and load-bearing regardless of the wire-frame
+	// mismatch: this field is read in-process (never round-tripped through
+	// the wire frame) by cancelAllPendingForSessions and by the approve/deny
+	// HTTP round trip. Two consequences follow from THAT and both are
+	// load-bearing:
 	//
 	//  1. Cancellation matches on this field by exact equality (see
 	//     cancelAllPendingForSessions), so a chat-level Stop must pass the

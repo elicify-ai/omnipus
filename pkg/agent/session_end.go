@@ -46,27 +46,53 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 
 	// FR-064/FR-033: force any pending in-memory-only stats delta (the
 	// FR-061 throttle) to disk, THEN evict this session's metaCache entry —
-	// unconditionally, same reasoning as forgetSession/approvalGrants.
-	// ClearSession above: this is bounded per-session cleanup, not gated on
-	// the recap feature. Order matters: flush BEFORE evict, mirroring
-	// FR-064's DeleteSession sequence (flush-then-remove) — evicting first
-	// would drop the cache entry FlushSessionStats itself reads to produce
-	// stats.json's bytes, losing the pending delta instead of persisting it.
-	// Without the flush, counters accumulated since the last periodic tick
-	// (up to StatsFlushInterval, default 5s) are silently lost: nothing
-	// errors, the session simply reports stale Stats to the next GetMeta/
-	// ListSessions caller. Without the evict, a stale composed meta can be
-	// served to a caller after this session has "closed" (FR-033) and the
-	// cache grows one entry per ever-delegated child for the process
-	// lifetime (Ambiguity 14). Eviction is NOT deletion: the session's files
-	// stay on disk and it stays in the FR-097 parent index (EvictSessionMeta
-	// deliberately does not call u4IndexEvict) — only the process-lifetime
-	// cache entry is dropped; the next GetMeta/ListSessions call self-heals
-	// it from disk like any other cache miss. al.sharedSessionStore may be
-	// nil in tests that build an AgentLoop literal directly without
-	// NewAgentLoop (same nil-safety concern documented on approvalGrants
-	// above), so both are skipped rather than panicking when there is no
-	// store.
+	// same reasoning as forgetSession/approvalGrants.ClearSession above: this
+	// is bounded per-session cleanup, not gated on the recap feature. Order
+	// matters: flush BEFORE evict, mirroring FR-064's DeleteSession sequence
+	// (flush-then-remove) — evicting first would drop the cache entry
+	// FlushSessionStats itself reads to produce stats.json's bytes, losing
+	// the pending delta instead of persisting it. Without the flush, counters
+	// accumulated since the last periodic tick (up to StatsFlushInterval,
+	// default 5s) are silently lost: nothing errors, the session simply
+	// reports stale Stats to the next GetMeta/ListSessions caller. Without
+	// the evict, a stale composed meta can be served to a caller after this
+	// session has "closed" (FR-033) and the cache grows one entry per
+	// ever-delegated child for the process lifetime (Ambiguity 14). Eviction
+	// is NOT deletion: the session's files stay on disk and it stays in the
+	// FR-097 parent index (EvictSessionMeta deliberately does not call
+	// u4IndexEvict) — only the process-lifetime cache entry is dropped; the
+	// next GetMeta/ListSessions call self-heals it from disk like any other
+	// cache miss. al.sharedSessionStore may be nil in tests that build an
+	// AgentLoop literal directly without NewAgentLoop (same nil-safety
+	// concern documented on approvalGrants above), so both are skipped rather
+	// than panicking when there is no store.
+	//
+	// Bug fix (regression introduced alongside this ADR): FlushSessionStats
+	// and EvictSessionMeta are two SEPARATE shard acquisitions — pkg/session
+	// exposes no primitive that holds sessionID's shard across both. Running
+	// the evict UNCONDITIONALLY, even when the flush failed, had two costs:
+	//  1. Deterministic: on a flush failure (e.g. a disk write error),
+	//     u6FlushDirtySessionLocked (pkg/session/unified_stats_flush.go)
+	//     deliberately KEEPS the dirty mark for the next periodic tick or
+	//     forced-flush point to retry — but that retry only does anything if
+	//     BOTH the dirty mark AND a live metaCache entry exist. The
+	//     unconditional evict removed the one thing the retry needs,
+	//     stranding the dirty mark (and the lost delta) for the rest of the
+	//     process's life: every later flush attempt finds dirty==true but
+	//     metaClone==nil and silently no-ops forever.
+	//  2. Racy: a concurrent AppendTranscript landing in the window between
+	//     FlushSessionStats releasing the shard and EvictSessionMeta
+	//     re-acquiring it re-marks the session dirty with a fresh cache
+	//     entry, which the unconditional evict then destroys before it is
+	//     ever flushed.
+	// Evicting ONLY on a successful flush closes case 1 completely (the
+	// cache entry the retry needs survives). Case 2 is a genuine cross-call
+	// race that can only be closed by a single-shard-acquisition primitive in
+	// pkg/session (e.g. a `FlushAndEvictSessionMeta(sessionID) error` that
+	// evicts under the SAME lockSession(sessionID) hold the flush uses,
+	// evicting only when the flush succeeds) — not implemented here because
+	// pkg/session is outside this file's ownership; reported as a follow-up
+	// with this exact signature.
 	if store := al.sharedSessionStore; store != nil {
 		if err := store.FlushSessionStats(sessionID); err != nil {
 			slog.Warn("session_end: forced stats flush failed at close",
@@ -74,8 +100,9 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 				"trigger", trigger,
 				"error", err,
 			)
+		} else {
+			store.EvictSessionMeta(sessionID)
 		}
-		store.EvictSessionMeta(sessionID)
 	}
 
 	// Use GetConfig() (holds al.mu.RLock) so that a PUT /settings/memory that
@@ -83,6 +110,60 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// al.cfg read races with SwapConfig's write and may see the pre-PUT value.
 	if !al.GetConfig().Agents.Defaults.AutoRecapEnabled {
 		return
+	}
+
+	// Bug fix (unconsidered rider introduced alongside this ADR): skip the
+	// recap pipeline entirely for a delegated child session
+	// (session.SessionTypeDelegate). subturn.go's cleanup defer calls
+	// al.CloseSession(childID, "delegate_terminal") for EVERY delegated
+	// child, unconditionally, and until this gate that reached the exact
+	// same recap pipeline as a real user chat session closing — but FR-033's
+	// own stated scope for that call site is narrow ("clearing its grant
+	// set, loadedTools bucket, metaCache entry and recallSpans entries"), all
+	// of which already ran unconditionally above; recap is never named as an
+	// intended consequence.
+	//
+	// A delegated child is an ephemeral task fan-out artifact — its
+	// transcript is one synthetic user turn (the task prompt) — never a real
+	// user conversation. With AutoRecapEnabled seeded true on every fresh
+	// install (coreagent.SeedConfig), letting it through runRecap (which has
+	// no session-type gate of its own) meant:
+	//   - Unbilled spend: runRecap calls p.Chat directly (max_tokens 2048),
+	//     bypassing the session entirely, so those tokens land in no
+	//     session's Stats and are invisible to Usage/get_usage. A fan-out of
+	//     N delegations is N uncounted LLM calls.
+	//   - Memory corruption: every delegated child of the SAME agent shares
+	//     that one agent's single last-session.md (pkg/agent/memory.go). N
+	//     concurrent delegations race N recap goroutines to overwrite it —
+	//     the winner is whichever micro sub-task's recap happens to finish
+	//     last, clobbering the recap of the user's actual last real
+	//     conversation with that agent.
+	//
+	// Checking store.GetMeta here (rather than trusting the trigger string)
+	// catches every current and future call site that might close a delegate
+	// session — not just subturn.go's own "delegate_terminal" label — and
+	// self-heals from disk exactly like every other GetMeta caller even
+	// though EvictSessionMeta may have just dropped the cache entry above.
+	// A GetMeta error (nil store, unresolvable session) falls through to the
+	// existing behavior unchanged: AgentForSession will fail the same way
+	// moments later inside runRecap and route to the heuristic (no-LLM-call)
+	// fallback, so failing open here costs nothing.
+	//
+	// This also closes the companion leak named in the same defect report:
+	// returning BEFORE the claimedCloseSessions.LoadOrStore call below means
+	// a delegated child's sessionID is never inserted into that sync.Map at
+	// all. Post-ADR-057, every delegated child owns a fresh, effectively
+	// single-use session id (subturn.go's childID), so without this early
+	// return the map gained one permanent entry per ever-delegated child for
+	// the life of the process — a far higher-volume source than the
+	// pre-existing "one entry per real chat session" growth this map already
+	// had (called out as "bounded in practice" and left unchanged: a real
+	// chat session still claims normally below).
+	if store := al.sharedSessionStore; store != nil {
+		if meta, metaErr := store.GetMeta(sessionID); metaErr == nil && meta.Type == session.SessionTypeDelegate {
+			al.auditRecap(sessionID, "", trigger, "skipped_delegate_session")
+			return
+		}
 	}
 
 	// Idempotency gate (FR-027): only one goroutine wins the claim.
