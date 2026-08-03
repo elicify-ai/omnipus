@@ -557,7 +557,7 @@ func spawnSubTurn(
 	// Delegate-spawn pending-marker cleanup (cancel_prearm.go's pendingSpawns
 	// / DelegateSpawnMarker seam): pkg/tools/delegate.go's executeAsync may
 	// have called MarkPendingDelegateSpawn for parentTS's own identity
-	// (transcriptSessionID, channel, chatID — inherited verbatim by the
+	// (routingSessionID, channel, chatID — inherited verbatim by the
 	// child below, so the SAME keys apply regardless of whether this call
 	// ever reaches child construction) immediately before dispatching the
 	// goroutine that reached this function. That marker's ONLY job is to
@@ -582,7 +582,17 @@ func spawnSubTurn(
 	// defers registered before a panic still run during that panic's
 	// unwind — regardless of whether a LATER defer, e.g. the panic-recovery
 	// one further down, ever got registered at all).
-	pendingSpawnKeysForThisCall := pendingSpawnKeys(parentTS.transcriptSessionID, parentTS.channel, parentTS.chatID)
+	// ADR-057 FR-016 (W4 subturn half): this is one of the three DIRECT reads
+	// re-based onto routingSessionID (the other two are cancel_prearm.go:354,
+	// :355, U15's file, this same wave) — routingSessionID is inherited
+	// verbatim by the child a few lines below (childTS.routingSessionID =
+	// parentTS.routingSessionID), so the SAME keys this call computes are the
+	// ones a subsequently-registered child turn would be checked against
+	// on the pre-arm-latch side. Was parentTS.transcriptSessionID, which
+	// under D1 is now the PARENT's own real session id (potentially a
+	// delegated child's own id for a nested spawn) rather than the routing
+	// identity a chat-wide Stop click resolves against.
+	pendingSpawnKeysForThisCall := pendingSpawnKeys(string(parentTS.routingSessionID), parentTS.channel, parentTS.chatID)
 	registeredForCancel := false
 	if al.cancelPreArm != nil && len(pendingSpawnKeysForThisCall) > 0 {
 		defer func() {
@@ -913,7 +923,20 @@ func spawnSubTurn(
 	// actually be looked up under keeps this correct whether execSource is
 	// baseAgent (self-delegation — a harmless same-key union) or a resolved
 	// target (agent.ID == targetAgent.ID, the real delegate).
-	al.ApprovalGrants().Inherit(parentTS.transcriptSessionID, parentTS.agentID, agent.ID)
+	// ADR-057 FR-031 (W10a): the retired single-key Inherit(sessionID,
+	// parentAgentID, childAgentID) used ONE session id for both the source
+	// lookup and the destination write — correct only while parent and
+	// child shared a session id. Under D1 every delegated child owns its
+	// OWN real session (childID), so the two-key InheritFrom is required:
+	// source = the PARENT's own session id + the PARENT's agent id (where
+	// its grants actually live); destination = the CHILD's OWN session id
+	// (childID) + the child's agent id. This field intentionally stays
+	// parentTS.transcriptSessionID, NOT parentTS.routingSessionID — grant
+	// inheritance is not in FR-014's closed routingSessionID consumer set
+	// (WS payload stamping, the role-B predicates, pre-arm keys), and
+	// transcriptSessionID is exactly "the parent's own real session id"
+	// (its own childID when the parent is itself a delegated child).
+	al.ApprovalGrants().InheritFrom(parentTS.transcriptSessionID, parentTS.agentID, childID, agent.ID)
 
 	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
 	// registry. Note: distinct from the identity-swap
@@ -994,11 +1017,61 @@ func spawnSubTurn(
 		)
 	}
 
+	// ADR-057 US-2/D1 (W1 agent half, FR-005/FR-006/FR-008/FR-009/FR-010):
+	// mint a REAL, store-backed session under the EXACT childID computed
+	// above — the child no longer shares the parent's transcript.jsonl.
+	// Minted into the SAME shared *session.UnifiedStore the delegate tool
+	// holds (pkg/agent/loop.go:1727-1728's sharedStore/al.GetSessionStore()),
+	// or ChildCount/drill-down/cascade-cancel-by-lineage would all read an
+	// empty store for this child. CreateSessionWithID (pkg/session/
+	// unified_api.go) also copies the parent's Owner verbatim (FR-006)
+	// under its own read-then-release two-step protocol (FR-082) and
+	// refuses a childID that already exists on disk (FR-096) — both a nil
+	// store (degraded boot, see loop.go:609-620) and a parent id that does
+	// not name a real session surface here as a loud, non-nil error rather
+	// than a silent delegation-without-a-real-session, which is exactly the
+	// success-shaped failure this whole migration exists to close (see this
+	// spec's governing note). SessionTypeDelegate is FR-008's "subordinate"
+	// value.
+	sharedStore := al.GetSessionStore()
+	if sharedStore == nil {
+		return nil, fmt.Errorf("subturn: no shared session store wired — cannot mint a real session for delegated child %q", childID)
+	}
+	if _, err := sharedStore.CreateSessionWithID(
+		childID,
+		parentTS.transcriptSessionID,
+		session.SessionTypeDelegate,
+		parentTS.channel,
+		agent.ID,
+	); err != nil {
+		return nil, fmt.Errorf("subturn: create child session %q: %w", childID, err)
+	}
+	// FR-008 (the parent->child edge itself): CreateSessionWithID mints the
+	// session but never persists ParentSessionID (grep -c ParentSessionID
+	// pkg/session/unified_api.go == 0) — SetMeta is the sole writer of that
+	// field and is also what wires the FR-097 in-memory parent index
+	// (u5WriteIdentityLocked, unified_meta_files.go), which is what makes
+	// ChildCount(parentID) non-zero and the whole nested-session hierarchy
+	// (sidebar/search tree, drill-down, durable-walk Stop, cascade delete)
+	// resolvable at all. Skipping this call leaves meta.json's
+	// ParentSessionID at its zero value with a green build and no compiler
+	// or runtime signal — the exact silent-success shape this migration
+	// exists to end.
+	childParentSessionID := parentTS.transcriptSessionID
+	if err := sharedStore.SetMeta(childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); err != nil {
+		return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", childID, err)
+	}
+
 	// Create processOptions for the child turn.
-	// FR-6a: inherit TranscriptSessionID from parent so that cascade cancel in
-	// InterruptSession can match this sub-turn via ts.transcriptSessionID == sessionID.
-	// Without this, every sub-turn has transcriptSessionID == "" and the cascade
-	// matches only the parent turn (the load-bearing bug fixed here).
+	// ADR-057 FR-007/FR-009: TranscriptSessionID is now the child's OWN
+	// session id (childID) — every delegated child writes its own
+	// transcript, never the parent's. Cascade-cancel reachability no
+	// longer depends on a SHARED transcriptSessionID matching inside the
+	// (now-retired) InterruptSession entry point, which is what this
+	// comment used to describe — it is carried instead by
+	// routingSessionID, inherited verbatim from the parent immediately
+	// below (FR-011) and consumed by the collapsed Interrupt(id, scope,
+	// hint) entry point (FR-041) via the role-B predicates (FR-015).
 	//
 	// Soul composition: the system role is the DELEGATE's own soul
 	// (config.AgentConfig.Soul or the compiled coreagent.GetPrompt), and the
@@ -1029,9 +1102,15 @@ func spawnSubTurn(
 		DefaultResponse:         "",
 		EnableSummary:           false,
 		SendResponse:            false,
-		NoHistory:               true, // SubTurns don't use session history
+		// ADR-057 FR-007: NoHistory MUST NOT be set for a delegated child —
+		// was `true` here ("SubTurns don't use session history"). Left at
+		// its zero value (false) so the child goes through the same
+		// history load/save path as any other turn, against its own
+		// ephemeral in-memory store (agent.Sessions above) — a separate
+		// concept from the transcript.jsonl persistence TranscriptSessionID/
+		// TranscriptStore below govern.
 		SkipInitialSteeringPoll: true,
-		TranscriptSessionID:     parentTS.transcriptSessionID,
+		TranscriptSessionID:     childID, // FR-007: the child's OWN session id, not the parent's
 		TranscriptStore:         parentTS.transcriptStore,
 	}
 
@@ -1040,6 +1119,15 @@ func spawnSubTurn(
 
 	// Create child turnState using the new API
 	childTS := newTurnState(&agent, opts, scope)
+	// ADR-057 FR-011 (W4 subturn half): OVERWRITE the routing id
+	// newTurnState just defaulted to this child's OWN session id (correct
+	// only for a root turn) with the PARENT's routingSessionID, inherited
+	// verbatim through the whole delegation subtree — see
+	// turnState.routingSessionID's doc comment (turn.go) for the full
+	// contract this closes. Skipping this overwrite silently leaves a
+	// child's routing/interrupt-scope key equal to its own session id
+	// instead of the root's, and a chat-wide Stop stops reaching it.
+	childTS.routingSessionID = parentTS.routingSessionID
 
 	// Set SubTurn-specific fields
 	childTS.cancelFunc = cancel
@@ -1074,9 +1162,14 @@ func spawnSubTurn(
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
 	// ADR-053 S2/D1: expose the child's own durable session_id (== childID
 	// above) to its OWN tool calls (message_parent.go reads this via
-	// tools.ToolDelegateSessionID) — distinct from the shared transcript
-	// session id (tools.ToolTranscriptSessionID), which this context also
-	// carries via runTurn below for backward compat.
+	// tools.ToolDelegateSessionID) — historically distinct from the
+	// transcript session id (tools.ToolTranscriptSessionID), which this
+	// context also carries via runTurn below. Under ADR-057 FR-007 the two
+	// have converged for a delegated child: TranscriptSessionID is now
+	// childID as well (see the processOptions construction above), so both
+	// context values name the same real session; ToolDelegateSessionID is
+	// kept as its own carrier rather than removed, since callers resolve
+	// delegation identity through it independently of transcript wiring.
 	childCtx = tools.WithDelegateSessionID(childCtx, childID)
 
 	childTS.ctx = childCtx
@@ -1123,7 +1216,7 @@ func spawnSubTurn(
 	// erase whatever is CURRENTLY stored under childID when this defer finally
 	// fires — which by then is the NEW generation's live, running turnState,
 	// not this (finished) one. That silently makes the new generation
-	// unreachable to GetActiveTurnHookForSession/InterruptSession/
+	// unreachable to GetActiveTurnHookForSession/Interrupt/
 	// sessionTurnsStillAlive for the rest of its life: no cancel (graceful,
 	// hard, or detach) can ever find it again, and it runs unchecked until its
 	// own MaxIterations ceiling. clearActiveTurnStateEntry only removes the
@@ -1135,7 +1228,8 @@ func spawnSubTurn(
 	defer al.clearActiveTurnStateEntry(childID, childTS)
 
 	// The child is now real, discoverable evidence of its own (findable via
-	// GetActiveTurnHookForSession/sessionTurnsStillAlive by transcriptSessionID) —
+	// GetActiveTurnHookForSession/sessionTurnsStillAlive by routingSessionID,
+	// re-based from transcriptSessionID by U3's role split, ADR-057 FR-015) —
 	// the pending-spawn marker's whole job was to stand in for that evidence
 	// during the window that just closed. Clear it explicitly, right here,
 	// rather than leaving it for this function's own early-return defer
@@ -1180,7 +1274,13 @@ func spawnSubTurn(
 				ParentSpawnCallID: session.ToolCallID(parentSpawnCallID),
 				TaskLabel:         taskLabel,
 				ChatID:            parentTS.chatID,
-				SessionID:         parentTS.transcriptSessionID,
+				// ADR-057 FR-017/W21c: pinned to the PARENT's routingSessionID
+				// (SubTurnSpawnPayload.SessionID's own doc comment, U23,
+				// events.go, is the frozen contract this satisfies) — was
+				// parentTS.transcriptSessionID before U3's role split landed.
+				// Do NOT repoint to the child's own id: the child's id already
+				// rides this same payload as Label.
+				SessionID: string(parentTS.routingSessionID),
 			},
 		)
 	}
@@ -1421,11 +1521,29 @@ func spawnSubTurn(
 					ParentSpawnCallID: session.ToolCallID(parentSpawnCallID),
 					DurationMS:        subTurnDurationMS,
 					ChatID:            parentTS.chatID,
-					SessionID:         parentTS.transcriptSessionID,
-					Reason:            endReason,
+					// ADR-057 FR-017/W21c: pinned to the PARENT's
+					// routingSessionID (SubTurnEndPayload.SessionID's own
+					// doc comment, U23, events.go) — was
+					// parentTS.transcriptSessionID before U3's role split
+					// landed. Do NOT repoint to the child's own id.
+					SessionID: string(parentTS.routingSessionID),
+					Reason:    endReason,
 				},
 			)
 		}
+
+		// ADR-057 FR-033/W10d (US-6 AS-4): the child-turn-terminal CloseSession
+		// call site — verified absent from the tree before this change (the
+		// only non-test callers were websocket.go:1038 "explicit",
+		// loop.go:1048/:1064 "idle", session_end.go:865 "bootstrap"). Runs
+		// unconditionally, regardless of cfg.Async/emitSpanEvents/panic, since
+		// it is bounded per-session store cleanup (grant set, loadedTools
+		// bucket, metaCache entry — U17b's session_end.go) tied to the
+		// CHILD's own session lifetime, not to span/event emission. Without
+		// this call, a delegated child's inherited grants (FR-031 above)
+		// never expire when the child ends, and its metaCache entry leaks for
+		// the process lifetime of every ever-delegated child.
+		al.CloseSession(childID, "delegate_terminal")
 	}()
 
 	// 8. Execute the sub-turn. The executor on the resolved DELEGATE's config

@@ -240,28 +240,6 @@ func (s *ApprovalGrantStore) InheritInvalidKeyCount() int64 {
 	return s.inheritInvalidKey.Load()
 }
 
-// Inherit is the retired single-key form, kept ONLY so the tree compiles
-// between this change (ADR-057 Wave A / unit U17a, which publishes the
-// InheritFrom signature) and unit U7 (Wave F), which owns the sole non-test
-// call site at pkg/agent/subturn.go:916 and re-points it at InheritFrom with
-// the child's own session id as the destination.
-//
-// This mirrors the shim precedent the ADR-057 spec sets for a cross-wave
-// removal whose intermediate tree would otherwise not compile (hard ordering 6
-// — IsDelegateChildEntry). It is NOT a supported API and MUST NOT acquire a
-// second caller: FR-031 requires the single-key form to be removed outright,
-// and U7's commit removes this shim together with its call site.
-//
-// Behaviour is byte-for-byte today's: source and destination share sessionID,
-// which is exactly the pre-ADR-057 same-session case, so re-pointing the call
-// site is U7's behaviour change and not this one's.
-//
-// Deprecated: use InheritFrom, which takes a separate source and destination
-// session id. Removed by ADR-057 unit U7.
-func (s *ApprovalGrantStore) Inherit(sessionID, parentAgentID, childAgentID string) {
-	s.InheritFrom(sessionID, parentAgentID, sessionID, childAgentID)
-}
-
 // ClearSession removes every grant recorded for sessionID, across all
 // agents. Called when a session ends (AgentLoop.CloseSession) so the store
 // does not grow without bound and a finished session's grants can never leak
