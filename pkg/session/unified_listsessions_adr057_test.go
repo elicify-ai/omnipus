@@ -212,7 +212,7 @@ func TestListSessionsPage_WindowAndStability(t *testing.T) {
 
 	// Window correctness: concatenating every page's ids must reproduce the
 	// full ordered sequence exactly (no gaps, no duplicates, no reordering).
-	var reassembled []string
+	reassembled := make([]string, 0, len(page1.Sessions)+len(page2.Sessions)+len(page3.Sessions))
 	for _, m := range page1.Sessions {
 		reassembled = append(reassembled, m.ID)
 	}
@@ -222,7 +222,7 @@ func TestListSessionsPage_WindowAndStability(t *testing.T) {
 	for _, m := range page3.Sessions {
 		reassembled = append(reassembled, m.ID)
 	}
-	var expected []string
+	expected := make([]string, 0, len(full))
 	for _, m := range full {
 		expected = append(expected, m.ID)
 	}
@@ -234,7 +234,8 @@ func TestListSessionsPage_WindowAndStability(t *testing.T) {
 	require.NoError(t, err)
 	repeatAgain, err := store.ListSessionsPage(0, 3)
 	require.NoError(t, err)
-	var idsA, idsB []string
+	idsA := make([]string, 0, len(repeat.Sessions))
+	idsB := make([]string, 0, len(repeatAgain.Sessions))
 	for _, m := range repeat.Sessions {
 		idsA = append(idsA, m.ID)
 	}

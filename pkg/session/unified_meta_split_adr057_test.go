@@ -432,8 +432,8 @@ func TestMetaCache_HitCostsZeroDiskReads(t *testing.T) {
 
 	reads = 0
 	for i := 0; i < 5; i++ {
-		_, err := store.GetMeta(sessionID)
-		require.NoError(t, err)
+		_, hitErr := store.GetMeta(sessionID)
+		require.NoError(t, hitErr)
 	}
 	_, err = store.ListSessions()
 	require.NoError(t, err)

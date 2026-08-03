@@ -216,7 +216,7 @@ func findFilesystemCall(fset *token.FileSet, stmts []ast.Stmt) (desc string, lin
 			break
 		}
 	}
-	return
+	return desc, line, ok
 }
 
 // TestCacheMu_NoFilesystemInCriticalSection is test #9 (FR-049/BDD-57): an
@@ -664,10 +664,10 @@ func TestUnifiedStore_ConcurrentAppendsToSameSessionStaySafe(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
-				if err := store.AppendTranscript(meta.ID, TranscriptEntry{
+				if appendErr := store.AppendTranscript(meta.ID, TranscriptEntry{
 					Role: "assistant", Content: fmt.Sprintf("w%d-%d", idx, i),
-				}); err != nil {
-					t.Errorf("AppendTranscript failed: %v", err)
+				}); appendErr != nil {
+					t.Errorf("AppendTranscript failed: %v", appendErr)
 				}
 			}
 		}(w)
