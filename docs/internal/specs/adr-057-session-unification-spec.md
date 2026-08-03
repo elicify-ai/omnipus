@@ -6,7 +6,57 @@
 
 **Branch**: `feature/plan-swimlane-board`. **Greenfield** — no migration, no back-compat, for chats or config files (ADR-057 v4 operator decision 1).
 
-**Version**: v2 (2026-08-03). Supersedes v1 (commit `478b85b5`).
+**Version**: v3 (2026-08-03). Supersedes v2 (commit `883f1efc`), which superseded v1 (commit `478b85b5`).
+
+> **v3 changelog.** v2 was reviewed by [grill #2](adr-057-session-unification-spec-review-2.md) — **verdict BLOCK, 4 CRITICAL / 12 MAJOR / 6 MINOR / 3 OBSERVATION**. All 22 numbered findings are resolved here; **nothing is deferred, nothing is filed as a follow-up issue.** Grill #2 independently re-derived every v2 correction against the tree and confirmed all six CRITICAL fixes are real — **those are not touched here.** Corrections forced by this review are marked `[grill2 C2-n / M2-n / m2-n]`.
+>
+> **The structural lesson v3 acts on.** Grill #2's verdict was not "v2 got things wrong" — it was that v2 **fixed the findings rather than the defect classes**, deriving its corrections from grill #1's file list instead of from the tree. So every correction below was derived by **enumerating the tree**, and the enumeration commands are now stated in the document so a reviewer can re-run them (see "Ownership derivation"). Three of the four CRITICALs are direct consequences of that one habit.
+>
+> **CRITICAL corrections:**
+> - **C2-1 — the ownership table was disjoint but not exhaustive.** Ten files that FRs require changing had no owner; six were hard compile breaks. Ownership is now derived from **symbol enumerations, not a review's file list**, and the commands are printed in the spec. New owners: `retention_sweep.go` → the U4→U5→U6 chain; `pkg/commands/**` → U8; `deps.go`/`gateway.go`/`rest_stats.go` → new **U25**; `task_executor.go`/`goal_loop.go`/`goal_triggers.go` → new **U26**; `pkg/config/**` → new **U28**; `pkg/agent/runner/**` and `handoff.go` → **U22** (re-scoped, see M2-3); `UsageScreen.tsx` + 4 SPA test files → U12/U24.
+> - **C2-2 — US-19's "MUST NOT load the whole set and slice" was infeasible.** `ListSessions` sorts an unordered `metaCache` map (`pkg/session/unified.go:1247-1293`, verified) and `ListAllSessions` k-way-merges N stores (`pkg/agent/loop.go:5046-5090`, verified); neither can produce a recency-ordered page without materialising everything, and no FR created an index. **Resolved by restating the requirement, not by adding an index** — because `metaCache` is already resident-everything (FR-058 asserts a cache hit costs **zero** disk reads), so the store-layer sort touches no disk and there is no I/O cost to eliminate. FR-092 now bounds cost at the **boundary** layers (REST payload, SPA render) and explicitly accepts the in-process sort over resident data at the store and loop layers. New **FR-097** (in-memory parent index for `child_count` and orphan detection) and **FR-098** (cross-store ordering + cursor + partial-error contract) supply the two mechanisms US-19 needed and no FR provided. **#100 is rewritten into three checkable assertions.**
+> - **C2-3 — FR-002 named 5 transcript writers; the tree has 22.** Enumerated: `task_executor.go` (7), `turn.go` (4), `handoff.go` (3), `websocket.go` (2), `loop.go` (2), `goal_loop.go` (2), `unified.go` (1), `cancel.go` (1) = **22 non-test matches of `AppendTranscript(`**, of which **20 are invocations** and 2 are declarations (the store method at `unified.go:802`, the interface method at `handoff.go:70`). *(This reconciles v3's 22 with grill #2's 20 — the review counted invocations, the enumeration command counts matches. Both numbers are now stated with their scope.)* **Resolved the way AC-1's frozen wording requires: `AppendTranscript` itself becomes strict** and the lenient silent-create branch (`unified.go:819-823`) is deleted. There is no lenient sibling left to leak. Verified this is a far smaller change than it appears: **all 20 invocation sites already capture or check the returned error**, so no call site fails to compile — the change is in runtime behaviour at sites that already have an error branch.
+> - **C2-4 — three undeclared wave-order violations.** Re-derived over **signature changes**, not file writes. U17 is split into **U17a** (approvals, Wave A) and **U17b** (`session_end.go` teardown, Wave E, after U6). U14 → Wave F and U19 → Wave G, both now declaring U8. **Correction to the review:** FR-041's compile-breaking surface is **5 files, not 4** — `steering.go` (U8, definitions), `cancel.go:390`/`:465` (U15, calls), `session_messaging_wire.go:166` (U19, method values), `delegate.go:363-364`/`:572-578` (U14, func types), `pkg/commands/runtime.go:39` (interface decl) + `cmd_cancel_test.go:61` (stub). The other ~25 references across 10 files are **doc comments only** and are handled as owned doc-rot (FR-100), which is why U3/U7/U9/U15/U17a/U22 do **not** need to move waves.
+>
+> **MAJOR corrections:** M2-1 the shipped default is seeded (**U28**) *and* covered (BDD-108, #112) — v2 had zero coverage for the configuration every install ships with; M2-2 FR-029 gets real implementation sites in `pkg/agent/runner/` with the in-house `Setpgid` precedent cited and POSIX scoping stated; M2-3 **U22 is re-scoped** (verified: zero `AppendTranscript` calls in either of its v2 files) and the real hazard it missed becomes **FR-099** (the transcript *mutate* path); M2-4 #107 is rewritten as a design assertion (a "must keep rising" claim is false by construction at 128 sessions over 64 shards); M2-5 binding rule 4 is made **generative** rather than a closed list of eleven, and #91's mechanism is specified; M2-6 three seam FRs (**FR-101…FR-103**) plus a narrow, stated exception to binding rules 1–2; M2-7 FR-086 is aligned with the design **and** the prune is required, citing the in-tree precedent at `unified.go:1474-1487` whose own comment names this exact failure ("leaving ListSessions to resurrect sessions that are gone from disk"); M2-8 #29's K is derived **by site**; M2-9 usage accounting gets **FR-104** and the four SPA test files get owners; M2-10 the existing `oneOf` and ADR-034's inline-hosting rule are addressed; M2-11 `DeleteSession`'s full ordered sequence is stated once.
+>
+> **MINOR corrections:** m2-1 the m-1 rebuttal is now applied to **all three** places (BDD-22 line 1204 and FR-022 were still `:571-575`); m2-2 the regression row names the renamed test; m2-3 the completeness check's BDD count was wrong — v2 claimed 106 while containing **107**; v3 adds seven and the check now reads **114**, produced by command rather than by hand (machine-verified: 114 headings, 114 unique ids, 01–114, zero gaps, zero duplicates); m2-4 FR-037 gains the two leftover comment sites **and** — found while verifying — FR-035's helper citation is widened to `:814-832` to include the doc comment that also names the predicate; m2-5 `websocket.go:1642` is enumerated; m2-6 FR-095/FR-096 are reordered.
+>
+> **Rebutted:** none. Every grill-#2 finding was confirmed against the tree. Two were found **understated** (C2-3's writer count, and M2-4's `rest.go` doc-comment site) and one **overstated in scope but not in kind** (C2-4's FR-041 file count is 5 compile breaks + 25 comment references, not 4 uniform breaks).
+>
+> **ID stability.** AC-1 … AC-22 remain byte-identical to ADR-057 v4 — **unchanged by this revision**. No existing FR/BDD/SC/test/unit ID was renumbered or reused for a different subject. Additions only: **FR-097…FR-104**, **BDD-108…BDD-114**, **SC-050…SC-056**, tests **#112…#118**, units **U25/U26/U28** plus the **U17 → U17a/U17b** split. Two IDs changed **meaning** and are called out where they appear: **FR-002** (the primitive itself becomes strict, so there is no sibling) and **FR-092** (bounded at the boundary layers, not at all four).
+>
+> **Counts.** v2 → v3: user stories 19 → **19**; FRs 96 → **104**; BDD scenarios 107 → **114**; success criteria 49 → **56**; test entries 112 → **119**; work units 24 → **28**; datasets 9 → **10**; waves 7 → **8**.
+
+### Grill #2 finding resolution
+
+| # | Severity | Finding | Resolution | Where |
+|---|---|---|---|---|
+| C2-1 | CRITICAL | Ownership disjoint but not exhaustive; 10 unowned files, 6 compile breaks | **Corrected** — re-derived from symbol enumerations; U25/U26/U28 added; commands printed | Ownership derivation, ownership table |
+| C2-2 | CRITICAL | US-19's bounded-cost requirement infeasible; #100 impossible or vacuous | **Corrected** — FR-092 restated to bound the boundary layers; FR-097/FR-098 add the missing mechanisms; #100 rewritten | FR-092, FR-097, FR-098, #100, BDD-102, SC-043 |
+| C2-3 | CRITICAL | 22 transcript writers, 5 named; lenient primitive survives | **Corrected** — `AppendTranscript` itself becomes strict; all 22 enumerated with owners | FR-002, Symbols table, ownership table |
+| C2-4 | CRITICAL | Three undeclared wave-order violations | **Corrected** — U17 split; U14→F, U19→G; `pkg/commands/**`→U8; derived over signatures | Ownership table, Integration order, FR-041, FR-100 |
+| M2-1 | MAJOR | No seeded default for `subturn.max_concurrent`; shipped config has zero coverage | **Corrected** — U28 seeds it; BDD-108/#112 cover the unset case | FR-095, U28, BDD-108, #112, SC-050 |
+| M2-2 | MAJOR | FR-029 has no implementation site; `pkg/agent/runner/` unowned | **Corrected** — U22 owns the drivers; precedent cited; POSIX scoped | FR-029, U22, BDD-86, #68a |
+| M2-3 | MAJOR | U22 has nothing to do; mutate-path hazard uncovered | **Corrected** — U22 re-scoped; FR-099 covers the mutate path | U22, FR-099, BDD-109, #113 |
+| M2-4 | MAJOR | #107 false by construction at 64 shards | **Corrected** — restated as a design assertion | FR-052, #107, SC-016 |
+| M2-5 | MAJOR | #106/#104 unbounded; #91 scoped to a fixed eleven; mechanism unspecified | **Corrected** — bounds table made generative; #91 mechanism specified | Rule 4, bounds table, FR-085, #91, SC-035 |
+| M2-6 | MAJOR | #88/#92/#103 need seams no FR requires | **Corrected** — FR-101/FR-102/FR-103; rules 1–2 gain a narrow stated exception | FR-101…FR-103, rules 1–2 |
+| M2-7 | MAJOR | FR-086 stricter than the design; nothing implements the difference | **Corrected** — prune required, in-tree precedent cited | FR-086, BDD-110, #114, SC-051 |
+| M2-8 | MAJOR | #29's K never derived; WS arm inert | **Corrected** — "read" defined; K derived by site | "Three reads, five sites", #29, FR-016 |
+| M2-9 | MAJOR | Roots-only drops child spend; 4 SPA test files unowned | **Corrected** — FR-104; files owned by U12/U24 | FR-104, BDD-111, #115, ownership table |
+| M2-10 | MAJOR | Existing `oneOf` + ADR-034 inline-hosting unaddressed | **Corrected** — response shape decided and stated | FR-091, Integration Boundaries → REST |
+| M2-11 | MAJOR | FR-064 vs FR-086 ordering contradiction | **Corrected** — one ordered sequence stated once | Edge Cases, FR-064, FR-086, FR-033 |
+| M2-12 | MAJOR | `retention_sweep.go` named in SC-038 but unowned | **Corrected** — assigned to the U4→U5→U6 chain | Ownership table, FR-050 |
+| m2-1 | MINOR | m-1 correction applied to 1 of 3 places | **Corrected** — BDD-22 and FR-022 now `:572-575` | BDD-22, FR-022 |
+| m2-2 | MINOR | Regression row names a deleted test | **Corrected** — `#25` / `TestApprovalGrants_InheritFromTwoKeys` | Regression Test Requirements |
+| m2-3 | MINOR | Completeness check under-counts its own BDDs | **Corrected** — 107, machine-verified | Completeness check |
+| m2-4 | MINOR | SC-003's `rg` still cannot return zero | **Corrected + widened** — FR-037 gains 2 sites; FR-035's helper citation widened to `:814-832` | FR-035, FR-037, SC-003 |
+| m2-5 | MINOR | `websocket.go:1642` unnamed | **Corrected** — enumerated | FR-002 |
+| m2-6 | MINOR | FR-096 defined before FR-095 | **Corrected** — reordered | FR section |
+| o2-1 | OBS | Disjointness answers a question nobody asked | **Accepted** — replaced with "Ownership derivation" + commands | Ownership derivation |
+| o2-2 | OBS | Verbatim-AC and structural claims all true | **Acknowledged** — re-verified in v3; AC-1…AC-22 untouched | — |
+| o2-3 | OBS | M-7 rebuttal correct and worth keeping | **Kept verbatim** | changelog, FR-095 |
 
 > **v2 changelog.** v1 was reviewed by [grill #1](adr-057-session-unification-spec-review.md) — **verdict BLOCK, 6 CRITICAL / 14 MAJOR / 5 MINOR / 2 OBSERVATION**. All 20 numbered findings are resolved here; **nothing is deferred**. In parallel the operator resolved all 12 items in the Ambiguity Self-Audit. The two classes of change are marked distinctly throughout — `[grill C-n / M-n / m-n]` for a correction forced by the review, `[operator n]` for a settled decision.
 >
@@ -105,14 +155,18 @@ The project has been burned by exactly this shape before, and the code says so:
 
 1. **Every acceptance criterion is verified against REAL store-backed state and a REAL registered turn.** A spy, fake, or mock that records the argument it was handed and returns success is **disallowed**. Where a test needs a store, it gets a real `UnifiedStore` rooted at a `t.TempDir()`. Where it needs a turn, it gets a turn registered in `activeTurnStates`.
 2. **Assertions land on observable artefacts, not on invocation.** Files on disk and their bytes; process IDs that are gone; registry entries that no longer resolve; SPA store buckets. Never "the flush function was called".
+
+> **The one narrow exception to rules 1–2, stated as a rule rather than left as an oversight.** `[grill2 M2-6]` Three properties in this spec are **about** ordering or cost and therefore have no observable artefact to land on: **lock-acquisition order** (#88 / SC-038), **deterministic interleaving at a stated boundary** (#92 / SC-041), and **cache-hit disk-read cost** (#103 / FR-058). Go's race detector is not a lock-order checker and a correct cache hit leaves no trace, so for these three — **and only these three** — a test MAY assert on instrumented invocation, provided the instrumentation is a **production seam required by an FR** (FR-101, FR-102, FR-103) rather than a test-only substitute for the thing under test. A reviewer applying rules 1–2 literally would otherwise have to reject the only tests covering three success criteria. Every other test in this suite is bound by rules 1–2 without exception.
 3. **Cross-process and store-level guarantees copy the shape of `pkg/entity/store_crossprocess_test.go`** — which re-execs the test binary as real OS processes (`//go:build !windows`, verified present). Performance properties assert a **slope** (doubling concurrency must not double wall-clock), never a machine-specific constant.
 4. **Every negative, exclusion or static gate MUST first prove its search is live.** `[grill C-3]` Rules 1–3 address spies, invocation assertions and cross-process guarantees. They say nothing about the third failure shape this migration is full of: a test whose assertion is *"the search returned zero results"*, which is green whenever the search **itself** is broken — a typo'd pattern, a renamed symbol, a fixture that is never compiled, a drifted file path, a parser that silently returns no nodes. Such a test MUST, in the same run and before its zero-assertion, assert a **stated positive lower bound** — that it located at least K of the occurrences it is supposed to be scanning, where K is written down in this spec so drift is visible in code review. A gate that cannot state a positive lower bound is not a gate and MUST NOT be counted as coverage. This rule is FR-085; the bounds are in "Negative-gate positive lower bounds" below.
+>
+> **Rule 4 is GENERATIVE, not a list of eleven.** `[grill2 M2-5]` v2 stated rule 4 universally ("every negative, exclusion or static gate") but **enforced** it against a closed list of eleven rows, and then added two more gates of exactly that shape — #106 and #104 — which sat outside both the bounds table and #91's scope. #106 is the **sole** coverage of FR-023, one of the two security properties of the parentage design, so an unbounded gate left it unenforced while reporting green: C-3's own finding, inside C-3's correction. The membership rule is therefore stated as a **predicate**, not an enumeration: **every row of the TDD plan whose assertion is an exclusion, a zero-count, a "no such thing exists", or a compile-must-fail appears in the bounds table below, and #91 iterates that table rather than a hardcoded list.** Adding a gate without adding its bound is a spec defect a reviewer must reject. The table currently has **thirteen** rows.
 
 **Corollary — distinct ids everywhere.** `pkg/agent/message_parent_real_context_test.go:16-17` already records that its fixture *"happens to make `ToolTranscriptSessionID`"* equal the seeded id, i.e. an existing test would **not** catch a divergence introduced here. Every test written for this spec MUST construct parent and child ids as distinct, non-equal values and assert on **which one** was used.
 
 ### Negative-gate positive lower bounds
 
-`[grill C-3]` Every gate below is one of the eleven identified as vacuity-prone. Each row states the positive assertion that MUST run **first**, in the same test. Counts marked *(verified 2026-08-03)* were measured on `feature/plan-swimlane-board` and are the review anchor: if the measured count drifts, the gate is stale and the reviewer must re-derive it, not relax it.
+`[grill C-3; grill2 M2-5]` Every gate below satisfies rule 4's membership predicate. Each row states the positive assertion that MUST run **first**, in the same test. Counts marked *(verified 2026-08-03)* were measured on `feature/plan-swimlane-board` and are the review anchor: if the measured count drifts, the gate is stale and the reviewer must re-derive it, not relax it. **This table is the input to #91** — #91 iterates it, so a gate added to the TDD plan without a row here is not covered by the mutation check either.
 
 | Test | Gate | Required positive lower bound (assert first, in the same run) |
 |---|---|---|
@@ -122,11 +176,13 @@ The project has been burned by exactly this shape before, and the code says so:
 | #17 `TestMetaWriters_WriterIsolationByteLevel` | byte-comparison of "other" files | MUST assert all **4** files exist with **non-zero** length and a **distinct** content hash before any "unchanged" assertion |
 | #19 `TestMetaDocComments_NoSingleFunnelClaim` | doc-truth grep | MUST locate **both** blocks (`pkg/session/unified.go:776-785` — verified: `writeMetaLocked`'s doc comment opens at `:776` and the "single invalidation/update point" sentence is at `:780` — and `:166-181`) before asserting content |
 | #27 `TestInterruptScope_RequiredByCompiler` | compile-fail fixture | As #3 |
-| #29 `TestRoutingSessionID_ConsumerSetIsClosed` | enumerate reads, assert none outside the set | MUST assert it enumerated **≥ K** reads before asserting none is outside the set. **K = 10 post-change**: 7 role-B predicate reads + 3 pre-arm key reads, **plus** every WS-payload stamping site enumerated by U9/U11/U23, which the test MUST also count and assert ≥ 1. See "Eight sites, seven predicates" below for the derivation. Enumerating zero is the D2 safety property silently unenforced |
+| #29 `TestRoutingSessionID_ConsumerSetIsClosed` | enumerate reads, assert none outside the set | MUST assert it enumerated **≥ K** reads before asserting none is outside the set. **K = 10 post-change = 7 role-B predicate reads + 3 pre-arm reads**, each derived **by site** in "Eight sites, seven predicates" and "Three reads, five sites" below, **plus** the WS-payload stamping sites, for which the bound is **the exact count in the W5 audit artefact (FR-089)** — not "≥ 1". `[grill2 M2-8]` "Read" is defined precisely below; a gate whose enumerator counts identifier occurrences instead of selector expressions will not reproduce K and must be treated as broken, not relaxed. Enumerating zero is the D2 safety property silently unenforced |
 | #58 `TestIsDelegateChildEntry_ZeroNonTestReferences` | grep-for-zero | MUST first assert **≥ 60** non-test **Go** references to `ParentSpawnCallID` (measured: **73** across 9 non-test Go files, verified 2026-08-03), proving the file set and the search both work, before asserting zero for `IsDelegateChildEntry`. **The search MUST be restricted to Go source** — see SC-003 |
 | #81 `TestGateTestsInvertedNotDeleted` | file presence | MUST assert all **12** files are present **and** each contains the marker comment `// ADR-057-W22-inverted`. Scope is presence + marker only (`[grill m-3]`) |
 | #82 `TestW22CommitContainsOnlyTests` | commit-shape gate | MUST first resolve the W22 commit by its marker and assert it exists and its file list is **non-empty**; "commit not found" is a **failure**, not a pass |
 | #83 `TestAllFixturesUseDistinctParentChildIDs` | fixture discovery | MUST assert it discovered **≥ 20** fixtures constructing a parent/child id pair before asserting all are distinct. Discovering zero is a failure |
+| **#104** `TestMigrateLegacy_BytesUnchanged` | golden bytes + "no fused reader exists" | `[grill2 M2-5]` MUST first assert (a) it located **≥ 1** `migrateLegacy` golden fixture and that fixture is **non-empty**, and (b) it located the **2** symbols whose output it is pinning — `migrateLegacy` and `writeUnifiedMetaDirect` (`pkg/session/unified.go:1515`, verified present) — before asserting either the byte equality or the zero-fused-readers clause. A search that finds neither symbol currently passes both clauses |
+| **#106** `TestParentageWalk_NeverReadsOwnerScopeIDOrParentAgentID` | zero reads of two fields over the walk | `[grill2 M2-5]` **"The walk's code path" is defined as an explicit symbol set, not a phrase:** `verifyCallerOwnsSession` and `callerOwnerKey` (`pkg/tools/delegate.go:1973-1979`, `:1966-1968`) plus their transitive callees **within `pkg/tools` and `pkg/session`**, and `LifecycleFilter.matches` (`pkg/session/lifecycle.go:565+`). The test MUST first assert (a) it resolved **all 3** named symbols, (b) it walked **≥ 1** transitive callee edge, and (c) it located **≥ 1** read of `ParentDurableKey` inside that set — proving the walk it is scanning is the real one — before asserting **zero** reads of `OwnerScopeID` or `ParentAgentID`. This gate is the sole coverage of FR-023, a security property: unbounded, it reports green over an empty symbol set |
 
 ### Eight sites, seven predicates
 
@@ -144,6 +200,27 @@ The project has been burned by exactly this shape before, and the code says so:
 | `pkg/agent/turn.go:607` | `getActiveRootTurnStateForSession` |
 
 **Eight distinct functions today. Seven after W13**, which collapses `InterruptSession` and `InterruptSessionHard` into one entry point (FR-041), removing one read. Wherever this spec says "seven role-B predicates" it means the **post-change** set; FR-015's eight citations are the **pre-change** sites to re-base.
+
+### Three reads, five sites — and what "read" means
+
+`[grill2 M2-8]` v2 set #29's K at "7 role-B + **3** pre-arm key reads". The 7 was derived rigorously above; **the 3 was never derived anywhere**, while FR-016 names **five** pre-arm sites. A reviewer could not tell a working gate from a broken one — which is exactly the state binding rule 4 exists to end.
+
+**Definition (normative, for #29 and every gate that counts "reads").** A **read** is an AST `SelectorExpr` whose selector identifier is the field name, appearing in non-test Go source, **excluding** the field's own declaration and excluding the left-hand side of an assignment to it. Comments, string literals, parameter identifiers that merely *carry* the value, and calls to helpers that take the value are **not** reads. An enumerator counting identifier occurrences or grep hits will not reproduce K.
+
+Verified 2026-08-03, each of FR-016's five citations resolved:
+
+| Site | What is actually there | A read? |
+|---|---|---|
+| `pkg/agent/cancel_prearm.go:354` | `if ts.transcriptSessionID != "" {` | **yes** — selector on the turn state |
+| `pkg/agent/cancel_prearm.go:355` | `keys = append(keys, "s:"+ts.transcriptSessionID)` | **yes** |
+| `pkg/agent/subturn.go:585` | `pendingSpawnKeys(parentTS.transcriptSessionID, parentTS.channel, parentTS.chatID)` | **yes** |
+| `pkg/agent/cancel_prearm.go:338` | `return "s:" + sessionID` — inside `preArmKeyForScope(sessionID string, …)` | no — a **parameter**, fed from `:355` |
+| `pkg/agent/cancel_prearm.go:602` | `al.cancelPreArm.consume(time.Now(), preArmKeysForTurn(ts)...)` | no — a **call** taking the whole turn state |
+| `pkg/agent/subturn.go:1147` | `al.cancelPreArm.clearPendingSpawn(pendingSpawnKeysForThisCall...)` | no — consumes a **precomputed slice** |
+
+**Three reads across five sites.** K's pre-arm component is **3** and the number is now derived rather than asserted. The two counts are different things and both are load-bearing: **FR-016's five sites** are what W4 must re-base (three directly, two transitively); **#29's three** are what the gate must enumerate. A gate that enumerates 5 is as broken as one that enumerates 0 — it is counting the wrong construct.
+
+**The WS-payload arm is no longer "≥ 1".** `[grill2 M2-8]` FR-012 requires **every** session-scoped frame's `session_id` to come from `routingSessionID`; a gate satisfied by one stamping site cannot see nineteen minus one. #29's WS bound is **the exact stamping-site count recorded in the W5 audit artefact** (FR-089), and #29 MUST read that artefact rather than hardcoding a number — which also makes the artefact load-bearing instead of decorative.
 
 ---
 
@@ -202,7 +279,7 @@ Everything else this spec cites was re-verified exact, including: `pkg/session/u
 
 | Symbol | Site | Role in this change |
 |---|---|---|
-| `UnifiedStore.AppendTranscript` | `pkg/session/unified.go:802` | **modified** — gains a strict sibling (W3); the counter path becomes in-memory (W24) |
+| `UnifiedStore.AppendTranscript` | `pkg/session/unified.go:802` | **becomes strict** (W3) — the silent-create branch at `:819-823` is **deleted**, not preserved behind a sibling `[grill2 C2-3]`; the counter path becomes in-memory (W24) |
 | `UnifiedStore.createSessionLocked` | `pkg/session/unified.go:441` | **extended** — exported exact-id wrapper (W1); must copy parent `Owner` |
 | `UnifiedStore.mu` | `pkg/session/unified.go:161` | **replaced** — 64-shard `sessionLock` + narrow `cacheMu` (W15) |
 | `UnifiedStore.writeMetaLocked` | `pkg/session/unified.go:786` | **replaced** — four targeted writers (W23) |
@@ -617,6 +694,8 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 
 **Design that makes hierarchy and pagination coherent**: the list endpoint paginates over **root** sessions (`ParentSessionID == ""`) and returns a `child_count` per row; children are fetched on expand via the same endpoint filtered by `parent_session_id`, itself paginated. The client assembles the tree; no layer ever has to hold the whole forest.
 
+> `[grill2 C2-2]` **Where the cost is actually bounded — and where it deliberately is not.** v2 required all four layers to "bound their own cost rather than loading the full set and slicing", which is **not implementable** at the two backend layers: `ListSessions` ranges an unordered `metaCache` map and sorts (`pkg/session/unified.go:1283-1291`), and `ListAllSessions` k-way-merges and de-duplicates N stores before sorting (`pkg/agent/loop.go:5046-5090`). Neither can produce a recency-ordered page without materialising everything, and no v2 FR created an index. **This spec does not add one**, because there is nothing to gain: `metaCache` already holds every session's composed meta — FR-058 asserts a cache hit costs **zero** disk reads — so the sort runs over resident data and touches no disk. The bounded-cost obligation therefore sits where unbounded cost is genuinely paid: the **REST payload** (serialise ≤ `limit` rows) and the **SPA render** (virtualized, viewport-bounded). At the store and loop layers the obligation is *correctness and stability* of the window, plus zero per-session disk reads on a warm cache. Two mechanisms US-19 needed and v2 never required are added: **FR-097** (an in-memory parent index, so `child_count` and orphan detection are O(1) per row rather than O(all sessions) per page) and **FR-098** (cross-store ordering, cursor stability and mid-page store-error behaviour). See FR-092.
+
 **Why this priority**: P2 — it is the difference between "delegations are inspectable" and "the session list is unusable at 24-way fan-out", but no correctness-critical story depends on it. It is called out separately from US-14 because it is a distinct body of work with its own owner (U24) and its own contract change.
 
 **Independent Test**: Create one parent chat with 24 children, then list; assert the first page contains the parent with `child_count == 24` and **zero** children inline, and that expanding it returns the 24 in pages.
@@ -659,7 +738,9 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - When `goal.json` / `loop.json` / `stats.json` is present but corrupt, the load surfaces an error for **that group**.
 - When the root-level delegation admission cap is reached, the next root-level delegation is refused with a tool error returned to the calling agent **and** an `slog.Error` record — the shape at `pkg/tools/delegate.go:1150-1159`. No separate user-facing notification `[operator 6]`.
 - When a grant inheritance finds no grants under the **source** key, the no-op is logged and counted rather than returning silently.
-- When `ListSessions` runs concurrently with `DeleteSession`, the result MAY omit a session deleted during the call and MUST NOT include one whose directory was already gone when the call began; it never panics, deadlocks or returns a partially-composed meta.
+- When `ListSessions` runs concurrently with `DeleteSession`, the result MAY omit a session deleted during the call and MUST NOT include one whose directory was already gone when the call began — **the latter because the reconcile pass prunes cache entries for vanished directories (FR-097a), not because the cache happens to be right**; it never panics, deadlocks or returns a partially-composed meta. `[grill2 M2-7]`
+- When the transcript **mutate** path cannot find the session or the target entry, it emits a counter increment and a WARN rather than returning a bare `false` (FR-099).
+- When a legacy per-agent store errors during a paged `ListAllSessions` merge, the page still returns its rows with `partial_errors` populated and a valid `next_cursor` (FR-098).
 
 **Boundary conditions**
 
@@ -683,7 +764,8 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - **Two sessions collide on an FNV-32a hash mod 64.** Expected: they contend on one shard; correctness is unaffected and throughput is bounded by the filesystem and the admission gate, never by the shard count.
 - **`ClearAll` / `RetentionSweep` run while per-session writes are in flight.** Expected: every shard is taken **in index order** (never hash order); no deadlock, no dropped session.
 - **A `SetMeta` carrying `Status` lands between a counter bump and a flush.** Expected: structurally unrepresentable as a clobber **at the file layer** — the flusher owns `stats.json`, which no other writer touches. **At the cache layer it is entirely representable and MUST be prevented by construction** (FR-084): the `Status` writer mutates only `meta.json`'s field group inside the cached `*UnifiedMeta` and MUST NOT replace the entry, and a `readMetaLocked` cache-miss compose MUST NOT overwrite an entry marked dirty. `[grill C-5]` v1 asserted the file-layer property and stopped there, while W24 moved the counters into the cache — one layer up from where the guarantee was proved.
-- **A child's `stats.json` deltas when the child is `DeleteSession`d mid-flush.** Expected: **flush-then-delete.** `DeleteSession` is a forced flush point (FR-064); the flush completes under the session's shard before the directory is removed, so a concurrent flusher tick cannot recreate a `stats.json` in a deleted directory. A tick that finds the session gone drops its dirty entry without writing.
+- **A child's `stats.json` deltas when the child is `DeleteSession`d mid-flush.** Expected: **flush-then-delete**, per the single ordered sequence stated in FR-064 — acquire shard → flush dirty stats → remove directory → evict `metaCache` → drop dirty-set entry → release. A concurrent flusher tick cannot recreate a `stats.json` in a deleted directory: before step 3 it flushes, after step 3 it finds the session gone and drops its dirty entry without writing. `[grill2 M2-11]` v2 resolved the flusher's half here and left the `metaCache`-eviction ordering FR-033 also requires unstated, while FR-086 described the same window from the reader's side — three requirements over one operation with no agreed order, tested by two different units (#22, #92) with no shared dataset.
+- **A session directory removed out of band** — by `RetentionSweep`, an operator `rm`, or a crashed deploy — while its `metaCache` entry survives. Expected: the next `ListSessions` reconcile pass **prunes** it (FR-097a) and it stops being listed. Verified: today the reconcile pass only **adds** entries (`pkg/session/unified.go:1251-1280`) and never removes one, so such a session is returned forever. The codebase already names this failure in `ClearAll`'s own prune loop (`:1474-1487`): *"leaving ListSessions to resurrect sessions that are gone from disk."* `[grill2 M2-7]`
 - **A page boundary falls between a parent and its children.** Expected: unrepresentable — the list endpoint paginates over **roots only**, and children are a separate, separately-paginated request keyed by `parent_session_id` (US-19). Slicing a flat mixed list is the design this explicitly rejects.
 - **A child whose parent session was deleted.** Expected: rendered as a **root-level row**, not omitted. A session that exists on disk and is unreachable in the UI is R-7's shape with a different surface.
 - **A pre-cutover session that ran a delegation is rendered.** Expected: previously-hidden narration appears; accepted and bounded (R-16). Tool-call and error entries were never filtered anyway — only three writers stamp `ParentSpawnCallID` (`pkg/agent/turn.go:1204`, `:1268`, `pkg/gateway/websocket.go:4254`), while `appendToolCallTranscript` (`pkg/agent/turn.go:1123-1129`) and `appendErrorTranscript` (`:1314-1324`) do not.
@@ -727,6 +809,7 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 - **Data in**: `GET /api/v1/sessions` (list, now paginated), `GET /api/v1/sessions/{id}` (detail — must resolve for a child id).
 - **Data out**: session list/detail wire shape (`pkg/gateway/rest.go:608-665`) plus the new subordinate session type and `ParentSessionID`.
 - **Contract**: `contracts/openapi.yaml`. The `verifier` session type is the working precedent: it required a store enum, an OpenAPI enum and an SPA change (`pkg/gateway/rest.go:783-785` + `?include_verifier=true`).
+- **The response is already a discriminated `oneOf`, and reshaping it is constrained by ADR-034** `[grill2 M2-10]`: `listSessions` (`pkg/gateway/rest.go:795-811`) returns **either** a bare `[]gen.Session` **or** `gen.ListSessions200JSONResponseBody1{Sessions, PartialErrors}`, with generated union accessors at `pkg/api/generated/openapi_types.gen.go:14816-14862`. This project's CLAUDE.md records a hard, precedent-backed rule for exactly this shape: `oneOf` + discriminator wrappers **must be hosted inline in `openapi.yaml`** over internal refs, because oapi-codegen inlines external file refs inside a `oneOf` as anonymous structs and emits non-compiling `As*` accessors (precedent `AgentCreateRequest`). **FR-091 resolves it by collapsing the union to one named `SessionPage` schema**, hosted inline, carrying `partial_errors` as an optional field — removing the discriminator rather than deepening it. U10 owns the change; U18 owns the handler.
 - **On failure**: `GET /api/v1/sessions/{id}` 404s when no `UnifiedMeta` resolves (`pkg/gateway/rest.go:834-844` ← `pkg/agent/loop.go:5012-5039`). Under D11 that 404 is the **required** behaviour for a directory with no `meta.json` (AC-21c).
 - **Development**: real gateway binary, not the Vite dev server.
 
@@ -757,10 +840,11 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 ### External CLI (3P) subagents
 
 - **Data in**: task prompt; the child runs inside a foreign CLI's process tree.
-- **Data out**: transcript entries via `pkg/agent/external_dispatch.go:463`, `:550-555`, `:562-564`.
+- **Data out**: transcript entries via `pkg/agent/external_dispatch.go:463`, `:550-555`, `:562-564` — **which are calls to U3's `turn.go` writers** (`childTS.appendIntermediateAssistantTranscript`, `childTS.appendToolCallTranscript`), not `AppendTranscript` call sites. `[grill2 M2-3]` Verified: `external_dispatch.go` contains **zero** `AppendTranscript` calls; it inherits strictness from U3's conversion with no edit of its own.
 - **Contract**: out of the lifecycle session graph by construction. The cancellation boundary is the process group.
+- **Implementation sites (FR-029)** `[grill2 M2-2]`: `pkg/agent/runner/driver_claude.go:147`, `driver_codex.go:121`, `driver_opencode.go:87` — each `exec.CommandContext(runCtx, binary, args...)` + `cmd.Start()`, with **no** `SysProcAttr` anywhere in the package today (`rg 'SysProcAttr|Setpgid|cmd\.Process\.Kill|Signal\(' pkg/agent/runner/` → zero matches, verified). Pattern to copy: `pkg/sandbox/hardened_exec_linux.go:39-41` (sets `Setpgid`) and `pkg/sandbox/hardened_exec_cancel_unix.go` (group kill). Owner **U22**; POSIX-only, with a no-op Windows path.
 - **On failure**: if the process group survives, the subtree survives — AC-17(c) asserts it does not.
-- **Development**: real subprocess.
+- **Development**: real subprocess, real PIDs, POSIX only.
 
 ---
 
@@ -787,69 +871,121 @@ Five behaviours change as a **consequence** of D1–D8 rather than as a target o
 | **U1** Named ID types | W20 | NEW `pkg/session/ids.go` | — | any existing file |
 | **U2** Strict store API | W3 (store half), W1 (store half) | NEW `pkg/session/unified_api.go` (`AppendTranscriptStrict`, `CreateSessionWithID`) | U1, U4 · **frozen contract from U5** | `pkg/session/unified.go` — request lock-helper changes from U4 |
 | **U3** Turn-local identity | W3 (4 writers), W4 (`turnState.routingSessionID` + 3 resolvers) | `pkg/agent/turn.go` | U1, U2 | `pkg/agent/subturn.go`, `pkg/agent/steering.go`, `pkg/agent/loop.go`, `pkg/agent/events.go` |
-| **U4** Store striping | W15 | `pkg/session/unified.go` (chain 1/3: lock + cache surface), NEW `pkg/session/unified_lock.go` | U1 | `pkg/session/daypartition.go` |
-| **U5** meta split + parent fields + predicate deletion | W23, W2 (store half), W11a (delete `IsDelegateChildEntry`) | `pkg/session/unified.go` (chain 2/3), `pkg/session/daypartition.go`, NEW `pkg/session/unified_meta_files.go` | **U4** | anything in `pkg/agent`, `pkg/gateway`, `pkg/tools`. **MUST NOT change `readMetaLocked`'s signature** — frozen for U2 |
-| **U6** Stats throttle + store pagination | W24, **W16a (store layer)** | `pkg/session/unified.go` (chain 3/3), NEW `pkg/session/unified_stats_flush.go` | **U5** | `pkg/session/daypartition.go` (U5 is done with it; do not re-edit) |
-| **U7** Delegation spawn | W1 (agent half), W4 (subturn half), W10a (`InheritFrom` **call site**), W10d (**child-terminal `CloseSession` call site**), W21c (payload assignment) | `pkg/agent/subturn.go` | U2, U3, U5, **U17** | `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/agent/events.go`, `pkg/security/approvalgrants.go` |
-| **U8** Steering + interrupt | W4 (role-B predicates), W13 (scope collapse) | `pkg/agent/steering.go` | U3 | `pkg/agent/cancel.go`, `pkg/agent/subturn.go` |
-| **U9** Loop payload stamping + loop pagination | W4 (WS payload stamping), W10b (grant read re-key), **W16b (loop layer)** | `pkg/agent/loop.go` | U3, U6, U10, U17, U23 | `pkg/agent/turn.go`, `pkg/agent/subturn.go`, `pkg/agent/events.go` |
+| **U4** Store striping | W15, **W15b (`RetentionSweep` shard-order conversion, FR-050/SC-038)**, **FR-097 parent-index surface**, **FR-101 lock seam** | `pkg/session/unified.go` (chain 1/3: lock + cache surface), **`pkg/session/retention_sweep.go`** (chain 1/3), NEW `pkg/session/unified_lock.go` | U1 | `pkg/session/daypartition.go` |
+| **U5** meta split + parent fields + predicate deletion | W23, W2 (store half), W11a (delete `IsDelegateChildEntry`), **W3a (`AppendTranscript` becomes strict, FR-002)**, **FR-103 read seam** | `pkg/session/unified.go` (chain 2/3), `pkg/session/retention_sweep.go` (chain 2/3), `pkg/session/daypartition.go`, NEW `pkg/session/unified_meta_files.go` | **U4** | anything in `pkg/agent`, `pkg/gateway`, `pkg/tools`. **MUST NOT change `readMetaLocked`'s signature** — frozen for U2 |
+| **U6** Stats throttle + store pagination | W24, **W16a (store layer, FR-092/FR-097 consumer)**, **FR-097a prune**, **FR-102 barrier** | `pkg/session/unified.go` (chain 3/3), `pkg/session/retention_sweep.go` (chain 3/3), NEW `pkg/session/unified_stats_flush.go` | **U5**, **U28** | `pkg/session/daypartition.go` (U5 is done with it; do not re-edit), `pkg/config/**` — **U28 owns the keys; U6 only reads them** |
+| **U7** Delegation spawn | W1 (agent half), W4 (subturn half), W10a (`InheritFrom` **call site**), W10d (**child-terminal `CloseSession` call site**), W21c (payload assignment), FR-100 doc-rot in `subturn.go` | `pkg/agent/subturn.go` | U2, U3, U5, **U17a**, **U17b** | `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/agent/events.go`, `pkg/security/approvalgrants.go`, `pkg/agent/session_end.go` |
+| **U8** Steering + interrupt | W4 (role-B predicates), W13 (scope collapse), **W13b (`pkg/commands` interface + stub)** | `pkg/agent/steering.go`, **`pkg/commands/runtime.go`**, **`pkg/commands/cmd_cancel_test.go`** | U3 | `pkg/agent/cancel.go`, `pkg/agent/subturn.go` |
+| **U9** Loop payload stamping + loop pagination | W4 (WS payload stamping), W10b (grant read re-key), **W16b (loop layer, FR-098)**, FR-100 doc-rot in `loop.go` | `pkg/agent/loop.go` | U3, U6, U10, U17a, U23 | `pkg/agent/turn.go`, `pkg/agent/subturn.go`, `pkg/agent/events.go` |
 | **U10** Contracts + regeneration | W5a, **W2b (OpenAPI enum)**, **W16e (pagination + `parent_session_id` filter + `child_count`)** | `contracts/**`, `pkg/api/generated/**`, `src/lib/api/generated/**` | — | any hand-written Go/TS consumer |
 | **U11** Gateway WS | W3 (streamed write, `pkg/gateway/websocket.go:4256`), W5b (frame stamping), W10c (WS-side teardown) | `pkg/gateway/websocket.go` | U2, U10, U17, U23 | `pkg/gateway/rest.go`, `pkg/gateway/replay.go`, `pkg/gateway/approvals.go` |
-| **U12** SPA store + API client | W5c, W19b (drill-down), W2c (SPA enum), **W16d (client paging + tree assembly)** | `src/store/chat.ts`, `src/lib/api.ts`, `src/routes/_app/sessions.$sessionId.tsx` | U10 | `src/lib/api/generated/**`, `src/components/layout/Sidebar.tsx`, `src/components/search/SearchModal.tsx` — **U24 owns those** |
+| **U12** SPA store + API client | W5c, W19b (drill-down), W2c (SPA enum), **W16d (client paging + tree assembly)**, **W16h (`flat=true` usage accounting, FR-104)** | `src/store/chat.ts`, `src/lib/api.ts`, `src/routes/_app/sessions.$sessionId.tsx`, **`src/components/screens/UsageScreen.tsx`**, **`src/components/screens/UsageScreen.test.tsx`**, **`src/lib/__adr052__sessionVisibilityParams.test.ts`** | U10 | `src/lib/api/generated/**`, `src/components/layout/Sidebar.tsx`, `src/components/search/SearchModal.tsx` and **their** tests — **U24 owns those** |
 | **U13** Lifecycle edge + index | W6 | `pkg/session/lifecycle.go`, NEW `pkg/session/lifecycle_index.go` | — | `pkg/session/lifecycle_lock.go` (read-only precedent), `pkg/session/unified.go` |
-| **U14** Delegate tool + inbox producer | W7a (refuse), W9a (cancel kills shells), W12 (ancestor walk), W14 (status/leak/eviction), W21b (`DelegateTaskState.SessionID`), W6 doc-rot in `list_jobs_sources.go`, **W12b (`message_parent.go:640` producer)** | `pkg/tools/delegate.go`, `pkg/tools/list_jobs_sources.go`, **`pkg/tools/message_parent.go`** | U13 | `pkg/tools/shell.go`, `pkg/tools/session.go`, `pkg/tools/inspect_session.go` |
+| **U14** Delegate tool + inbox producer | W7a (refuse), W9a (cancel kills shells), W12 (ancestor walk), W14 (status/leak/eviction), W21b (`DelegateTaskState.SessionID`), W6 doc-rot in `list_jobs_sources.go`, **W12b (`message_parent.go:640` producer)**, **W13c (consume U8's collapsed signature at `delegate.go:363-364`, `:572-578`)**, FR-100 doc-rot in `delegate.go` | `pkg/tools/delegate.go`, `pkg/tools/list_jobs_sources.go`, **`pkg/tools/message_parent.go`** | U13, **U8** | `pkg/tools/shell.go`, `pkg/tools/session.go`, `pkg/tools/inspect_session.go`, `pkg/tools/handoff.go` — **U22 owns it** |
 | **U15** Cancel orchestration | W8, W4 (pre-arm keys) | `pkg/agent/cancel.go`, `pkg/agent/cancel_prearm.go`, `pkg/agent/orphan_watch.go` | U8, U13, U16 | `pkg/agent/steering.go` |
-| **U16** Background shells | W9b | `pkg/tools/shell.go`, `pkg/tools/session.go` | — | `pkg/tools/delegate.go` |
-| **U17** Approvals + session teardown | W10 (grant store **signature**, pending registry re-key, `CloseSession` **entry point**, tool manifest) | `pkg/security/approvalgrants.go`, `pkg/gateway/approvals.go`, `pkg/agent/session_end.go`, `pkg/agent/tool_manifest.go` | — | `pkg/agent/loop.go`, `pkg/agent/subturn.go` |
+| **U16** Background shells | W9b | `pkg/tools/shell.go`, `pkg/tools/session.go`, **`pkg/tools/shell_process_unix.go`** | — | `pkg/tools/delegate.go`, `pkg/agent/runner/**` — **U22 owns the 3P drivers** |
+| **U17a** Approvals | W10 (grant store **signature**, pending registry re-key, tool manifest), FR-100 doc-rot in `approvals.go` | `pkg/security/approvalgrants.go`, `pkg/gateway/approvals.go`, `pkg/agent/tool_manifest.go` | — | `pkg/agent/loop.go`, `pkg/agent/subturn.go`, **`pkg/agent/session_end.go` — U17b owns it** |
+| **U17b** Session teardown | **W10e** (`CloseSession` **entry point** + the store-flush and `metaCache`-eviction FR-033/FR-064 require at teardown) | **`pkg/agent/session_end.go`** | **U6**, U17a | `pkg/agent/subturn.go` — **the child-terminal call site is U7's line item W10d** |
 | **U18** Read boundaries + REST | W11b (4 filter sites), **W16c (REST layer + nested listing)**, W19a (drill-down endpoint), **W18b (uploads cascade wiring)** | `pkg/gateway/replay.go`, `pkg/gateway/rest.go`, `pkg/agent/verifier_adjudication.go`, `pkg/tools/inspect_session.go` | U5, U9, U10, U13, U20 | `pkg/session/daypartition.go` — **the predicate deletion is U5's line item W11a** |
-| **U19** Admission + wiring + boot sweep | W17, W7b (fail-closed wiring), **W6b (boot-sweep reconcile, FR-078)** | `pkg/agent/admission.go`, `pkg/agent/session_messaging_wire.go`, **`pkg/agent/boot_sweep.go`** | U13, U14 | `pkg/agent/subturn.go` |
+| **U19** Admission + wiring + boot sweep | W17 (**reads U28's seeded cap, FR-095**), W7b (fail-closed wiring), **W6b (boot-sweep reconcile, FR-078)**, **W13d (re-wire `SetCancelHooks` at `session_messaging_wire.go:166` onto U8's collapsed signature)**, FR-100 doc-rot in `session_messaging_wire.go` | `pkg/agent/admission.go`, `pkg/agent/session_messaging_wire.go`, **`pkg/agent/boot_sweep.go`** | U13, U14, **U8**, **U28** | `pkg/agent/subturn.go`, `pkg/config/**` — **U28 owns the seed** |
 | **U20** Uploads primitive | **W18a** (primitive only) | `pkg/tools/normalization.go`, `pkg/media/tempdir.go`, `pkg/media/store.go` | — | `pkg/gateway/rest.go` — **the cascade wiring is U18's line item W18b**; U20 only exposes `RemoveSessionUploadsTree(ids []string) error` |
 | **U21** Test inversions | W22 | **exactly** the 12 named `*_test.go` files, and nothing else | all behaviour units | **any non-test file; any test file not in the twelve** |
-| **U22** Turn-adjacent transcript writers | W3 (`external_dispatch.go:463`, `:550-555`, `:562-564`; `approval_transcript.go:179`, `:183`) | **NEW owner:** `pkg/agent/external_dispatch.go`, `pkg/agent/approval_transcript.go` | U1, U2 | `pkg/agent/turn.go`, `pkg/agent/subturn.go` |
+| **U22** 3P process group + mutate path + hand-off writers | **RE-SCOPED** `[grill2 M2-3]`: **W9c (FR-029 `Setpgid` + group kill)**, **W3b (FR-099 mutate-path strictness)**, **W3c (`handoff.go:205`, `:386` writers)**, FR-100 doc-rot in `external_dispatch.go` | **NEW owner:** `pkg/agent/runner/driver_claude.go`, `pkg/agent/runner/driver_codex.go`, `pkg/agent/runner/driver_opencode.go`, NEW `pkg/agent/runner/procgroup_unix.go`, NEW `pkg/agent/runner/procgroup_windows.go`, **`pkg/tools/handoff.go`**; retained: `pkg/agent/external_dispatch.go`, `pkg/agent/approval_transcript.go` | U1, U2, U5 | `pkg/agent/turn.go`, `pkg/agent/subturn.go`, `pkg/tools/delegate.go` |
 | **U23** Event payload types | **W21a** (`SubTurnSpawnPayload.SessionID` `events.go:441`, `SubTurnEndPayload.SessionID`), W5d (`ProducingSessionID` on session-scoped payloads) | **NEW owner:** `pkg/agent/events.go` | U1, U10 | every consumer of these types — U7/U9/U11 assign them |
-| **U24** SPA session hierarchy | **W16f (sidebar tree), W16g (search tree)** — operator decision 1 | **NEW owner:** `src/components/layout/Sidebar.tsx`, `src/components/search/SearchModal.tsx`, NEW `src/components/sessions/SessionTree.tsx` | U10, U12 | `src/store/chat.ts`, `src/lib/api.ts` — request shape changes from U12 |
+| **U24** SPA session hierarchy | **W16f (sidebar tree), W16g (search tree)** — operator decision 1; **W22b (invert the two SPA component tests)** | **NEW owner:** `src/components/layout/Sidebar.tsx`, `src/components/search/SearchModal.tsx`, NEW `src/components/sessions/SessionTree.tsx`, **`src/components/layout/Sidebar.test.tsx`**, **`src/components/layout/Sidebar.focus-trap.test.tsx`**, **`src/components/layout/Sidebar.m5.test.tsx`**, **`src/components/search/SearchModal.test.tsx`** | U10, U12 | `src/store/chat.ts`, `src/lib/api.ts` — request shape changes from U12 |
+| **U25** List-consumer wiring | **NEW** `[grill2 C2-1]` **W16i** — consume U9's paginated `ListAllSessions` signature | **NEW owner:** `pkg/sysagent/tools/deps.go`, **`pkg/sysagent/tools/diag.go`**, `pkg/gateway/gateway.go`, `pkg/gateway/rest_stats.go` | U6, U9 | `pkg/gateway/rest.go`, `pkg/gateway/websocket.go`, `pkg/agent/loop.go` |
+| **U26** Task/goal-path store consumers | **NEW** `[grill2 C2-1, C2-3]` **W3d** (9 `AppendTranscript` sites), **W16j** (consume paginated `ListSessions`) | **NEW owner:** `pkg/agent/task_executor.go`, `pkg/agent/goal_loop.go`, `pkg/agent/goal_triggers.go` | U2, U5, U6 | `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/agent/subturn.go` |
+| **U28** Config keys + seeded defaults | **NEW** `[grill2 C2-1, M2-1]` **W24b** (flush-interval key, FR-067), **W17b** (seed `subturn.max_concurrent`, FR-095) | **NEW owner:** `pkg/config/config.go`, `pkg/config/defaults.go` | — | every reader of these keys — U6 and U19 consume them |
 
-**Disjointness proof.** Every path above appears in exactly one row, with one declared exception: `pkg/session/unified.go` is owned by the **U4→U5→U6 chain** (Rule 1), whose members are in three consecutive waves and never run concurrently. `Sidebar.tsx` moved from U12 to U24 and was removed from U12's row; `message_parent.go`, `boot_sweep.go`, `events.go`, `external_dispatch.go` and `approval_transcript.go` were unowned in v1 and now have exactly one owner each `[grill M-1]`.
+> **There is no U27.** The number is skipped deliberately so that no reader mistakes a three-unit addition for a four-unit one; U25/U26/U28 are the three new units and the count is 28 rows for 27 units plus the U17a/U17b split. *(Unit total: 28 — U1…U16, U17a, U17b, U18…U26, U28.)*
+
+### Ownership derivation
+
+`[grill2 C2-1, o2-1]` **v2 proved the wrong property.** Its "Disjointness proof" was true and was independently re-verified by grill #2 — but two units writing the same file was never the observed failure mode. **A file with *no* unit was**, and v2 closed grill #1's exhaustiveness finding by adding owners for the five files that review happened to name, then declared the table exhaustive. Ten more were never looked for; six stopped the build the moment U4 or U8 merged.
+
+So ownership is derived **from the symbols this spec changes**, not from any review's file list, and the commands are printed here so the check is reproducible in review rather than asserted:
+
+```bash
+# For each symbol this spec modifies, every non-test file that references it
+# must appear in exactly one ownership row.
+for sym in 'us\.mu' 'metaCache' 'cacheLoadFailures' \
+           'ListSessions' 'ListAllSessions' \
+           'InterruptSession\b' 'InterruptSessionHard\b' \
+           'InterruptBySessionKey\b' 'InterruptBySessionKeyHard\b' \
+           'AppendTranscript\(' 'IsDelegateChildEntry' 'ParentSpawnCallID' \
+           'Inherit\(' 'InheritFrom\(' 'fetchSessions' \
+           'mutateToolCallInTranscript' 'SysProcAttr' 'Setpgid'; do
+  echo "== $sym"; rg -l "$sym" --glob '*.go' --glob '!*_test.go'
+done
+rg -l 'fetchSessions' src/ --glob '*.ts' --glob '*.tsx'
+```
+
+**Both properties are asserted, and both were machine-checked** (see the completeness check for the exact commands run):
+
+- **Disjoint** — every path appears in exactly one row, with two **declared** chain exceptions under Rule 1: `pkg/session/unified.go` and `pkg/session/retention_sweep.go` are both owned by the **U4→U5→U6 chain**, whose members occupy three consecutive waves and never run concurrently.
+- **Exhaustive** — every file the enumeration above returns has an owner or an explicit out-of-scope reason. The ten v2 left unowned are now assigned: `retention_sweep.go` → the U4→U5→U6 chain `[grill2 M2-12 — the one unowned file v2 named in a success criterion, SC-038]`; `pkg/commands/runtime.go` + `cmd_cancel_test.go` → U8; `deps.go`, `gateway.go`, `rest_stats.go` → U25; `goal_triggers.go`, `goal_loop.go`, `task_executor.go` → U26; `pkg/config/**` → U28; `pkg/agent/runner/**` and `handoff.go` → U22; plus `UsageScreen.tsx` and the four SPA test files → U12/U24 `[grill2 M2-9]`.
+
+> **The mechanical derivation found an eleventh file the review did not.** `pkg/sysagent/tools/diag.go:212` calls `metas, errs := t.deps.ListSessions()` through the `deps.ListSessions` func field at `deps.go:197` — so FR-092's signature change makes it a **hard compile break**, and it appeared in neither v2's table nor grill #2's list of ten. It is assigned to **U25** alongside the `deps.go` field it consumes. This is precisely grill #2's stated prediction — *"re-derive ownership mechanically, otherwise grill #3 finds the eleventh file"* — and it is recorded here as evidence that the derivation, not the review, is now the source of the table. `pkg/tools/shell_process_unix.go:14` (`SysProcAttr{Setpgid: true}`) was likewise unowned and is assigned to **U16**, whose background-shell subsystem it belongs to; it is also the nearest in-house precedent for FR-029.
+
+**Explicitly out of scope, with reasons** (these appear in the enumeration but are read-only precedent or unrelated subsystems, and no unit writes them): `pkg/session/lifecycle_lock.go`, `pkg/session/message_inbox.go`, `pkg/entity/lock.go` (striping/index precedents); `pkg/sandbox/hardened_exec*.go`, `pkg/sandbox/spawn_bg*.go` (the `Setpgid` precedent for FR-029); `pkg/fileutil/file.go` (the `Sync()` and `MkdirAll` behaviour this spec reasons about but does not change); `pkg/daemon/daemon*.go` and `pkg/tools/browser/cdppipe/allocator.go` (unrelated `SysProcAttr` uses); `pkg/session/usage.go` (a **comment-only** mention of `ListSessions` at `:193`; it declares no `UnifiedStore` method — verified, unlike `retention_sweep.go`, which declares one and was a genuine gap).
+
+**`retention_sweep.go` is `UnifiedStore` internals in all but filename** — verified: it declares exactly one method (`func (us *UnifiedStore) RetentionSweep`, `:25`), takes `us.mu` at `:136`/`:141` and touches `metaCache` at `:127`/`:131`/`:139` — five references in total, and it is the **only** file besides `unified.go` holding either. FR-048 deletes `us.mu`; FR-050, SC-038 and Ambiguity item 13 name `RetentionSweep` by name. Putting it anywhere but the chain would split one lock surface across two owners.
 
 ### Integration order
 
 ```
 Wave A  (parallel, no interdependencies)
   U1  types            U10 contracts+regen    U13 lifecycle index
-  U16 shells           U17 approvals          U20 uploads primitive
+  U16 shells           U17a approvals         U20 uploads primitive
+  U28 config keys
 
 Wave B  (parallel)                            [needs Wave A]
   U4  striping            (needs U1)
-  U14 delegate tool       (needs U13)
   U23 event payloads      (needs U1,U10)
   U12 SPA store+client    (needs U10)
 
 Wave C  (parallel)                            [needs Wave B]
-  U5  meta split          (needs U4)   ← SERIAL after U4, same file
-  U2  strict store API    (needs U1,U4 + U5's frozen readMetaLocked signature)
-  U19 admission+wiring    (needs U13,U14)
+  U5  meta split          (needs U4)   ← SERIAL after U4, same files
+  U2  strict store API    (needs U1,U4 | U5 same-wave: FROZEN CONTRACT, not an ordering edge)
   U24 SPA hierarchy       (needs U10,U12)
 
 Wave D  (parallel)                            [needs Wave C]
-  U6  stats throttle      (needs U5)   ← SERIAL after U5, same file
+  U6  stats throttle      (needs U5,U28)  ← SERIAL after U5, same files
   U3  turn.go             (needs U1,U2)
-  U11 gateway WS          (needs U2,U10,U17,U23)
-  U22 3P + approval writers (needs U1,U2)
+  U11 gateway WS          (needs U2,U10,U17a,U23)
+  U22 3P group + mutate   (needs U1,U2,U5)
 
 Wave E  (parallel)                            [needs Wave D]
-  U7  subturn             (needs U2,U3,U5,U17)
-  U8  steering            (needs U3)
-  U9  loop.go             (needs U3,U6,U10,U17,U23)
+  U8  steering+commands   (needs U3)
+  U9  loop.go             (needs U3,U6,U10,U17a,U23)
+  U17b session teardown   (needs U6,U17a)
 
 Wave F  (parallel)                            [needs Wave E]
+  U7  subturn             (needs U2,U3,U5,U17a,U17b)
+  U14 delegate tool       (needs U13,U8)      ← MOVED from Wave B [grill2 C2-4]
   U15 cancel              (needs U8,U13,U16)
   U18 read boundaries+REST(needs U5,U9,U10,U13,U20)
+  U25 list-consumer wiring(needs U6,U9)
+  U26 task/goal consumers (needs U2,U5,U6)
 
-Wave G  (own commit, no behaviour files)
+Wave G  (parallel)                            [needs Wave F]
+  U19 admission+wiring    (needs U13,U14,U8,U28)  ← MOVED from Wave C [grill2 C2-4]
+
+Wave H  (own commit, no behaviour files)
   U21 test inversions
 ```
 
-**The true critical path is four to six sequential steps, not "21 units in 5 waves".** `[grill o-1 — accepted]` The storage cluster is a forced serial chain on one file (`U4 → U5 → U6`, three waves by construction) and the read/REST cluster is gated behind it twice over (`U4 → U5 → U2 → U3 → U9 → U18` is six). Twenty-four units buys parallel **breadth**, not a shorter path. If an implementer chooses to merge U4/U5/U6 into one agent taking three commits in the stated order, that is compliant with Rule 1 and loses nothing — the ownership overhead exists to stop *concurrent* writes, and a chain is not concurrent.
+**The true critical path is six to seven sequential steps, not "28 units in 8 waves".** `[grill o-1 — accepted; recounted in v3]` The storage cluster is a forced serial chain on two files (`U4 → U5 → U6`, three waves by construction) and the read/REST cluster is gated behind it twice over (`U4 → U5 → U2 → U3 → U9 → U18` is six). The longest path is now `U1 → U4 → U5 → U3 → U8 → U14 → U19` — **seven** — created by C2-4's correction, which is the honest cost of making the interrupt-collapse dependency explicit rather than discovering it as a mid-wave compile break. Twenty-eight units buys parallel **breadth**, not a shorter path. If an implementer chooses to merge U4/U5/U6 into one agent taking three commits in the stated order, that is compliant with Rule 1 and loses nothing — the ownership overhead exists to stop *concurrent* writes, and a chain is not concurrent.
+
+**What moved in v3, and why** `[grill2 C2-4]`:
+
+| Unit | v2 wave | v3 wave | Reason |
+|---|---|---|---|
+| **U14** | B | **F** | Owns `delegate.go:363-364` / `:572-578`, whose func types **are** FR-041's collapsing signature. U8 (Wave E) changes it. v2 declared neither the work item nor the dependency |
+| **U19** | C | **G** | Owns `session_messaging_wire.go:166`, `SetCancelHooks(al.InterruptBySessionKey, al.InterruptBySessionKeyHard)` — same signature. Also now needs U14 (unchanged) and U28 |
+| **U17** → **U17a** | A | A | Approvals half has no store dependency; unchanged |
+| **U17** → **U17b** | A | **E** | FR-064 requires a forced flush and FR-033 a `metaCache` eviction on the child `CloseSession` teardown. Verified: `CloseSession` (`pkg/agent/session_end.go:32-80`) touches `forgetSession`, `approvalGrants.ClearSession`, the recap claim and the idle ticker — **it holds no store reference at all**. The flush API is U6's (Wave D); v2 put the whole of U17 in Wave A with `Depends on: —` |
+| **U22** | D | D | Re-scoped, not re-waved; its new work (`pkg/agent/runner/**`, `handoff.go`) needs only U2/U5 |
 
 **Hard orderings (violating any of these is a defect, not a preference):**
 
@@ -858,6 +994,9 @@ Wave G  (own commit, no behaviour files)
 3. **U10 (contracts) before U9, U11, U12, U23, U24.** Constraint #8: schema first, generated types only, one atomic commit. U10 is Wave A.
 4. **U5 before U18.** Deleting the four filter sites before the child owns its own file un-hides narration with nothing gained. U5 is Wave C, U18 is Wave F.
 5. **U21 last, in its own commit.** Bisection must be able to distinguish "the contract changed" from "the behaviour regressed".
+5a. **U8 (W13) before U14, U15 and U19.** `[grill2 C2-4]` FR-041's compile-breaking surface is five files with five owners; three of them are not U8. Landing U14 or U19 before U8 leaves the tree uncompilable mid-wave. U8 is Wave E; U14/U15 are Wave F; U19 is Wave G.
+5b. **U28 (config keys) before U6 and U19.** `[grill2 M2-1, C2-1]` FR-067's flush interval and FR-095's seeded root cap are both **MUST** config keys with no v2 owner. U28 is Wave A; U6 is Wave D; U19 is Wave G.
+5c. **U6 before U17b.** `[grill2 C2-4]` The teardown flush FR-064 requires at `CloseSession` does not exist until U6 builds it.
 6. **W11's two halves must land in the same integration window.** `[grill §5, W11]` U5 deletes `IsDelegateChildEntry` (Wave C) and U18 deletes its four call sites (Wave F). **The intermediate tree does not compile.** This is enforced, not hoped: U5 MUST land the deletion behind a `//lint:ignore` deprecation shim that keeps the method compiling but always returns `false`, and U18's commit MUST remove both the shim and the call sites. Test #58's positive lower bound (see Rule 4) fails if the shim survives U18.
 7. **U6 → U9 → U18 → U12/U24 for pagination.** `[grill M-1]` FR-068/FR-092 requires four layers; each now has exactly one owner, and they only work in this order because each calls the one below it.
 
@@ -883,6 +1022,15 @@ Wave G  (own commit, no behaviour files)
 | U24 | the tree-assembly helper and `child_count`-bearing `Session` type from the API client | U12 |
 | U15 | the descendant-set accessor computed in PHASE A | U8 |
 | U22 | `AppendTranscriptStrict` | U2 |
+| **U14 / U15 / U19** | **frozen:** the collapsed `Interrupt(sessionID, hint string, scope InterruptScope) ([]string, error)` signature, published once by U8 and unchanged for the rest of the change set (Rule 7) `[grill2 C2-4]` | **U8** |
+| **U17b** | **frozen:** the forced-flush entry point `FlushSessionStats(sessionID string) error` and the cache-eviction entry point `EvictSessionMeta(sessionID string)`, both taking the session's shard internally, signatures fixed before U17b lands `[grill2 C2-4]` | **U6** |
+| **U7** | the child-terminal `CloseSession(sessionID, trigger string)` **behaviour** now also flushing stats and evicting `metaCache` — the signature is unchanged and frozen | **U17b** |
+| **U6 / U19** | the flush-interval key and the seeded `agents.defaults.subturn.max_concurrent` default `[grill2 M2-1]` | **U28** |
+| **U6** | the `metaCache`-adjacent parent index and its `cacheMu` guard (FR-097) | **U4** |
+| **U25** | the paginated `ListAllSessions(limit, offset int, parentSessionID string, flat bool)` signature `[grill2 C2-1]` | **U9** |
+| **U26** | the strict `AppendTranscript` and the paginated `ListSessions` | **U5**, **U6** |
+| **U24** | the four SPA component-test inversions are U24's own; the `api.ts`/ADR-052 params tests are U12's `[grill2 M2-9]` | **U12** |
+| **U12** | the `flat=true` list contract backing per-session usage accounting (FR-104) | **U10**, **U18** |
 
 ---
 
@@ -950,6 +1098,20 @@ Wave G  (own commit, no behaviour files)
 - **And** `AbandonedWritesSuppressed()` has increased by **exactly one** across the call
 - **But** the assertion is on the log record and the counter **delta** — never on the counter's existence, which `[grill C-2]` verified is already satisfied today at `pkg/agent/turn.go:1297` and already covered by `pkg/agent/turn_test.go:221`
 
+#### BDD-109 — Scenario: A transcript mutate against a missing session is counted and logged, not silently false
+
+**Traces to**: User Story 1, Acceptance Scenario 3
+**Category**: Error
+
+- **Given** a real `UnifiedStore` and a turn whose `transcriptStore` is wired
+- **And** a session id for which no `meta.json` exists, and a `callID` that therefore cannot resolve
+- **When** `replaceToolCallInTranscript` runs and reaches `mutateToolCallInTranscript` (`pkg/agent/approval_transcript.go:188+`)
+- **Then** a WARN naming the session id and the call id is emitted **and** a counter increases by exactly one
+- **And** the same holds for the "session exists but the entry does not" case, which MUST be distinguishable in the log record
+- **But** today it returns a bare `false` with no signal `[grill2 M2-3]` — the read-modify-write twin of AC-1's silent append, and the one genuine hazard on the path v2 assigned U22 a factually empty work item for
+
+---
+
 #### BDD-05 — Scenario: Routing and session ids are distinct types
 
 **Traces to**: User Story 1, Acceptance Scenario 5
@@ -971,7 +1133,7 @@ Wave G  (own commit, no behaviour files)
 - **And** only then asserts its exclusion property
 - **But** a run in which the search located fewer than `<K>` **fails**, and never reports the exclusion as satisfied
 
-**Examples**: the eleven rows of "Negative-gate positive lower bounds" — #3, #9, #12, #17, #19, #27, #29, #58, #81, #82, #83.
+**Examples**: **every** row of "Negative-gate positive lower bounds" — currently **thirteen**: #3, #9, #12, #17, #19, #27, #29, #58, #81, #82, #83, **#104**, **#106**. `[grill2 M2-5]` The example set is **generated by rule 4's membership predicate**, not fixed: any TDD-plan row whose assertion is an exclusion, a zero-count, a "no such thing exists" or a compile-must-fail belongs here, and #91 iterates this table. v2 listed eleven and then added #104 and #106 outside it — one of which (#106) is the sole coverage of FR-023, a security property.
 
 ---
 
@@ -1201,7 +1363,7 @@ Wave G  (own commit, no behaviour files)
 **Category**: Happy Path
 
 - **Given** the merged tree
-- **When** `pkg/session/lifecycle.go:225-228`, `:571-575` and `pkg/tools/list_jobs_sources.go:311-315` are read
+- **When** `pkg/session/lifecycle.go:225-228`, `:572-575` and `pkg/tools/list_jobs_sources.go:311-315` are read
 - **Then** none describes `ParentDurableKey` as shared between a parent and its children
 
 ---
@@ -1560,6 +1722,19 @@ Wave G  (own commit, no behaviour files)
 
 ---
 
+#### BDD-114 — Scenario: No doc comment survives describing the retired four-entry-point interrupt API
+
+**Traces to**: User Story 9, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** the merged tree after W13
+- **When** a doc-truth gate greps non-test Go for `InterruptSession`, `InterruptSessionHard`, `InterruptBySessionKey` and `InterruptBySessionKeyHard`
+- **Then** it first asserts it located **≥ 1** reference to the **new** collapsed entry point (proving the search and the file set both work)
+- **And** then asserts **zero** surviving references to the four retired names, in code **or** comments
+- **But** v2 left ~25 such references across eight files (`cancel_prearm.go`, `external_dispatch.go`, `loop.go`, `orphan_watch.go`, `subturn.go`, `turn.go`, `config.go`, `approvals.go`) `[grill2 C2-4]` — not compile breaks, which is why their owners need no dependency on U8, but exactly the doc-rot FR-022/FR-037/FR-059 already gate elsewhere
+
+---
+
 #### BDD-49 — Scenario: A synchronous delegation reports a non-empty activity snapshot
 
 **Traces to**: User Story 10, Acceptance Scenario 1
@@ -1672,6 +1847,21 @@ Wave G  (own commit, no behaviour files)
 - **And** the result MUST NOT contain a session whose directory was already absent when the call began
 - **And** no call panics, deadlocks, or returns a partially-composed meta
 - **But** v1 stated **no** consistency model for `ListSessions` after striping `[grill M-14]` — today the whole method runs under `us.mu.Lock()` and the doc comment at `pkg/session/unified.go:1240-1246` says exactly why ("an RLock cannot be upgraded to a Lock without risking deadlock"), so splitting it creates a window that must be specified rather than discovered
+
+---
+
+#### BDD-110 — Scenario: A directory deleted out of band stops being listed
+
+**Traces to**: User Story 11, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** a real `UnifiedStore` with sessions `A` and `B` both loaded into `metaCache`
+- **And** `B`'s directory removed **out of band** — by `os.RemoveAll` directly, not through `DeleteSession`
+- **When** `ListSessions` runs
+- **Then** the reconcile pass **prunes** `B`'s cache entry under `B`'s shard and updates the parent index (FR-097a)
+- **And** the returned set contains `A` and **not** `B`
+- **And** a session excluded by `cacheLoadFailures` (a construction-time load failure, Ambiguity item 8) is **not** disturbed — it stays excluded for the process lifetime, which is a different set from "directory is gone"
+- **But** today the reconcile pass only **adds** entries (`pkg/session/unified.go:1251-1280`) and `B` is returned forever `[grill2 M2-7]`. The in-house precedent is `ClearAll`'s stat-and-prune loop (`:1483-1487`), whose own comment names this exact outcome: *"leaving ListSessions to resurrect sessions that are gone from disk"*
 
 ---
 
@@ -1947,6 +2137,21 @@ Wave G  (own commit, no behaviour files)
 
 ---
 
+#### BDD-108 — Scenario: The root-delegation cap is defined on a default install, with no operator override
+
+**Traces to**: User Story 15, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** a **fresh install** with `agents.defaults.subturn.max_concurrent` **not set by any operator**
+- **When** the root-delegation admission gate resolves its cap
+- **Then** the resolved value is the **seeded default of 16** from `pkg/config/defaults.go` (U28)
+- **And** the gate is **active** — the 17th concurrent root delegation is refused, not admitted
+- **And** the resolution did **not** pass through `Performance.EffectiveMaxParallelAgents()` (FR-095)
+- **And** a configured value of `≤ 0` is surfaced as a boot-time configuration error, never as "no gate"
+- **But** every v2 test set the key explicitly to 24 `[grill2 M2-1]`, so **the configuration every install ships with had zero coverage** — and with no seed, `MaxConcurrent == 0` sent the resolver down exactly the branch FR-095 forbids (`pkg/agent/subturn.go:64-69`, verified; `rg SubTurn pkg/config/defaults.go` returns nothing)
+
+---
+
 #### BDD-78 — Scenario: Deleting a parent removes every descendant's uploads directory
 
 **Traces to**: User Story 16, Acceptance Scenario 1
@@ -2075,6 +2280,20 @@ Wave G  (own commit, no behaviour files)
 - **And** zero subordinate sessions appear as top-level rows
 - **But** the children are not omitted from the system — they remain reachable, a page at a time, via `parent_session_id`
 
+#### BDD-112 — Scenario: `child_count` and orphan detection cost O(1) per row, not O(all sessions)
+
+**Traces to**: User Story 19, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** a store holding `M` sessions of which `R` are roots, with `R ≪ M`
+- **When** a page of `n` roots is listed
+- **Then** each row's `child_count` and each candidate's orphan status are resolved from the **in-memory parent index** (FR-097) in O(1) per row
+- **And** the total work attributable to `child_count` and orphan detection is O(n), **not** O(M)
+- **And** the index is updated on create, meta write, delete, eviction and reconcile — asserted by mutating each path and re-reading the count
+- **But** v2 required `child_count` per root and orphan-as-root with **no parent index anywhere** `[grill2 C2-2]`: `ParentSessionID` is a brand-new field (FR-008), and U13's parent index is over **lifecycle records**, not sessions, with no FR bridging them — so both obligations were O(all sessions) per page by construction
+
+---
+
 #### BDD-103 — Scenario: Expanding a node returns its direct children only, a page at a time
 
 **Traces to**: User Story 19, Acceptance Scenarios 2 and 3
@@ -2085,6 +2304,22 @@ Wave G  (own commit, no behaviour files)
 - **Then** each call returns exactly that node's **direct** children, bounded by the page size, ordered by recency
 - **And** no call returns a grandchild
 - **And** the total request count is O(expanded nodes), not O(all sessions)
+
+#### BDD-113 — Scenario: A legacy store that errors mid-merge yields a partial page, not a broken cursor
+
+**Traces to**: User Story 19, Acceptance Scenario 2
+**Category**: Error
+
+- **Given** a shared store plus two legacy per-agent stores, one of which fails to list
+- **When** a paged `ListAllSessions` merge runs
+- **Then** the page returns the rows the healthy stores supplied
+- **And** `partial_errors` names the failing store (sanitized), and the response is still HTTP 200
+- **And** `next_cursor` is present and valid — the failure does **not** halt paging or invalidate the cursor
+- **And** requesting the next page returns the following window with **no duplicated and no skipped row** relative to the first
+- **And** rows with equal `UpdatedAt` are ordered by session id, so repeated calls cannot reorder them (FR-098)
+- **But** v2 gave this layer one cross-unit-request line and stated no ordering, no cursor stability rule and no mid-page error behaviour `[grill2 C2-2, M2-10]`, while `pkg/agent/loop.go:5070-5075` already returns `[]error` alongside the rows and `rest.go:795-811` already switches response variants on it
+
+---
 
 #### BDD-104 — Scenario: The sidebar spends its budget on roots and collapses children
 
@@ -2117,6 +2352,20 @@ Wave G  (own commit, no behaviour files)
 - **When** the session list renders
 - **Then** the orphan appears as a **root-level** row
 - **But** it is not silently omitted — a session that exists on disk and is unreachable in the UI is R-7's shape with a different surface
+
+#### BDD-111 — Scenario: Per-session token accounting survives roots-only listing
+
+**Traces to**: User Story 19, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** a parent chat that delegated to 3 children, where the children consumed the majority of the tokens
+- **When** the Usage screen's "By session" tab loads
+- **Then** it requests `GET /api/v1/sessions?flat=true&include_verifier=true` (FR-104)
+- **And** the response contains **both** the parent and all 3 children as top-level rows
+- **And** the sum of per-session token totals equals the pre-change total for the same logical state — **zero spend disappears**
+- **And** the default (non-`flat`) listing still returns roots only, so the tree surfaces are unaffected
+- **And** supplying `flat=true` together with `parent_session_id` is a 400
+- **But** under v2's roots-only response this spend silently vanished from per-session accounting `[grill2 M2-9]`, materially weakening ADR-052's SC-014 — an audit regression with no requirement, no dataset row and no owner, in a screen (`src/components/screens/UsageScreen.tsx:282`) that appeared in no ownership row
 
 ---
 
@@ -2173,7 +2422,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 26 | `TestSessionUploadsDir_RejectsUnsafeID` | Unit | U20 | BDD-79 | Existing `("", false)` contract preserved |
 | 27 | `TestInterruptScope_RequiredByCompiler` | Unit | U8 | BDD-45, BDD-97 | Fixture **located** first (absence = failure), then `go build` MUST fail |
 | 28 | `TestRoutingSessionID_RootEqualsOwnSessionID` | Unit | U3 | BDD-12 | Root behaviour byte-identical |
-| 29 | `TestRoutingSessionID_ConsumerSetIsClosed` | Unit | U3 | BDD-17, BDD-97 | Asserts it enumerated **≥ 10** reads (7 role-B + 3 pre-arm) **plus ≥ 1** WS-stamping site before asserting none is outside the set. `[grill C-3]` A silently empty enumeration leaves the entire D2 safety property unenforced while reporting green |
+| 29 | `TestRoutingSessionID_ConsumerSetIsClosed` | Unit | U3 | BDD-17, BDD-97 | Asserts it enumerated **≥ 10** reads (7 role-B + 3 pre-arm, each derived by site) **plus exactly the WS-stamping count recorded in the W5 audit artefact** (FR-089), before asserting none is outside the set. "Read" = AST `SelectorExpr`, defined normatively in "Three reads, five sites" `[grill2 M2-8]` — an enumerator counting identifier occurrences will not reproduce K and is broken, not lenient. `[grill C-3]` A silently empty enumeration leaves the entire D2 safety property unenforced while reporting green |
 | 30 | `TestRecentActivityLines_LogsEmptyPath` | Unit | U14 | BDD-51 | Empty path logged |
 | 31 | `TestDelegateTaskMaps_BoundedAfterNCompletions` | Unit | U14 | BDD-52 | **Renamed `[grill M-10]`.** N ≫ C terminal tasks past TTL → `len(t.tasks) ≤ C` and `len(t.sessionIndex) ≤ C`; a task within TTL is retained |
 | 32 | `TestSpawnSubTurn_ChildOwnsRealSession` | Integration | U7 | BDD-06 | `meta.json` exists at `<baseDir>/<childID>` after a real spawn. File: `pkg/agent/subturn_adr057_test.go` (NOT `subturn_test.go` — U21's) |
@@ -2243,7 +2492,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 88 | `TestCreateSessionWithID_NeverHoldsTwoSessionShards` | Unit | U2, U4 | BDD-92 | Instrumented lock wrapper records acquire/release order; parent shard released before child's; `ClearAll` in index order | C-6 |
 | 89 | `TestStatsThrottle_UnforcedFlushConverges` | Unit | U6 | BDD-93 | One append, **no** other action, > 1 interval → `stats.json` current. The only test that fails on a dead flusher | C-4 |
 | 90 | `TestStatsCache_FieldGroupIsolationUnderInterleavedWriters` | Unit | U6 | BDD-94 | K appends unflushed + `/goal set` + `Status` → forced flush yields exactly K's deltas; no wholesale cache replace | C-5 |
-| 91 | `TestNegativeGates_AssertPositiveLowerBounds` | Unit | U21 | BDD-97 | Meta-gate: each of the eleven gates fails when its search is deliberately broken (mutation-style: rename the target, assert the gate goes **red**) | C-3 |
+| 91 | `TestNegativeGates_AssertPositiveLowerBounds` | Unit | U21 | BDD-97 | Meta-gate: **iterates the bounds table** (currently **13** rows, not a hardcoded eleven) and asserts each gate goes **red** when its search target is deliberately broken. **Mechanism specified** `[grill2 M2-5]`: mutations are applied to a `t.TempDir()` **copy** of only the gate's own package — never in place, because this is a shared working tree — and each re-invocation is scoped to that package with `-run '^<GateTest>$'`. `pkg/gateway` gates are **excluded from local execution** and run in CI only (CLAUDE.md forbids local `pkg/gateway` suites; 13 in-place rebuilds would OOM the dev pod). If the temp-copy approach proves unaffordable at implementation time, #91 downgrades to a recorded **review gate** the way FR-072's semantic half did — and that downgrade must be written into SC-035, not decided silently in a test file | C-3 |
 | 92 | `TestListSessions_ConcurrentDeleteConsistency` | Integration | U6 | BDD-95 | Delete interleaved between reconcile and snapshot; stated model honoured; no panic/deadlock/partial meta | M-14 |
 | 93 | `TestDelegateTaskMaps_RetainWithinTTL` | Unit | U14 | BDD-52 | The complement of #31: a terminal task **within** TTL is **not** evicted, so eviction cannot break `action=status` | M-10 |
 | 94 | `TestChildCloseSession_FiresOnEveryTerminalState` | Integration | U7, U17 | BDD-96 | completed / cancelled / failed / abandoned each invoke `CloseSession` from the child-turn terminal path | M-13 |
@@ -2252,20 +2501,34 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 97 | `TestCancel_AuditNamesEveryDescendantAtDepth3` | Integration | U15, U13 | BDD-100 | `descendants_canceled` contains all three ids — **non-holdout** | M-12 |
 | 98 | `TestSessionList_RootsOnlyWithChildCount` | Integration | U18 | BDD-101 | 1 parent + 24 children → 1 row, `child_count == 24`, zero children inline | operator 1 |
 | 99 | `TestSessionList_ExpandReturnsDirectChildrenPaged` | Integration | U18, U13 | BDD-103 | `?parent_session_id=…&limit=n` returns direct children only, a page at a time, at every depth | operator 1 |
-| 100 | `TestSessionListLayers_EachHonoursPaging` | Integration | U6, U9, U18, U12 | BDD-102 | All four layers bound their own cost; none loads-all-then-slices | M-1 |
+| 100 | `TestSessionListLayers_EachHonoursPaging` | Integration | U6, U9, U18, U12 | BDD-102 | **Rewritten `[grill2 C2-2]`** into three checkable assertions, replacing "none loads-all-then-slices" — which was either impossible to satisfy or would have been written as `len(rows) <= limit`, which the forbidden implementation satisfies exactly. (a) **Window correctness + stability:** each of the four layers returns exactly the requested window of the recency-ordered sequence, and two identical calls with no intervening write return byte-identical windows (catches `limit` ignored and non-deterministic map ordering). (b) **Boundary cost is O(page):** the REST response body carries exactly ≤ `limit` rows and its serialised size scales with `limit`, not with total session count, measured at two population sizes. (c) **Zero per-session disk reads** on a warm-cache paged call, via FR-103's read seam (shared counter with #103) — catches an implementation that re-reads meta files per page | M-1 |
 | 101 | `TestSidebarTree_ParentSurvivesWideFanOut` | E2E | U24 | BDD-104 | 24 children, parent present, children collapsed, root budget unspent on children | operator 1 |
 | 102 | `TestSearchModalTree_NestedAndVirtualized` | E2E | U24 | BDD-105 | Child-only match shows its parent for context; rendered node count bounded by viewport | operator 1 |
 | 103 | `TestMetaCache_HitCostsZeroDiskReads` | Unit | U5 | BDD-58 | Instrumented FS counter: a `GetMeta`/`ListSessions` cache hit performs **zero** reads after the split | M-11 (FR-058) |
-| 104 | `TestMigrateLegacy_BytesUnchanged` | Unit | U5 | BDD-61 | Golden-bytes gate on `migrateLegacy`/`writeUnifiedMetaDirect` output; also asserts no pre-split fused reader exists | M-11 (FR-060) |
+| 104 | `TestMigrateLegacy_BytesUnchanged` | Unit | U5 | BDD-61, BDD-97 | Golden-bytes gate on `migrateLegacy`/`writeUnifiedMetaDirect` output; also asserts no pre-split fused reader exists. **Bounded `[grill2 M2-5]`:** MUST first assert ≥ 1 located, **non-empty** golden fixture and that **both** named symbols resolved, before either clause — otherwise the "no fused reader" half passes whenever the search is wrong | M-11 (FR-060) |
 | 105 | `TestFlushInterval_ConfigKeyDefaultAndOverride` | Unit | U6 | BDD-93 | The key exists, defaults to **5 s**, and a non-default value is honoured end to end | M-11 (FR-067), operator 2 |
-| 106 | `TestParentageWalk_NeverReadsOwnerScopeIDOrParentAgentID` | Unit | U13, U14 | BDD-18, BDD-21 | Static gate over the walk's code path: **zero** reads of either field | M-11 (FR-023) |
-| 107 | `TestStoreSharding_ThroughputRisesPast64Sessions` | Cross-process | U4 | BDD-53 | Throughput still increases at 64 → 128 concurrent sessions, proving no fixed cap above the tested N | M-11 (FR-052) |
+| 106 | `TestParentageWalk_NeverReadsOwnerScopeIDOrParentAgentID` | Unit | U13, U14 | BDD-18, BDD-21, BDD-97 | Static gate: **zero** reads of `OwnerScopeID` or `ParentAgentID`. **Bounded and scoped `[grill2 M2-5]`:** "the walk's code path" is the explicit symbol set `verifyCallerOwnsSession` + `callerOwnerKey` + `LifecycleFilter.matches` and their transitive callees within `pkg/tools` and `pkg/session`; the test MUST first assert it resolved all **3** symbols, walked **≥ 1** callee edge and located **≥ 1** `ParentDurableKey` read. This is the **sole** coverage of FR-023, a security property — unbounded, it reported green over an empty symbol set | M-11 (FR-023) |
+| 107 | `TestStoreSharding_NoFixedConcurrencyCapInDesign` | Cross-process + Unit | U4 | BDD-53, BDD-97 | **Renamed and rewritten `[grill2 M2-4]`.** The v2 assertion ("throughput still rises 64 → 128") is **false by construction**: at N=128 over 64 shards the pigeonhole gives ≥ 2 sessions per shard, so contention at least doubles while the work inside each shard is fsync-bound (`pkg/fileutil/file.go:97` **and** `:121`) — the spec's own edge case and dataset row 5 both concede it. Now: (a) a **static gate** asserting no constant in the store's write path bounds concurrent session writers (no semaphore, no worker pool, no fixed-size gating channel over `NewSession`/`AppendTranscript`/`SetMeta`), with a positive lower bound of ≥ 1 located write-path function; (b) the existing 2N-vs-N slope at a box-saturating N (dataset rows 3–4). No machine-specific throughput promise | M-11 (FR-052) |
 | 108 | `TestOrphanSession_ListedAsRoot` | Integration | U18 | BDD-106 | A child whose parent was deleted appears as a root row, not omitted | operator 1 |
 | 109 | `TestDrillDown_NoSubagentMessageOrStateReferences` | Unit | U12, U24 | BDD-74, BDD-97 | Static gate over `src/`: ≥ 1 `producing_session_id` reference located first, then **zero** non-test references to `subagent_message`/`subagent_state` | M-11 (FR-047) |
 | 110 | `TestRootDelegationCap_SourcedFromSubTurnMaxConcurrent` | Unit | U19 | BDD-75 | The resolved cap came from `agents.defaults.subturn.max_concurrent` (unclamped) and **not** from `Performance.EffectiveMaxParallelAgents()`; an operator-set 24 survives | operator 4, M-7 |
 | 111 | `TestCreateSessionWithID_RejectsCollidingDirectory` | Unit | U2 | BDD-107 | A pre-existing directory at the target id → loud failure; the child never adopts its transcript/meta/owner/stats | STRIDE: tampering |
 
-**Test count**: 112 entries — #1 … #111 plus #68a. v1 had 84 (#1 … #83 plus #68a).
+#### Tests added in v3
+
+`[grill2 C2-1…C2-4, M2-1, M2-3, M2-7, M2-9]` Each row names the finding it closes. Numbering continues from #111; no existing number was reused.
+
+| # | Test name | Level | Unit | Traces to BDD | What it verifies | Closes |
+|---|---|---|---|---|---|---|
+| 112 | `TestRootDelegationCap_DefaultInstallIsGatedAt16` | Unit | U19, U28 | BDD-108 | **No key set anywhere**: the resolved cap is the seeded 16, the gate is **active** (17th refused), and resolution did not pass through `EffectiveMaxParallelAgents()`. A `≤ 0` configured value is a boot error, not "no gate". The one test that fails on the configuration every install ships with | M2-1 |
+| 113 | `TestTranscriptMutate_MissingSessionIsLoggedAndCounted` | Unit | U22 | BDD-109 | `mutateToolCallInTranscript` against (a) a session with no `meta.json` and (b) an existing session with an unresolvable `callID` → WARN + counter delta each, distinguishable in the record; never a bare `false` | M2-3 |
+| 114 | `TestListSessions_PrunesOutOfBandDeletedDirectory` | Unit | U6 | BDD-110 | `os.RemoveAll` a session directory behind the store's back → the next `ListSessions` drops it from the result **and** from `metaCache` and the parent index; a `cacheLoadFailures` exclusion is left undisturbed | M2-7 |
+| 115 | `TestUsageAccounting_FlatListingRetainsChildSpend` | E2E | U12, U18 | BDD-111 | Parent + 3 children where children hold most of the spend: `flat=true` returns all 4 rows and the per-session total equals the pre-change total; default listing still returns roots only; `flat=true` + `parent_session_id` → 400 | M2-9 |
+| 116 | `TestSessionParentIndex_ChildCountIsConstantPerRow` | Unit | U4, U6 | BDD-112 | `child_count` and orphan status resolve from the in-memory parent index in O(1) per row; the index is correct after create, meta write, delete, eviction and reconcile — each mutated and re-read | C2-2 |
+| 117 | `TestListAllSessions_PartialErrorPagingContract` | Integration | U9, U18 | BDD-113 | One legacy store errors mid-merge → rows still returned, `partial_errors` populated, HTTP 200, `next_cursor` valid; the next page neither duplicates nor skips a row; equal `UpdatedAt` ties break on session id across repeated calls | C2-2, M2-10 |
+| 118 | `TestInterruptAPI_NoStaleDocReferences` | Unit | U8 | BDD-114, BDD-97 | Doc-truth gate: ≥ 1 reference to the collapsed entry point located **first**, then zero surviving references — code or comment — to the four retired names across non-test Go | C2-4 |
+
+**Test count**: 119 entries — #1 … #118 plus #68a. v2 had 112; v1 had 84.
 
 ### Test Datasets
 
@@ -2391,6 +2654,23 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | 7 | 0 sessions | default paging | Empty | empty page, HTTP 200, not 404 | BDD-102 |
 | 8 | `?parent_session_id=<id that does not exist>` | — | Missing entity | empty page, HTTP 200 — "no children" is not "no such session"; a 404 here would make an orphan indistinguishable from a childless node | BDD-103 |
 
+#### Dataset: Session parent index
+
+`[grill2 C2-2]` FR-097's index is the mechanism `child_count` and orphan detection need. Every row is a mutation of `metaCache` that MUST keep the index correct.
+
+| # | Store mutation | Boundary type | Expected index state | Traces to |
+|---|---|---|---|---|
+| 1 | Create a root (`ParentSessionID == ""`) | Valid representative | root registered; `child_count(root) == 0` | BDD-112 |
+| 2 | Create a child naming that root | Direct child | `child_count(root) == 1`; child not a root | BDD-112, BDD-101 |
+| 3 | Create 24 children of one root | Representative fan-out | `child_count(root) == 24`, resolved O(1) | BDD-101, BDD-112 |
+| 4 | `SetMeta` on a child that does **not** touch `ParentSessionID` | No-op for the index | counts unchanged | BDD-112 |
+| 5 | `DeleteSession` on a child | Removal | `child_count(parent)` decremented; child gone from the index | BDD-112, FR-064 |
+| 6 | `DeleteSession` on the **parent** | Orphan creation | each former child is now a **root**; `child_count` of the deleted id no longer resolves | BDD-106, BDD-112 |
+| 7 | Directory removed **out of band**, then `ListSessions` | Prune | entry evicted and index updated in the same pass | BDD-110, FR-097a |
+| 8 | `CloseSession` evicts a child's `metaCache` entry | Eviction ≠ deletion | the session still exists on disk, so it stays in the index; only the cached meta is dropped | FR-033, Ambiguity 14 |
+| 9 | Reconcile discovers an out-of-band **new** directory | Late arrival | added to the index with its parent link, or as a root if `ParentSessionID == ""` | BDD-112 |
+| 10 | A child whose `ParentSessionID` names a never-existing id | Corrupted state | treated as an **orphan root**, not dropped and not a dangling edge | BDD-106 |
+
 ### Regression Test Requirements
 
 **This change MODIFIES existing behaviour.** The suite is the current contract's specification: ~430 references across ~71 test files touch the shared transcript id (128 `transcriptSessionID` refs across 43 test files alone).
@@ -2406,7 +2686,8 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | ADR-045 watchdog does not reap live critical work | `pkg/agent/orphan_watch_test.go:14,223-229` | `TestOrphanWatchdog_DefersWhileCriticalDelegateAlive` | Silent failure mode; the interlock's whole purpose |
 | Orphan-delegate cancellation | `pkg/agent/cancel_orphan_delegate_test.go:57-79` | covered by #38–#42 | Same ladder |
 | Steering delivery to a child at its next tool boundary | `pkg/agent/steering_test.go:1693,1765-1811,1865` | `TestDelegateControls_ResolveByChildID` | INV-3; a steer must still land |
-| Approval-grant delegation inheritance | `pkg/agent/approval_grant_delegation_test.go:19,229` | `TestApprovalGrants_InheritKeyedToChildSession` | Availability: the 300 s invisible block |
+| Approval-grant delegation inheritance | `pkg/agent/approval_grant_delegation_test.go:19,229` | **#25 `TestApprovalGrants_InheritFromTwoKeys`** (+ #84, #85) | Availability: the 300 s invisible block. `[grill2 m2-2]` v2 left the **pre-rename** name here after C-1 renamed it "because the old name described the vacuous assertion" — the regression table pointed at a test that no longer exists |
+| Per-session token accounting includes delegated children | `src/components/screens/UsageScreen.test.tsx:346-349` | **#115 `TestUsageAccounting_FlatListingRetainsChildSpend`** | `[grill2 M2-9]` Roots-only listing would silently drop child spend from the Usage screen. ADR-052 SC-014 depends on it |
 | Subagent transcript nesting on the wire | `pkg/agent/subturn_transcript_nesting_test.go:9-10,93-94` | `TestFrameContract_BothIDsRoundTrip` | Span nesting key is a **different** field from the transcript one |
 | Plan cancellation | `StopPlan` (`pkg/agent/plan_engine.go:2044-2135`) | no new test; **assert unchanged** | D9: explicitly out of scope |
 | `list_jobs` attribution by `ParentAgentID` | existing `list_jobs` tests | `TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly` (negative half) | A different axis; must not start filtering by session |
@@ -2430,6 +2711,17 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | `pkg/gateway/cancel_subagent_cascade_test.go` | `:5` | Gateway-side cascade |
 | `pkg/gateway/replay_test.go` | `:1549` | Replay returns unfiltered entries |
 
+**SPA tests that MUST be deliberately inverted, never deleted** `[grill2 M2-9]`. W22/U21's scope is Go-only ("the twelve named `*_test.go` files"), and Rule 5 routes **new** tests to new files while saying nothing about **existing SPA** tests the change breaks — yet SC-034 requires `npx vitest run` to exit 0. Four files assert the current `fetchSessions` call shape and break the moment FR-092/FR-093/FR-094/FR-104 land. They are inverted by the unit that owns the component, in that unit's own commit (not U21's):
+
+| File | Anchor | New assertion | Owner |
+|---|---|---|---|
+| `src/components/layout/Sidebar.test.tsx` | `:241`, `:244` — `toHaveBeenCalledWith()` (literally "no arguments") | called **with** paging arguments; roots-only; children collapsed | **U24** |
+| `src/components/search/SearchModal.test.tsx` | `:158`, `:161` — same | called with paging arguments; results nested and virtualized | **U24** |
+| `src/components/screens/UsageScreen.test.tsx` | `:346-349` — `toHaveBeenCalledWith(undefined, undefined, { includeVerifier: true })` | called with `flat: true` **and** `includeVerifier: true`; child rows present (FR-104) | **U12** |
+| `src/lib/__adr052__sessionVisibilityParams.test.ts` | 6 cases pinning the exact query string | `limit`/`offset`/`parent_session_id`/`flat` added; `include_verifier`'s existing opt-in semantics preserved unchanged | **U12** |
+
+`src/components/layout/Sidebar.focus-trap.test.tsx:73` and `Sidebar.m5.test.tsx:60` mock `fetchSessions` arity-agnostically (`() => Promise.resolve([])`) and do **not** break — they are listed in U24's owned set so no other unit edits them, and they need no inversion.
+
 **Regression dataset — behaviours a reviewer will otherwise mistake for breakage:**
 
 | # | Input | Previous behaviour | Must now produce | Traces to |
@@ -2450,7 +2742,22 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 ### Strict transcript primitive and named types (W3, W20)
 
 - **FR-001**: The system MUST provide `AppendTranscriptStrict`, which returns a non-nil error for a session id with no `meta.json` and MUST NOT create any directory for it.
-- **FR-002**: All five transcript writer sites (`pkg/agent/turn.go:1130`, `:1208`, `:1270`, `:1325`; `pkg/gateway/websocket.go:4256`) plus `pkg/agent/external_dispatch.go:463`, `:550-555`, `:562-564` and `pkg/agent/approval_transcript.go:179`, `:183` MUST use the strict primitive and MUST surface its error as a counter increment plus a WARN naming the session id.
+- **FR-002**: `UnifiedStore.AppendTranscript` (`pkg/session/unified.go:802`) MUST **itself become strict** — the `slog.Warn` + `return nil` branch after a failed meta read (`:819-823`) is **deleted**, and the method returns that error. **No lenient form survives anywhere in the tree.** `[grill2 C2-3 — MEANING CHANGED from v2.]` v2 kept the lenient primitive and gave it "a strict **sibling**", converting five named call sites. That contradicts **AC-1's frozen governing text**, which states the property of `AppendTranscript` itself: *"`AppendTranscript` against a UUID with no `meta.json` returns a non-nil error and creates **no** directory."* Under a sibling design AC-1 holds only for the converted callers, and a `task_executor`, `/goal` or `hand_off` write against an unminted session still silently creates — the exact mechanism US-1's opening section calls "the canonical mechanism" of silent failure. `AppendTranscriptStrict` (FR-001) is retained as the explicitly-named entry point on `unified_api.go` for callers converted in W3; it is a **name**, not a second behaviour.
+
+  **The conversion boundary, enumerated completely** (the way FR-090 states W20's). Command: `rg -n 'AppendTranscript\(' --glob '*.go' --glob '!*_test.go'` → **22 matches**, of which **20 are invocations** and **2 are declarations** (the store method at `unified.go:802`; the `TranscriptAppender` interface method at `pkg/tools/handoff.go:70`). *(v2 named 5. Grill #2 said 20 — it counted invocations; this spec's command counts matches. Both numbers are stated with their scope so the enumeration is reproducible.)* Every invocation site MUST surface the now-possible error as a counter increment plus a WARN naming the session id:
+
+  | File | Invocation sites | Count | Owner |
+  |---|---|---|---|
+  | `pkg/agent/task_executor.go` | `:554`, `:687`, `:718`, `:1084`, `:1170`, `:1278`, `:1989` | 7 | **U26** |
+  | `pkg/agent/turn.go` | `:1130`, `:1208`, `:1270`, `:1325` | 4 | U3 |
+  | `pkg/tools/handoff.go` | `:205`, `:386` (+ the interface decl at `:70`) | 2 | **U22** |
+  | `pkg/gateway/websocket.go` | `:4256`, **`:1642`** `[grill2 m2-5]` | 2 | U11 |
+  | `pkg/agent/loop.go` | `:5923`, `:6107` | 2 | U9 |
+  | `pkg/agent/goal_loop.go` | `:739`, `:823` | 2 | **U26** |
+  | `pkg/agent/cancel.go` | `:354` | 1 | U15 |
+  | `pkg/session/unified.go` | — (the method **definition**) | 0 | U4→U5→U6 chain |
+
+  **Verified: all 20 invocation sites already capture or check the returned error** (`if err := …; err != nil` or `appendErr := …`), so making the primitive strict breaks **no** call site's compilation. The change is in runtime behaviour at sites that already have an error branch — which is why this is the smaller migration as well as the correct one. `pkg/agent/external_dispatch.go` and `pkg/agent/approval_transcript.go`, which v2 listed here, contain **zero** `AppendTranscript` calls and are correctly absent — see FR-099 and M2-3.
 - **FR-003**: The `ts.abandoned` write suppression (`pkg/agent/turn.go:1295-1298`) MUST emit a **WARN naming the session id and the suppression reason**. The existing `abandonedWritesSuppressed` counter is **retained unchanged** — it already increments here and at six other sites, is declared at `turn.go:25`, documented at `:21-24` as backing `omnipus_abandoned_writes_suppressed_total`, and exported at `:44`. Any test of this requirement MUST assert the **log record** and a counter **delta** across the call, never the counter's existence. `[grill C-2 — v1's premise that this path is "entirely silent" was false, and the test written from it was green against the unmodified tree]`
 - **FR-004**: The system MUST define `SessionID` and `RoutingSessionID` as distinct named types that do not implicitly interconvert.
 
@@ -2470,7 +2777,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-013**: The system MUST add an optional `producing_session_id` to session-scoped frames, present **iff** it differs from `session_id`.
 - **FR-014**: `routingSessionID` MUST NOT be read outside the closed consumer set (WS payload stamping, the seven role-B predicates, pre-arm keys), and a test MUST fail the build on any read outside it.
 - **FR-015**: The seven role-B predicates (`pkg/agent/steering.go:429`, `:459`, `:519`, `:745`, `:787`; `pkg/agent/turn.go:524`, `:564`, `:607`) MUST re-base onto `routingSessionID`.
-- **FR-016**: The pre-arm latch keys (`pkg/agent/cancel_prearm.go:338`, `:355`, `:602`; `pkg/agent/subturn.go:585`, `:1147`) MUST re-base onto `routingSessionID`, preserving the "inherits verbatim" invariant literally.
+- **FR-016**: The pre-arm latch keys MUST re-base onto `routingSessionID`, preserving the "inherits verbatim" invariant literally, across **five sites of which three are direct reads**: direct — `pkg/agent/cancel_prearm.go:354`, `:355`, `pkg/agent/subturn.go:585`; transitive — `pkg/agent/cancel_prearm.go:338` (a parameter fed from `:355`), `:602` (a call taking the turn state), `pkg/agent/subturn.go:1147` (consumes a precomputed slice). `[grill2 M2-8]` The three-vs-five distinction is normative, not editorial: **#29's K counts the three reads; this requirement re-bases all five sites.** See "Three reads, five sites" for the derivation and the definition of "read".
 - **FR-017**: `SubTurnSpawnPayload.SessionID` and `SubTurnEndPayload.SessionID` MUST be pinned to `routingSessionID` with a regression test, and `DelegateTaskState.SessionID` (`pkg/tools/delegate.go:1303`) MUST be re-pointed deliberately.
 - **FR-018**: All **19** `SESSION_SCOPED_FRAME_TYPES` MUST be audited against the routing rule, and the contract change MUST follow Constraint #8's 5-step pipeline in one atomic commit.
 
@@ -2479,8 +2786,8 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-019**: `LifecycleFilter` MUST gain a `ParentDurableKey` field and a corresponding `matches` clause.
 - **FR-020**: A secondary parent index MUST be maintained inside `Persist`, under the existing 64-shard striped lock, so "children of X" is one file read and a transitive walk is O(descendants).
 - **FR-021**: Delegation MUST be refused with an operator-visible error when no lifecycle store is wired (`pkg/agent/session_messaging_wire.go:141-143`), mirroring the existing fail-closed posture at `pkg/tools/delegate.go:1150-1157`.
-- **FR-022**: The three doc comments at `pkg/session/lifecycle.go:225-228`, `:571-575` and `pkg/tools/list_jobs_sources.go:311-315` MUST be rewritten so none describes `ParentDurableKey` as shared parent↔child.
-- **FR-023**: The system MUST NOT use `OwnerScopeID` or `ParentAgentID` as the parentage edge, asserted by a **static gate** over the walk's code path (#106) rather than only by positive tests of the correct edge. `[grill M-11 — v1 mapped this to #10/#49, neither of which asserts the negative]`
+- **FR-022**: The three doc comments at `pkg/session/lifecycle.go:225-228`, `:572-575` and `pkg/tools/list_jobs_sources.go:311-315` MUST be rewritten so none describes `ParentDurableKey` as shared parent↔child. `[grill2 m2-1 — line range corrected from `:571-575`; v2's changelog claimed this correction had been applied here and to BDD-22, and it had not. All three sites now read `:572-575`, matching #12's bound and AC-13.]`
+- **FR-023**: The system MUST NOT use `OwnerScopeID` or `ParentAgentID` as the parentage edge, asserted by a **static gate** (#106) rather than only by positive tests of the correct edge. `[grill M-11 — v1 mapped this to #10/#49, neither of which asserts the negative]` **"The walk's code path" is an explicit symbol set, not a phrase** `[grill2 M2-5]`: `verifyCallerOwnsSession` (`pkg/tools/delegate.go:1973-1979`), `callerOwnerKey` (`:1966-1968`) and `LifecycleFilter.matches` (`pkg/session/lifecycle.go:565+`), plus their transitive callees within `pkg/tools` and `pkg/session`. #106 MUST assert it resolved all three symbols, walked ≥ 1 callee edge and located ≥ 1 `ParentDurableKey` read before asserting zero — see the bounds table. This is the sole coverage of a **security** property (a task dispatch puts a *plan id* in `OwnerScopeID`, `pkg/agent/task_executor.go:202-208`, so a walk over it mistakes a plan id for a session id); an unbounded gate leaves it unenforced while reporting green.
 
 ### Cancellation (W8, W9)
 
@@ -2489,7 +2796,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-026**: Each descendant's lifecycle record MUST transition to `cancelled` (today `pkg/agent/cancel.go:428` transitions exactly one).
 - **FR-027**: `ProcessSession.OwnerSessionID` MUST be stamped from the child's own id, and `KillBackgroundSessions` MUST cascade over the descendant set.
 - **FR-028**: `delegate action=cancel` MUST kill that child's background shells (today no such call exists on that path).
-- **FR-029**: A 3P child's process **group** MUST die with the child.
+- **FR-029**: A 3P child's process **group** MUST die with the child. `[grill2 M2-2]` **This is new work with named sites, not an assertion of existing behaviour.** Verified: the external-CLI subprocesses are started at `pkg/agent/runner/driver_claude.go:147`, `driver_codex.go:121` and `driver_opencode.go:87`, each `exec.CommandContext(runCtx, binary, args...)` followed by `cmd.Start()`, and `rg 'SysProcAttr|Setpgid|cmd\.Process\.Kill|Signal\(' pkg/agent/runner/` returns **zero matches** — so `exec.CommandContext` kills only the direct child on context cancel and a 3P child's own subprocess tree survives today. Each of the three drivers MUST set `cmd.SysProcAttr.Setpgid = true` and cancellation MUST signal the **process group**, following the in-house precedents at **`pkg/tools/shell_process_unix.go:14`** — `cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}`, the closest analogue since it is this repo's own background-shell path and is owned by U16 — and `pkg/sandbox/hardened_exec_linux.go:39-41` / `pkg/sandbox/hardened_exec_cancel_unix.go` (the group kill). The group-kill helper lands in NEW `pkg/agent/runner/procgroup_unix.go` with a no-op `procgroup_windows.go`, and **FR-029 is scoped POSIX-only** — matching how the store's cross-process assertions are scoped (see Assumptions) — because `Setpgid` has no Windows equivalent in this codebase. Owner: **U22**; `pkg/agent/runner/**` appeared in no v2 ownership row, so this requirement had no implementation site at all.
 - **FR-030**: The `turn_canceled` audit entry's `descendants_canceled` (`pkg/agent/cancel.go:376`) MUST remain non-empty and name **every** descendant the Stop reached, asserted at **depth 3** by BDD-100 / #97 in the visible plan. `[grill M-12 — v1 required "every descendant" but tested only depth 1 where the implementing agent could see it]`
 
 ### Approvals and session teardown (W10)
@@ -2501,16 +2808,29 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 ### Transcript visibility (W11)
 
 - **FR-034**: `IsDelegateChildEntry()` MUST be deleted and MUST have zero references outside tests.
-- **FR-035**: All four filter sites MUST be deleted — `pkg/gateway/replay.go:298`, `pkg/gateway/rest.go:826` (including the `filterDelegateChildEntries` helper at `:823-832` and both callers `:851`/`:887`), `pkg/agent/verifier_adjudication.go:406`, `pkg/tools/inspect_session.go:172`.
+- **FR-035**: All four filter sites MUST be deleted — `pkg/gateway/replay.go:298`, `pkg/gateway/rest.go:826` (including the `filterDelegateChildEntries` helper at **`:814-832`** — the func body is `:823-832` and its **doc comment is `:814-822`**, which itself names `IsDelegateChildEntry` twice at `:815` and `:818` — and both callers `:851`/`:887`), `pkg/agent/verifier_adjudication.go:406`, `pkg/tools/inspect_session.go:172`. `[grill2 m2-4, widened]` v2 cited only `:823-832`; deleting exactly that range leaves a dangling doc comment that keeps SC-003's `rg` non-zero. Found while verifying m2-4, which named only the other two sites.
 - **FR-036**: `TranscriptEntry.ParentSpawnCallID` MUST be retained as provenance on the child's own entries and MUST have a named reader (the drill-down surface).
-- **FR-037**: The three comment blocks that exist only to defend the filter (`pkg/session/daypartition.go:268-307`, `:311-332`; `pkg/gateway/replay.go:41-45` and `:271-297`) MUST be rewritten or removed in the same change.
+- **FR-037**: The comment blocks that exist only to defend the filter MUST be rewritten or removed in the same change: `pkg/session/daypartition.go:268-307`, `:311-332`; `pkg/gateway/replay.go:41-45` and `:271-297`; **`pkg/agent/verifier_adjudication.go:394`** and **`pkg/tools/inspect_session.go:170`** `[grill2 m2-4]`. The last two are inline comments adjacent to deleted code that name `IsDelegateChildEntry`; v2 did not list them, so a careful implementer would remove them and a literal one would not — and SC-003's `rg` cannot return zero while either survives. "Careful" is not a requirement; the list is.
 - **FR-038**: No read boundary — backend or frontend — MAY reintroduce a transcript visibility filter.
 
 ### Ownership and interrupt (W12, W13)
 
 - **FR-039**: `verifyCallerOwnsSession` MUST walk the `ParentDurableKey` chain upward from the target toward the caller, bounded by the configured max delegation depth, at all six gated call sites.
 - **FR-040**: The sibling/cousin reach MUST be removed; root-over-subtree reach MUST be preserved.
-- **FR-041**: `InterruptSession`, `InterruptSessionHard`, `InterruptBySessionKey` and `InterruptBySessionKeyHard` MUST collapse into one entry point taking a mandatory explicit `InterruptScope ∈ {ScopeSubtree, ScopeSelfOnly}`.
+- **FR-041**: `InterruptSession`, `InterruptSessionHard`, `InterruptBySessionKey` and `InterruptBySessionKeyHard` (`pkg/agent/steering.go:449`, `:511`, `:611`, `:665`) MUST collapse into one entry point taking a mandatory explicit `InterruptScope ∈ {ScopeSubtree, ScopeSelfOnly}`. **`InterruptGraceful` (`:397`) and `InterruptHard` (`:866`) are out of scope** — they take no session id and are process-wide.
+
+  **The compile-breaking surface is five files, each with a declared owner** `[grill2 C2-4 — derived over the signature, not over file writes]`:
+
+  | File | What breaks | Owner | Wave |
+  |---|---|---|---|
+  | `pkg/agent/steering.go` | the four definitions | **U8** | E |
+  | `pkg/agent/cancel.go` | calls at `:390`, `:465` | **U15** | F |
+  | `pkg/tools/delegate.go` | func-typed fields `:363-364`; `SetCancelHooks` params `:572-578` | **U14** | F |
+  | `pkg/agent/session_messaging_wire.go` | method values at `:166` | **U19** | G |
+  | `pkg/commands/runtime.go` | `AgentLoopInterface` method decl `:39` | **U8** | E |
+  | `pkg/commands/cmd_cancel_test.go` | stub implementation `:61` | **U8** | E |
+
+  Enumeration command: `rg -n 'InterruptSession\b|InterruptSessionHard\b|InterruptBySessionKey\b|InterruptBySessionKeyHard\b' --glob '*.go' --glob '!*_test.go' -l` → **13 files**. Verified line by line: the **other eight** (`cancel_prearm.go`, `external_dispatch.go`, `loop.go`, `orphan_watch.go`, `subturn.go`, `turn.go`, `config.go`, `approvals.go`) contain **doc comments only** — ~25 references naming the retired symbols, zero call sites. Those are doc-rot, covered by **FR-100**, and are the reason U3/U7/U9/U17a/U22 do **not** acquire a wave dependency on U8. A file-level dependency derivation would have moved five units unnecessarily and still missed `pkg/commands/**`.
 - **FR-042**: `Interrupt(child, ScopeSubtree)` MUST reach that child's own descendants and MUST NOT reach the parent or a sibling.
 
 ### Delegate observability (W14, W19)
@@ -2527,7 +2847,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-049**: `cacheMu` MUST NEVER be held across an `os.*` or `fileutil.*` call.
 - **FR-050**: Lock order MUST be one-directional: `sessionLock(id)` → `cacheMu`. Two session shards MUST NOT be held at once, with exactly two exceptions: (a) `ClearAll`/`RetentionSweep`, which MUST take every shard **in index order**; and (b) **none other** — in particular the parent-`Owner` copy MUST satisfy the prohibition by **releasing** the parent's shard before taking the child's, per FR-082, rather than by being exempted. `[grill C-6 — v1's blanket prohibition forbade the change's own most-used new operation]`
 - **FR-051**: `ListSessions` MUST reconcile per-session under that session's shard and snapshot under `cacheMu.RLock`, and MUST NOT take a store-global write lock.
-- **FR-052**: The design MUST NOT impose a fixed concurrency cap; 64 shards matches the in-house precedent and does not bound throughput, asserted by showing throughput **still rising** from 64 to 128 concurrent sessions (#107). `[grill M-11 — a slope measured at N cannot detect a cap above N]`
+- **FR-052**: The design MUST NOT impose a fixed concurrency cap. This is a **design** property, asserted **structurally**: a static gate proving no constant in the store's write path bounds the number of concurrent session writers (no semaphore, no worker pool, no fixed-size channel gating `NewSession`/`AppendTranscript`/`SetMeta`), plus the existing 2N-vs-N slope at a box-saturating N (dataset rows 3–4). `[grill2 M2-4 — MEANING CHANGED from v2.]` v2 asserted it as a **throughput promise** — "still rising from 64 to 128" (#107) — which **64 shards make false by construction**: at N=128 the pigeonhole gives ≥ 2 sessions per shard under a perfect hash, so contention at least doubles, and the work inside each shard is fsync-bound (`WriteFileAtomic` does a file `Sync()` at `pkg/fileutil/file.go:97` **and** a parent-directory `Sync()` at `:121`). On a finite-IOPS CI runner throughput at 128 concurrent creates plateaus or falls. The spec's own edge case concedes the mechanism ("they contend on one shard; … throughput is bounded by the filesystem") and dataset row 5 records shard collision as "documented, not a failure" — #107 asserted the opposite of both, and would also have violated binding rule 3, being a machine-specific claim wearing a slope's clothing.
 
 ### Session store: file split (W23)
 
@@ -2538,17 +2858,17 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-057**: `UnifiedMeta`'s in-memory shape and marshalled JSON MUST be unchanged; no `contracts/` change and no regeneration are required by this work item.
 - **FR-058**: `metaCache` MUST continue to hold one composed `*UnifiedMeta` clone per session, so `GetMeta` and `ListSessions` cost nothing extra — asserted by an instrumented filesystem counter showing **zero** disk reads on a cache hit after the split (#103). `[grill M-11 — v1 mapped this to #13, which never touches the cache]`
 - **FR-059**: The doc comments at `pkg/session/unified.go:780-785` and `:166-181` MUST be rewritten, as neither single-funnel claim remains true.
-- **FR-060**: The system MUST NOT provide a reader for a pre-split fused `meta.json`, and MUST NOT modify `migrateLegacy`/`writeUnifiedMetaDirect` (`:1515`) — the latter asserted by a golden-bytes gate on their output (#104). `[grill M-11 — v1 mapped this to #15, which tests neither clause]`
+- **FR-060**: The system MUST NOT provide a reader for a pre-split fused `meta.json`, and MUST NOT modify `migrateLegacy`/`writeUnifiedMetaDirect` (`:1515`) — the latter asserted by a golden-bytes gate on their output (#104), **which MUST first assert its positive lower bound: ≥ 1 located non-empty golden fixture and both named symbols resolved** `[grill2 M2-5]`. Without that bound the "no pre-split fused reader exists" clause passes whenever the search is wrong. `[grill M-11 — v1 mapped this to #15, which tests neither clause]`
 
 ### Session store: counter throttle (W24)
 
 - **FR-061**: `AppendTranscript`'s `Stats.*` and `UpdatedAt` bumps MUST become in-memory mutations of the cached meta under `cacheMu`, with no file write.
 - **FR-062**: The transcript append itself MUST stay immediate and unthrottled.
 - **FR-063**: A per-store periodic flusher MUST write only `stats.json`, only for dirty sessions, each write taking that session's shard.
-- **FR-064**: Forced synchronous flushes MUST occur on a `SetMeta` carrying `Status`, on `DeleteSession`, on `UnifiedStore.Close` (which has no flush hook today), and on the child `CloseSession` teardown.
+- **FR-064**: Forced synchronous flushes MUST occur on a `SetMeta` carrying `Status`, on `DeleteSession`, on `UnifiedStore.Close` (which has no flush hook today), and on the child `CloseSession` teardown (**U17b**, see FR-088 and the ownership table). **`DeleteSession`'s full ordered sequence is stated once, here, and is referenced by FR-033, FR-086 and FR-096** `[grill2 M2-11]`: (1) acquire `sessionLock(id)`; (2) flush the session's dirty stats under that shard; (3) `os.RemoveAll` the directory; (4) evict the `metaCache` entry under `cacheMu`; (5) drop the dirty-set entry under `cacheMu`; (6) release. A flusher tick arriving at any of the six points either finds the session dirty and flushes it (before 3) or finds it gone and drops its dirty entry without writing (after 3) — it can never recreate a `stats.json` in a deleted directory. v2 resolved the flusher's half in Edge Cases and left the `metaCache`-eviction ordering FR-033 also requires unstated, while FR-086 described the deletion window from the reader's side with no shared sequence — three requirements, one operation, no agreed order.
 - **FR-065**: Event-driven `SetMeta` paths (goal, loop, status, title, owner, workspace) MUST NOT be throttled.
 - **FR-066**: `UpdatedAt` MUST compose as the later of `meta.json`'s and `stats.json`'s on load.
-- **FR-067**: The flush interval **MUST** be a config key with a default of **5 seconds** `[operator 2]`, tunable from measurement. `[grill m-5 — promoted from the spec's only `SHOULD`, which SC-034's gate list did not cover and which was therefore unenforced in either direction]` A test MUST assert the key exists, defaults to 5 s, and that a non-default value is honoured end to end (#105).
+- **FR-067**: The flush interval **MUST** be a config key with a default of **5 seconds** `[operator 2]`, tunable from measurement. `[grill m-5 — promoted from the spec's only `SHOULD`, which SC-034's gate list did not cover and which was therefore unenforced in either direction]` A test MUST assert the key exists, defaults to 5 s, and that a non-default value is honoured end to end (#105). **The key and its seeded default are declared in `pkg/config/config.go` and `pkg/config/defaults.go`, owned by U28** `[grill2 C2-1]` — v2 required a new MUST config key while no ownership row covered `pkg/config/**` at all, so the requirement had no implementation site. U6 **reads** the key; it does not own the config package.
 
 ### Scale and hygiene (W16, W17, W18)
 
@@ -2581,17 +2901,50 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **FR-083**: The periodic flusher MUST make a dirty session's `stats.json` current **without any external trigger** — no `Close`, no `SetMeta`, no `DeleteSession`, no `CloseSession`, no test-driven tick. `[grill C-4]` Every other W24 requirement is satisfiable by a store whose flusher goroutine was never started; under the production shape (a long-lived gateway that never calls `Close`) that means `stats.json` is stale for the process lifetime.
 - **FR-084**: Each of W23's four targeted writers MUST update **only its own field group** within the cached `*UnifiedMeta` and MUST NOT replace the cache entry wholesale; and a `readMetaLocked` cache-miss compose MUST NOT overwrite an entry marked dirty. `[grill C-5]` `writeMetaLocked` ends today with a whole-document `us.metaCache[sessionID] = meta.Clone()` (`pkg/session/unified.go:798`), documented at `:780` as "the single invalidation/update point for every mutation path". The obvious per-writer translation of that shape discards every unflushed `Stats.*` delta — Alternative F's clobber, one layer up from the file the spec proved it away on.
 - **FR-085**: Every negative, exclusion or static gate MUST assert a **stated positive lower bound** before its zero-assertion, and MUST fail if its search located fewer occurrences than that bound. The bounds are enumerated in "Negative-gate positive lower bounds" and MUST be restated in the test's own comment so drift is visible in review. `[grill C-3]`
-- **FR-086**: `ListSessions`'s consistency model after striping MUST be stated in code and honoured: a **best-effort point-in-time snapshot** that MAY omit a session deleted during the call, MUST NOT return a session whose directory was already absent when the call began, and MUST NOT panic, deadlock or return a partially-composed meta. `[grill M-14]` Today the whole method runs under `us.mu.Lock()` and `pkg/session/unified.go:1240-1246` documents why; FR-051's split creates a window that must be specified rather than discovered.
+- **FR-086**: `ListSessions`'s consistency model after striping MUST be stated in code and honoured: a **best-effort point-in-time snapshot** that MAY omit a session deleted during the call, MUST NOT panic, deadlock or return a partially-composed meta, and MUST NOT return a session whose directory was already absent when the call began — **which requires the reconcile pass to prune, and FR-097a makes that a requirement rather than an assumption.** `[grill M-14; grill2 M2-7 — the second clause was stricter than the design it claimed to describe.]` Verified: `ListSessions` snapshots `us.metaCache` and its reconcile pass only **adds** entries for out-of-band directories (`pkg/session/unified.go:1251-1280`) — it never removes a cache entry whose directory has vanished, so a directory deleted **out of band** (`RetentionSweep`, an operator `rm`, a crashed deploy — exactly AC-19's cases) stays cached and is returned forever. The codebase already knows this failure by name: `ClearAll` carries a targeted stat-and-prune loop at `:1483-1487` whose comment (`:1474-1482`) says removing it leaves *"ListSessions to resurrect sessions that are gone from disk."* That loop is the in-house precedent FR-097a generalises. Today the whole method runs under `us.mu.Lock()` and `:1240-1246` documents why; FR-051's split creates a window that must be specified rather than discovered.
 - **FR-087**: `t.tasks` and `t.sessionIndex` MUST each be bounded by a stated constant `C`, enforced after eviction. A task within its TTL MUST be retained so eviction cannot break `delegate action=status`. `[grill M-10]`
 - **FR-088**: The child-turn terminal path in `pkg/agent/subturn.go` (**owned by U7**) MUST invoke `CloseSession(childID, "delegate_terminal")` on each of the four terminal states — completed, cancelled, failed, abandoned — using the entry point at `pkg/agent/session_end.go:32` (**owned by U17**, signature unchanged). `[grill M-13]` No such call site exists in the tree, and v1 assigned "W10 (teardown call site)" to U11, whose file is the *user* session-close path.
 - **FR-089**: The W5 audit MUST produce a **committed classification artefact** assigning each of the 19 `SESSION_SCOPED_FRAME_TYPES` to exactly one of class **(a)** child-turn-produced → both ids, **(b)** root/gateway-produced → `producing_session_id` absent, **(c)** documented pre-existing gap. Every type MUST be asserted per its class, and a gate MUST fail if any of the 19 is unclassified. `[grill M-8]` A single outline asserting one property across all 19 is false for at least five of them.
 - **FR-090**: W20's conversion boundary MUST be stated and MUST be complete within it: **every field and parameter in `turnState`, `processOptions` and the `UnifiedStore` public API** carries `SessionID` or `RoutingSessionID` rather than a bare `string`. References outside that boundary are explicitly out of scope for this change. `[grill o-2]` With 116 non-test `transcriptSessionID` references across 18 files, a partial conversion is the likely outcome; test #3 proves the types do not interconvert, not that they are used.
 - **FR-091**: `GET /api/v1/sessions` MUST return **root** sessions (`ParentSessionID == ""`) only, each carrying a `child_count`, and MUST accept a `parent_session_id` filter returning exactly that node's **direct** children. A session whose `ParentSessionID` names a session that no longer resolves MUST be returned as a **root**. `[operator 1]` This is the resolution of ADR-057 §9's R-9 open question: **nested under parent**, explicitly **not** the `verifier` hidden-with-a-flag precedent.
-- **FR-092**: Pagination MUST be implemented at each of the four layers, each with exactly one owner, and each MUST bound its own cost rather than loading the full set and slicing: `UnifiedStore.ListSessions` (`pkg/session/unified.go:1247`, **U6**), `AgentLoop.ListAllSessions` (`pkg/agent/loop.go:5046`, **U9**), `restAPI.listSessions` (`pkg/gateway/rest.go:758-812`, **U18**), `fetchSessions` (`src/lib/api.ts:1379-1388`, **U12**). `[grill M-1]` v1 assigned W16 to U12 + U18 only. Verified: **none of the four takes a limit or offset today.**
+
+  **Response shape — decided, not left to the implementer** `[grill2 M2-10]`. `listSessions` (`pkg/gateway/rest.go:795-811`) **already** returns a discriminated union: a bare `[]gen.Session` when there are no partial errors, otherwise `gen.ListSessions200JSONResponseBody1{Sessions, PartialErrors}` — with generated `As*`/`From*`/`Merge*` accessors at `pkg/api/generated/openapi_types.gen.go:14816-14862`. Adding `child_count` and a paging envelope therefore **reshapes an existing `oneOf`**, which this project constrains by hard precedent: **`oneOf` + discriminator wrappers MUST be hosted INLINE in `openapi.yaml` over internal `#/components/schemas/…` refs** (ADR-034; oapi-codegen inlines external file refs inside a `oneOf` as anonymous structs and emits non-compiling `As*` accessors; precedent `AgentCreateRequest`). The decisions:
+  - The paged envelope is a **new named schema `SessionPage`** `{sessions: [Session], next_cursor?: string, partial_errors?: [string]}`, hosted **inline in `openapi.yaml`** per ADR-034, replacing the two-variant `oneOf` with **one** shape. The bare-array variant is retired — greenfield permits it (operator decision 1) and one shape removes the discriminator problem rather than deepening it.
+  - **`partial_errors` composes with paging**: a page whose merge hit a failing legacy store is **still a page** — it returns its rows, populates `partial_errors`, and **still returns `next_cursor`**. A store that errored contributes no rows and does not halt the cursor (see FR-098).
+  - **`include_verifier` × roots-only**: `include_verifier` continues to gate *inclusion of verifier sessions*, orthogonally to hierarchy. A verifier session with no parent is a root; one with a parent is reachable only via `parent_session_id`. Absent the flag, verifier sessions are excluded from both surfaces and are **not** counted in `child_count`.
+- **FR-092**: Pagination MUST be implemented at each of the four layers, each with exactly one owner: `UnifiedStore.ListSessions` (`pkg/session/unified.go:1247`, **U6**), `AgentLoop.ListAllSessions` (`pkg/agent/loop.go:5046`, **U9**), `restAPI.listSessions` (`pkg/gateway/rest.go:758-812`, **U18**), `fetchSessions` (`src/lib/api.ts:1379-1388`, **U12**). Verified: **none of the four takes a limit or offset today.** `[grill M-1]`
+
+  **Where cost MUST be bounded, and where an in-process sort is the accepted design** `[grill2 C2-2 — MEANING CHANGED from v2.]` v2 required that each of the four layers "bound its own cost rather than loading the full set and slicing". That is **not implementable** at the two backend layers and its own test (#100) was therefore either impossible or vacuous. Verified: `UnifiedStore.ListSessions` builds its result by ranging `us.metaCache` — a Go **map**, i.e. unordered — then `slices.SortFunc` by `UpdatedAt` descending (`:1283-1291`); there is no recency-ordered index on disk or in memory, and none was required by any FR. `AgentLoop.ListAllSessions` merges the shared store with **every** legacy per-agent store, de-duplicates against `sharedIDs`, then sorts the union (`pkg/agent/loop.go:5046-5090`). A recency-ordered page from either shape **requires** materialising and sorting the whole set.
+
+  The requirement is restated to match the design, and the design is stated:
+  - **Store and loop layers: an in-process sort over resident data is the design, explicitly accepted.** `metaCache` already holds every session's composed meta — that is its purpose, and FR-058 asserts a cache hit costs **zero** disk reads. So the sort touches **no disk**: there is no I/O cost to eliminate, and adding a persisted recency index would be a large new mechanism buying nothing. What these layers MUST guarantee instead is (a) they return exactly the requested window of the recency-ordered sequence, (b) the window is **stable** across repeated calls with no intervening write, and (c) a paged call performs **zero per-session disk reads** against a warm cache (instrumented via FR-103's read seam, shared with #103). An implementation that ignores `limit`, orders non-deterministically, or re-reads meta files per page fails (c) — and those are the failure modes that actually matter here.
+  - **Boundary layers: cost MUST be O(page), not O(N).** `restAPI.listSessions` MUST serialise at most `limit` rows — response body size scales with `limit`, not with total session count — and `fetchSessions` MUST request and hold at most one page, with `SearchModal`'s rendered node count bounded by the viewport (FR-094). These are the layers where unbounded cost is genuinely paid: JSON serialisation and DOM nodes.
+
+  The two mechanisms US-19 needed and no v2 FR provided are **FR-097** (parent index, for `child_count` and orphan detection) and **FR-098** (cross-store ordering and cursor contract).
 - **FR-093**: The sidebar MUST render the session tree — roots at the top level with an expand affordance, children collapsed by default — and its visible budget (`maxVisible`, `src/components/layout/Sidebar.tsx:456-457`) MUST apply to **roots**, so a wide fan-out cannot evict a parent chat. `[operator 1]`
 - **FR-094**: `SearchModal` MUST nest matching children under their parent (showing the parent for context even when only a child matched) and MUST render the list **virtualized**. `[operator 1]` It currently fetches every session (`src/components/search/SearchModal.tsx:363`) and renders `groups.map(...)` unwindowed (`:687`); under D1 that list grows by every delegated child at every depth.
+- **FR-095**: The root-delegation cap MUST be sourced from `agents.defaults.subturn.max_concurrent` (`pkg/config/config.go:1343`, type at `:1301-1302`, resolved at `pkg/agent/subturn.go:64-69`) and MUST NOT be sourced from `Performance.EffectiveMaxParallelAgents()`. `[operator 4; grill M-7]` No new config key is introduced. The distinction is load-bearing: the former is honoured **unclamped** when > 0, the latter is hard-capped at 16 by `clampParallelExplicit` (`pkg/config/config.go:459-468`) — which is the 16 the UAT observed, and which would make AC-10's "refuses the 25th" unrunnable.
+
+  **The unset case — the shipped default — is now defined, seeded and covered** `[grill2 M2-1]`. Verified: `rg SubTurn pkg/config/defaults.go` returns **nothing**, so on a fresh install `MaxConcurrent == 0` and the resolver FR-095 cites takes exactly the branch FR-095 forbids (`subturn.go:64-69`: `if maxConcurrent <= 0 { maxConcurrent = al.cfg.Performance.EffectiveMaxParallelAgents() }`). v2 left an implementer three readings and picked none, and **every visible test set the key explicitly to 24 — so the configuration every install ships with had zero coverage.** The resolution:
+  - **U28 MUST seed `agents.defaults.subturn.max_concurrent = 16` in `pkg/config/defaults.go`.** 16 matches what `clampParallelExplicit` already caps the fallback at, so the seeded default changes **no** shipped behaviour — it only makes the value explicit, keeps the root gate off the forbidden branch, and gives an operator one number to raise.
+  - **The root gate MUST read the key directly, not via `getSubTurnConfig()`**, and MUST treat a value `≤ 0` as a **configuration error surfaced at boot** — never as "no gate". "No gate" silently restores the ungated root fan-out W17 exists to prevent, which is the ADR-037 anti-pattern this project bans.
+  - **Two scopes now share one number, intentionally, and the spec says so.** The key's existing semantics are a **per-parent-turn, in-turn fan-out** semaphore (`subturn.go:1051` creates it on the *child*; the guard is `:607` on `parentTS.concurrencySem`). W17's gate is a **process-global root-level** admission cap. Reusing the value is operator decision 4; that the two scopes are different and deliberately share one knob is recorded here so it is not later mistaken for a bug.
+  - Coverage: **BDD-108 / #112 / SC-050** exercise the **unset** case explicitly.
 - **FR-096**: `CreateSessionWithID` MUST detect a child id that collides with an existing session directory and MUST fail loudly rather than adopting it. Under no circumstance may a child silently inherit a pre-existing session's transcript, meta, owner or stats. `[grill §6 STRIDE note]` `createSessionLocked` calls `os.MkdirAll` (`pkg/session/unified.go:463`), which is **idempotent and silent**, and FR-005 said nothing about an existing directory — so a child adopting another session's transcript, meta, owner and stats was the **default** behaviour, with no requirement anywhere obliging an implementer to defend against it.
-- **FR-095**: The root-delegation cap MUST be sourced from `agents.defaults.subturn.max_concurrent` (`pkg/config/config.go:1304`, resolved at `pkg/agent/subturn.go:64-69`) and MUST NOT be sourced from `Performance.EffectiveMaxParallelAgents()`. `[operator 4; grill M-7]` No new config key is introduced. The distinction is load-bearing: the former is honoured **unclamped** when > 0, the latter is hard-capped at 16 by `clampParallelExplicit` (`pkg/config/config.go:459-468`) — which is the 16 the UAT observed, and which would make AC-10's "refuses the 25th" unrunnable.
+
+### Added in v3 (grill #2)
+
+`[grill2 C2-2, M2-1, M2-3, M2-6, M2-7, M2-9, C2-4]` Each requirement below exists because grill #2 found a property the spec **asserted or relied on** with nothing obliging anyone to build it.
+
+- **FR-097**: The store MUST maintain an **in-memory parent index** alongside `metaCache`, guarded by the same `cacheMu`, mapping `parentSessionID → set(childSessionID)` plus the derived `child_count` per session. It MUST be updated in every place `metaCache` is mutated — create, meta write, delete, eviction, reconcile — so `child_count` for a page of roots and orphan detection are **O(1) per row** rather than O(all sessions) per page. `[grill2 C2-2]` FR-091 requires a `child_count` per root and FR-106-style orphan detection; the session store has **no** parent index (`ParentSessionID` is a brand-new field, FR-008) and U13's parent index is over **lifecycle records**, not sessions, with no FR bridging them. Owner: **U4** creates the index surface (it owns the lock + cache surface); **U6** consumes it for listing. Dataset: "Session parent index".
+  - **FR-097a**: The `ListSessions` reconcile pass MUST **evict** a cached entry whose session directory no longer exists, under that session's shard, and MUST update the parent index accordingly. `[grill2 M2-7]` This is the mechanism FR-086's second clause requires and v2 left unimplemented. The in-house precedent is `ClearAll`'s stat-and-prune loop (`pkg/session/unified.go:1483-1487`), whose own comment names this failure: *"leaving ListSessions to resurrect sessions that are gone from disk."* Pruning MUST NOT disturb `cacheLoadFailures`' documented limitation (a session that failed to load at construction stays excluded for the process lifetime — Ambiguity item 8): a pruned entry is one whose **directory** is gone, which is a different set.
+- **FR-098**: `ListAllSessions` MUST define its **cross-store ordering and cursor contract**: (a) the merged sequence is ordered by `UpdatedAt` descending with the **session id as a stable tiebreak**, so equal timestamps cannot reorder between calls; (b) paging is **offset-based over that merged sequence**, and a cursor remains valid for the duration of a client's expansion even if a store's contents change — a shifted window is acceptable, a duplicated or skipped row within one page is not; (c) a legacy per-agent store that **errors mid-merge** contributes zero rows, appends to `partial_errors`, and **does not halt the page or invalidate the cursor** (today it already `continue`s and appends to `errs`, `pkg/agent/loop.go:5070-5075`). `[grill2 C2-2, M2-10]` v2 gave this layer one cross-unit-request line and no ordering, stability or error contract at all. Owner: **U9**.
+- **FR-099**: The transcript **mutate** path — `mutateToolCallInTranscript` (`pkg/agent/approval_transcript.go:188+`), reached from `replaceToolCallInTranscript` (`:176-186`) and `external_dispatch.go`'s result updater — MUST surface "session not found" and "entry not found" as a **counter increment plus a WARN**, rather than the bare `false` it returns today. `[grill2 M2-3]` This is the one genuine hazard on U22's original path, and v2 covered it with **no requirement at all**: verified, `grep AppendTranscript pkg/agent/external_dispatch.go pkg/agent/approval_transcript.go` matches **only two doc comments** (`external_dispatch.go:581`, `approval_transcript.go:166`) — **neither file contains a single `AppendTranscript` call**, so U22's v2 work item was factually empty while the real read-modify-write silent-failure went unrequired. It is the same success-shaped failure as AC-1's, on the mutation side. Owner: **U22**.
+- **FR-100**: Every doc comment naming a symbol this change retires MUST be rewritten or removed in the same change set. `[grill2 C2-4]` FR-041 leaves **~25 references across eight files** (`cancel_prearm.go`, `external_dispatch.go`, `loop.go`, `orphan_watch.go`, `subturn.go`, `turn.go`, `config.go`, `approvals.go`) naming `InterruptSession`/`InterruptSessionHard`/`InterruptBySessionKey`/`InterruptBySessionKeyHard` in prose. These are **not** compile breaks — which is why their owners do not acquire a wave dependency on U8 — but this spec already treats stale comments as defects worth a gate (FR-022, FR-037, FR-059, tests #12/#19), and leaving 25 comments describing a four-entry-point API after collapsing it to one is exactly the doc-rot those gates exist to prevent. Each file's existing owner performs the rewrite in its own commit. Enumeration command is stated in FR-041.
+- **FR-101**: `sessionLock` acquisition and release MUST go through a **package-level indirection** that U4 owns, defaulting to the direct path and overridable in-package, so lock **order** is observable to a test. `[grill2 M2-6]` #88 is the sole coverage of SC-038 and BDD-92 requires "an instrumented lock wrapper recording every acquire and release in order" — a production seam **no v2 requirement obliged anyone to build** (FR-048 specifies the shard pool copying `lifecycle_lock.go:17-39`, which exposes no hook). Go's race detector is not a lock-order checker, so there is no alternative. Owner: **U4**.
+- **FR-102**: FR-051's **reconcile → snapshot boundary** MUST expose an in-package test barrier allowing a `DeleteSession` to be interleaved deterministically between the two phases. `[grill2 M2-6]` BDD-95/#92 require exactly that interleaving across "100 interleavings" (SC-041) and v2 required no mechanism to produce it. Owner: **U6**. If the barrier is judged too invasive at implementation time, the fallback is stated rather than discovered: #92 becomes a stress loop with a declared iteration count and SC-041 drops the word "deterministic" — **that choice must be recorded in the ADR, not made silently in a test file.**
+- **FR-103**: `readUnifiedMeta`'s file reads MUST go through a package-level `readFileFn` var mirroring the existing injectable write seam `writeFileAtomicFn` (`pkg/session/unified.go:793`). `[grill2 M2-6]` #103 asserts "zero disk reads on a cache hit" and FR-092's bounded-cost clause (c) reuses the same counter; the store has an injectable **write** seam today and **no read seam**, so neither assertion was constructible. Owner: **U5**.
+- **FR-104**: Per-session token accounting MUST remain complete under roots-only listing. `GET /api/v1/sessions` MUST accept **`flat=true`**, which returns every session — roots and subordinates — as a flat, paged list with `child_count` still populated; `UsageScreen`'s "By session" tab MUST use it. `[grill2 M2-9]` `src/components/screens/UsageScreen.tsx:282` calls `fetchSessions(undefined, undefined, { includeVerifier: true })` to back that tab. Under D1 a large share of token spend moves into delegated child sessions, so roots-only would make that spend **silently disappear** from per-session accounting and materially weaken ADR-052's SC-014 (verifier LLM spend auditable per session). v2's Assumptions acknowledged the response-shape break and the regression analysis stopped there — an audit regression with no requirement, no dataset row and no owner. `flat=true` is orthogonal to `parent_session_id`; supplying both is a 400.
 
 ---
 
@@ -2612,7 +2965,7 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **SC-013**: A sibling's attempt at each of the six gated actions against another sibling returns an ownership error in 6 of 6 cases; the root chat's attempt against a grandchild succeeds in 6 of 6.
 - **SC-014**: The interrupt API exposes exactly one entry point (plus its `Hard` variant) and the scope argument is non-optional, proven by a compile-fail fixture.
 - **SC-015**: `delegate action=status` returns a non-empty activity snapshot for both a sync and an async delegation.
-- **SC-016**: Wall-clock for 2N concurrent single-session writers is less than 2× the wall-clock for N, on the same box and filesystem, with the pre-change store's measurement recorded as the baseline that must be beaten — **and** throughput still rises from 64 to 128 concurrent sessions, proving no fixed cap above the tested N (FR-052). `[grill M-11]`
+- **SC-016**: Wall-clock for 2N concurrent single-session writers is less than 2× the wall-clock for N, on the same box and filesystem, with the pre-change store's measurement recorded as the baseline that must be beaten — **and** a static gate reports **zero** constants bounding the number of concurrent session writers in the store's write path (FR-052), having first located ≥ 1 write-path function. `[grill M-11; grill2 M2-4 — the v2 clause "throughput still rises from 64 to 128" is unmeasurable-as-true: 64 shards guarantee ≥ 2 sessions per shard at N=128, and the work inside a shard is fsync-bound. FR-052 is a design property and is now asserted as one.]`
 - **SC-017**: A `-race` run over concurrent create/append/`SetMeta`/`ListSessions`/`DeleteSession` on overlapping and disjoint ids reports zero data races and completes without deadlock.
 - **SC-018**: Zero `cacheMu` critical sections contain an `os.*` or `fileutil.*` call, verified by a static gate.
 - **SC-019**: After a create plus one `/goal set`, one `/loop` start and one transcript append, the session directory contains exactly the four expected files and zero fields appear in more than one of them.
@@ -2631,21 +2984,28 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - **SC-032**: All twelve named gate test files exist and each carries the `// ADR-057-W22-inverted` marker; zero are deleted. Whether each *asserts* the new invariant is a recorded **review-gate** sign-off, not an automated criterion. `[grill m-3]`
 - **SC-033**: The W22 commit's file list contains zero non-`_test.go` files.
 - **SC-034**: `gofmt -l . | wc -l` is 0, `golangci-lint run --build-tags=goolm,stdjson` exits 0, `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 ./...` exits 0 in CI, `govulncheck ./...` reports 0 vulnerabilities, `npm run typecheck` and `npx vitest run` exit 0, and `make verify-contracts` exits 0.
-- **SC-035**: Each of the eleven negative/static gates fails **red** when its search target is deliberately renamed (mutation check, #91), and each asserts its stated positive lower bound before its zero-assertion — 11 of 11. `[grill C-3]`
+- **SC-035**: **Every** row of the "Negative-gate positive lower bounds" table — currently **13**, and generated by rule 4's membership predicate rather than fixed at eleven — fails **red** when its search target is deliberately renamed (mutation check, #91, run against a `t.TempDir()` copy scoped to the gate's own package, `pkg/gateway` gates in CI only), and each asserts its stated positive lower bound before its zero-assertion — 13 of 13. `[grill C-3; grill2 M2-5 — v2 scored this "11 of 11" while two gates of the same shape (#104, #106) had been added outside the list, one of them the sole coverage of a security property.]` If #91's mutation mechanism is downgraded to a review gate per FR-085, this criterion is scored as a recorded sign-off and that fact is stated here rather than left implicit.
 - **SC-036**: With one append and **no** other action — store never closed, no `SetMeta`, no `DeleteSession`, no `CloseSession`, no test-driven tick — `stats.json` on disk is current after one flush interval elapses, in 100 % of trials. `[grill C-4]`
 - **SC-037**: After K unflushed appends followed by a `/goal set` and a `Status` transition and then a forced flush, `stats.json` equals K's exact deltas — zero lost, zero double-counted — while `goal.json` and `meta.json` each carry their own writer's value. `[grill C-5]`
 - **SC-038**: An instrumented lock wrapper over `CreateSessionWithID` records zero instants at which two session shards are held simultaneously, and records `ClearAll`/`RetentionSweep` acquiring all 64 shards in strictly ascending index order. `[grill C-6]`
 - **SC-039**: With distinct parent and child session ids, the inherited grant is **absent** under `{childSessionID, childAgentID}` before the spawn and **present** after, while remaining present under `{parentSessionID, parentAgentID}` — 3 of 3 assertions in one run. `[grill C-1]`
 - **SC-040**: A child's pending-approval registry entry carries the child's own session id in 100 % of trials, and a client **approve** on a routing-keyed frame resolves to that entry by approval id and completes the child's tool call. `[grill M-6]`
-- **SC-041**: A `ListSessions` interleaved with `DeleteSession` between the reconcile pass and the snapshot returns a result consistent with the stated model, with zero panics, zero deadlocks and zero partially-composed metas across 100 interleavings. `[grill M-14]`
+- **SC-041**: A `ListSessions` interleaved with `DeleteSession` **at FR-102's reconcile→snapshot barrier** returns a result consistent with the stated model — the deleted session MAY be omitted and MUST NOT be a partially-composed meta — with zero panics, zero deadlocks and zero partially-composed metas across 100 interleavings. `[grill M-14; grill2 M2-6, M2-7 — "consistent with the stated model" was unfalsifiable while FR-086's second clause was stricter than the design; FR-097a supplies the prune that makes it true, and FR-102 supplies the barrier that makes "interleaved" reproducible. If FR-102's barrier is not built, this criterion becomes a stress loop with a declared iteration count and the word "deterministic" is struck — recorded, not decided in a test file.]`
 - **SC-042**: After N ≫ C terminal delegations past TTL, `len(t.tasks) ≤ C` and `len(t.sessionIndex) ≤ C`; a terminal task within TTL is still present and `delegate action=status` still returns for it. `[grill M-10]`
-- **SC-043**: With one parent chat and 24 children, `GET /api/v1/sessions` returns the parent with `child_count == 24` and zero children inline; `?parent_session_id=<parent>&limit=10` returns exactly 10 direct children and a next cursor; and each of the four layers bounds its own cost. `[operator 1; grill M-1]`
+- **SC-043**: With one parent chat and 24 children, `GET /api/v1/sessions` returns the parent with `child_count == 24` and zero children inline; `?parent_session_id=<parent>&limit=10` returns exactly 10 direct children and a next cursor; **the REST response carries ≤ `limit` rows with body size scaling on `limit` and not on total session count; the SPA holds at most one page; each of the four layers returns exactly the requested window of the recency-ordered sequence, stably across repeated calls; and a warm-cache paged call performs zero per-session disk reads.** `[operator 1; grill M-1; grill2 C2-2 — v2's "each of the four layers bounds its own cost" was not achievable at the store and loop layers and its test was therefore unwritable. The obligation is now split: O(page) at the boundary layers, correctness-stability-and-zero-disk-reads at the backend layers.]`
 - **SC-044**: While a 24-way root fan-out runs, a second session's inter-token interval satisfies the **slope** assertion against the pre-change baseline on the same box (no millisecond constant), and the 25th root delegation is refused. `[operator 3, 4; grill M-7]`
 - **SC-045**: The W5 classification artefact assigns all 19 session-scoped frame types to (a), (b) or (c), with zero unclassified, and the gate fails if a type is added to `SESSION_SCOPED_FRAME_TYPES` without a class. `[grill M-8]`
 - **SC-046**: A Stop on a chat with descendants at depths 1, 2 and 3 produces a `turn_canceled` audit entry whose `descendants_canceled` contains all three turn ids. `[grill M-12]`
 - **SC-047**: `CloseSession` is invoked from the child-turn terminal path for each of the four terminal states — 4 of 4 — and after each, the child's grant set, `loadedTools` bucket, `metaCache` entry and `recallSpans` entries are absent. `[grill M-13]`
 - **SC-048**: The flush-interval config key exists, resolves to **5 s** with no operator override, and a non-default value is honoured end to end. `[operator 2; grill m-5]`
 - **SC-049**: A `CreateSessionWithID` against an id whose directory already exists fails loudly in 100 % of trials, and the pre-existing directory's `transcript.jsonl`, `meta.json` and `stats.json` are byte-unchanged afterwards. `[grill §6 STRIDE note]`
+- **SC-050**: On a **fresh install with no operator override**, the root-delegation cap resolves to the seeded **16**, the gate is active (the 17th concurrent root delegation is refused), and the resolution did not pass through `Performance.EffectiveMaxParallelAgents()` — asserted with the key absent from config, not set to a value. A configured `≤ 0` aborts boot with a named error. `[grill2 M2-1]`
+- **SC-051**: A session directory removed **out of band** is absent from the next `ListSessions` result and from `metaCache` and the parent index, in 100 % of trials; a `cacheLoadFailures` exclusion is unaffected. `[grill2 M2-7]`
+- **SC-052**: `mutateToolCallInTranscript` against (a) a missing session and (b) a missing entry each produce exactly one WARN and one counter increment, distinguishable by record — zero bare `false` returns on either path. `[grill2 M2-3]`
+- **SC-053**: `GET /api/v1/sessions?flat=true` returns every session including subordinates, and the sum of per-session token totals equals the pre-change total for the same logical state — zero spend unaccounted. `flat=true` with `parent_session_id` returns 400. `[grill2 M2-9]`
+- **SC-054**: `child_count` and orphan status for a page of `n` roots resolve in work proportional to `n`, not to total session count, across all ten "Session parent index" dataset rows — 10 of 10. `[grill2 C2-2]`
+- **SC-055**: With one legacy per-agent store failing mid-merge, a paged `ListAllSessions` returns its healthy rows, a populated `partial_errors`, HTTP 200 and a valid `next_cursor`; consecutive pages neither duplicate nor skip a row, and equal-`UpdatedAt` rows keep a stable session-id tiebreak order across repeated calls. `[grill2 C2-2, M2-10]`
+- **SC-056**: Every file returned by the ownership-derivation enumeration (see "Ownership derivation") appears in **exactly one** ownership row — zero unowned, zero doubly-owned, with the two declared `U4→U5→U6` chain files as the only exception; and the wave graph is acyclic with zero units depending on a later wave. Both checked mechanically, with the commands recorded in the completeness check. `[grill2 C2-1, C2-4]`
 
 ---
 
@@ -2792,8 +3152,44 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 | FR-091 | US-19 | W16 | BDD-101, BDD-103, BDD-106 | #98, #99, #108 | AC-10 |
 | FR-093 | US-19 | W16 | BDD-104 | #101 | AC-10 |
 | FR-094 | US-19 | W16 | BDD-105 | #102 | AC-10 |
+| FR-097 | US-19 | W16 | BDD-112, BDD-101, BDD-106 | #116, #98, #108 | AC-10 |
+| FR-097a | US-11, US-19 | W15, W16 | BDD-110, BDD-95 | #114, #92 | AC-20 |
+| FR-098 | US-19 | W16 | BDD-113, BDD-103 | #117, #99 | AC-10 |
+| FR-099 | US-1 | W3 | BDD-109 | #113 | AC-1 |
+| FR-100 | US-9 | W13 | BDD-114 | #118 | AC-8 |
+| FR-101 | US-2, US-11 | W15 | BDD-92 | #88 | AC-20 |
+| FR-102 | US-11 | W15 | BDD-95 | #92 | AC-20 |
+| FR-103 | US-12, US-19 | W23, W16 | BDD-58, BDD-102 | #103, #100 | AC-21 |
+| FR-104 | US-19 | W16 | BDD-111 | #115 | AC-10 |
 
-**Completeness check (v2)**: **96 FRs** (FR-001 … FR-096), every row carrying at least one BDD scenario and at least one test. **106 BDD scenarios** (BDD-01 … BDD-107 with BDD-96/BDD-97 present, contiguous), every one of which appears in at least one row. **19 user stories**, each with ≥ 1 acceptance scenario. **49 success criteria.** **112 test entries** (#1 … #111 plus #68a). Every ADR acceptance criterion AC-1 … AC-22 is referenced by at least one row.
+**Completeness check (v3)**: **104 FRs** (FR-001 … FR-104, plus the sub-requirement FR-097a), every row carrying at least one BDD scenario and at least one test. **114 BDD scenarios** (BDD-01 … BDD-114, machine-verified contiguous: 114 headings, 114 unique ids, min 01, max 114, zero gaps, zero duplicates), every one of which appears in at least one row. **19 user stories**, each with ≥ 1 acceptance scenario. **56 success criteria** (SC-001 … SC-056). **119 test entries** (#1 … #118 plus #68a). Every ADR acceptance criterion AC-1 … AC-22 is referenced by at least one row, and AC-1 … AC-22 remain **byte-identical** to ADR-057 v4.
+
+> `[grill2 m2-3]` v2's check asserted "**106** BDD scenarios" while the document contained **107** — and its own changelog header said 107. A structural check that is itself wrong is worse than none, so v3's counts were produced by command rather than by hand. **Commands run, for re-verification:**
+>
+> ```bash
+> S=docs/internal/specs/adr-057-session-unification-spec.md
+> # BDD: count, uniqueness, contiguity
+> grep -o '^#### BDD-[0-9][0-9]*' $S | sed 's/.*BDD-//' | sort -n > /tmp/bdd
+> wc -l < /tmp/bdd; sort -nu /tmp/bdd | wc -l; head -1 /tmp/bdd; tail -1 /tmp/bdd
+> sort -n /tmp/bdd | awk 'NR==1{p=$1;next}{if($1!=p+1)print "GAP/DUPE "p" -> "$1; p=$1}'
+> # FRs and SCs
+> grep -c '^- \*\*FR-[0-9]*\*\*' $S
+> grep -c '^- \*\*SC-[0-9]*\*\*' $S
+> # Ownership: disjoint AND exhaustive + wave DAG acyclic (SC-056)
+> #   Parse the ownership table, extract every path, cross-check against the symbol
+> #   enumeration in "Ownership derivation"; then parse the wave block and check
+> #   every declared dependency points at a STRICTLY earlier wave.
+> ```
+>
+> **Result of the ownership / wave-DAG check, run 2026-08-03 on `feature/plan-swimlane-board`:**
+>
+> | Property | Result | Detail |
+> |---|---|---|
+> | **Disjoint** | **PASS** | 74 distinct paths, 28 units, **0 collisions**. The only multi-owner paths are `pkg/session/unified.go` and `pkg/session/retention_sweep.go`, both the declared `U4→U5→U6` chain (Rule 1) |
+> | **Exhaustive** | **PASS** | 57 files returned by the enumeration; **0 unowned**; 17 explicitly out of scope with stated reasons |
+> | **Wave DAG** | **PASS** | 28 units placed across waves A–H; **0 forward and 0 unknown dependencies**; acyclic by construction. The one same-wave edge (U2↔U5, Wave C) is a declared **frozen contract** under Rule 7, not an ordering edge |
+>
+> **This check is what found the eleventh unowned file** — `pkg/sysagent/tools/diag.go` — *after* grill #2's ten had already been assigned. v2 described its table as "machine-checked" without stating what was checked; v3 states the property, the command, and the result.
 
 **Two columns now legitimately read `—`.** `[grill M-11]` FR-072 and FR-073 are **process** requirements (W22's commit shape). W22 has **no** acceptance criterion in ADR-057 §10, and v1 filled the column with **AC-8**, which is the interrupt-scope criterion and has nothing to do with commit shape. A fabricated mapping is worse than a blank one: it makes a structural completeness check pass while the row means nothing. The column is now blank with a stated reason.
 
@@ -2805,28 +3201,28 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 |---|---|---|---|---|
 | W1 | Exact-id session create; copy parent `Owner`; delete `NoHistory` | US-2, US-18 | U2 (store), U7 (agent) | FR-005…FR-007, FR-009, FR-010, FR-075 |
 | W2 | `SessionMeta.ParentSessionID` + subordinate `UnifiedSessionType` + OpenAPI + SPA | US-2, US-14, **US-19** | U5 (store), U10 (contract), U12 (SPA) | FR-008, **FR-091** (its consumer) |
-| W3 | `AppendTranscriptStrict` + convert all writers | US-1 | U2, U3, U11, **U22** | FR-001…FR-003 |
+| W3 | **`AppendTranscript` itself becomes strict** + all 20 invocation sites surface the error + the mutate path | US-1 | U2, **U5** (W3a, the primitive), U3, U11, **U22** (W3b/W3c), **U26** (W3d) | FR-001…FR-003, **FR-099** |
 | W4 | `turnState.routingSessionID`; re-base 7 predicates + pre-arm keys | US-3 | U3, U7, U8, U9, U15 | FR-011, FR-014…FR-016 |
 | W5 | WS contract: routing key + `producing_session_id`; **classify** all 19 frame types | US-3 | U10, U11, U12, **U23** | FR-012, FR-013, FR-018, **FR-089** |
 | W6 | `LifecycleFilter.ParentDurableKey` + parent index + 3 doc rewrites + boot sweep | US-4, US-18 | U13, U14, **U19** (`boot_sweep.go`) | FR-019, FR-020, FR-022, FR-023, FR-078 |
 | W7 | Refuse delegation with no lifecycle store | US-4 | U14, U19 | FR-021 |
 | W8 | Subtree computed once in PHASE A; durable walk; per-descendant transitions | US-5 | U15 | FR-024…FR-026, FR-030 |
-| W9 | Shell ownership + cascade kill + `delegate cancel` kills shells + 3P group | US-5, US-18 | U14, U16 | FR-027…FR-029 |
-| W10 | Grants re-keyed **two-key**; pending-registry re-key + approve round-trip; child `CloseSession` **call site** | US-6 | U7 (call sites), U9 (grant read), U11 (WS), U17 (signatures) | FR-031…FR-033, **FR-079, FR-080, FR-081, FR-088** |
+| W9 | Shell ownership + cascade kill + `delegate cancel` kills shells + **3P process group (W9c, real sites in `pkg/agent/runner/`)** | US-5, US-18 | U14, U16, **U22** (W9c) | FR-027…FR-029 |
+| W10 | Grants re-keyed **two-key**; pending-registry re-key + approve round-trip; child `CloseSession` **call site** + **the teardown flush/eviction it must perform (W10e)** | US-6 | U7 (call sites, W10d), U9 (grant read), U11 (WS), **U17a** (signatures), **U17b** (teardown, W10e) | FR-031…FR-033, **FR-079, FR-080, FR-081, FR-088** |
 | W11 | Delete `IsDelegateChildEntry` + 4 filter sites + 3 comment blocks | US-7 | U5 (predicate), U18 (sites) | FR-034…FR-038 |
 | W12 | Ancestor-chain ownership walk at 6 call sites; inbox producer+consumer move together | US-8, US-18 | U14 (incl. `message_parent.go`) | FR-039, FR-040, FR-076, FR-077 |
-| W13 | One interrupt entry point with explicit `InterruptScope` | US-9 | U8 | FR-041, FR-042 |
+| W13 | One interrupt entry point with explicit `InterruptScope`; **5 compile-breaking files across 4 owners + ~25 doc-comment sites** | US-9 | U8 (+ `pkg/commands/**`), **U14** (W13c), **U15**, **U19** (W13d) | FR-041, FR-042, **FR-100** |
 | W14 | `recentActivityLines` fix; `executeSync` registers state; **bounded** map eviction | US-10 | U14 | FR-043…FR-045, **FR-087** |
-| W15 | Stripe `UnifiedStore.mu`; narrow `cacheMu`; one-directional lock order **with the stated two-session protocol**; `ListSessions` consistency model | US-11 | U4 (+ U2 for the two-session protocol) | FR-048…FR-052, **FR-082, FR-086** |
-| W16 | Pagination through all four **owned** layers; **nested-under-parent listing**, sidebar tree, search tree | US-14, **US-19** | **U6** (store), **U9** (loop), U18 (REST), U12 (client), **U24** (sidebar+search), U10 (contract) | FR-068, **FR-091, FR-092, FR-093, FR-094** |
-| W17 | Root-level delegation admission gate, cap from `subturn.max_concurrent` | US-15, US-18 | U19 | FR-069, FR-070, FR-078, **FR-095** |
+| W15 | Stripe `UnifiedStore.mu`; narrow `cacheMu`; one-directional lock order **with the stated two-session protocol**; `ListSessions` consistency model **+ the prune it requires**; **`retention_sweep.go` shard-order conversion (W15b)**; **three test seams** | US-11 | U4 (+ U2 for the two-session protocol), U6 (FR-097a, FR-102), U5 (FR-103) | FR-048…FR-052, **FR-082, FR-086, FR-097a, FR-101, FR-102, FR-103** |
+| W16 | Pagination through all four **owned** layers; **nested-under-parent listing**, sidebar tree, search tree, **parent index, cross-store cursor contract, flat usage listing** | US-14, **US-19** | **U6** (store), **U9** (loop), U18 (REST), U12 (client + W16h), **U24** (sidebar+search), U10 (contract), **U4** (index surface), **U25** (W16i consumers), **U26** (W16j consumers) | FR-068, **FR-091, FR-092, FR-093, FR-094, FR-097, FR-097a, FR-098, FR-104** |
+| W17 | Root-level delegation admission gate, cap from `subturn.max_concurrent`, **seeded default** | US-15, US-18 | U19, **U28** (W17b seed) | FR-069, FR-070, FR-078, **FR-095** |
 | W18 | Child uploads directory reachable by cascade-delete — **W18a primitive (U20), W18b wiring (U18)** | US-16 | U20, U18 | FR-071 |
 | W19 | Drill-down surface as the stated inspection surface | US-14 | U12, U18, U24 | FR-046, FR-047 |
 | W20 | Named ID types (`SessionID`, `RoutingSessionID`) **+ a stated conversion boundary** | US-1 | U1 | FR-004, **FR-090** |
 | W21 | Pin `SubTurn*Payload.SessionID`; re-point `DelegateTaskState.SessionID` | US-3 | **U23** (types), U7 (assignment), U14 (`DelegateTaskState`) | FR-017 |
 | W22 | Deliberately invert the 12 gate tests, in their own commit; **enforce binding rule 4 across the suite** | US-17, **US-1** | U21 | FR-072…FR-074, **FR-085** |
 | W23 | Split `meta.json` into four files + 2 doc rewrites + **field-group-only cache mutation** | US-12 | U5 | FR-053…FR-060, **FR-084** |
-| W24 | Throttle the counter path; forced flush points; **unforced periodic flush**; event writes immediate | US-13 | U6 | FR-061…FR-067, **FR-083** |
+| W24 | Throttle the counter path; forced flush points **with one stated ordered `DeleteSession` sequence**; **unforced periodic flush**; event writes immediate; **flush-interval config key (W24b)** | US-13 | U6, **U17b** (teardown flush), **U28** (W24b key) | FR-061…FR-067, **FR-083** |
 
 **Hardest to place, stated honestly:**
 
@@ -2928,7 +3324,10 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - Windows has no cross-process file locking anywhere in the file-store family (`pkg/fileutil/flock_windows.go` is a no-op). W15's cross-process assertions are POSIX-only, matching `pkg/entity/store_crossprocess_test.go`'s `//go:build !windows` gate. This is an accepted, documented limitation, not a gap this spec closes.
 - The **W5 audit artefact** (FR-089) is produced before U11/U23 stamp anything, so no frame type is stamped against a class nobody assigned.
 - `agents.defaults.subturn.max_concurrent` is honoured **unclamped** when > 0 (`pkg/agent/subturn.go:64-69`). If a future change routes it through `clampParallelExplicit`, FR-095 and AC-10's 24/25 topology both break — #110 is the tripwire.
-- The listing design (US-19) paginates over **roots** and fetches children on expand. This is a **breaking change to the `GET /api/v1/sessions` response shape**, which greenfield permits (ADR-057 v4 operator decision 1) and which travels through Constraint #8's pipeline as part of W16 — **not** as part of W23, whose AC-21(e) "byte-identical, `verify-contracts` unaffected" is scoped to the file split alone.
+- The listing design (US-19) paginates over **roots** and fetches children on expand. This is a **breaking change to the `GET /api/v1/sessions` response shape**, which greenfield permits (ADR-057 v4 operator decision 1) and which travels through Constraint #8's pipeline as part of W16 — **not** as part of W23, whose AC-21(e) "byte-identical, `verify-contracts` unaffected" is scoped to the file split alone. **The break has three named consumers, not zero** `[grill2 M2-9, M2-10]`: `Sidebar.tsx:172`, `SearchModal.tsx:363` and `UsageScreen.tsx:282` all call `fetchSessions()`, and four SPA test files assert its exact call shape — all now owned and listed under "SPA tests that MUST be deliberately inverted". The existing two-variant `oneOf` collapses to one inline-hosted `SessionPage` schema per ADR-034.
+- **The store-layer sort is over resident data and this is a design decision, not an oversight** `[grill2 C2-2]`. `metaCache` holds every session's composed meta and FR-058 asserts a cache hit costs zero disk reads, so `ListSessions`'s O(N log N) sort touches no filesystem. No persisted recency index is introduced. If the session count ever grows to where an in-process sort of resident metadata is the bottleneck, the resident cache itself is the prior constraint to revisit — not the sort.
+- **The 3P process-group requirement (FR-029) is POSIX-only.** `Setpgid` and process-group signalling have no equivalent in this codebase on Windows; `pkg/agent/runner/procgroup_windows.go` is a documented no-op, matching how W15's cross-process assertions are scoped and how `pkg/fileutil/flock_windows.go` is treated. AC-17(c) is asserted on POSIX.
+- **The seeded `agents.defaults.subturn.max_concurrent = 16` changes no shipped behaviour** `[grill2 M2-1]` — 16 is already what `clampParallelExplicit` caps the fallback at, so the seed makes the effective value explicit rather than altering it. It exists so the resolver never takes FR-095's forbidden branch and so an operator has one number to raise.
 - **Out of scope**: plan cancellation (D9), throttle unification (ratified cut, W17 excepted), `migrateLegacy`/`writeUnifiedMetaDirect`, and any fix to the pre-existing `rate_limit`/`replay_done` frame gaps (operator decision 11 — audit and document, do not fix).
 
 ## Clarifications
@@ -2955,3 +3354,17 @@ Write these before the implementation code. Order is by dependency; the Unit tie
 - Q: Does `producing_session_id` survive replay? → A: **Carried, not reconstructed** (Ambiguity Resolution item 15).
 - Q: Does `ParentSessionID` have a reader, or is W2 a write-only field? → A: **FR-091 is its reader.** Without US-19 it had none, and W2 could have shipped write-only with every test green (`[grill §5, W2]`).
 - Q: Does `CreateSessionWithID` fail or succeed when the directory already exists? → A: **Fails loudly** (FR-096). `os.MkdirAll` at `pkg/session/unified.go:463` is idempotent and silent, so adoption was the default; the property is promoted out of holdout H-7 while H-7's scenario stays a holdout.
+
+### 2026-08-03 (v3, post-grill-#2)
+
+- Q: Does `AppendTranscript` itself become strict, or does the lenient form survive behind a sibling? → A: **`AppendTranscript` itself becomes strict** (FR-002). AC-1's frozen text states the property of `AppendTranscript`, so a sibling satisfies AC-1 only for converted callers. Verified all 20 invocation sites already check the error, so this is also the smaller change (`[grill2 C2-3]`).
+- Q: What maintains the recency order that pagination slices, and how is `child_count` computed without an O(all sessions) scan? → A: **Nothing maintains a persisted order, and none is added.** `metaCache` is resident-everything, so the sort costs no disk; bounded cost is required at the REST and SPA layers only (FR-092). `child_count` and orphan detection come from a new **in-memory parent index** (FR-097) (`[grill2 C2-2]`).
+- Q: What is the root-delegation cap on a fresh install? → A: **16, seeded explicitly** in `pkg/config/defaults.go` by U28 (FR-095). It matches today's effective value, so nothing changes behaviourally — but the resolver stops taking the branch FR-095 forbids, and the case now has coverage (BDD-108, #112) (`[grill2 M2-1]`).
+- Q: Where does per-session token accounting live once the list returns roots only? → A: **`GET /api/v1/sessions?flat=true`** (FR-104), used by UsageScreen's "By session" tab. Roots-only would have silently dropped child spend (`[grill2 M2-9]`).
+- Q: Does the reconcile pass prune cache entries for directories deleted out of band? → A: **Yes, and it is now required** (FR-097a), following `ClearAll`'s existing stat-and-prune loop at `pkg/session/unified.go:1483-1487`. FR-086's second clause was previously stricter than the design it described (`[grill2 M2-7]`).
+- Q: What is the strict contract for the transcript *mutate* path? → A: **Counter + WARN, never a bare `false`** (FR-099) — the read-modify-write twin of AC-1 (`[grill2 M2-3]`).
+- Q: What does `#91` actually execute, given a shared working tree and a local `pkg/gateway` ban? → A: **Mutations against a `t.TempDir()` copy, scoped to the gate's own package; `pkg/gateway` gates run in CI only.** If unaffordable, #91 downgrades to a recorded review gate and SC-035 says so (`[grill2 M2-5]`).
+- Q: Is "read" in #29's K an identifier occurrence, a selector expression, or a dataflow use — and is the pre-arm component 2, 3 or 5? → A: **An AST `SelectorExpr`; the answer is 3 reads across 5 re-based sites**, derived by site in "Three reads, five sites" (`[grill2 M2-8]`).
+- Q: What happens to `partial_errors` under pagination, and does a cursor survive a store that errored mid-page? → A: **The page still returns, `partial_errors` is populated, and the cursor stays valid** (FR-098). The two-variant `oneOf` collapses to one inline `SessionPage` schema per ADR-034 (`[grill2 M2-10]`).
+- Q: Which unit adds the store-flush and `metaCache`-eviction calls to `session_end.go`? → A: **U17b**, split out of U17 and moved to Wave E behind U6. `CloseSession` holds no store reference today (`[grill2 C2-4]`).
+- Q: Do all units owning a file that mentions the retired interrupt API need to wait for U8? → A: **No — only the five with compile breaks.** The other ~25 references are doc comments, handled by FR-100 in each file's existing owner's commit (`[grill2 C2-4]`).
