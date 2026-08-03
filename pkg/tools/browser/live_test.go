@@ -1569,7 +1569,8 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return nil
 			},
 		}
-		x, y := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		require.True(t, ok, "a cache hit must be mappable")
 		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
 		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
 		require.Zero(t, calls, "a cache hit must never call runCDP")
@@ -1588,7 +1589,8 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return nil
 			},
 		}
-		x, y := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		x, y, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		require.True(t, ok, "a successful fetch must be mappable")
 		require.InDelta(t, 100*1280.0/319.0, x, 0.0001)
 		require.InDelta(t, 79*720.0/158.0, y, 0.0001)
 		require.Equal(t, 1, calls)
@@ -1599,7 +1601,13 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 		require.Equal(t, 720, lv.cssViewportH)
 	})
 
-	t.Run("cache miss + fetch failure dispatches unscaled and backs off the next call", func(t *testing.T) {
+	// Rewritten 2026-08-03. This previously asserted that a failed fetch
+	// "dispatches unscaled", on the reasoning that a slightly-off click beats a
+	// dead panel. Measurement disproved the premise: the capture frame and the
+	// CSS viewport differed by 562 vs 369 px, so an unscaled coordinate lands
+	// ~34% off — reliably on the WRONG element. A mis-aimed click can navigate
+	// away, delete or submit; a dropped one is a no-op the user retries.
+	t.Run("cache miss + fetch failure DROPS the event and backs off the next call", func(t *testing.T) {
 		var calls int
 		lv := &LiveView{
 			sessionID: "s1",
@@ -1608,9 +1616,8 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				return fmt.Errorf("simulated CDP hiccup")
 			},
 		}
-		x, y := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
-		require.InDelta(t, 100.0, x, 0.0001, "a failed fetch must dispatch the raw, unscaled coordinate")
-		require.InDelta(t, 79.0, y, 0.0001)
+		_, _, ok := lv.rescaleToCSSViewport(context.Background(), 100, 79, 319, 158)
+		require.False(t, ok, "a failed fetch must report the event as UNMAPPABLE, not dispatch it unscaled")
 		require.Equal(t, 1, calls)
 
 		lv.mu.Lock()
@@ -1619,9 +1626,8 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 		lv.mu.Unlock()
 
 		// Immediately call again — the backoff window must suppress a retry.
-		x2, y2 := lv.rescaleToCSSViewport(context.Background(), 50, 30, 319, 158)
-		require.InDelta(t, 50.0, x2, 0.0001)
-		require.InDelta(t, 30.0, y2, 0.0001)
+		_, _, ok2 := lv.rescaleToCSSViewport(context.Background(), 50, 30, 319, 158)
+		require.False(t, ok2, "inside the backoff window the event must still be dropped, not dispatched unscaled")
 		require.Equal(t, 1, calls, "a second call within the backoff window must not re-invoke runCDP")
 	})
 }

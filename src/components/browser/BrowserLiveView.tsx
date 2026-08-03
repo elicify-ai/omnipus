@@ -2292,14 +2292,31 @@ export function BrowserLiveView({
           handleKeyDown above) — a keyboard-only escape hatch that isn't
           advertised somewhere on screen doesn't satisfy "No Keyboard Trap"
           even once it technically works. */}
-      {visualState === 'you-driving' && (
-        <p
-          data-testid="browser-live-handback-hint"
-          className="shrink-0 px-4 pb-1.5 text-[11px] text-[var(--color-muted)]"
-        >
-          Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
-        </p>
-      )}
+      {/* ALWAYS MOUNTED, visibility-toggled — never conditionally rendered
+          (measured fix, 2026-08-03). Mounting/unmounting this line on every
+          drive-state change resized the live frame by exactly its own height
+          (564 <-> 587px, reproduced deterministically), and the SPA pushes the
+          frame box as the viewport — so every click-to-drive triggered a
+          browser_viewport push -> OS window resize -> full capture rebuild,
+          and invalidated the cached CSS viewport (live.go's
+          invalidateCSSViewportCache). A click arriving inside that window
+          could then take dispatchInput's unmappable path. Reserving the space
+          unconditionally removes the resize, the recapture and the
+          invalidation window in one move.
+
+          aria-hidden while idle so screen readers do not announce an
+          instruction that does not currently apply, matching what sighted
+          users see. */}
+      <p
+        data-testid="browser-live-handback-hint"
+        aria-hidden={visualState !== 'you-driving'}
+        className={
+          'shrink-0 px-4 pb-1.5 text-[11px] text-[var(--color-muted)]' +
+          (visualState === 'you-driving' ? '' : ' invisible')
+        }
+      >
+        Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
+      </p>
 
       {/* Tab strip (ADR-041 D4) — open tabs: favicon-or-globe + truncated
           title/hostname + active highlight + close ✕, plus a trailing ＋ to

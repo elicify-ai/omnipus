@@ -14,7 +14,7 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 
-const { mockSendControl, mockSendInput, mockSendTabAction, callbacksRef } = vi.hoisted(() => ({
+const { mockSendControl, mockSendInput, mockSendTabAction, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
   // Returns `true` by default — mirrors the real BrowserLiveWsConnection's
   // "sent on an OPEN socket" success case. The auto-release effect (and any
   // future caller) reacts to a falsy return as a failed send; tests that
@@ -23,6 +23,9 @@ const { mockSendControl, mockSendInput, mockSendTabAction, callbacksRef } = vi.h
   mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn(),
   mockSendTabAction: vi.fn(() => true),
+  // Hoisted so the layout-stability suite can assert that a drive-state
+  // change pushes NO viewport (the resize-flap regression).
+  mockSendViewport: vi.fn(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
 
@@ -45,7 +48,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           sendTabAction: mockSendTabAction,
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
           // calls this on mount, so every connection double needs it.
-          sendViewport: vi.fn(() => true),
+          sendViewport: mockSendViewport,
           isConnected: true,
         }
       },
@@ -904,15 +907,27 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
   })
 })
 
+// The hint is ALWAYS MOUNTED and visibility-toggled (2026-08-03). It used to be
+// conditionally rendered, which resized the live frame by its own height on
+// every drive-state change (measured 564 <-> 587px) — the SPA pushes the frame
+// box as the viewport, so each toggle forced a window resize + full capture
+// rebuild and invalidated the cached CSS viewport. These assertions therefore
+// check VISIBILITY, not presence: asserting presence again would re-introduce
+// the resize loop the moment someone "fixed" the test.
 describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () => {
   it('shows a hand-back hint using the resolved agent name only while you-driving', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
-    expect(screen.queryByTestId('browser-live-handback-hint')).not.toBeInTheDocument()
+    // Present (so the layout never shifts) but hidden while idle.
+    const idleHint = screen.getByTestId('browser-live-handback-hint')
+    expect(idleHint).toHaveClass('invisible')
+    expect(idleHint).toHaveAttribute('aria-hidden', 'true')
 
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
+
+    expect(screen.getByTestId('browser-live-handback-hint')).not.toHaveClass('invisible')
 
     // No agents query cache populated in this suite — falls back to "the agent".
     expect(screen.getByTestId('browser-live-handback-hint')).toHaveTextContent(
@@ -939,7 +954,9 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
     connectAndFrame()
     setAgentWorking('s1', true)
 
-    expect(screen.queryByTestId('browser-live-handback-hint')).not.toBeInTheDocument()
+    const hint = screen.getByTestId('browser-live-handback-hint')
+    expect(hint).toHaveClass('invisible')
+    expect(hint).toHaveAttribute('aria-hidden', 'true')
   })
 
   it('hides the hand-back hint again once control is released', () => {
@@ -948,12 +965,67 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
-    expect(screen.getByTestId('browser-live-handback-hint')).toBeInTheDocument()
+    expect(screen.getByTestId('browser-live-handback-hint')).not.toHaveClass('invisible')
 
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
     })
 
-    expect(screen.queryByTestId('browser-live-handback-hint')).not.toBeInTheDocument()
+    // Hidden again, but STILL MOUNTED — the frame box must not change height.
+    const released = screen.getByTestId('browser-live-handback-hint')
+    expect(released).toHaveClass('invisible')
+    expect(released).toHaveAttribute('aria-hidden', 'true')
+  })
+})
+
+// Regression coverage for the resize flap (measured live on UAT, 2026-08-03).
+//
+// The hand-back hint used to be conditionally rendered, so taking or releasing
+// the wheel changed the live frame's height by exactly the hint's own height
+// (reproduced deterministically: 564 <-> 587px). The SPA pushes the frame box
+// as the viewport, so every click-to-drive produced:
+//   browser_viewport push -> OS window resize -> full capture rebuild
+//        -> cached CSS viewport invalidated -> the next click could take
+//           dispatchInput's unmappable path and land off-target.
+//
+// This is the operator-reported "mouse clicks work only sometimes". The test
+// asserts the INVARIANT that prevents it: drive-state changes must never add or
+// remove nodes above the frame.
+describe('BrowserLiveView — layout stability across drive-state changes', () => {
+  it('keeps the hand-back hint mounted so the frame never resizes', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    const hintCount = () => screen.queryAllByTestId('browser-live-handback-hint').length
+    const idle = hintCount()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    const driving = hintCount()
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
+    })
+    const releasedAgain = hintCount()
+
+    expect(idle).toBe(1)
+    expect(driving).toBe(1)
+    expect(releasedAgain).toBe(1)
+  })
+
+  it('does not push a new viewport when only the drive state changes', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+
+    mockSendViewport.mockClear()
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
+    })
+
+    expect(mockSendViewport).not.toHaveBeenCalled()
   })
 })

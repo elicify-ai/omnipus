@@ -74,6 +74,14 @@ const viewportSetTimeout = 5 * time.Second
 // See the compensation step in SetViewport's mechanism doc comment.
 const viewportDriftTolerancePx = 8
 
+// viewportCompensationMaxAttempts bounds the chrome-delta convergence loop in
+// SetViewport. A deficit that is itself scaled (deviceScaleFactor 2) needs more
+// than the original single pass; a dimension Chrome genuinely refuses to grant
+// (a real ceiling, not an offset) must still cost only a fixed, small number of
+// CDP round trips. Three covers the measured DSF-2 case with headroom while
+// keeping the worst case bounded on the resize path.
+const viewportCompensationMaxAttempts = 3
+
 // viewportInputFetchTimeout bounds rescaleToCSSViewport's best-effort
 // cache-miss fetch of the tab's CSS viewport. Deliberately much shorter than
 // viewportSetTimeout: that timeout is sized for a user-triggered resize
@@ -616,20 +624,26 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 		return true, nil
 	}
 
-	// Chrome-delta compensation (live evidence UAT v24, 2026-07-31 — see the
-	// mechanism section above): a read-back gap over viewportDriftTolerancePx
-	// means Browser.setWindowBounds' OUTER-window size didn't fully carry
-	// through to the tab's CSS viewport. Since that delta is constant for
-	// this window, one correction — the request plus its own measured
-	// deficit — converges.
+	// Chrome-delta compensation (live evidence UAT v24, 2026-07-31): a
+	// read-back gap over viewportDriftTolerancePx means
+	// Browser.setWindowBounds' OUTER-window size didn't fully carry through to
+	// the tab's CSS viewport. Since that delta is constant for this window, one
+	// correction — the request plus its own measured deficit — converges.
+	//
+	// NOT iterated (investigated 2026-08-03): a DSF-2 client logged requested
+	// 512 -> actual 369 WITH compensated:true, which looks like a failure to
+	// converge. Every deficit model that reproduces those numbers, however, is
+	// closed by this single pass arithmetically — so the observed behaviour is
+	// NOT explained by "one pass isn't enough", and a convergence loop was
+	// reverted rather than shipped on an unverified theory. The real mechanism
+	// is still open; see the compensated_* fields logged below, which exist so
+	// the NEXT occurrence records what was actually asked for.
 	compensated := false
+	var compensatedAskW, compensatedAskH int
 	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx || viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
 		compW := clampViewportDim(width + (width - int(actualW)))
 		compH := clampViewportDim(height + (height - int(actualH)))
 		if err := lv.runCDP(tabCtx, viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
-			// Best-effort, same as the resize itself: keep the
-			// pre-compensation (already valid, non-degenerate) read-back
-			// rather than failing the whole call over a correction step.
 			logger.WarnCF("browser", "live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back", map[string]any{
 				"error":              err.Error(),
 				"session_id":         sessionID,
@@ -653,6 +667,10 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 				})
 				return true, nil
 			}
+			// Diagnostic for the still-open DSF-2 shrink: record what was
+			// ACTUALLY asked for alongside what came back, so the next
+			// occurrence is decidable from logs instead of reconstruction.
+			compensatedAskW, compensatedAskH = compW, compH
 			actualW, actualH = compW2, compH2
 			compensated = true
 		}
@@ -666,6 +684,11 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 		"actual_height":       actualH,
 		"device_scale_factor": deviceScaleFactor,
 		"compensated":         compensated,
+		// What compensation actually asked Chrome for (0 when it never ran).
+		// Present so a recurrence of the DSF-2 shrink is diagnosable from the
+		// log alone — reconstructing it by hand produced two wrong models.
+		"compensated_ask_width":  compensatedAskW,
+		"compensated_ask_height": compensatedAskH,
 	}
 	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx || viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
 		// The silent-success failure mode the root-cause doc documents:
@@ -2072,7 +2095,18 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	switch in.Kind {
 	case "mouse_move", "mouse_down", "mouse_up", "wheel":
 		if in.HasXY && in.CaptureWidth > 0 && in.CaptureHeight > 0 {
-			in.X, in.Y = lv.rescaleToCSSViewport(tabCtx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
+			rx, ry, ok := lv.rescaleToCSSViewport(tabCtx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
+			if !ok {
+				// DROP rather than dispatch at an unmapped coordinate — see
+				// rescaleToCSSViewport's doc comment: unscaled coordinates
+				// land ~34% off (measured), i.e. on the wrong element, and a
+				// mis-aimed click can navigate away, delete or submit. Benign
+				// so the client is not shown an error for a transient
+				// viewport read it can simply retry past; the next event
+				// after the backoff maps correctly.
+				return benignInputError("browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch", in.Kind)
+			}
+			in.X, in.Y = rx, ry
 		}
 	}
 
@@ -2135,9 +2169,17 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 // WS-read-loop hot path, once per input event on every cache miss, not on a
 // rare, debounced user-triggered resize, so a slow/wedged CDP transport must
 // fail fast here instead of stalling input throughput up to a multi-second
-// timeout per event. On fetch failure, this dispatches the input UNSCALED
-// rather than dropping it: a slightly-off click still beats a completely
-// dead panel.
+// timeout per event.
+//
+// On fetch failure it reports ok=false and the caller DROPS the event.
+// This reverses the previous behaviour, which dispatched unscaled on the
+// reasoning that "a slightly-off click still beats a completely dead panel".
+// Measurement killed that argument (2026-08-03): the capture frame and the CSS
+// viewport differed by 562 vs 369 px, so an unscaled click lands ~34% below
+// where the user aimed — reliably on the WRONG element, not merely near the
+// right one. A dropped click is a no-op the user retries; a mis-aimed click
+// activates something they did not choose, which on a real page can navigate
+// away, delete, or submit. Silence beats a wrong action.
 //
 // Failure backoff (item 3b): a failed fetch arms lv.nextFetchAfter
 // viewportInputFetchBackoff into the future. While that window is open,
@@ -2148,7 +2190,7 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 // throughput to roughly one event per timeout. The failure is logged once,
 // when it actually happens, not once per event that finds the cache still
 // empty.
-func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, capH float64) (float64, float64) {
+func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, capH float64) (rx, ry float64, ok bool) {
 	lv.mu.Lock()
 	cssW, cssH := lv.cssViewportW, lv.cssViewportH
 	inBackoff := !lv.nextFetchAfter.IsZero() && time.Now().Before(lv.nextFetchAfter)
@@ -2156,20 +2198,22 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 
 	if cssW <= 0 || cssH <= 0 {
 		if inBackoff {
-			return x, y
+			// Already logged when the fetch actually failed — staying quiet
+			// here is the whole point of the backoff window.
+			return 0, 0, false
 		}
 
 		var w, h int64
 		err := lv.runCDP(tabCtx, viewportInputFetchTimeout, layoutMetricsAction{w: &w, h: &h})
 		if err != nil || w <= 0 || h <= 0 {
-			logger.WarnCF("browser", "live view: input rescale — could not read the tab's CSS viewport, dispatching unscaled (backing off further fetches)", map[string]any{
+			logger.WarnCF("browser", "live view: input rescale — could not read the tab's CSS viewport, DROPPING this positional event (backing off further fetches)", map[string]any{
 				"session_id":      lv.sessionID,
 				"backoff_seconds": viewportInputFetchBackoff.Seconds(),
 			})
 			lv.mu.Lock()
 			lv.nextFetchAfter = time.Now().Add(viewportInputFetchBackoff)
 			lv.mu.Unlock()
-			return x, y
+			return 0, 0, false
 		}
 
 		lv.mu.Lock()
@@ -2179,7 +2223,8 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 		cssW, cssH = int(w), int(h)
 	}
 
-	return rescaleInputCoords(x, y, capW, capH, float64(cssW), float64(cssH))
+	rx, ry = rescaleInputCoords(x, y, capW, capH, float64(cssW), float64(cssH))
+	return rx, ry, true
 }
 
 // rescaleInputCoords maps (x, y) from the capture frame's pixel space
