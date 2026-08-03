@@ -298,10 +298,25 @@ type SessionSummarizePayload struct {
 }
 
 // ToolExecStartPayload describes a tool execution request.
+//
+// tool_call_start is class (a) per the ADR-057 W5 audit (FR-089, BDD-16): a
+// child turn genuinely emits it, so the wire frame carries both ids. See
+// SessionID and ProducingSessionID below for which is which.
 type ToolExecStartPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
+	//
+	// ADR-057 FR-012 (W5/U23): the WS forwarder (pkg/gateway/websocket.go,
+	// U11) stamps the outbound tool_call_start frame's wire `session_id`
+	// straight from this field, so it MUST hold the ROUTING session id —
+	// the id inherited verbatim from the root of the delegation subtree
+	// (session.RoutingSessionID's contract) — not necessarily this turn's
+	// own store-backed session when the call fires several delegation
+	// levels deep. Emitting code (turn.go, U3/U9) is responsible for
+	// sourcing it from the emitting turnState's routing identity. The
+	// turn's own real session, when it differs, belongs in
+	// ProducingSessionID below.
 	SessionID string
 	Tool      string
 	Arguments map[string]any
@@ -312,13 +327,35 @@ type ToolExecStartPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_start frames must carry agent_id to match replay frame parity.
 	AgentID string
+	// ProducingSessionID is the real, store-backed session that actually
+	// executed this tool call (ADR-057 FR-013, W5d, owned by U23) — the
+	// child's own session.SessionID when the call fires inside a delegated
+	// sub-turn, distinct from SessionID's routing key above. Left as the
+	// zero value when this turn IS the routing session (producing ==
+	// routing), so the WS forwarder can implement FR-013's "present iff it
+	// differs from session_id" rule with a plain non-empty-and-unequal
+	// check before stamping the wire's optional producing_session_id
+	// (generated.ToolCallStartFrame.ProducingSessionId). Populated by the
+	// emitting turnState (U3/U9) with its own transcriptSessionID — never by
+	// this file, which defines the shape only.
+	ProducingSessionID session.SessionID
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.
+//
+// tool_call_result is class (a) per the ADR-057 W5 audit (FR-089, BDD-16): a
+// child turn genuinely emits it, so the wire frame carries both ids. See
+// SessionID and ProducingSessionID below for which is which.
 type ToolExecEndPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
+	//
+	// ADR-057 FR-012 (W5/U23): the WS forwarder (pkg/gateway/websocket.go,
+	// U11) stamps the outbound tool_call_result frame's wire `session_id`
+	// straight from this field, so it MUST hold the ROUTING session id — see
+	// ToolExecStartPayload.SessionID's doc comment for the full rationale,
+	// which applies identically here.
 	SessionID  string
 	Tool       string
 	Duration   time.Duration
@@ -336,6 +373,13 @@ type ToolExecEndPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_result frames must carry agent_id to match replay frame parity.
 	AgentID string
+	// ProducingSessionID is the real, store-backed session that actually
+	// executed this tool call (ADR-057 FR-013, W5d, owned by U23) — the
+	// child's own session.SessionID when the call fires inside a delegated
+	// sub-turn, distinct from SessionID's routing key above. See
+	// ToolExecStartPayload.ProducingSessionID's doc comment for the full
+	// "present iff it differs" contract, which applies identically here.
+	ProducingSessionID session.SessionID
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.
@@ -437,7 +481,24 @@ type SubTurnSpawnPayload struct {
 	TaskLabel string
 	// ChatID is needed so the WS forwarder can route this event to the right connection.
 	ChatID string
-	// SessionID is the transcript-store session ID for this turn.
+	// SessionID is the ROUTING session id (ADR-057 FR-011/FR-017), NOT this
+	// child turn's own transcript session.
+	//
+	// FROZEN CONTRACT (ADR-057 Rule 7, this field owned by U23 — do not
+	// "tidy" it to the child): sourced from the PARENT's turnState — today
+	// parentTS.transcriptSessionID at pkg/agent/subturn.go:1183 (U7); once
+	// U3's turn.go role split (W4) lands, that becomes
+	// parentTS.routingSessionID, still parent-scoped. subagent_start is
+	// class (b) per the W5 audit (FR-089, BDD-98): emitted by the PARENT
+	// about the child, so producing_session_id would always equal this
+	// field and is therefore always absent (FR-013's "iff it differs") —
+	// no ProducingSessionID sibling exists on this payload for that reason.
+	// The child's own identity already rides this same payload as Label
+	// (set to childID at the spawn call site) and SpanID/ParentSpawnCallID.
+	// Repointing SessionID to the child here would split a delegation's
+	// span from its own steps in the SPA's frame bucketing
+	// (src/store/chat.ts, grill #2 finding C-2) on the live connection, on
+	// the FIRST delegation — not merely after a reload.
 	SessionID string
 }
 
@@ -454,7 +515,14 @@ type SubTurnEndPayload struct {
 	DurationMS int64
 	// ChatID is needed so the WS forwarder can route this event to the right connection.
 	ChatID string
-	// SessionID is the transcript-store session ID for this turn.
+	// SessionID is the ROUTING session id (ADR-057 FR-011/FR-017), NOT this
+	// child turn's own transcript session — sourced from the PARENT's
+	// turnState, today parentTS.transcriptSessionID at
+	// pkg/agent/subturn.go:1424 (U7). See SubTurnSpawnPayload.SessionID's
+	// doc comment for the full frozen-contract rationale (ADR-057 Rule 7,
+	// owned by U23), which applies identically here: subagent_end is class
+	// (b) (FR-089, BDD-98), so producing_session_id would always equal this
+	// field and is therefore always absent — do not repoint to the child.
 	SessionID string
 	// Reason is populated ONLY when Status == SubTurnStatusInterrupted (FIX 4,
 	// 7-reviewer-gate follow-up on the Wave 3 fix pass), mirroring the wire
