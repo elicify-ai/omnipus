@@ -98,8 +98,18 @@ type ProcessSession struct {
 	// set once at process-creation time and never mutated afterward, so reads
 	// elsewhere do not need to hold mu (mirrors StartTime's treatment in
 	// cleanupOldSessions). Populated by the tool that spawned the background
-	// process (bash/exec); left empty ("") for callers that don't track an
-	// owning session, in which case KillAllForSession never matches it.
+	// process (bash/exec) from ToolTranscriptSessionID(ctx) (shell.go's
+	// runBackground) — left empty ("") for callers that don't track an
+	// owning session, in which case neither KillAllForSession nor
+	// KillAllForSessions ever matches it.
+	//
+	// ADR-057 (FR-027): a delegated child stamps THIS FIELD from its OWN
+	// distinct transcript session id, not the root chat session's id it may
+	// previously have shared. A session-level cancel that must reach a
+	// child's background shells therefore cannot rely on ONE exact match
+	// against the root id — the caller resolves the full descendant set
+	// (root id plus every live descendant's own id) and passes it to
+	// KillAllForSessions, which cascades over the whole set.
 	OwnerSessionID string
 }
 
@@ -403,6 +413,46 @@ func (sm *SessionManager) cleanupOldSessions() {
 // RequestCancel, this cascades the cancel to any detached background bash/exec
 // work that session started.
 //
+// This is a single-id convenience wrapper around KillAllForSessions (below),
+// which carries the full doc comment for the cascade's locking and
+// benign-race semantics — nothing here duplicates that. Pre-ADR-057 callers
+// with exactly one owning session id (no descendant set to cascade over)
+// keep using this form unchanged; ADR-057 (FR-027) callers that must cascade
+// over a resolved descendant set (root id plus every live descendant's own
+// id — see OwnerSessionID's doc comment) call KillAllForSessions directly.
+func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed int) {
+	if sessionID == "" {
+		return 0, 0
+	}
+	return sm.KillAllForSessions([]string{sessionID})
+}
+
+// KillAllForSessions kills every currently-running ProcessSession whose
+// OwnerSessionID is present in sessionIDs and returns the total count of
+// sessions killed and failed across the whole set. KillAllForSession above
+// is the single-id convenience form; this is the general primitive both it
+// and any ADR-057 descendant-set cascade (FR-027) are built on.
+//
+// Why a set, not one id: before ADR-057, a delegated child shared the root
+// chat session's transcript id, so a single exact match against the root id
+// reached the child's background shells too. ADR-057 stamps each child's
+// OwnerSessionID from its OWN distinct session id (see OwnerSessionID's doc
+// comment), so that same single match against only the root id would no
+// longer reach a child's shells at all — silently orphaning them as detached
+// processes on a chat-level Stop. The fix is not in this function's match
+// predicate (still a plain equality check) but in what the CALLER passes:
+// the full descendant set — root id plus every live descendant's own id,
+// resolved by walking the session hierarchy — rather than the root id alone.
+//
+// Empty strings in sessionIDs are never matched — the same guard a lone
+// empty sessionID has always triggered on KillAllForSession above:
+// OwnerSessionID == "" marks a background process with no tracked owner
+// (ProcessSession.OwnerSessionID's doc comment), so treating "" as a real id
+// in the set would incorrectly sweep up ownerless sessions no session-level
+// cancel is entitled to touch. A sessionIDs set that is empty, nil, or
+// contains only empty strings is a no-op — (0, 0) — without ever scanning
+// sm.sessions.
+//
 // Locking mirrors cleanupOldSessions' two-phase pattern: candidate session IDs
 // are collected under sm.mu.RLock (keyed on OwnerSessionID, which is set once
 // at creation and never mutated, so it's safe to read without session.mu —
@@ -443,8 +493,15 @@ func (sm *SessionManager) cleanupOldSessions() {
 // kill failure is visible to the caller (RequestCancel threads it into the
 // EventTurnCancelBackgroundKilled audit event as background_sessions_failed)
 // instead of being invisible outside a slog.Warn line.
-func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed int) {
-	if sessionID == "" {
+func (sm *SessionManager) KillAllForSessions(sessionIDs []string) (killed, failed int) {
+	want := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id == "" {
+			continue
+		}
+		want[id] = struct{}{}
+	}
+	if len(want) == 0 {
 		return 0, 0
 	}
 
@@ -452,7 +509,7 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 	sm.mu.RLock()
 	var candidates []string
 	for id, s := range sm.sessions {
-		if s.OwnerSessionID == sessionID {
+		if _, ok := want[s.OwnerSessionID]; ok {
 			candidates = append(candidates, id)
 		}
 	}
@@ -471,11 +528,13 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 			continue // already done/killed — no-op for this candidate
 		}
 
-		// PID and StartTime are set once at process-creation time (before the
-		// session is registered with Add) and never mutated afterward — safe
-		// to read without session.mu, matching the OwnerSessionID doc comment.
+		// PID, StartTime and OwnerSessionID are set once at process-creation
+		// time (before the session is registered with Add) and never mutated
+		// afterward — safe to read without session.mu, matching the
+		// OwnerSessionID doc comment.
 		pid := s.PID
 		startTime := s.StartTime
+		ownerSessionID := s.OwnerSessionID
 
 		// KillAndRelabel kills AND relabels to StatusCanceled atomically under
 		// one lock acquisition (mirrors executeKill's "killed" relabel in
@@ -489,8 +548,8 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 				continue
 			}
 			failed++
-			slog.Warn("tools: SessionManager.KillAllForSession: failed to kill background session",
-				"owner_session_id", sessionID,
+			slog.Warn("tools: SessionManager.KillAllForSessions: failed to kill background session",
+				"owner_session_id", ownerSessionID,
 				"session_id", id,
 				"pid", pid,
 				"error", err,
@@ -500,7 +559,7 @@ func (sm *SessionManager) KillAllForSession(sessionID string) (killed, failed in
 
 		elapsedSeconds := time.Now().Unix() - startTime
 		slog.Info("tools: SessionManager.KillAllForSession: killed background session on cancel cascade",
-			"owner_session_id", sessionID,
+			"owner_session_id", ownerSessionID,
 			"session_id", id,
 			"pid", pid,
 			"elapsed_seconds", elapsedSeconds,

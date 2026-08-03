@@ -1014,9 +1014,16 @@ func sandboxLimitsEnv(lim sandbox.Limits) []string {
 // (stamped with OwnerSessionID per FR-B10 so a session-level cancel can find
 // it — see pkg/agent/cancel.go's CancelHooks.KillBackgroundSessions /
 // SessionManager.KillAllForSession), and returns immediately with a
-// session_id. The completion goroutine below fires cb exactly once — on
-// natural completion, failure, timeout, or explicit kill (FR-B9) — via
-// whichever ToolResult best describes the final state.
+// session_id. ownerSessionID is whatever the caller's context carries as
+// ToolTranscriptSessionID(ctx) (see executeRun above) — under ADR-057
+// (FR-027) that is the CHILD's own distinct session id when this call
+// happens inside a delegated sub-turn, not the root chat session's id it
+// may previously have shared; a session-level cancel that must reach this
+// process therefore cascades over the resolved descendant set via
+// SessionManager.KillAllForSessions rather than a single exact match. The
+// completion goroutine below fires cb exactly once — on natural completion,
+// failure, timeout, or explicit kill (FR-B9) — via whichever ToolResult best
+// describes the final state.
 func (t *ExecTool) runBackground(
 	ctx context.Context,
 	command, cwd string,
