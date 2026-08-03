@@ -56,13 +56,14 @@ func TestSetViewport_DeviceMatrix_BoundedWhenChromeRefuses(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, applied, "an unreachable target must still apply, not error")
 
-			// Two window-bounds calls total: the initial apply plus exactly
-			// one compensation attempt. Asserted as an exact value, not a
-			// loose upper bound — a loose bound would pass equally against a
-			// looping implementation and so would guard nothing.
+			// Exactly two window-bounds calls: the initial apply plus ONE
+			// compensation attempt. Not iterated — the v52 diagnostics showed a
+			// second setWindowBounds changes nothing (post-compensation
+			// read-back == pre-compensation read-back), so a loop would repeat
+			// a no-op. Asserted as an exact value: a loose upper bound would
+			// pass against a loop and guard nothing.
 			assert.Equal(t, 2, bounds,
-				"a refusing browser must cost the initial apply plus exactly one compensation "+
-					"attempt (no loop), got %d", bounds)
+				"compensation must be a single pass — the initial apply plus one attempt, got %d", bounds)
 
 			lv.mu.Lock()
 			gotH := lv.cssViewportH
@@ -74,53 +75,50 @@ func TestSetViewport_DeviceMatrix_BoundedWhenChromeRefuses(t *testing.T) {
 	}
 }
 
-// TestSetViewport_SingleCompensationPass_OverwritesUnconditionally pins what
-// the shipped code ACTUALLY does, which is not the same as what is desirable.
+// TestSetViewport_IgnoredResize_KeepsTheTrueViewport pins the MEASURED failure
+// (v52 diagnostics, deviceScaleFactor 1):
 //
-// SetViewport makes exactly ONE compensation attempt and then assigns
-// `actualW, actualH = compW2, compH2` unconditionally — there is no
-// keep-the-closest comparison against the pre-compensation read-back. So a
-// compensation pass that OVERSHOOTS leaves the cache further from the target
-// than before, and that cached value is what input-coordinate mapping trusts.
+//	requested 587 -> first read-back 444 -> asked 730 -> still 444
+//	requested 564 -> first read-back 421 -> asked 707 -> still 421
 //
-// This test previously claimed the opposite ("the CLOSEST read-back must win"),
-// which was false: it passed only because its fixture happened to improve on
-// the first reading. Asserting a best-of-N mechanism that does not exist gave
-// false assurance about behavior under a real overshoot. Documented here as a
-// known limitation rather than silently "tested" — see the DSF-2 shrink, still
-// open, in this file's header.
-func TestSetViewport_SingleCompensationPass_OverwritesUnconditionally(t *testing.T) {
-	var reads int
-	runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		if _, ok := actions[0].(windowBoundsAction); ok {
-			return nil
-		}
-		if lm, ok := actions[0].(layoutMetricsAction); ok {
-			reads++
-			if reads == 1 {
-				*lm.w, *lm.h = 603, 500 // 12 off — outside tolerance, triggers compensation
-			} else {
-				*lm.w, *lm.h = 603, 300 // compensation OVERSHOOTS: 212 off, far worse
+// The compensating setWindowBounds changes NOTHING — the post-compensation
+// read-back equals the pre-compensation one exactly. Chrome ignores the resize
+// rather than partially honoring it, which is why iterating cannot help and a
+// convergence loop was twice built and twice reverted.
+//
+// What MUST hold regardless: the cached CSS viewport records the tab's TRUE
+// size. That value feeds input-coordinate mapping, so getting it right is the
+// difference between "the panel looks small" (cosmetic) and "clicks land in the
+// wrong place" (the operator's actual complaint).
+func TestSetViewport_IgnoredResize_KeepsTheTrueViewport(t *testing.T) {
+	for _, dpr := range []float64{1, 1.5, 2, 3} {
+		t.Run("dpr"+trimFloat(dpr), func(t *testing.T) {
+			const trueH = 444 // what the tab really is, whatever we ask for
+			runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
+				if _, ok := actions[0].(windowBoundsAction); ok {
+					return nil // accepted, and silently ignored — the measured behavior
+				}
+				if lm, ok := actions[0].(layoutMetricsAction); ok {
+					*lm.w, *lm.h = 603, trueH
+					return nil
+				}
+				return nil
 			}
-			return nil
-		}
-		return nil
+			reg, lv := newViewportTestLiveView(runCDP)
+
+			applied, err := reg.SetViewport("s1", 603, 587, dpr)
+			require.NoError(t, err)
+			require.True(t, applied, "an ignored resize must still report applied, not error")
+
+			lv.mu.Lock()
+			gotH := lv.cssViewportH
+			lv.mu.Unlock()
+			assert.Equal(t, trueH, gotH,
+				"the cache must hold the tab's TRUE height (%d), never the height we asked for — "+
+					"input coordinates are mapped through this value, so a wrong number here is "+
+					"exactly the mis-aimed-click bug", trueH)
+		})
 	}
-	reg, lv := newViewportTestLiveView(runCDP)
-
-	applied, err := reg.SetViewport("s1", 603, 512, 2)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	lv.mu.Lock()
-	gotH := lv.cssViewportH
-	lv.mu.Unlock()
-
-	assert.Equal(t, 300, gotH,
-		"the compensated read-back is taken unconditionally, even when it is WORSE than the "+
-			"pre-compensation value — pinning the real behavior so a future keep-the-closest "+
-			"change is a deliberate, visible improvement rather than an accident")
-	assert.Equal(t, 2, reads, "exactly one compensation pass: two read-backs total, no loop")
 }
 
 func trimFloat(f float64) string {

@@ -625,25 +625,36 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 		return true, nil
 	}
 
-	// Chrome-delta compensation (live evidence UAT v24, 2026-07-31): a
-	// read-back gap over viewportDriftTolerancePx means
-	// Browser.setWindowBounds' OUTER-window size didn't fully carry through to
-	// the tab's CSS viewport. Since that delta is constant for this window, one
-	// correction — the request plus its own measured deficit — converges.
+	// Chrome-delta compensation — SINGLE PASS, deliberately not iterated.
 	//
-	// NOT iterated (investigated 2026-08-03): a DSF-2 client logged requested
-	// 512 -> actual 369 WITH compensated:true, which looks like a failure to
-	// converge. Every deficit model that reproduces those numbers, however, is
-	// closed by this single pass arithmetically — so the observed behavior is
-	// NOT explained by "one pass isn't enough", and a convergence loop was
-	// reverted rather than shipped on an unverified theory. The real mechanism
-	// is still open; see the compensated_* fields logged below, which exist so
-	// the NEXT occurrence records what was actually asked for.
+	// Browser.setWindowBounds' OUTER-window size does not fully carry through
+	// to the tab's CSS viewport, so one correction (request + observed gap) is
+	// attempted. It frequently does not work, and the diagnostic fields added
+	// for exactly this question show why iterating would NOT help (v52 logs,
+	// deviceScaleFactor 1):
+	//
+	//	requested 587 -> first read-back 444 -> asked 730 -> still 444
+	//	requested 564 -> first read-back 421 -> asked 707 -> still 421
+	//
+	// The second setWindowBounds changes NOTHING: the post-compensation
+	// read-back equals the pre-compensation one exactly. Chrome is ignoring the
+	// resize outright, not partially honouring it — so a convergence loop would
+	// merely repeat a no-op N times and burn CDP round trips. (A loop was built
+	// and reverted twice on this evidence; do not reintroduce one without first
+	// showing that a SECOND setWindowBounds moves the viewport at all.)
+	//
+	// The cause is still open. It is NOT the screen bound: the managed Chrome
+	// launches with --window-size=2560,1440 (exec_resolver.go, verified on the
+	// running container) so a ~730px request has ample headroom and is still
+	// ignored. Whatever the reason, the cache below records the TRUE viewport,
+	// so input-coordinate mapping stays correct even while the panel renders
+	// undersized — a cosmetic shrink, not mis-aimed clicks.
 	compensated := false
 	var compensatedAskW, compensatedAskH int
 	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx || viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
 		compW := clampViewportDim(width + (width - int(actualW)))
 		compH := clampViewportDim(height + (height - int(actualH)))
+		compensatedAskW, compensatedAskH = compW, compH
 		if err := lv.runCDP(tabCtx, viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
 			logger.WarnCF("browser", "live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back", map[string]any{
 				"error":              err.Error(),
@@ -668,11 +679,15 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 				})
 				return true, nil
 			}
-			// Diagnostic for the still-open DSF-2 shrink: record what was
-			// ACTUALLY asked for alongside what came back, so the next
-			// occurrence is decidable from logs instead of reconstruction.
-			compensatedAskW, compensatedAskH = compW, compH
-			actualW, actualH = compW2, compH2
+			// Keep the CLOSEST read-back, not merely the latest: if the
+			// compensated attempt came back worse (or, as measured, identical),
+			// the cache must not be degraded. cssViewportW/H feeds input
+			// coordinate mapping, so "closest to the page's real size" is the
+			// property that matters.
+			if viewportDeltaPx(width, compW2)+viewportDeltaPx(height, compH2) <
+				viewportDeltaPx(width, actualW)+viewportDeltaPx(height, actualH) {
+				actualW, actualH = compW2, compH2
+			}
 			compensated = true
 		}
 	}
