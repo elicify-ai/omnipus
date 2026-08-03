@@ -528,27 +528,33 @@ func getMostRecentSessionID(t *testing.T, gw *testutil.TestGateway) string {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("getMostRecentSessionID: unexpected status %d", resp.StatusCode)
 	}
-	// /api/v1/sessions returns a JSON array of session metadata, not an
-	// object wrapping it.
-	var sessions []struct {
-		ID        string `json:"id"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
-		t.Fatalf("getMostRecentSessionID: decode: %v", err)
-	}
-	if len(sessions) == 0 {
-		return ""
-	}
-	// Wrap in the previous struct-shape for the rest of the helper.
-	body := struct {
+	// ADR-057 U18 (commit 664633b9, "fix(gateway): ADR-057 U18 — read
+	// boundaries + REST pagination/nesting"): GET /api/v1/sessions now
+	// ALWAYS returns the named gen.SessionPage envelope
+	// ({"sessions": [...], "next_cursor"?, "partial_errors"?}), retiring the
+	// old bare-array response this helper used to assume. That commit fixed
+	// three pkg/gateway tests with the identical bare-array decode, but this
+	// tests/integration helper was outside that file list and was missed —
+	// the same cross-package ownership gap flagged elsewhere in this wave.
+	// Without this fix, decoding the object body into a bare []struct fails
+	// with "json: cannot unmarshal object into Go value of type []struct
+	// { ID string; UpdatedAt string }" before the test ever reaches the
+	// replay assertion it exists to check.
+	var page struct {
 		Sessions []struct {
 			ID        string `json:"id"`
 			UpdatedAt string `json:"updated_at"`
-		}
-	}{Sessions: sessions}
-	// Return the first (most recent) session — the server returns newest first.
-	return body.Sessions[0].ID
+		} `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatalf("getMostRecentSessionID: decode: %v", err)
+	}
+	if len(page.Sessions) == 0 {
+		return ""
+	}
+	// Return the first (most recent) session — the server returns newest first
+	// (ListAllSessions sorts by UpdatedAt descending, u9SessionRecencyLess).
+	return page.Sessions[0].ID
 }
 
 // sessionTranscriptContains reports whether ANY transcript JSONL file in the
