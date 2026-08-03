@@ -187,17 +187,17 @@ func TestGetMeta_CacheHitAndDiskSelfHeal(t *testing.T) {
 	// Force a cache miss (white-box, same package) while leaving meta.json on
 	// disk intact, then confirm GetMeta self-heals via disk and repopulates
 	// the cache.
-	store.mu.Lock()
+	store.cacheMu.Lock()
 	delete(store.metaCache, meta.ID)
-	store.mu.Unlock()
+	store.cacheMu.Unlock()
 
 	got2, err := store.GetMeta(meta.ID)
 	require.NoError(t, err, "GetMeta must self-heal from disk on a cache miss")
 	assert.Equal(t, meta.ID, got2.ID)
 
-	store.mu.RLock()
+	store.cacheMu.RLock()
 	_, cached := store.metaCache[meta.ID]
-	store.mu.RUnlock()
+	store.cacheMu.RUnlock()
 	assert.True(t, cached, "GetMeta must repopulate the cache after a disk self-heal")
 }
 
@@ -241,16 +241,16 @@ func TestClearAll_ClearsCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, metas)
 
-	store.mu.RLock()
+	store.cacheMu.RLock()
 	cacheLen := len(store.metaCache)
-	store.mu.RUnlock()
+	store.cacheMu.RUnlock()
 	assert.Zero(t, cacheLen, "ClearAll must empty metaCache, not just disk")
 }
 
 // TestNewChannelSession_PostCreateMutationDoesNotLeakIntoCache guards against
 // the specific aliasing mistake called out in Clone's doc comment:
 // NewChannelSession mutates meta.PeerID/meta.Title on the pointer NewSession
-// returned, without holding us.mu, before its own writeMetaLocked call. A
+// returned, without holding any lock, before its own writeMetaLocked call. A
 // caller that goes on to mutate the object NewChannelSession itself returned
 // (bypassing SetMeta) must never be able to corrupt the cache either.
 //
@@ -275,7 +275,7 @@ func TestNewChannelSession_PostCreateMutationDoesNotLeakIntoCache(t *testing.T) 
 // TestRetentionSweep_EvictsRemovedSessionsFromCache is the regression test for
 // the companion fix in retention_sweep.go: RetentionSweep's second pass
 // removes an emptied session directory (including meta.json) via
-// os.RemoveAll WITHOUT ever touching us.mu/metaCache. Without the companion
+// os.RemoveAll WITHOUT ever touching cacheMu/metaCache. Without the companion
 // fix, GetMeta would keep serving the stale cached entry forever (a phantom
 // session) even though the directory is gone from disk. This test FAILS
 // without that fix.
@@ -341,7 +341,7 @@ func TestGetOrCreateScheduledSession_SecondCallServesFromCache(t *testing.T) {
 }
 
 // TestConcurrentListWhileWriting runs NewSession and ListSessions
-// concurrently; run with -race to catch any metaCache/us.mu misuse.
+// concurrently; run with -race to catch any metaCache/cacheMu misuse.
 //
 // Traces to: pkg/session/unified.go ListSessions, NewSession (RWMutex split).
 func TestConcurrentListWhileWriting(t *testing.T) {
@@ -374,7 +374,7 @@ func TestConcurrentListWhileWriting(t *testing.T) {
 }
 
 // TestConcurrentNewChannelSessionWhileListing runs NewChannelSession (which
-// mutates its meta pointer's PeerID/Title outside us.mu before its own
+// mutates its meta pointer's PeerID/Title outside any lock before its own
 // writeMetaLocked call) concurrently with ListSessions. This is the specific
 // scenario that would surface a "cache stored the live, still-mutating
 // pointer instead of a clone" mistake as a -race failure.
@@ -417,7 +417,7 @@ func TestConcurrentNewChannelSessionWhileListing(t *testing.T) {
 }
 
 // TestConcurrentDeleteWhileListing runs DeleteSession and ListSessions
-// concurrently; run with -race to catch any metaCache/us.mu misuse around
+// concurrently; run with -race to catch any metaCache/cacheMu misuse around
 // eviction.
 //
 // Traces to: pkg/session/unified.go DeleteSession, ListSessions.
@@ -464,7 +464,7 @@ func TestConcurrentDeleteWhileListing(t *testing.T) {
 // comment calls out — SetMeta/SwitchAgent mutate the value readMetaLocked
 // returns and then call writeMetaLocked. This interleaves SetMeta and
 // SwitchAgent (both RMW callers) with ListSessions and GetMeta (both readers)
-// across many sessions; run with -race to catch any metaCache/us.mu misuse
+// across many sessions; run with -race to catch any metaCache/cacheMu misuse
 // on this path specifically.
 //
 // Traces to: pkg/session/unified.go readMetaLocked, SetMeta, SwitchAgent,
@@ -881,9 +881,9 @@ func TestListSessions_ReconcilesOutOfBandSessionDir(t *testing.T) {
 
 	// Precondition: the out-of-band session must NOT already be cached — it
 	// was never written through this store instance.
-	store.mu.RLock()
+	store.cacheMu.RLock()
 	_, alreadyCached := store.metaCache[outOfBandID]
-	store.mu.RUnlock()
+	store.cacheMu.RUnlock()
 	require.False(t, alreadyCached,
 		"precondition: out-of-band session must not be pre-populated in the cache")
 
@@ -905,9 +905,9 @@ func TestListSessions_ReconcilesOutOfBandSessionDir(t *testing.T) {
 	// into metaCache (the same side effect readMetaLocked has on any other
 	// cache-miss read) so a repeat ListSessions call doesn't re-read it from
 	// disk.
-	store.mu.RLock()
+	store.cacheMu.RLock()
 	_, nowCached := store.metaCache[outOfBandID]
-	store.mu.RUnlock()
+	store.cacheMu.RUnlock()
 	assert.True(t, nowCached, "ListSessions must self-heal the out-of-band session into metaCache")
 }
 

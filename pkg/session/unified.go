@@ -131,7 +131,7 @@ type UnifiedMeta struct {
 //
 // This is load-bearing, not polish: NewChannelSession mutates
 // meta.PeerID/meta.Title on the pointer returned by NewSession without
-// holding us.mu (see its doc comment). If the cache aliased that pointer,
+// holding any lock (see its doc comment). If the cache aliased that pointer,
 // a concurrent ListSessions/GetMeta clone-read racing that mutation would be
 // a real -race failure. Cloning on every cache insert and cache read keeps
 // the cache and every caller's copy fully independent in both directions.
@@ -157,11 +157,41 @@ var ErrAlreadyActive = errors.New("agent already active on this session")
 //
 // It implements SessionStore so the agent loop works unchanged, and adds
 // UI-oriented methods (NewSession, AppendTranscript, ReadTranscript, etc.).
+//
+// Locking (ADR-057 FR-048, replacing the single pre-ADR-057 us.mu
+// sync.RWMutex): two independent primitives, never a store-global lock.
+//
+//   - sessionLocks (unified_lock.go) is a 64-shard per-session mutex pool.
+//     Every method that mutates or reads a SINGLE session's on-disk state
+//     acquires that session's shard via lockSession(id) for the duration of
+//     its filesystem work — concurrent operations on DIFFERENT sessions no
+//     longer contend with each other (this is the R-8 fix: a wide delegation
+//     fan-out no longer stalls token streaming in every other session).
+//   - cacheMu is a narrow sync.RWMutex guarding ONLY metaCache,
+//     cacheLoadFailures, and the FR-097 parent index (parentIndex/
+//     childToParent) below. It is NEVER held across an os.* or fileutil.*
+//     call (FR-049) — every cacheMu critical section is a tight map
+//     read/write with no I/O inside it.
+//
+// Lock order (FR-050): sessionLock(id) -> cacheMu, one-directional. Two
+// session shards are never held simultaneously except by ClearAll/
+// RetentionSweep (which take all 64 in ascending index order via
+// lockAllSessionShards) and by U2's CreateSessionWithID parent-Owner copy
+// (FR-082: read under lockSession(parent), Unlock, THEN lockSession(child)).
+// See unified_lock.go's doc comment for the full design and the FR-101
+// lock-order observation seam.
 type UnifiedStore struct {
-	mu       sync.RWMutex
-	baseDir  string // {workspace}/sessions/
-	homePath string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
-	backend  *memory.JSONLStore
+	// sessionLocks is the FR-048(a) 64-shard per-session mutex pool. See
+	// unified_lock.go's lockSession/lockAllSessionShards.
+	sessionLocks u4SessionStripedLock
+	baseDir      string // {workspace}/sessions/
+	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
+	backend      *memory.JSONLStore
+
+	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
+	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's
+	// doc comment above for the full lock-order contract.
+	cacheMu sync.RWMutex
 
 	// metaCache holds one independent clone per session, keyed by session ID.
 	// It is the primary data source for ListSessions/GetOrCreateScheduledSession's
@@ -178,7 +208,7 @@ type UnifiedStore struct {
 	// (bypassing this store) and self-heals them into the cache the same way
 	// readMetaLocked does — without any per-file disk read for entries already
 	// cached. Explicit eviction on DeleteSession, ClearAll, and
-	// RetentionSweep's empty-dir removal.
+	// RetentionSweep's empty-dir removal. Guarded by cacheMu (was: us.mu).
 	metaCache map[string]*UnifiedMeta
 
 	// cacheLoadFailures counts sessions whose meta.json failed to read/parse
@@ -188,8 +218,33 @@ type UnifiedStore struct {
 	// transient blip that would have cleared up moments later does NOT
 	// self-correct without a restart. This counter makes that accepted
 	// limitation assertable/observable instead of a silent gap. See
-	// CacheLoadFailureCount.
+	// CacheLoadFailureCount. Guarded by cacheMu (was: us.mu).
 	cacheLoadFailures int
+
+	// parentIndex/childToParent are the ADR-057 FR-097 in-memory parent
+	// index: parentIndex maps a parent session id to the set of its DIRECT
+	// children, and childToParent is its reverse (child id -> parent id),
+	// letting both ChildCount and "is this a tracked child" resolve in O(1)
+	// without a reverse scan. Guarded by the SAME cacheMu that guards
+	// metaCache — deliberately NOT its own lock (contrast
+	// lifecycle_index.go's lifecycleParentIndex, which has its own mutex),
+	// because a session's cache entry and its parent-index membership must
+	// never be observable out of sync with each other, and sharing one lock
+	// is the simplest way to guarantee that.
+	//
+	// SURFACE, NOT YET FULLY WIRED (U4/Wave B honesty note, see u4IndexAddChild's
+	// doc comment): SessionMeta.ParentSessionID does not exist yet in this
+	// wave (it is FR-008/W2, owned by U5 in pkg/session/daypartition.go,
+	// which this unit MUST NOT touch) so the ADD side of this index is not
+	// yet called from createSessionLocked/writeMetaLocked — there is no
+	// ParentSessionID to read. The DELETE/EVICT side (u4IndexEvict) IS fully
+	// wired into DeleteSession, ClearAll and RetentionSweep below, since
+	// those never needed the field to correctly say "id is gone". U5 wires
+	// u4IndexAddChild at create/meta-write time once FR-008 lands; U6
+	// consumes ChildCount for roots-only listing (FR-097's stated ownership
+	// split: "U4 creates the index surface ... U6 consumes it for listing").
+	parentIndex   map[string]map[string]struct{}
+	childToParent map[string]string
 }
 
 // CacheLoadFailureCount returns the number of sessions that failed to load
@@ -197,8 +252,8 @@ type UnifiedStore struct {
 // loadMetaCacheLocked's doc comment for the accepted limitation this
 // signals. Safe to call concurrently with any other UnifiedStore method.
 func (us *UnifiedStore) CacheLoadFailureCount() int {
-	us.mu.RLock()
-	defer us.mu.RUnlock()
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
 	return us.cacheLoadFailures
 }
 
@@ -270,10 +325,12 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 	}
 
 	us := &UnifiedStore{
-		baseDir:   baseDir,
-		homePath:  homePath,
-		backend:   store,
-		metaCache: make(map[string]*UnifiedMeta),
+		baseDir:       baseDir,
+		homePath:      homePath,
+		backend:       store,
+		metaCache:     make(map[string]*UnifiedMeta),
+		parentIndex:   make(map[string]map[string]struct{}),
+		childToParent: make(map[string]string),
 	}
 
 	us.migrateLegacy()
@@ -412,8 +469,8 @@ func (us *UnifiedStore) NewSession(
 		return nil, err
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 	return us.createSessionLocked(sessionID, sessionType, channel, creatingAgentID)
 }
 
@@ -427,9 +484,9 @@ func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string
 	}
 	meta.PeerID = peerID
 	meta.Title = title
-	us.mu.Lock()
+	h := us.lockSession(meta.ID)
 	err = us.writeMetaLocked(meta.ID, meta)
-	us.mu.Unlock()
+	h.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +494,8 @@ func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string
 }
 
 // createSessionLocked creates a session directory with the EXACT supplied id,
-// meta.json, and an empty transcript. Caller must hold us.mu.
+// meta.json, and an empty transcript. Caller must hold sessionID's shard
+// (see lockSession) — was: caller must hold us.mu.
 func (us *UnifiedStore) createSessionLocked(
 	sessionID string,
 	sessionType UnifiedSessionType,
@@ -567,8 +625,8 @@ func (us *UnifiedStore) GetOrCreateScheduledSession(id, ownerAgentID string) (*U
 	if err := validateSessionID(id); err != nil {
 		return nil, err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(id)
+	defer h.Unlock()
 
 	if meta, err := us.readMetaLocked(id); err == nil {
 		// Cache-first existence check. readMetaLocked already returns an
@@ -588,21 +646,23 @@ func (us *UnifiedStore) GetMeta(sessionID string) (*UnifiedMeta, error) {
 		return nil, err
 	}
 
-	// Fast path: RLock-only cache hit, cloned before returning so the caller
-	// never receives a pointer aliasing the cache's live entry.
-	us.mu.RLock()
+	// Fast path: cacheMu.RLock-only cache hit, cloned before returning so the
+	// caller never receives a pointer aliasing the cache's live entry. No
+	// session shard needed — this touches only the cache, never disk.
+	us.cacheMu.RLock()
 	if meta, ok := us.metaCache[sessionID]; ok {
 		clone := meta.Clone()
-		us.mu.RUnlock()
+		us.cacheMu.RUnlock()
 		return clone, nil
 	}
-	us.mu.RUnlock()
+	us.cacheMu.RUnlock()
 
-	// Cache miss: upgrade to the full write lock and self-heal from disk
+	// Cache miss: acquire ONLY this session's shard and self-heal from disk
 	// (readMetaLocked populates the cache on a successful read). Preserves
-	// the existing not-found error contract.
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	// the existing not-found error contract, without contending with any
+	// OTHER session's concurrent operation (was: store-global us.mu.Lock()).
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
 		return nil, err
@@ -615,8 +675,8 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
@@ -696,15 +756,16 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 }
 
 // SwitchAgent atomically updates the ActiveAgentID on a session.
-// The caller must NOT hold us.mu. Returns ErrAlreadyActive if the session
+// The caller must NOT already hold sessionID's shard (see lockSession) — was:
+// caller must NOT hold us.mu. Returns ErrAlreadyActive if the session
 // is already on newAgentID (idempotent — callers should treat this as success).
 // newAgentID is appended to AgentIDs if not already present.
 func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
@@ -731,18 +792,29 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 
 // readMetaLocked returns an INDEPENDENT CLONE of sessionID's metadata,
 // never the live cache entry pointer, on both the cache-hit and cache-miss
-// paths. Caller must hold us.mu (the full write lock — see below).
+// paths. Caller must hold sessionID's shard (see lockSession) — was: caller
+// must hold us.mu (the full write lock). FROZEN SIGNATURE (cross-unit
+// contract, U2/U5): U2's AppendTranscriptStrict existence predicate is
+// "readMetaLocked returned a non-nil error"; U5's W23 file split may change
+// only this method's internals, never its signature.
+//
+// Internally this method touches metaCache ONLY under the narrower cacheMu
+// (FR-048(b)), and the disk read (readUnifiedMeta) happens OUTSIDE any
+// cacheMu critical section (FR-049 — cacheMu is never held across an os.*/
+// fileutil.* call). Correctness against a concurrent cache-miss reader for
+// the SAME sessionID still holds because the caller's session shard already
+// serializes that — cacheMu only needs to protect the map itself.
 //
 // MB-1 fix (cache/disk divergence on write failure): an earlier version of
 // this method returned the LIVE cache entry pointer on a hit, reasoning that
 // every read-modify-write caller (SetMeta, SwitchAgent, AppendTranscript,
-// GetOrCreateScheduledSession, GetMeta's cache-miss path) holds us.mu.Lock()
-// — the full exclusive lock — across its entire mutate-then-write, so no
-// RLock holder could observe the entry mid-mutation. That reasoning covered
-// the SUCCESS path but not FAILURE: those callers mutate the returned value
-// in place and then call writeMetaLocked; if the disk write failed,
-// writeMetaLocked returned early WITHOUT re-storing a clone — but the
-// in-place mutation had already corrupted the shared cached object, so
+// GetOrCreateScheduledSession, GetMeta's cache-miss path) holds the
+// session's shard across its entire mutate-then-write, so no reader of a
+// DIFFERENT session could observe this entry mid-mutation. That reasoning
+// covered the SUCCESS path but not FAILURE: those callers mutate the
+// returned value in place and then call writeMetaLocked; if the disk write
+// failed, writeMetaLocked returned early WITHOUT re-storing a clone — but
+// the in-place mutation had already corrupted the shared cached object, so
 // GetMeta/ListSessions would go on reporting the unpersisted, attempted
 // value while meta.json on disk still held the old one. Cloning on every
 // read (not just every write) closes this: every RMW caller now mutates its
@@ -751,31 +823,44 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // persisted (the prior cache value on a hit, or the freshly disk-read value
 // on a miss).
 //
-// Callers that hand this value to code outside us.mu (GetMeta's cache-miss
-// path, GetOrCreateScheduledSession) may return it directly — it is already
-// an independent clone — though both currently call .Clone() on it again
-// before returning; that second clone is redundant but harmless (kept as
-// defensive belt-and-braces so a future readMetaLocked change can never leak
-// a live cache pointer to those external-facing call sites).
+// Callers that hand this value to code outside the session's shard (GetMeta's
+// cache-miss path, GetOrCreateScheduledSession) may return it directly — it
+// is already an independent clone — though both currently call .Clone() on
+// it again before returning; that second clone is redundant but harmless
+// (kept as defensive belt-and-braces so a future readMetaLocked change can
+// never leak a live cache pointer to those external-facing call sites).
 //
 // On a cache miss, reads meta.json from disk, populates the cache with the
 // freshly-unmarshaled (necessarily unaliased) object, and returns a clone of
 // it.
 func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
+	us.cacheMu.RLock()
 	if meta, ok := us.metaCache[sessionID]; ok {
+		us.cacheMu.RUnlock()
 		return meta.Clone(), nil
 	}
+	us.cacheMu.RUnlock()
+
 	meta, err := readUnifiedMeta(filepath.Join(us.baseDir, sessionID))
 	if err != nil {
 		return nil, err
 	}
+	us.cacheMu.Lock()
 	us.metaCache[sessionID] = meta
+	us.cacheMu.Unlock()
 	return meta.Clone(), nil
 }
 
 // writeMetaLocked atomically writes meta.json for sessionID, acquiring an OS
 // flock for cross-process defense-in-depth, then refreshes metaCache with an
-// independent clone of the just-written value. Caller must hold us.mu.
+// independent clone of the just-written value. Caller must hold sessionID's
+// shard (see lockSession) — was: caller must hold us.mu.
+//
+// The disk write (fileutil.WithFlock/writeFileAtomicFn) happens BEFORE
+// cacheMu is ever taken — FR-049 forbids holding cacheMu across an os.*/
+// fileutil.* call, and this ordering also preserves the existing failure
+// contract: a failed disk write returns before touching the cache at all, so
+// metaCache never observes a mutation that didn't also land on disk.
 //
 // This is the single invalidation/update point for every mutation path:
 // createSessionLocked, SetMeta, SwitchAgent, AppendTranscript, and
@@ -794,11 +879,20 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 	}); err != nil {
 		return err
 	}
+	us.cacheMu.Lock()
 	us.metaCache[sessionID] = meta.Clone()
+	us.cacheMu.Unlock()
 	return nil
 }
 
 // AppendTranscript appends an entry to {session-id}/transcript.jsonl.
+//
+// R-8 fix (ADR-057 FR-048): this used to take the store-global us.mu on
+// EVERY streamed line, held across the append AND a full meta rewrite — a
+// 24-way delegation fan-out serialised 24 fsync-bound creates/appends and
+// stalled token streaming in every OTHER session in the store. Now it takes
+// only sessionID's own shard, so a concurrent append/create against a
+// DIFFERENT session never waits on this one.
 func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
@@ -807,8 +901,8 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 		entry.Timestamp = time.Now().UTC()
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	if err := fileutil.AppendJSONL(transcriptPath, entry); err != nil {
@@ -871,7 +965,9 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 // preserves backward compatibility with any call sites that cannot supply
 // a turn ID.
 //
-// Acquires the same in-process mutex as AppendTranscript. Does NOT touch
+// Acquires the same per-session shard as AppendTranscript (see lockSession),
+// so it serializes with any concurrent operation against THIS session
+// without contending with any other session's shard. Does NOT touch
 // context.jsonl (LLM history) — per FR-14a, the partial content there remains
 // untouched so the next turn's LLM context sees natural truncation.
 //
@@ -890,8 +986,8 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 		)
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
@@ -1077,8 +1173,8 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 		return false, nil
 	}
 
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
@@ -1237,16 +1333,28 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 // reconcile against disk should not erase sessions this store already knows
 // about from a prior successful call.
 //
-// Reconciliation requires mutating metaCache (via readMetaLocked), which
-// needs the full write lock — an RLock cannot be upgraded to a Lock without
-// risking deadlock, so the whole method runs under us.mu.Lock() rather than
-// the previous RLock. This serializes ListSessions with writers for the
-// duration of the call, but ListSessions is not on a hot path, and the
+// Consistency model (FR-086, post-striping): a best-effort POINT-IN-TIME
+// snapshot. It MAY omit a session deleted DURING this call, MUST NOT panic
+// or deadlock, and MUST NOT return a partially-composed meta. It does NOT
+// yet evict a metaCache entry whose directory vanished BEFORE this call
+// started (FR-086's "must not resurrect a gone session" clause / FR-097a) —
+// that prune is explicitly owned by U6 (Wave D, per the spec's ownership
+// table row for W15: "U6 (FR-097a, FR-102)"), layered on top of the
+// per-session-shard reconcile this method now performs. Until U6 lands it,
+// this preserves the exact pre-ADR-057 behavior for that one case (a
+// directory removed out-of-band stays cached until process restart or an
+// explicit DeleteSession/ClearAll/RetentionSweep) — not a regression, a
+// documented incremental gap tracked at the FR-097a boundary.
+//
+// FR-051 locking (replacing the old store-global us.mu.Lock() for the whole
+// call): reconciliation of each out-of-band directory happens under THAT
+// session's own shard only (lockSession), never a store-global lock, so a
+// concurrent create/append/etc. against a DIFFERENT session is never blocked
+// by a ListSessions call in flight. The final snapshot is taken under
+// cacheMu.RLock — a short, I/O-free critical section (FR-049) — so the
 // steady-state (no out-of-band directories) cost is unchanged: one
-// os.ReadDir plus map lookups, still zero per-session disk reads.
+// os.ReadDir plus map lookups, zero per-session disk reads.
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
-	us.mu.Lock()
-
 	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
@@ -1263,14 +1371,21 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 			if err := validateSessionID(name); err != nil {
 				continue
 			}
-			if _, cached := us.metaCache[name]; cached {
+			us.cacheMu.RLock()
+			_, cached := us.metaCache[name]
+			us.cacheMu.RUnlock()
+			if cached {
 				// Already cached — no per-file disk read needed.
 				continue
 			}
 			// Unknown on-disk directory: lazily load via the standard
-			// self-heal path, which also populates metaCache as a side
+			// self-heal path under ONLY this session's shard (never a
+			// store-global lock), which also populates metaCache as a side
 			// effect (see readMetaLocked's cache-miss branch).
-			if _, readErr := us.readMetaLocked(name); readErr != nil {
+			h := us.lockSession(name)
+			_, readErr := us.readMetaLocked(name)
+			h.Unlock()
+			if readErr != nil {
 				slog.Warn(
 					"unified_store: list sessions: skipping unreadable out-of-band session dir",
 					"dir", name, "error", readErr,
@@ -1280,11 +1395,12 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 		}
 	}
 
+	us.cacheMu.RLock()
 	metas := make([]*UnifiedMeta, 0, len(us.metaCache))
 	for _, meta := range us.metaCache {
 		metas = append(metas, meta.Clone())
 	}
-	us.mu.Unlock()
+	us.cacheMu.RUnlock()
 
 	slices.SortFunc(metas, func(a, b *UnifiedMeta) int {
 		return b.UpdatedAt.Compare(a.UpdatedAt)
@@ -1398,8 +1514,8 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
 
 	dir := filepath.Join(us.baseDir, sessionID)
 	if _, err := os.Stat(dir); err != nil {
@@ -1411,7 +1527,10 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("unified_store: delete session %q: %w", sessionID, err)
 	}
+	us.cacheMu.Lock()
 	delete(us.metaCache, sessionID)
+	us.cacheMu.Unlock()
+	us.u4IndexEvict(sessionID) // FR-097: drop sessionID from the parent index either as a parent or as a child
 	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
 	os.Remove(contextFile) // best-effort, ignore error if file does not exist
 
@@ -1434,9 +1553,17 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 // continues to the next entry — but the failure is still surfaced to the
 // caller so a "clear all sessions" request cannot silently under-deliver on
 // this privacy-sensitive, destructive action.
+// Locking (FR-050(a) exception): ClearAll takes ALL 64 session shards, in
+// strictly ascending index order, via lockAllSessionShards — never
+// lockSession, which would deadlock (sync.Mutex is not reentrant and every
+// shard is already held by this goroutine). metaCache/cacheLoadFailures/the
+// parent index are still touched only under cacheMu, exactly as everywhere
+// else — holding every session shard does not exempt this method from that
+// rule, it only means no OTHER goroutine can be mid-mutation on any session
+// while this runs.
 func (us *UnifiedStore) ClearAll() (int, error) {
-	us.mu.Lock()
-	defer us.mu.Unlock()
+	unlock := us.lockAllSessionShards()
+	defer unlock()
 
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
@@ -1459,7 +1586,10 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 			errs = append(errs, fmt.Errorf("unified_store: clear all: remove session dir %q: %w", entry.Name(), err))
 			continue
 		}
+		us.cacheMu.Lock()
 		delete(us.metaCache, entry.Name())
+		us.cacheMu.Unlock()
+		us.u4IndexEvict(entry.Name()) // FR-097
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
 		os.Remove(contextFile) // best-effort, ignore error if file does not exist
 		// Cascade-delete uploads for this session.
@@ -1480,13 +1610,108 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 	// leaving ListSessions to resurrect sessions that are gone from disk.
 	// Entries whose directory survived (a failed removal above) are kept, since
 	// those sessions genuinely still exist.
+	us.cacheMu.RLock()
+	remaining := make([]string, 0, len(us.metaCache))
 	for id := range us.metaCache {
+		remaining = append(remaining, id)
+	}
+	us.cacheMu.RUnlock()
+	for _, id := range remaining {
 		if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); errors.Is(statErr, os.ErrNotExist) {
+			us.cacheMu.Lock()
 			delete(us.metaCache, id)
+			us.cacheMu.Unlock()
+			us.u4IndexEvict(id) // FR-097
 		}
 	}
 
 	return removed, errors.Join(errs...)
+}
+
+// --- ADR-057 FR-097: in-memory session parent index (surface) ---
+//
+// See UnifiedStore's parentIndex/childToParent field doc comment above for
+// the full design and the Wave-B honesty note about what is and is not wired
+// yet. Every method below assumes it is called OUTSIDE any cacheMu critical
+// section (it takes cacheMu itself) and OUTSIDE lockAllSessionShards'
+// held-shards window is NOT required — DeleteSession/ClearAll/RetentionSweep
+// call these after releasing cacheMu but while still holding the relevant
+// session shard(s), which is fine: the lock order is sessionLock -> cacheMu,
+// and these methods only ever take cacheMu.
+
+// u4IndexAddChild registers childID as a direct child of parentID in the
+// FR-097 parent index. A no-op when parentID is empty (a root has no parent
+// to register under) or when parentID == childID (a malformed self-parent
+// must never be indexed — it would make ChildCount and the eventual
+// roots-only listing walk into themselves). Idempotent: registering the same
+// pair twice is harmless.
+//
+// NOT YET CALLED from createSessionLocked/writeMetaLocked in this wave — see
+// the parentIndex field's doc comment. This method is the ADD half of the
+// surface U5 wires in once SessionMeta.ParentSessionID (FR-008/W2) lands;
+// it is exercised directly by this unit's own tests today.
+func (us *UnifiedStore) u4IndexAddChild(parentID, childID string) {
+	if parentID == "" || parentID == childID {
+		return
+	}
+	us.cacheMu.Lock()
+	defer us.cacheMu.Unlock()
+	if us.parentIndex[parentID] == nil {
+		us.parentIndex[parentID] = make(map[string]struct{})
+	}
+	us.parentIndex[parentID][childID] = struct{}{}
+	us.childToParent[childID] = parentID
+}
+
+// u4IndexEvict removes id from the FR-097 parent index entirely, handling
+// both roles id may hold:
+//
+//   - If id is itself a tracked CHILD of some parent, that edge is dropped
+//     (the parent's child_count decrements — dataset row 5, "DeleteSession on
+//     a child").
+//   - If id is itself a tracked PARENT, every one of its former children has
+//     its own childToParent entry cleared, making each an orphan ROOT at the
+//     index level (dataset row 6, "DeleteSession on the parent"). Their own
+//     on-disk ParentSessionID is untouched here — patching that (once FR-008
+//     lands) belongs to whichever unit wires the write path, not this
+//     read/evict-only surface.
+//
+// Called whenever id's metaCache entry is deleted for a reason that means
+// the session itself is gone (DeleteSession, ClearAll, RetentionSweep's
+// empty-dir removal) — i.e. FR-097's "delete" and "eviction" mutation
+// points that this unit owns. Idempotent and safe to call for an id that was
+// never indexed at all.
+func (us *UnifiedStore) u4IndexEvict(id string) {
+	us.cacheMu.Lock()
+	defer us.cacheMu.Unlock()
+	if parentID, ok := us.childToParent[id]; ok {
+		if kids := us.parentIndex[parentID]; kids != nil {
+			delete(kids, id)
+			if len(kids) == 0 {
+				delete(us.parentIndex, parentID)
+			}
+		}
+		delete(us.childToParent, id)
+	}
+	if kids, ok := us.parentIndex[id]; ok {
+		for childID := range kids {
+			delete(us.childToParent, childID)
+		}
+		delete(us.parentIndex, id)
+	}
+}
+
+// ChildCount returns the number of DIRECT children sessionID has in the
+// FR-097 parent index, resolved in O(1) — the mechanism FR-091's per-root
+// child_count and FR-106-style orphan detection need. Returns 0 for a
+// session with no tracked children (including one never indexed at all —
+// the zero value of a missing map key). This is the "U6 consumes it for
+// listing" half of FR-097's stated ownership split; U6's Wave D listing
+// layer is the intended caller once it exists.
+func (us *UnifiedStore) ChildCount(sessionID string) int {
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
+	return len(us.parentIndex[sessionID])
 }
 
 // readUnifiedMeta reads meta.json from sessionDir, handling both legacy SessionMeta
