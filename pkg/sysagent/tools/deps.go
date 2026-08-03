@@ -193,7 +193,18 @@ type Deps struct {
 	// dependency in production is a wiring bug that must fail loudly rather than
 	// returning an empty report indistinguishable from genuine zero usage.
 	//
-	// The production gateway wires this to agentLoop.ListAllSessions.
+	// ADR-057 U9 (FR-092/FR-098) changed AgentLoop.ListAllSessions' signature to
+	// (limit, offset int, parentSessionID string, flat bool) (session.SessionListPage,
+	// []error) — paginated and hierarchy-aware. This field's own zero-arg shape is
+	// intentionally UNCHANGED (ADR-057 U25, W16i, [grill2 C2-1]): get_usage always
+	// wants the whole session set for a correct aggregate and has no pagination
+	// concept of its own, so widening this field to mirror ListAllSessions'
+	// parameters would add knobs no caller can usefully vary. The production
+	// gateway wires this via u25AllSessionsForUsage (pkg/gateway/gateway.go),
+	// which calls ListAllSessions(0, 0, "", true) — flat=true is load-bearing, not
+	// a default of convenience: FR-104 warns that a roots-only listing silently
+	// drops delegated children's token spend from the merged set, which would
+	// make get_usage under-report real spend with a green build.
 	ListSessions func() ([]*session.UnifiedMeta, []error)
 
 	// PlanStore, when non-nil, backs create_task_in_workspace's optional

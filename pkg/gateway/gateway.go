@@ -1239,6 +1239,35 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 	return nil
 }
 
+// u25AllSessionsForUsage adapts AgentLoop.ListAllSessions' ADR-057/U9
+// paginated signature (limit, offset int, parentSessionID string, flat bool)
+// back to the zero-arg, "return everything" shape systools.Deps.ListSessions
+// still exposes (ADR-057 U25, W16i, [grill2 C2-1]).
+//
+// The single consumer of Deps.ListSessions is the get_usage tool
+// (pkg/sysagent/tools/diag.go's UsageQueryTool), which aggregates token
+// spend by period/agent/model/session with no pagination concept of its own
+// — it always wants the WHOLE session set in one pass, so widening its field
+// to accept limit/offset/parentSessionID would add parameters no caller can
+// ever usefully vary. flat=true is not a default of convenience: FR-104
+// warns explicitly that a roots-only listing silently DROPS a delegated
+// child's token spend from the merged set (Total.Sessions would only carry
+// parents), which would make get_usage under-report real spend with a green
+// build — exactly this ADR's defining defect class. limit=0/offset=0 mean
+// "no limit, from the start" (FR-098(b)), matching this method's pre-
+// pagination "collect every session, every store" behavior exactly. See
+// rest_stats_adr057_test.go's TestU25ListAllSessions_RootsOnly_
+// UndercountsDelegatedChildSpend (red) and
+// TestU25AllSessionsForUsage_FeedsGetUsageWithDelegatedChildSpend (green)
+// for the proof: roots-only under-counts a real delegated child's spend;
+// this flat=true wiring does not.
+func u25AllSessionsForUsage(al *agent.AgentLoop) func() ([]*session.UnifiedMeta, []error) {
+	return func() ([]*session.UnifiedMeta, []error) {
+		page, errs := al.ListAllSessions(0, 0, "", true)
+		return page.Sessions, errs
+	}
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
@@ -1899,7 +1928,15 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
 		// comment.
 		ResolveBashPolicy: agentLoop.NewSysagentBashPolicyResolver(),
-		ListSessions:      agentLoop.ListAllSessions,
+		// ADR-057 U9 changed ListAllSessions' signature to
+		// (limit, offset int, parentSessionID string, flat bool), so it can no
+		// longer be assigned here as a bare method value — this field's type
+		// is the zero-arg func() ([]*session.UnifiedMeta, []error) shape
+		// get_usage (the sole consumer) actually needs. See
+		// u25AllSessionsForUsage's doc comment for why flat=true is required
+		// here (FR-104: roots-only would silently under-count delegated
+		// children's token spend).
+		ListSessions: u25AllSessionsForUsage(agentLoop),
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 
