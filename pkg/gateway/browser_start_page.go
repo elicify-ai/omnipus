@@ -85,7 +85,10 @@ const browserStartPageHTML = `<!doctype html>
     -webkit-font-smoothing: antialiased;
   }
   .wrap { max-width: 30rem; }
-  .mark { font-size: 3.25rem; line-height: 1; margin-bottom: 1.25rem; }
+  /* Inline SVG, not an emoji: the container image ships no emoji font, so the
+     octopus glyph rendered as blank space (live-observed on UAT v40). */
+  .mark { margin-bottom: 1.25rem; }
+  .mark svg { width: 3rem; height: 3rem; }
   h1 {
     font-size: 1.375rem;
     font-weight: 600;
@@ -113,7 +116,19 @@ const browserStartPageHTML = `<!doctype html>
 </head>
 <body>
   <main class="wrap">
-    <div class="mark" role="img" aria-label="Omnipus">&#129425;</div>
+    <div class="mark" role="img" aria-label="Omnipus">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#D4AF37" stroke-width="1.5"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2.75a6 6 0 0 0-6 6v2.5h12v-2.5a6 6 0 0 0-6-6Z"/>
+        <circle cx="9.75" cy="8.5" r="0.9" fill="#D4AF37" stroke="none"/>
+        <circle cx="14.25" cy="8.5" r="0.9" fill="#D4AF37" stroke="none"/>
+        <path d="M7 11.25c-1.2 2-1.6 4.4-3.2 5.9"/>
+        <path d="M9.6 11.25c-.5 2.6-.9 5.2-2.2 7.4"/>
+        <path d="M12 11.25v8.2"/>
+        <path d="M14.4 11.25c.5 2.6.9 5.2 2.2 7.4"/>
+        <path d="M17 11.25c1.2 2 1.6 4.4 3.2 5.9"/>
+      </svg>
+    </div>
     <h1>Ready to browse with <span class="accent">omnipus</span></h1>
     <p>This is a real browser. Use the address bar above, or ask your agent to
        take it somewhere &mdash; you can both drive.</p>
