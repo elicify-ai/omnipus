@@ -352,9 +352,13 @@ func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testin
 	if !ok {
 		t.Fatalf("message_parent tool is %T, want *tools.MessageParentTool", mpAny)
 	}
-	// Drive it: a progress message with the transcript session id set in
-	// context (message_parent reads it via ToolTranscriptSessionID).
-	ctx := tools.WithTranscriptSessionID(context.Background(), "child-direct-1")
+	// Drive it: a progress message with the child's own durable session id
+	// set in context. message_parent.go resolves the durable LifecycleRecord
+	// under tools.ToolDelegateSessionID(ctx) (the child's OWN ADR-053
+	// session_id — #576), not ToolTranscriptSessionID; set both to the same
+	// seeded SessionID, mirroring pkg/tools/message_parent_test.go's
+	// withChildContext.
+	ctx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), "child-direct-1"), "child-direct-1")
 	res := mp.Execute(ctx, map[string]any{
 		"kind": "progress",
 		"text": "direct-path progress line",

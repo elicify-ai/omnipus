@@ -260,7 +260,11 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 	}
 
 	// child-noisy floods blockers up to the default per-child ceiling (20).
-	noisyCtx := tools.WithTranscriptSessionID(context.Background(), "child-noisy")
+	// message_parent.go resolves the durable LifecycleRecord under
+	// tools.ToolDelegateSessionID(ctx) (the child's OWN ADR-053 session_id —
+	// #576), not ToolTranscriptSessionID; set both to the same seeded
+	// SessionID, mirroring pkg/tools/message_parent_test.go's withChildContext.
+	noisyCtx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), "child-noisy"), "child-noisy")
 	for i := 0; i < 20; i++ {
 		res := tool.Execute(noisyCtx, map[string]any{
 			"kind": "blocker", "text": "noise", "severity": "low",
@@ -280,7 +284,7 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 
 	// child-quiet's blocker is STILL accepted — the ceiling is per-child, so the
 	// noisy sibling did not consume the quiet sibling's slot.
-	quietCtx := tools.WithTranscriptSessionID(context.Background(), "child-quiet")
+	quietCtx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), "child-quiet"), "child-quiet")
 	quiet := tool.Execute(quietCtx, map[string]any{
 		"kind": "blocker", "text": "I need a decision", "severity": "high", "message_id": "quiet-1",
 	})
@@ -369,7 +373,11 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	if !ok {
 		t.Fatalf("message_parent tool is %T, want *tools.MessageParentTool", mpAny)
 	}
-	childCtx := tools.WithTranscriptSessionID(context.Background(), childSession)
+	// message_parent.go resolves the durable LifecycleRecord under
+	// tools.ToolDelegateSessionID(ctx) (the child's OWN ADR-053 session_id —
+	// #576), not ToolTranscriptSessionID; set both to the same seeded
+	// SessionID, mirroring pkg/tools/message_parent_test.go's withChildContext.
+	childCtx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), childSession), childSession)
 
 	// (1) Child → parent: a blocking question parks the child in needs_input
 	// with a correlation_id, same generation, and durably reaches the inbox.
