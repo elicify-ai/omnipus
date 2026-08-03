@@ -275,6 +275,37 @@ type UnifiedStore struct {
 	// index surface ... U6 consumes it for listing").
 	parentIndex   map[string]map[string]struct{}
 	childToParent map[string]string
+
+	// --- ADR-057 U6 (Wave D), W24 — the FR-061...FR-067 stats-flush
+	// throttle. See unified_stats_flush.go for the mechanics; the fields
+	// live here because UnifiedStore itself does. ---
+
+	// dirtyStats tracks sessions with an unflushed in-memory-only Stats
+	// delta (FR-061): AppendTranscript's per-token counter bump no longer
+	// writes stats.json synchronously — it mutates the cached entry via
+	// u6MarkStatsDirtyLocked and records the session id here instead. The
+	// periodic flusher (runStatsFlusher) and every forced-flush point
+	// (SetMeta w/ Status, DeleteSession, Close, FlushSessionStats) drain
+	// this set. Guarded by the SAME cacheMu that guards metaCache — a
+	// session's dirty membership must never be observable out of sync with
+	// its cached Stats.
+	dirtyStats map[string]struct{}
+
+	// flushMu guards statsFlushInterval/flusherStarted/flushStopCh/
+	// flushDoneCh below. Deliberately a SEPARATE lock from cacheMu/
+	// sessionLocks — it protects the flusher's own control-plane state, not
+	// session data, so it is never part of the sessionLock -> cacheMu order
+	// and is never held across an os.*/fileutil.* call either.
+	flushMu            sync.Mutex
+	statsFlushInterval time.Duration
+	flusherStarted     bool
+	flushStopCh        chan struct{}
+	flushDoneCh        chan struct{}
+	// flushTimer is the flusher goroutine's LIVE timer. SetStatsFlushInterval
+	// resets it directly so an override takes effect immediately rather than
+	// only after the in-flight wait (started with whatever interval was
+	// current when the timer was last armed) happens to elapse on its own.
+	flushTimer *time.Timer
 }
 
 // CacheLoadFailureCount returns the number of sessions that failed to load
@@ -374,10 +405,18 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 		metaCache:     make(map[string]*UnifiedMeta),
 		parentIndex:   make(map[string]map[string]struct{}),
 		childToParent: make(map[string]string),
+		dirtyStats:    make(map[string]struct{}),
 	}
 
 	us.migrateLegacy()
 	us.loadMetaCacheLocked()
+	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
+	// from construction — a fresh install with no operator override still
+	// converges stats.json every DefaultSessionStatsFlushInterval (5s, see
+	// unified_stats_flush.go) with zero wiring required by the caller.
+	// SetStatsFlushInterval overrides the period later, e.g. once a caller
+	// has resolved config.SessionConfig.EffectiveStatsFlushInterval().
+	us.startStatsFlusher()
 	return us, nil
 }
 
@@ -850,6 +889,22 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 			return err
 		}
 	}
+	if patch.Status != nil {
+		// ADR-057 U6 W24 (FR-064): a Status transition is one of the four
+		// forced-flush points — a session about to pause/complete/error
+		// must not leave pending counter deltas stranded in the cache until
+		// the next periodic tick. This call already holds sessionID's shard
+		// (h, acquired above), so u6FlushDirtySessionLocked is safe to call
+		// directly. A flush failure here is logged, not returned: the
+		// Status write itself already succeeded durably above, and failing
+		// the whole SetMeta call would make a successfully-persisted status
+		// change look like a lost one (same rationale AppendTranscript uses
+		// for its own post-write stats failure).
+		if err := us.u6FlushDirtySessionLocked(sessionID); err != nil {
+			slog.Warn("unified_store: forced stats flush on status change failed",
+				"session_id", sessionID, "error", err)
+		}
+	}
 	if goalTouched {
 		if err := us.u5WriteGoalLocked(sessionID, meta); err != nil {
 			return err
@@ -1111,20 +1166,18 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 		meta.Stats.MessageCount++
 	}
 	meta.UpdatedAt = entry.Timestamp
-	// Unlike the existence check above, a POST-append stats-write failure is
-	// still logged rather than returned: the transcript line itself already
-	// landed durably (the caller's "did my message survive" question is
-	// already answered yes), and failing the whole call here would make a
-	// successfully-persisted chat message look like a lost one.
-	if writeErr := us.u5WriteStatsLocked(sessionID, meta); writeErr != nil {
-		slog.Warn(
-			"unified_store: could not write stats after transcript append",
-			"session_id",
-			sessionID,
-			"error",
-			writeErr,
-		)
-	}
+	// ADR-057 U6 W24 (FR-061/FR-062): the per-token counter write is
+	// throttled — this mutates ONLY the cached entry (never touching
+	// stats.json on disk) and marks the session dirty for the periodic
+	// flusher (or the next forced-flush point) to persist. The transcript
+	// line itself already landed durably above via fileutil.AppendJSONL
+	// (FR-062: the append stays immediate and unthrottled); only the
+	// counters are deferred. Before this throttle, this call site invoked
+	// u5WriteStatsLocked directly — a full marshal + WithFlock + fsync +
+	// rename + directory fsync on EVERY streamed line (US-13's governing
+	// complaint). u6MarkStatsDirtyLocked can never fail (it is pure
+	// in-memory bookkeeping), so there is no error to log here.
+	us.u6MarkStatsDirtyLocked(sessionID, meta)
 	return nil
 }
 
@@ -1512,16 +1565,18 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 //
 // Consistency model (FR-086, post-striping): a best-effort POINT-IN-TIME
 // snapshot. It MAY omit a session deleted DURING this call, MUST NOT panic
-// or deadlock, and MUST NOT return a partially-composed meta. It does NOT
-// yet evict a metaCache entry whose directory vanished BEFORE this call
-// started (FR-086's "must not resurrect a gone session" clause / FR-097a) —
-// that prune is explicitly owned by U6 (Wave D, per the spec's ownership
-// table row for W15: "U6 (FR-097a, FR-102)"), layered on top of the
-// per-session-shard reconcile this method now performs. Until U6 lands it,
-// this preserves the exact pre-ADR-057 behavior for that one case (a
-// directory removed out-of-band stays cached until process restart or an
-// explicit DeleteSession/ClearAll/RetentionSweep) — not a regression, a
-// documented incremental gap tracked at the FR-097a boundary.
+// or deadlock, and MUST NOT return a partially-composed meta. It MUST NOT
+// return a session whose directory was already absent when the call began
+// (FR-086's "must not resurrect a gone session" clause) — ADR-057 U6 (Wave
+// D) closes this: the reconcile pass below now PRUNES a metaCache entry
+// whose directory vanished out of band (RetentionSweep, an operator rm, a
+// crashed deploy — FR-097a) in the SAME pass that adds newly-discovered
+// out-of-band directories, reusing the single os.ReadDir result for both
+// directions so the prune costs ZERO additional disk reads beyond what this
+// method already performed before FR-097a existed. A cacheLoadFailures
+// exclusion (Ambiguity item 8) is untouched by this: a session that failed
+// to load at construction was never admitted into metaCache, so it is never
+// a candidate for this prune.
 //
 // FR-051 locking (replacing the old store-global us.mu.Lock() for the whole
 // call): reconciliation of each out-of-band directory happens under THAT
@@ -1531,6 +1586,12 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 // cacheMu.RLock — a short, I/O-free critical section (FR-049) — so the
 // steady-state (no out-of-band directories) cost is unchanged: one
 // os.ReadDir plus map lookups, zero per-session disk reads.
+//
+// FR-102 seam: u6ReconcileSnapshotBarrierFn (unified_stats_flush.go) fires
+// between the reconcile pass (add + prune) above and the final snapshot
+// below, letting an in-package test interleave a DeleteSession
+// deterministically at exactly that boundary (BDD-95/#92/SC-041) instead of
+// hoping go test -race happens to hit the window.
 func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	var listErr error
 	entries, err := os.ReadDir(us.baseDir)
@@ -1540,6 +1601,7 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 			listErr = fmt.Errorf("unified_store: list sessions: read base dir %q: %w", us.baseDir, err)
 		}
 	} else {
+		onDisk := make(map[string]struct{}, len(entries))
 		for _, entry := range entries {
 			if !entry.IsDir() || entry.Name() == ".context" {
 				continue
@@ -1548,6 +1610,8 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 			if err := validateSessionID(name); err != nil {
 				continue
 			}
+			onDisk[name] = struct{}{}
+
 			us.cacheMu.RLock()
 			_, cached := us.metaCache[name]
 			us.cacheMu.RUnlock()
@@ -1570,7 +1634,34 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 				continue
 			}
 		}
+
+		// FR-097a: evict any cached session absent from onDisk — its
+		// directory vanished out of band since it was cached. Snapshot the
+		// stale ids first (a short cacheMu.RLock, no I/O), then evict each
+		// under ITS OWN shard (mirroring DeleteSession's own lock order:
+		// sessionLock(id) -> cacheMu -> u4IndexEvict) so a concurrent
+		// create/delete for the SAME id can never interleave mid-eviction.
+		us.cacheMu.RLock()
+		staleIDs := make([]string, 0)
+		for id := range us.metaCache {
+			if _, present := onDisk[id]; !present {
+				staleIDs = append(staleIDs, id)
+			}
+		}
+		us.cacheMu.RUnlock()
+		for _, id := range staleIDs {
+			h := us.lockSession(id)
+			us.cacheMu.Lock()
+			delete(us.metaCache, id)
+			delete(us.dirtyStats, id)
+			us.cacheMu.Unlock()
+			us.u4IndexEvict(id) // FR-097
+			h.Unlock()
+		}
 	}
+
+	// FR-102 barrier — see this method's doc comment.
+	u6ReconcileSnapshotBarrierFn()
 
 	us.cacheMu.RLock()
 	metas := make([]*UnifiedMeta, 0, len(us.metaCache))
@@ -1579,10 +1670,96 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	}
 	us.cacheMu.RUnlock()
 
+	// FR-098-style stable ordering at the store layer: UpdatedAt descending
+	// with session id as a tiebreak, so two sessions sharing one timestamp
+	// (down to whatever resolution the clock/filesystem gives) cannot
+	// silently swap places between two calls with no intervening write —
+	// slices.SortFunc alone is not a stable sort, and comparing only
+	// UpdatedAt leaves ties resolved by map iteration order, which Go
+	// deliberately randomizes.
 	slices.SortFunc(metas, func(a, b *UnifiedMeta) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
+		if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
 	})
 	return metas, listErr
+}
+
+// SessionListPage is the ADR-057 FR-092 store-layer pagination result
+// (W16a): a bounded window of ListSessions' full recency-ordered sequence,
+// plus enough information for a caller to fetch the next page. Additive —
+// ListSessions() itself keeps its existing zero-arg, "return everything"
+// signature so every caller outside this migration's own session-list
+// pipeline (usage aggregation, boot sweep, admin tooling, and the many other
+// consumers `ListSessions()` already has across the tree) keeps compiling
+// unchanged. ListSessionsPage is the primitive AgentLoop.ListAllSessions
+// (pkg/agent/loop.go, U9, FR-098) is meant to call once it adopts
+// pagination end to end; U6 does not — cannot, per ownership Rule 2 — edit
+// that file itself.
+type SessionListPage struct {
+	// Sessions is this page's window, in the same UpdatedAt-descending,
+	// id-tiebroken order ListSessions() returns.
+	Sessions []*UnifiedMeta
+	// NextOffset is the offset to request for the next page, or -1 when
+	// this page reached the end of the sequence.
+	NextOffset int
+	// Total is the full sequence length (post FR-097a prune) at the moment
+	// this page was computed — informational only; callers MUST NOT assume
+	// it is stable across calls on a live store.
+	Total int
+}
+
+// ListSessionsPage returns a stably-ordered window of ListSessions' result
+// (FR-092/FR-098's "window correctness + stability", #100(a)): two identical
+// calls with no intervening write return a byte-identical window, because
+// the underlying ListSessions() ordering is itself now a total order (see
+// its doc comment). It performs the EXACT SAME reconcile + FR-097a prune
+// pass as ListSessions() — this is a bounded VIEW over that same call, not a
+// second listing mechanism, so it inherits ListSessions' consistency model
+// (FR-086) and its zero-per-session-disk-read warm-cache cost (FR-058/
+// FR-103) unchanged.
+//
+// limit <= 0 means "no limit" — the remainder of the sequence from offset is
+// returned in one page. offset < 0 is treated as 0. An offset at or beyond
+// the end of the sequence returns an empty, non-nil Sessions slice with
+// NextOffset == -1 — not an error.
+func (us *UnifiedStore) ListSessionsPage(offset, limit int) (SessionListPage, error) {
+	all, err := us.ListSessions()
+	if offset < 0 {
+		offset = 0
+	}
+	total := len(all)
+	if offset >= total {
+		return SessionListPage{Sessions: []*UnifiedMeta{}, NextOffset: -1, Total: total}, err
+	}
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	nextOffset := -1
+	if end < total {
+		nextOffset = end
+	}
+	page := make([]*UnifiedMeta, end-offset)
+	copy(page, all[offset:end])
+	return SessionListPage{Sessions: page, NextOffset: nextOffset, Total: total}, err
+}
+
+// IsOrphan reports whether meta's ParentSessionID names a session that no
+// longer exists in this store's metaCache (BDD-106: "an orphaned child is
+// listed as a root, not dropped" — the U18/REST listing layer's roots-only
+// view needs to know this to avoid silently hiding such a child forever).
+// O(1), no disk read — a direct FR-097-adjacent metaCache membership check.
+// Returns false for a root (empty ParentSessionID) and for a nil meta.
+func (us *UnifiedStore) IsOrphan(meta *UnifiedMeta) bool {
+	if meta == nil || meta.ParentSessionID == "" {
+		return false
+	}
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
+	_, parentExists := us.metaCache[meta.ParentSessionID]
+	return !parentExists
 }
 
 // AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.
@@ -1678,7 +1855,17 @@ func (us *UnifiedStore) Save(sessionKey string) error {
 }
 
 // Close implements SessionStore.
+//
+// ADR-057 U6 W24 (FR-064): UnifiedStore.Close had no flush hook at all
+// before this throttle existed — moot while every stats write was
+// synchronous, but a real gap now that AppendTranscript defers its counter
+// bump. Close is the third of FR-064's four forced-flush points: it stops
+// the periodic flusher goroutine FIRST (so no tick can race the final flush
+// below or fire after Close returns) and then flushes every still-dirty
+// session's stats.json synchronously, before closing the context backend.
 func (us *UnifiedStore) Close() error {
+	us.stopStatsFlusher()
+	us.flushAllDirtyStats()
 	return us.backend.Close()
 }
 
@@ -1701,11 +1888,26 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 		}
 		return fmt.Errorf("unified_store: stat session %q: %w", sessionID, err)
 	}
+	// ADR-057 U6 W24 (FR-064) — DeleteSession's stated ordered sequence,
+	// step 2 of 6 ("flush the session's dirty stats under that shard"),
+	// BEFORE the directory removal in step 3. This still holds sessionID's
+	// shard (h, acquired above), so a concurrent periodic-flusher tick that
+	// already snapshotted this id as dirty either loses the shard race and
+	// finds the cache entry gone once it gets the shard (skips, no write —
+	// see u6FlushDirtySessionLocked), or wins it and flushes before this
+	// call even starts. A flush failure here is logged, not returned: the
+	// session is being deleted either way, so a stale/never-written
+	// stats.json is moot the instant os.RemoveAll below succeeds.
+	if err := us.u6FlushDirtySessionLocked(sessionID); err != nil {
+		slog.Warn("unified_store: forced stats flush before delete failed",
+			"session_id", sessionID, "error", err)
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("unified_store: delete session %q: %w", sessionID, err)
 	}
 	us.cacheMu.Lock()
 	delete(us.metaCache, sessionID)
+	delete(us.dirtyStats, sessionID) // step 5: drop the dirty-set entry too
 	us.cacheMu.Unlock()
 	us.u4IndexEvict(sessionID) // FR-097: drop sessionID from the parent index either as a parent or as a child
 	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
@@ -1765,6 +1967,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		us.cacheMu.Lock()
 		delete(us.metaCache, entry.Name())
+		delete(us.dirtyStats, entry.Name())
 		us.cacheMu.Unlock()
 		us.u4IndexEvict(entry.Name()) // FR-097
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
@@ -1797,6 +2000,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); errors.Is(statErr, os.ErrNotExist) {
 			us.cacheMu.Lock()
 			delete(us.metaCache, id)
+			delete(us.dirtyStats, id)
 			us.cacheMu.Unlock()
 			us.u4IndexEvict(id) // FR-097
 		}

@@ -77,6 +77,17 @@ func TestReadUnifiedMeta_ComposesFourFiles(t *testing.T) {
 	// check succeeding for a real session).
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "hi"}))
 
+	// ADR-057-U6-inverted: AppendTranscript's Stats bump is now throttled
+	// (W24/FR-061) — it lands in the cache only, and stats.json is created
+	// lazily by the first flush, not synchronously by the append itself.
+	// Force that flush here so the assertion below still exercises AC-21(a)
+	// ("a session directory that HAS run a transcript append holds a real
+	// stats.json"), which is unaffected by whether that write is immediate
+	// or deferred — only the append's own file-split correctness is under
+	// test here, not W24's timing (see unified_stats_flush_adr057_test.go
+	// for that).
+	require.NoError(t, store.FlushSessionStats(sessionID))
+
 	// Now all four MUST exist.
 	assertFileExists(t, filepath.Join(sessionDir, "meta.json"))
 	assertFileExists(t, filepath.Join(sessionDir, "stats.json"))
@@ -208,6 +219,12 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 	loopMode := "interval"
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{LoopMode: &loopMode}))
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "seed"}))
+	// ADR-057-U6-inverted: see the identical note in
+	// TestReadUnifiedMeta_ComposesFourFiles above — force the W24 throttle's
+	// deferred stats.json write so the positive-lower-bound check below
+	// (Rule 4: all 4 files must exist before any byte-comparison) still
+	// holds under the new deferred-write timing.
+	require.NoError(t, store.FlushSessionStats(sessionID))
 
 	metaPath := filepath.Join(sessionDir, "meta.json")
 	statsPath := filepath.Join(sessionDir, "stats.json")
@@ -247,6 +264,11 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 	// Row: transcript append -> goal.json and loop.json unchanged.
 	before := snap()
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "assistant", Content: "reply", Tokens: 3}))
+	// ADR-057-U6-inverted: force the W24 throttle's deferred stats.json
+	// write so this row's "stats.json must actually change" check observes
+	// the append's effect on disk rather than the still-pending in-memory
+	// delta — see the note on the earlier FlushSessionStats call above.
+	require.NoError(t, store.FlushSessionStats(sessionID))
 	after := snap()
 	assert.True(t, bytes.Equal(before[goalPath], after[goalPath]), "transcript append must leave goal.json byte-identical")
 	assert.True(t, bytes.Equal(before[loopPath], after[loopPath]), "transcript append must leave loop.json byte-identical")
@@ -300,6 +322,16 @@ func TestUnifiedMetaMarshal_ByteIdenticalAcrossSplit(t *testing.T) {
 	loopMode := "interval"
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{LoopMode: &loopMode}))
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "x", Tokens: 2}))
+	// ADR-057-U6-inverted: AppendTranscript's Stats bump is now throttled
+	// (W24/FR-061) — the cache reflects it immediately, but stats.json on
+	// disk does not until a flush. This test's whole point (FR-057/AC-21(e))
+	// is that the CACHE and DISK compositions marshal byte-identically for
+	// the SAME logical state — which requires disk to actually hold that
+	// state. Force the flush so "fromDisk"/"fromReopen" below compose from a
+	// stats.json that agrees with the cache, rather than trivially failing
+	// on W24's now-real deferred-write window (a property this test was
+	// never meant to cover; unified_stats_flush_adr057_test.go covers that).
+	require.NoError(t, store.FlushSessionStats(sessionID))
 
 	// Read the composed value TWICE: once served from the warm cache, once
 	// forced through a fresh disk compose (simulating a new process).

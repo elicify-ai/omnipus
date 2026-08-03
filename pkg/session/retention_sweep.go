@@ -159,6 +159,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		if dirRmErr == nil {
 			us.cacheMu.Lock()
 			delete(us.metaCache, sessID)
+			delete(us.dirtyStats, sessID) // ADR-057 U6 W24: no dangling flush target
 			us.cacheMu.Unlock()
 			us.u4IndexEvict(sessID) // FR-097
 		}
