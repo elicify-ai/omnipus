@@ -38,6 +38,29 @@ func TranscriptSuppressedErrors() uint64 {
 	return transcriptSuppressedErrors.Load()
 }
 
+// transcriptWriteFailures is incremented each time one of this file's four
+// transcript writers (appendToolCallTranscript, appendIntermediateAssistantTranscript,
+// appendAssistantTranscript, appendErrorTranscript) calls
+// UnifiedStore.AppendTranscriptStrict against a session id that does not
+// resolve to a real, store-backed session (ADR-057 FR-001/FR-002, W3;
+// BDD-03). Before ADR-057, AppendTranscript silently minted an orphan
+// session directory for exactly this case and returned nil, so a lost
+// transcript write was indistinguishable from a successful one; the four
+// call sites already logged a WARN on error, but nothing counted it. This is
+// a DIFFERENT failure than transcriptSuppressedErrors (which fires when no
+// transcript store is wired at all, i.e. ts.transcriptStore == nil ||
+// ts.transcriptSessionID == "") — this counter fires only when the store IS
+// wired and the call actually reaches it, but the session id it names does
+// not exist.
+var transcriptWriteFailures atomic.Uint64
+
+// TranscriptWriteFailures returns the current value of the
+// transcript-write-failure counter (ADR-057 FR-001/FR-002). Used by tests
+// and operator tooling.
+func TranscriptWriteFailures() uint64 {
+	return transcriptWriteFailures.Load()
+}
+
 // AbandonedWritesSuppressed returns the current value of the
 // omnipus_abandoned_writes_suppressed_total counter.
 func AbandonedWritesSuppressed() int64 {
@@ -225,6 +248,45 @@ type turnState struct {
 	transcriptSessionID string
 	transcriptStore     *session.UnifiedStore
 
+	// routingSessionID is ADR-057's D2 identity split (FR-011): the id that
+	// answers "which open chat does this turn belong to", inherited VERBATIM
+	// through an entire delegation subtree — for a grandchild it equals the
+	// ROOT's own session id, not its immediate parent's transcriptSessionID.
+	// It is the routing/interrupt-scope key; transcriptSessionID (above)
+	// remains the id that answers "which store-backed session does this
+	// turn's own state live under" — the two questions used to be answered
+	// by the same field, which is exactly what let a delegated child's own
+	// transcript writes and its parent's cancel/interrupt scope silently
+	// diverge the moment the child got a real, distinct session (D1).
+	//
+	// Set by newTurnState below to this turn's OWN transcriptSessionID,
+	// which is the correct value for every root turn (FR-011: "for a root
+	// turn it MUST equal the turn's own session id") and requires no caller
+	// action. spawnSubTurn (pkg/agent/subturn.go, ADR-057 U7) is responsible
+	// for OVERWRITING this field on the freshly constructed child —
+	// `childTS.routingSessionID = parentTS.routingSessionID` — immediately
+	// after its own `newTurnState(...)` call, mirroring the existing
+	// `childTS.parentTurnState = parentTS` same-package direct-field-set
+	// pattern a few lines below that same call (both fields are unexported
+	// but pkg/agent is one package, so no accessor is needed). Skipping that
+	// overwrite would silently leave a child's routingSessionID equal to its
+	// OWN session id instead of the root's — the exact conflation this field
+	// exists to end.
+	//
+	// CLOSED CONSUMER SET (FR-014): this field MUST NOT be read for any
+	// purpose other than routing/interrupt scoping — never as a session
+	// store key, transcript write target, ownership predicate, approval-grant
+	// key, uploads-directory key, tool-manifest bucket, lifecycle-record
+	// field, or audit session_id (those all keep using transcriptSessionID
+	// above). Within this file the only reads are the three role-B
+	// predicates FR-015 names: GetActiveTurnHookForSession,
+	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession.
+	// The remaining closed-set readers land in later ADR-057 units: the
+	// steering.go role-B predicates (U8), the pre-arm latch keys in
+	// subturn.go/cancel_prearm.go (U7/U15), and the WS payload stamping in
+	// loop.go (U9).
+	routingSessionID session.RoutingSessionID
+
 	// askPendingToolCalls holds the tool-call IDs for which a "pending"
 	// approval placeholder has been written to the transcript by
 	// recordAskPendingToolCall (approval_transcript.go), and not yet settled.
@@ -335,6 +397,13 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// Bind transcript store for persisting tool calls
 	ts.transcriptSessionID = opts.TranscriptSessionID
 	ts.transcriptStore = opts.TranscriptStore
+
+	// ADR-057 FR-011: default routingSessionID to this turn's own session
+	// id. Correct as-is for every root turn (byte-identical to today's
+	// single-id behavior — AC scenario US-3/AS-1); spawnSubTurn overwrites
+	// it post-construction for a delegated child — see routingSessionID's
+	// field doc comment above for the full contract.
+	ts.routingSessionID = session.RoutingSessionID(ts.transcriptSessionID)
 
 	return ts
 }
@@ -507,21 +576,37 @@ func (ts *turnState) MarkAbandoned() {
 }
 
 // GetActiveTurnHookForSession returns a TurnCancelHook for the active turn
-// belonging to the given transcript session ID, or nil if none is active.
-// Used by handleCancel to atomically claim the turn and register the
-// post-cancel callback (FR-10, FR-11, FR-15).
+// belonging to the given ROUTING session ID, or nil if none is active. Used
+// by handleCancel to atomically claim the turn and register the post-cancel
+// callback (FR-10, FR-11, FR-15).
 //
-// H1: When multiple turns share the same transcriptSessionID (a root turn
-// plus one or more sub-turns), the root turn (depth==0 / parentTurnID=="")
-// is preferred so the cancel handler targets the outermost scope. The first
-// match in the sync.Map iteration is returned only as a last-resort fallback
-// (defensive; should not occur in normal operation).
+// ADR-057 FR-015 (role-B predicate, one of the seven): rebased from
+// transcriptSessionID onto routingSessionID. Before D1, a delegated child's
+// transcriptSessionID equaled its parent's verbatim (no real session of its
+// own), so matching on transcriptSessionID and matching on the routing key
+// were indistinguishable. Once a child owns its own real, distinct
+// transcriptSessionID, matching on that field here would silently stop
+// finding it from a Stop click on the chat's own (routing) session id — the
+// exact regression User Story 5 ("A Stop reaches the whole subtree") exists
+// to prevent. sessionID stays a plain string (this function's external
+// callers, e.g. cancel.go/cancel_prearm.go, are outside this unit's file
+// ownership and are not retyped here); the explicit string() conversion at
+// the comparison below is where the routing-typed field meets that
+// still-string boundary.
+//
+// H1: When multiple turns share the same routingSessionID (a root turn plus
+// one or more sub-turns — always true pre-D1, and still true post-D1 since
+// routingSessionID is inherited verbatim through the whole subtree), the
+// root turn (depth==0 / parentTurnID=="") is preferred so the cancel handler
+// targets the outermost scope. The first match in the sync.Map iteration is
+// returned only as a last-resort fallback (defensive; should not occur in
+// normal operation).
 func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHook {
 	var rootMatch *turnState
 	var anyMatch *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
-		if ts.transcriptSessionID != sessionID {
+		if string(ts.routingSessionID) != sessionID {
 			return true
 		}
 		if anyMatch == nil {
@@ -545,7 +630,20 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 // resolveSessionIDByChannelChat walks activeTurnStates for the turnState
 // matching (channel, chatID) — preferring the root turn (depth==0 /
 // parentTurnID=="") exactly like GetActiveTurnHookForSession — and returns
-// its transcriptSessionID, or "" when no active turn currently matches.
+// its ROUTING session ID, or "" when no active turn currently matches.
+//
+// ADR-057 FR-015 (role-B predicate, one of the seven): the match itself is
+// keyed on (channel, chatID), unaffected by the identity split, but the
+// RETURN VALUE is rebased from transcriptSessionID onto routingSessionID.
+// This matters precisely when the only match is a non-root descendant (the
+// root already finished and cleared from activeTurnStates, a live
+// Critical/background delegate remains): returning the descendant's OWN
+// (post-D1, real and distinct) transcriptSessionID would hand callers an id
+// that GetActiveTurnHookForSession — itself rebased onto routingSessionID —
+// can no longer find, silently breaking the two-function chain
+// cancel.go/cancel_prearm.go build on top of this one. Returning the
+// descendant's routingSessionID instead (which, inherited verbatim, equals
+// the root's own id) keeps that chain working.
 //
 // Shared by RequestCancel's Tier B resolution (cancel.go, a channel carrying
 // no SessionID of its own) and armCancelOrFindActiveTurn's re-check
@@ -561,7 +659,7 @@ func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) strin
 		ts.mu.RLock()
 		ch := ts.channel
 		cid := ts.chatID
-		sid := ts.transcriptSessionID
+		sid := ts.routingSessionID
 		depth := ts.depth
 		parentID := ts.parentTurnID
 		ts.mu.RUnlock()
@@ -578,18 +676,29 @@ func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) strin
 		return true
 	})
 	if rootTS != nil {
-		return rootTS.transcriptSessionID
+		return string(rootTS.routingSessionID)
 	}
 	return ""
 }
 
 // getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
-// parentTurnID=="") matching sessionID's transcriptSessionID, or nil when no
+// parentTurnID=="") matching sessionID's ROUTING session ID, or nil when no
 // root turn is currently active for the session — INCLUDING when the only
 // resolvable match is a non-root descendant. Unlike
 // GetActiveTurnHookForSession (which falls back to ANY match, root-preferring
 // but not root-EXCLUSIVE, as a defensive last resort for other callers), this
 // NEVER returns a delegate sub-turn.
+//
+// ADR-057 FR-015 (role-B predicate, one of the seven): rebased from
+// transcriptSessionID onto routingSessionID for the same reason as
+// GetActiveTurnHookForSession's identical rebase — see that function's doc
+// comment. The depth==0/parentTurnID=="" filter below already excludes every
+// descendant regardless of which id field feeds it, so for THIS function the
+// rebase changes no currently-observable input/output pair; it exists so
+// this predicate stays keyed on the same closed-set field as its six
+// siblings (FR-014) rather than reintroducing a transcriptSessionID
+// comparison that would silently diverge the moment any of them depends on
+// this one matching a genuinely-distinct-id descendant in the future.
 //
 // Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
 // pkg/agent/orphan_watch.go) to answer "is there still a genuine foreground
@@ -604,7 +713,7 @@ func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnSta
 	var root *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
-		if ts.transcriptSessionID != sessionID {
+		if string(ts.routingSessionID) != sessionID {
 			return true
 		}
 		if ts.depth == 0 || ts.parentTurnID == "" {
@@ -1084,6 +1193,18 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 	}
 }
 
+// warnAbandonedTranscriptWrite emits the ADR-057 FR-003/BDD-04 WARN record
+// for the ts.abandoned write-suppression branch shared by all four
+// transcript writers below, naming the session id and the suppression
+// reason. `[grill C-2]` The abandonedWritesSuppressed counter already exists
+// and already increments at each of these four sites (and three more
+// outside this file) — this call adds only the previously-missing log
+// record; the counter's own existing behavior is untouched by this change.
+func (ts *turnState) warnAbandonedTranscriptWrite(writer string) {
+	logger.WarnCF("agent", "transcript write suppressed: turn marked abandoned",
+		map[string]any{"session_id": ts.transcriptSessionID, "writer": writer, "reason": "abandoned"})
+}
+
 // appendToolCallTranscript records a tool call to the session transcript.
 // It is a no-op when no transcript store or session ID is configured, or when
 // the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
@@ -1095,6 +1216,7 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
+		ts.warnAbandonedTranscriptWrite("appendToolCallTranscript")
 		return
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
@@ -1127,7 +1249,8 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 		Timestamp: time.Now().UTC(),
 		ToolCalls: []session.ToolCall{tc},
 	}
-	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record tool call to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
 	}
@@ -1170,6 +1293,7 @@ func (ts *turnState) resolveActiveAgentID() string {
 func (ts *turnState) appendIntermediateAssistantTranscript(content string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
+		ts.warnAbandonedTranscriptWrite("appendIntermediateAssistantTranscript")
 		return
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
@@ -1205,7 +1329,8 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
 	}
-	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record intermediate assistant message to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
 	}
@@ -1224,6 +1349,7 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 func (ts *turnState) appendAssistantTranscript(content string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
+		ts.warnAbandonedTranscriptWrite("appendAssistantTranscript")
 		return
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
@@ -1267,7 +1393,8 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 		// child delegation sub-turn's own final-turn text.
 		ParentSpawnCallID: ts.parentSpawnCallID,
 	}
-	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record assistant message to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
 	}
@@ -1295,6 +1422,7 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 	}
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
+		ts.warnAbandonedTranscriptWrite("appendErrorTranscript")
 		return
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
@@ -1322,7 +1450,8 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string) {
 		// parsing the free-text Content.
 		Status: "error",
 	}
-	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record error to transcript",
 			map[string]any{
 				"session_id": ts.transcriptSessionID,
