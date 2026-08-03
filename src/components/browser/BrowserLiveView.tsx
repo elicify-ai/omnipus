@@ -1464,10 +1464,13 @@ export function BrowserLiveView({
     if (!connectedRef.current) return
     if (controllingRef.current) return // already driving — nothing to acquire
     if (pendingTakeRef.current) return // a take is already in flight — never double-fire
-    // UAT finding FE-6, preserved: don't race a DIFFERENT connection of this
-    // same session that already holds the lock (the pop-out and the docked
-    // panel can both be open on the same agent at once).
-    if (controlledByOtherRef.current) return
+    // NO controlledByOther bail-out (operator directive, 2026-08-03). This used
+    // to return early whenever ANY other connection held the lock, which meant a
+    // second panel, a pop-out, or a stale automation session silently disabled
+    // the real human's mouse, keyboard and omnibox — the panel showed "Someone
+    // else is driving" and dropped everything. The panel is a real browser: the
+    // human's input always proceeds, and the server no longer gates dispatch on
+    // a control lock either (see dispatchInput).
     if (agentWorkingRef.current) {
       // ADR-040 D2 "Take over": pause the agent FIRST, via the exact same
       // chat-store action the chat Stop button calls — reusing it here
@@ -2084,7 +2087,13 @@ export function BrowserLiveView({
       }
     }
     if (visualDriveMode === 'other-driving') {
-      return { label: 'Someone else is driving', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
+      // Informational, NOT a lock-out. Control is shared — this viewer's mouse,
+      // keyboard and omnibox all still work while someone else is also active
+      // (operator directive, 2026-08-03). The old label read "Someone else is
+      // driving", which told the user their input would be ignored — and it
+      // was, because the client and server both gated on the lock. Both gates
+      // are gone; the chip now just says who else is here.
+      return { label: 'Also viewing', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
     }
     return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
   })()

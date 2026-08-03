@@ -135,29 +135,37 @@ func TestLiveView_HandleScreencastEvent_IgnoresOtherEventTypes(t *testing.T) {
 	require.False(t, called, "a non-screencast CDP event must not be delivered as a frame")
 }
 
-// --- input gated by control (ADR-038 D6) ---
+// --- input is NEVER gated by control (operator directive, 2026-08-03) ---
+//
+// This suite previously asserted the opposite (ADR-038 D6's exclusive
+// single-controller lock: "input must be refused when nobody holds control").
+// That model was removed: the live panel is a REAL BROWSER the human uses
+// normally, and the agent can steer it too — concurrently. The lock made a
+// second panel, a pop-out, or a stale automation session silently disable the
+// actual user's mouse, keyboard and omnibox while the UI said "Someone else is
+// driving".
 
-func TestLiveView_DispatchInput_RequiresControl(t *testing.T) {
+func TestLiveView_DispatchInput_NeverRequiresControl(t *testing.T) {
 	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
 
+	// Nobody holds control at all. The input must still reach the dispatch
+	// step — proven by it failing on the UNATTACHED SESSION (nil tabCtx)
+	// rather than on a control rejection.
 	err := lv.dispatchInput("viewerA", LiveInput{Kind: "mouse_move", X: 1, Y: 2})
-	require.Error(t, err, "input must be refused when nobody holds control")
-	require.Contains(t, err.Error(), "does not hold control")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not attached",
+		"input must never be refused for lack of a control lock — it has to reach dispatch")
+	require.NotContains(t, err.Error(), "does not hold control")
 
+	// Someone else holds control. A different viewer's input must STILL get
+	// through: this is precisely the case that left a real human with a dead
+	// mouse and keyboard.
 	require.True(t, lv.takeControl("viewerA"))
-
-	// viewerB never took control — still refused even though SOMEONE holds it.
 	err = lv.dispatchInput("viewerB", LiveInput{Kind: "mouse_move", X: 1, Y: 2})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "does not hold control")
-
-	// viewerA holds control but the session was never attached (tabCtx is
-	// nil) — proves the request passed the control gate and reached the
-	// dispatch step, which then fails closed on the missing session rather
-	// than panicking or silently no-op'ing.
-	err = lv.dispatchInput("viewerA", LiveInput{Kind: "mouse_move", X: 1, Y: 2})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not attached")
+	require.Contains(t, err.Error(), "not attached",
+		"a viewer must be able to act while ANOTHER viewer holds control — control is shared, not exclusive")
+	require.NotContains(t, err.Error(), "does not hold control")
 }
 
 func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
@@ -376,30 +384,28 @@ func TestLiveView_DispatchInput_Navigate_ValidURLPassesSSRFAndDispatches(t *test
 // to the new "navigate" kind exactly like every other kind — and, since the
 // control check runs before the SSRF check, an uncontrolled/wrong-viewer
 // navigate never even reaches ValidateURL or CDP.
-func TestLiveView_DispatchInput_Navigate_RequiresControl(t *testing.T) {
+func TestLiveView_DispatchInput_Navigate_NeverRequiresControl(t *testing.T) {
 	var dispatched bool
 	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
 		dispatched = true
 		return nil
 	})
 
-	// Nobody holds control yet.
+	// Nobody holds control — navigation must still go through. This is the
+	// omnibox case from the 2026-08-03 recording: the user typed a URL and
+	// pressing Enter did nothing at all, because submit was gated on the lock.
 	err := lv.dispatchInput("viewerA", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
-	require.Error(t, err)
-	require.True(t, IsBenignLiveInputError(err), "not-controller is the benign, high-frequency rejection kind")
-	require.Contains(t, err.Error(), "does not hold control")
-	require.False(t, dispatched)
+	require.NoError(t, err)
+	require.True(t, dispatched, "navigate must dispatch without any control lock")
 
+	// Someone ELSE holds control — a second viewer's navigation must still
+	// work. Control is shared.
+	dispatched = false
 	require.True(t, lv.takeControl("viewerA"))
-
-	// viewerB never took control — still refused even though someone holds
-	// it, and the SSRF gate is never reached even for a URL that would
-	// otherwise pass it.
 	err = lv.dispatchInput("viewerB", LiveInput{Kind: "navigate", URL: "http://8.8.8.8/"})
-	require.Error(t, err)
-	require.True(t, IsBenignLiveInputError(err))
-	require.Contains(t, err.Error(), "does not hold control")
-	require.False(t, dispatched)
+	require.NoError(t, err)
+	require.True(t, dispatched,
+		"a viewer must be able to navigate while ANOTHER viewer holds control")
 }
 
 func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {

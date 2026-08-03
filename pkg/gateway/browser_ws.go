@@ -914,57 +914,12 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	if err := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); err != nil {
 		if browser.IsBenignLiveInputError(err) {
 			slog.Debug("browser-ws: input rejected (benign)", "error", err, "session_id", state.sessionID)
-			// Same user-drives-by-default model as the WebRTC data-channel
-			// path (see pkg/gateway/browser_webrtc.go's input handler): a
-			// human's input acquires the lock rather than being discarded,
-			// unless a different still-attached viewer genuinely holds it.
-			// Applied on BOTH transports deliberately — input arrives over
-			// the data channel normally but over this socket for the
-			// take-the-wheel first click, and a model that held on only one
-			// of them would be a coin-flip depending on which path the event
-			// happened to take.
-			if browser.IsNotControllerLiveInputError(err) {
-				if state.mgr.Live().EnsureControlForInput(browser.DefaultSessionID, viewerID) {
-					if retryErr := state.mgr.Live().Input(browser.DefaultSessionID, viewerID, in); retryErr != nil {
-						// Reclassify: EnsureControlForInput granting the lock
-						// does NOT mean the tab is healthy, so this retry can
-						// fail for a GENUINE reason (crashed tab, blocked
-						// navigate URL, CDP transport error). Logging every
-						// retry failure at Debug regardless of kind — as this
-						// did — silently violated this function's own
-						// contract that real failures ARE surfaced, precisely
-						// on the path this fix-wave added. Route a real error
-						// through the same reporting the primary path uses.
-						if browser.IsBenignLiveInputError(retryErr) {
-							slog.Debug("browser-ws: input still rejected after acquiring control",
-								"error", retryErr, "session_id", state.sessionID)
-						} else {
-							slog.Warn("browser-ws: input dispatch failed after acquiring control",
-								"error", retryErr, "session_id", state.sessionID)
-							wc.sendCriticalGen(
-								sessionErrorStatus(state.sessionID, fmt.Sprintf("browser input failed: %s", retryErr)),
-								dropContext(state.sessionID, viewerID, "input-failed-after-take"),
-							)
-						}
-					}
-					return
-				}
-				// EnsureControlForInput refused: a DIFFERENT, still-attached
-				// viewer genuinely holds the lock. The WebRTC data-channel
-				// path corrects the client here (correctViewerControlState);
-				// this path did not, so a viewer whose UI wrongly said
-				// "You're driving" kept that belief forever while every input
-				// was discarded — the exact flagship bug, reproduced on the
-				// sibling transport this comment claims parity with. No
-				// registry lookup needed: wc IS this viewer's connection.
-				slog.Warn("browser-ws: viewer sent input without holding control — pushing authoritative released state",
-					"session_id", state.sessionID, "viewer_id", viewerID)
-				wc.sendCriticalGen(generated.BrowserStatusFrame{
-					Type:      string(generated.WsFrameTypeBrowserStatus),
-					State:     "released",
-					SessionId: &state.sessionID,
-				}, dropContext(state.sessionID, viewerID, "control-state-correction"))
-			}
+			// The not-controller repair that lived here is gone: input is
+			// never gated on a control lock (see dispatchInput). It could
+			// still refuse a human whenever a DIFFERENT viewer was attached
+			// and holding control — a second panel or a stale automation
+			// session was enough to leave the real user with a dead mouse
+			// and keyboard. Only the self-correcting rate limit remains.
 			return
 		}
 		slog.Warn("browser-ws: input dispatch failed", "error", err, "session_id", state.sessionID)

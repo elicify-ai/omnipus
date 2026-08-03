@@ -919,26 +919,15 @@ func (h *BrowserWSHandler) webrtcInputSink(mgr *browser.BrowserManager, cfg *con
 				// anywhere the user could see. Push the AUTHORITATIVE
 				// control state back to this viewer so its UI corrects
 				// itself and the next click re-takes the wheel properly.
-				if browser.IsNotControllerLiveInputError(err) {
-					// Operator model: the user drives by default. Rather than
-					// discard a human's click because client and server
-					// disagree about who holds the lock, acquire it for this
-					// viewer and dispatch the SAME event — so the very first
-					// click lands instead of being spent re-taking the wheel.
-					// EnsureControlForInput refuses only when a different,
-					// still-attached viewer genuinely holds control.
-					if mgr.Live().EnsureControlForInput(browser.DefaultSessionID, viewerID) {
-						if retryErr := mgr.Live().Input(browser.DefaultSessionID, viewerID, in); retryErr != nil {
-							slog.Debug("browser-webrtc: input still rejected after acquiring control",
-								"error", retryErr, "viewer_id", viewerID)
-						}
-						return
-					}
-					// Another live viewer is driving — the client's "You're
-					// driving" is genuinely wrong, so push the authoritative
-					// state so its UI stops claiming control it doesn't have.
-					h.correctViewerControlState(viewerID)
-				}
+				// The not-controller rejection this branch used to repair no
+				// longer exists: input is never gated on holding a control
+				// lock (see dispatchInput). The previous repair — acquire the
+				// lock, then retry the same event — still refused a human's
+				// click whenever ANOTHER viewer was attached and holding
+				// control, which is exactly how a second panel or a stale
+				// automation session left the real user with a dead mouse and
+				// keyboard. What remains here is the rate limit, which is
+				// self-correcting.
 				return
 			}
 			slog.Warn("browser-webrtc: input dispatch failed", "error", err, "viewer_id", viewerID)

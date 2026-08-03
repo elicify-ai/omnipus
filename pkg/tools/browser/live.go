@@ -2014,10 +2014,22 @@ func IsBenignLiveInputError(err error) bool {
 // input action. Called with no locks held by the caller.
 func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	lv.mu.Lock()
-	if lv.controller == "" || lv.controller != viewerID {
-		lv.mu.Unlock()
-		return &LiveInputError{Kind: LiveInputErrorBenign, err: ErrViewerNotController}
-	}
+	// NO CONTROL GATE (operator directive, 2026-08-03). The live panel is a
+	// REAL BROWSER the human uses normally, and the agent can steer it too —
+	// both, concurrently. Input is never refused because some other viewer
+	// "holds the wheel".
+	//
+	// This replaced an exclusive single-controller lock that refused every
+	// event unless viewerID matched lv.controller. Measured consequence: a
+	// second attached viewer (another panel, a pop-out, an automation session
+	// that never detached) left the actual human with a dead mouse, dead
+	// keyboard, and a URL bar that would not submit — the panel showed
+	// "Someone else is driving" and silently dropped everything the user did.
+	// A browser that refuses input is not a browser.
+	//
+	// lv.controller is retained for PRESENTATION only (who to show as active
+	// in the header, the ADR-039 controlSinks broadcast); it must never again
+	// become an authorization decision on this path.
 	if !lv.allowInputLocked() {
 		lv.mu.Unlock()
 		return benignInputError("browser live: input rate limit exceeded (%d/s)", maxInputEventsPerSecond)

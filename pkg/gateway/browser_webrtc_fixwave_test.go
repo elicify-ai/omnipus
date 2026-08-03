@@ -539,13 +539,27 @@ func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 //
 // A hardcoded/no-op identity check would either surface a status frame for
 // BOTH viewers or NEITHER; this test fails under both of those mutations.
-func TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController(t *testing.T) {
+// TestWebrtcInputSink_NonControllerViewerIsNotRejected — regression coverage
+// for the operator-reported dead-input failure (2026-08-03, `0803 (1).mov`).
+//
+// This test previously asserted the OPPOSITE: that a viewer who never took
+// control was "rejected BENIGNLY at the identity gate". That exclusive-control
+// model is gone. The live panel is a real browser the human uses normally,
+// and the agent can steer it too — concurrently. A viewer that does not hold
+// lv.controller is most often the actual human, and silently discarding its
+// input is exactly what left the operator with a dead mouse and keyboard while
+// the panel read "Someone else is driving".
+//
+// Both viewers must now clear identity and reach the same downstream check.
+func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 	browserCfg, err := browser.DefaultConfig()
 	require.NoError(t, err)
 	browserCfg.ProfileDir = t.TempDir()
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
 
+	// viewerA holds control — standing in for a second panel, a pop-out, or an
+	// automation session that never detached.
 	require.True(t, mgr.Live().TakeControl(browser.DefaultSessionID, "viewerA"),
 		"TakeControl for the first-ever controller of a session must succeed")
 
@@ -565,29 +579,31 @@ func TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController(t *
 	raw, err := json.Marshal(inputFrame)
 	require.NoError(t, err)
 
-	// viewerA: the WS-granted controller.
-	sink("viewerA", raw)
-	frameA := drainOneFrame(t, wcA)
-	var fA struct {
-		Type    string `json:"type"`
-		State   string `json:"state"`
-		Message string `json:"message"`
+	readStatus := func(t *testing.T, wc *browserWSConn) string {
+		t.Helper()
+		frame := drainOneFrame(t, wc)
+		var f struct {
+			Type    string `json:"type"`
+			State   string `json:"state"`
+			Message string `json:"message"`
+		}
+		require.NoError(t, json.Unmarshal(frame, &f))
+		require.Equal(t, "browser_status", f.Type)
+		require.Equal(t, "error", f.State)
+		return f.Message
 	}
-	require.NoError(t, json.Unmarshal(frameA, &fA))
-	require.Equal(t, "browser_status", fA.Type)
-	require.Equal(t, "error", fA.State)
-	require.Contains(t, fA.Message, "session is not attached",
-		"viewerA (the controller) must clear the identity gate and reach the tabCtx check -- a DIFFERENT "+
-			"failure than viewerB's benign identity-gate rejection below")
 
-	// viewerB: never granted control.
+	// viewerA (holds control) reaches the tabCtx check.
+	sink("viewerA", raw)
+	require.Contains(t, readStatus(t, wcA), "session is not attached")
+
+	// viewerB (holds NO control) must reach the SAME check — not be discarded.
+	// Identical downstream failure is the proof that no identity gate stopped
+	// it on the way.
 	sink("viewerB", raw)
-	select {
-	case <-wcB.sendCh:
-		t.Fatal("viewerB (not the controller) must be rejected BENIGNLY at the identity gate -- " +
-			"no status frame should ever be surfaced for it")
-	case <-time.After(200 * time.Millisecond):
-	}
+	require.Contains(t, readStatus(t, wcB), "session is not attached",
+		"a viewer without the control lock must still reach dispatch — its input is a human's "+
+			"and must never be silently dropped (2026-08-03 dead-input regression)")
 }
 
 // ---------------------------------------------------------------------------
