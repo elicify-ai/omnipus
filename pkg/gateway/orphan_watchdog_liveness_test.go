@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -203,6 +205,17 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair (38ba80eb): DelegateTool now refuses to
+	// start a delegated session without a durable lifecycle store wired
+	// (fail-closed rather than an untracked, unrecoverable session,
+	// BDD-20/FR-021) — mirrors
+	// pkg/agent/delegate_async_toolcall_completion_test.go's identical
+	// wiring for the same contentRouted*Provider/gateTool pattern. Without
+	// this, executeRun's fail-closed guard returns ErrorResult before ever
+	// dispatching the async delegate, so the delegate never reaches
+	// orphan_gate_tool and every wait on gate.entered below times out at
+	// 15s — a fixture gap, not a watchdog defect.
+	delegateTool.SetLifecycleStore(session.NewLifecycleStore(filepath.Join(tmpDir, "session_lifecycle")))
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
@@ -354,6 +367,17 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
+	// ADR-057 U14 fixture repair (38ba80eb): DelegateTool now refuses to
+	// start a delegated session without a durable lifecycle store wired
+	// (fail-closed rather than an untracked, unrecoverable session,
+	// BDD-20/FR-021) — mirrors
+	// pkg/agent/delegate_async_toolcall_completion_test.go's identical
+	// wiring for the same contentRouted*Provider/gateTool pattern. Without
+	// this, executeRun's fail-closed guard returns ErrorResult before ever
+	// dispatching the async delegate, so the delegate never reaches
+	// orphan_gate_tool and every wait on gate.entered below times out at
+	// 15s — a fixture gap, not a watchdog defect.
+	delegateTool.SetLifecycleStore(session.NewLifecycleStore(filepath.Join(tmpDir, "session_lifecycle")))
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
