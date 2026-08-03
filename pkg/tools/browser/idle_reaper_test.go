@@ -1,9 +1,14 @@
 package browser
 
 import (
+	"context"
+	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/target"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -215,4 +220,92 @@ func TestDefaultConfig_SetsIdleTTL(t *testing.T) {
 	assert.Equal(t, DefaultIdleTTL, cfg.IdleTTL,
 		"a fresh install must reap idle browsing contexts by default")
 	assert.Positive(t, cfg.IdleTTL)
+}
+
+// --- new tabs land on the start page -----------------------------------------
+//
+// Regression coverage for a gap the ORIGINAL start-page tests missed entirely:
+// they verified StartPageURL() returned the right string, but nothing verified
+// a new tab actually NAVIGATED there. It did not — chromedp.NewContext opens a
+// bare about:blank — so the feature was inert in production while its unit
+// tests passed. Caught only by driving the live panel (UAT v39, 2026-08-03:
+// a brand-new tab measured luma 255 / 1 colour bucket, i.e. pure white).
+
+func TestNewTab_NavigatesToStartPage(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	m.cfg.StartPageURL = "http://localhost:5000/browser-start"
+
+	var got []string
+	m.navigateFn = func(_ context.Context, url string) error {
+		got = append(got, url)
+		return nil
+	}
+
+	m.navigateNewTabToStartPage(context.Background(), "")
+	require.Equal(t, []string{"http://localhost:5000/browser-start"}, got,
+		"a brand-new tab must navigate to the start page — about:blank reads as a broken panel")
+}
+
+// TestNewTab_AdoptedTargetIsNotRedirected — a non-empty targetID means we are
+// adopting an existing target (a popup, a window.open). Navigating it away
+// would destroy the very page the user or agent just opened.
+func TestNewTab_AdoptedTargetIsNotRedirected(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	m.cfg.StartPageURL = "http://localhost:5000/browser-start"
+
+	var called int
+	m.navigateFn = func(context.Context, string) error { called++; return nil }
+
+	m.navigateNewTabToStartPage(context.Background(), target.ID("existing-target"))
+	require.Zero(t, called, "adopting an existing target must never navigate it away from its own page")
+}
+
+func TestNewTab_NoStartPageConfigured_DoesNotNavigate(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	m.cfg.StartPageURL = "" // falls back to about:blank
+
+	var called int
+	m.navigateFn = func(context.Context, string) error { called++; return nil }
+
+	m.navigateNewTabToStartPage(context.Background(), "")
+	require.Zero(t, called, "with no start page configured the tab must be left on about:blank, not navigated")
+}
+
+// TestNewTab_StartPageNavigationFailureIsNonFatal — a tab that could not reach
+// the start page is still a perfectly usable tab. Failing tab creation over a
+// cosmetic landing page would be a far worse trade.
+func TestNewTab_StartPageNavigationFailureIsNonFatal(t *testing.T) {
+	m := newTestManagerWithFakeTabs(t, 5)
+	m.cfg.StartPageURL = "http://localhost:5000/browser-start"
+	m.navigateFn = func(context.Context, string) error { return errors.New("navigate exploded") }
+
+	require.NotPanics(t, func() {
+		m.navigateNewTabToStartPage(context.Background(), "")
+	}, "a failed start-page navigation must never break tab creation")
+}
+
+// TestCreateTab_CallsStartPageNavigation closes the gap the tests above cannot:
+// they exercise navigateNewTabToStartPage DIRECTLY, so they still pass if the
+// call site inside createTab is deleted — which is precisely how the start page
+// shipped inert the first time (unit tests green, brand-new tab still
+// about:blank on live UAT v39).
+//
+// createTab's real body performs a CDP attach that cannot run without Chrome,
+// so rather than add a second production seam purely for this test, this
+// asserts on the SOURCE: createTab must contain the call. A source assertion is
+// weak by nature, but it fails loudly on the one edit that caused the outage —
+// removing the wiring — which no behavioural test in this file can see.
+func TestCreateTab_CallsStartPageNavigation(t *testing.T) {
+	src, err := os.ReadFile("manager.go")
+	require.NoError(t, err)
+
+	body := string(src)
+	start := strings.Index(body, "func (m *BrowserManager) createTab(")
+	require.Positive(t, start, "createTab must exist")
+	end := strings.Index(body[start:], "\nfunc ")
+	require.Positive(t, end, "createTab must be followed by another function")
+
+	require.Contains(t, body[start:start+end], "navigateNewTabToStartPage(",
+		"createTab must call navigateNewTabToStartPage — without it every new tab opens "+
+			"about:blank and the start page is inert in production (UAT v39 regression)")
 }

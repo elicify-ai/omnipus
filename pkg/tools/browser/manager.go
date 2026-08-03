@@ -395,6 +395,12 @@ type BrowserManager struct {
 	// production, where m.now() falls through to time.Now().
 	nowFn func() time.Time
 
+	// navigateFn is the test seam for navigateNewTabToStartPage's single CDP
+	// navigation, same rationale as createTabFn/activateTabFn: unit tests hold
+	// chromedp contexts with no CDP connection behind them, where a real
+	// chromedp.Run would block until PageTimeout. nil in production.
+	navigateFn func(tabCtx context.Context, url string) error
+
 	// tabsChanged is invoked (ADR-041 D4) whenever a browsing context's tab
 	// set changes shape or its active tab moves — open/close/switch/adopt,
 	// and best-effort title/url updates observed via the passive target
@@ -1307,9 +1313,62 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 		resolvedID = cc.Target.TargetID
 	}
 
+	// Land a BRAND-NEW tab on the start page. chromedp.NewContext opens a bare
+	// about:blank, which reads as a broken panel on this surface (see
+	// StartPageURL). Only for genuinely new tabs: when targetID is set we are
+	// ADOPTING an existing target (a popup, a window.open) that already has its
+	// own destination, and navigating it away would destroy the page the user
+	// or agent actually opened.
+	//
+	// Best-effort and never fatal — a tab that failed to reach the start page
+	// is still a perfectly usable tab, and failing creation over a cosmetic
+	// landing page would be a far worse trade.
+	m.navigateNewTabToStartPage(ctx, targetID)
+
 	tab := &tabEntry{ctx: ctx, cancel: cancel, targetID: resolvedID}
 	tab.title, tab.url = refreshTabMeta(ctx, m.PageTimeout())
 	return tab, nil
+}
+
+// navigateNewTabToStartPage lands a BRAND-NEW tab on the configured start page.
+//
+// chromedp.NewContext opens a bare about:blank, and on this surface a blank
+// rectangle is indistinguishable from a broken panel — a real capture failure
+// renders identically (operator report, 2026-08-03). See StartPageURL.
+//
+// Only for genuinely new tabs: a non-empty targetID means we are ADOPTING an
+// existing target (a popup, a window.open) that already has its own
+// destination, and navigating it away would destroy the page the user or the
+// agent actually opened.
+//
+// Best-effort, never fatal — a tab that failed to reach the start page is still
+// a perfectly usable tab, and failing tab creation over a cosmetic landing page
+// would be a far worse trade.
+func (m *BrowserManager) navigateNewTabToStartPage(ctx context.Context, targetID target.ID) {
+	if targetID != "" {
+		return
+	}
+	start := m.StartPageURL()
+	if start == BlankPageURL {
+		return
+	}
+
+	m.mu.Lock()
+	fn := m.navigateFn
+	m.mu.Unlock()
+
+	var err error
+	if fn != nil {
+		err = fn(ctx, start) // test seam — see navigateFn's doc comment
+	} else {
+		navCtx, navCancel := context.WithTimeout(ctx, m.PageTimeout())
+		err = chromedp.Run(navCtx, chromedp.Navigate(start))
+		navCancel()
+	}
+	if err != nil {
+		logger.WarnCF("browser", "new tab: navigate to start page failed (tab still usable, showing about:blank)",
+			map[string]any{"error": err.Error(), "start_page": start})
+	}
 }
 
 // refreshTabMeta best-effort reads the current title/url of tabCtx, bounded
