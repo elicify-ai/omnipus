@@ -2848,6 +2848,40 @@ func setupAndStartServices(
 		}
 	}()
 
+	// Start the idle-browser reaper: closes browsing contexts that have had no
+	// attached live-panel viewer and no agent tool call within
+	// tools.browser.idle_ttl.
+	//
+	// Why this is needed: closing the live panel is a pure UI dismiss — the
+	// SPA sends no shutdown frame, and browser.CloseSession had no production
+	// caller at all — so a browsing context (and its resident Chrome) outlived
+	// the panel indefinitely. Reopening the panel days later showed the exact
+	// page the user had left. Sweeping is best-effort and idempotent; a sweep
+	// that reaps nothing is a cheap map scan.
+	go func() {
+		const reapInterval = 5 * time.Minute
+		ticker := time.NewTicker(reapInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a := agentLoop
+				if a == nil {
+					continue
+				}
+				for _, mgr := range a.BrowserManagers() {
+					if mgr == nil {
+						continue
+					}
+					if reaped := mgr.ReapIdleSessions(); len(reaped) > 0 {
+						slog.Info("browser-reaper: closed idle browsing contexts",
+							"count", len(reaped), "session_ids", reaped)
+					}
+				}
+			}
+		}
+	}()
+
 	return runningServices, nil
 }
 

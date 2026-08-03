@@ -348,6 +348,8 @@ func (r *LiveViewRegistry) Attach(
 	if err != nil {
 		return false, err
 	}
+	// A watched browsing context is never idle — see ReapIdleSessions.
+	r.mgr.ViewerAttached(sessionID)
 
 	// ADR-041 D4: give the newly-attached viewer the CURRENT tab strip
 	// immediately, mirroring lastFrame's "don't make a piggybacking/fresh
@@ -373,6 +375,10 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 		return
 	}
 	lv.detach(viewerID)
+	// Starts the idle clock from the moment the last viewer left, rather than
+	// from whenever the session was last touched before that — see
+	// ViewerDetached / ReapIdleSessions.
+	r.mgr.ViewerDetached(sessionID)
 }
 
 // PauseScreencast stops the underlying CDP screencast for sessionID WITHOUT

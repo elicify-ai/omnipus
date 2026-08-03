@@ -1791,6 +1791,17 @@ func registerSharedTools(
 				if cfg.Tools.Browser.ExecPath != "" {
 					browserCfg.ExecPath = cfg.Tools.Browser.ExecPath
 				}
+				// Idle reaping: 0 = unset, keep browser.DefaultIdleTTL;
+				// negative = operator explicitly disables reaping (mapped to 0,
+				// which ReapIdleSessions treats as "never reap").
+				if cfg.Tools.Browser.IdleTTLSec > 0 {
+					browserCfg.IdleTTL = time.Duration(cfg.Tools.Browser.IdleTTLSec) * time.Second
+				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
+					browserCfg.IdleTTL = 0
+				}
+				if cfg.Tools.Browser.StartPageURL != "" {
+					browserCfg.StartPageURL = cfg.Tools.Browser.StartPageURL
+				}
 				// ADR-052 D2/M1: PreferPackaged and TrustPathChrome are
 				// ALWAYS copied (bool fields, no "unset vs explicit false"
 				// distinction needed — the default-config zero value IS

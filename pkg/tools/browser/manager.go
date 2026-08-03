@@ -71,6 +71,23 @@ type BrowserConfig struct {
 	// host). Operators who deliberately want a custom Chrome set this to
 	// true (or use the explicit ExecPath override, which always wins).
 	TrustPathChrome bool `json:"trust_path_chrome,omitempty"`
+	// IdleTTL reaps a browsing context that has had NO activity for this long
+	// — no attached live-panel viewer and no agent tool call. Without it a
+	// browsing context lived forever: closing the live panel is a pure UI
+	// dismiss (the SPA sends no shutdown), so reopening it days later showed
+	// the exact page the user left, on a Chrome that had been resident the
+	// whole time. Zero disables reaping entirely.
+	//
+	// Deliberately generous (default 30m): an agent can legitimately be
+	// mid-task in a tab with no viewer watching, and reaping that out from
+	// under it would be worse than the stale tab this fixes. Both halves of
+	// "activity" gate the reap — see BrowserManager.touchSession.
+	IdleTTL time.Duration `json:"idle_ttl,omitempty"`
+	// StartPageURL is what a fresh tab opens instead of about:blank. Empty
+	// falls back to about:blank (the pre-existing behavior). The gateway sets
+	// this to its own served start page so a reopened panel lands somewhere
+	// branded and actionable rather than on a blank void that reads as broken.
+	StartPageURL string `json:"start_page_url,omitempty"`
 }
 
 // DefaultConfig returns a BrowserConfig with spec-defined defaults.
@@ -93,7 +110,33 @@ func DefaultConfig() (BrowserConfig, error) {
 		PageTimeout: 30 * time.Second,
 		MaxTabs:     5,
 		ProfileDir:  filepath.Join(base, "browser", "profiles", "default"),
+		IdleTTL:     DefaultIdleTTL,
 	}, nil
+}
+
+// DefaultIdleTTL is how long a browsing context may sit with no viewer and no
+// agent tool call before ReapIdleSessions closes it. See BrowserConfig.IdleTTL
+// for why this is deliberately generous rather than aggressive.
+const DefaultIdleTTL = 30 * time.Minute
+
+// BlankPageURL is the fallback a fresh tab opens when no start page is
+// configured — the historical behavior, kept as the floor so a misconfigured
+// StartPageURL can never leave a tab with nowhere to go.
+const BlankPageURL = "about:blank"
+
+// StartPageURL returns the URL a freshly created tab should open. Falls back
+// to about:blank when no start page is configured.
+//
+// Why a start page at all: a reopened live panel used to land on about:blank —
+// a blank void that is indistinguishable from the panel being broken, which is
+// exactly the failure mode the streaming bugs already made users suspect. A
+// branded, actionable page makes "nothing loaded yet" legible as a state
+// rather than a fault.
+func (m *BrowserManager) StartPageURL() string {
+	if u := strings.TrimSpace(m.cfg.StartPageURL); u != "" {
+		return u
+	}
+	return BlankPageURL
 }
 
 // tabEntry tracks one browser tab — a single chromedp target — within a
@@ -156,6 +199,18 @@ type sessionEntry struct {
 	// inspect_test.go) — every nil-checked at its two call sites.
 	browserCtx    context.Context
 	browserCancel context.CancelFunc
+	// lastActivity is when this browsing context was last touched by EITHER
+	// an agent tool call (Session()) or a live-panel viewer attach/detach —
+	// the two independent things that mean "somebody still cares about this
+	// browser". ReapIdleSessions closes a context only once BOTH have been
+	// quiet for BrowserConfig.IdleTTL. Guarded by m.mu like every other
+	// sessionEntry field; see touchSession.
+	lastActivity time.Time
+	// viewers counts currently-attached live-panel viewers. A context with a
+	// viewer attached is NEVER idle no matter how long ago the last tool call
+	// was — somebody is literally watching it. Incremented/decremented via
+	// ViewerAttached/ViewerDetached.
+	viewers int
 	// listenerTarget tracks which tab's chromedp ctx currently has the
 	// ADR-041 D2 passive Target.targetCreated listener installed (the zero
 	// value, "", means none yet). installTargetListenerLocked (re-)installs
@@ -334,6 +389,11 @@ type BrowserManager struct {
 	// doing anything observable. nil by default, in which case
 	// activateTabInChrome runs its normal chromedp body.
 	activateTabFn func(tabCtx context.Context) error
+
+	// nowFn overrides the clock for idle/TTL logic (ReapIdleSessions), so
+	// tests can age a session deterministically instead of sleeping. nil in
+	// production, where m.now() falls through to time.Now().
+	nowFn func() time.Time
 
 	// tabsChanged is invoked (ADR-041 D4) whenever a browsing context's tab
 	// set changes shape or its active tab moves — open/close/switch/adopt,
@@ -862,6 +922,10 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 
 		if se, ok := m.sessions[sessionID]; ok {
 			if tab := se.active(); tab != nil && tab.ctx.Err() == nil {
+				// An agent tool call resolving this session is activity — it
+				// keeps ReapIdleSessions from closing a context an agent is
+				// actively working in, even with no viewer attached.
+				m.touchSessionLocked(se)
 				m.mu.Unlock()
 				return tab.ctx, nil
 			}
@@ -2131,6 +2195,116 @@ func (m *BrowserManager) CloseSession(sessionID string) {
 // PageTimeout returns the configured page load timeout.
 func (m *BrowserManager) PageTimeout() time.Duration {
 	return m.cfg.PageTimeout
+}
+
+// touchSession records activity on sessionID's browsing context, resetting its
+// idle clock. Called on every path that means "somebody still cares about this
+// browser": an agent tool call resolving the session, and a live-panel viewer
+// attaching or detaching.
+//
+// Must be called with m.mu HELD — it is a plain field write on an entry the
+// caller already looked up, deliberately not re-locking (Session() holds the
+// lock across its own lookup, and re-entering would deadlock).
+func (m *BrowserManager) touchSessionLocked(se *sessionEntry) {
+	if se != nil {
+		se.lastActivity = m.now()
+	}
+}
+
+// now returns the current time through an overridable seam so idle/TTL logic
+// is testable without sleeping. Tests set m.nowFn; production leaves it nil.
+func (m *BrowserManager) now() time.Time {
+	if m.nowFn != nil {
+		return m.nowFn()
+	}
+	return time.Now()
+}
+
+// ViewerAttached records that a live-panel viewer attached to sessionID's
+// browsing context. A context with at least one attached viewer is never
+// considered idle — somebody is watching it right now.
+func (m *BrowserManager) ViewerAttached(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if se, ok := m.sessions[sessionID]; ok {
+		se.viewers++
+		m.touchSessionLocked(se)
+	}
+}
+
+// ViewerDetached records that a live-panel viewer detached. Detaching also
+// COUNTS as activity: it starts the idle clock from the moment the last viewer
+// left, rather than from whenever the session was last touched before that.
+// Never lets the count go negative (a detach without a matching attach — e.g.
+// a viewer that outlived a session recreation — must not underflow into a
+// permanently unreapable session).
+func (m *BrowserManager) ViewerDetached(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if se, ok := m.sessions[sessionID]; ok {
+		if se.viewers > 0 {
+			se.viewers--
+		}
+		m.touchSessionLocked(se)
+	}
+}
+
+// ReapIdleSessions closes every browsing context that has had NO attached
+// viewer and NO agent tool call for at least cfg.IdleTTL, returning the
+// session IDs it closed.
+//
+// Why this exists: closing the live panel is a pure UI dismiss — the SPA sends
+// no shutdown frame, and browser.CloseSession had ZERO production callers — so
+// a browsing context outlived the panel indefinitely. Reopening the panel days
+// later showed the exact page the user left, served by a Chrome that had been
+// resident the entire time.
+//
+// Both halves of "idle" are required. An agent can legitimately be mid-task in
+// a tab with nobody watching, so a viewer-only check would reap live work; and
+// a viewer can sit on a long-idle page, so a tool-call-only check would reap a
+// context somebody is staring at. A zero IdleTTL disables reaping entirely.
+//
+// Safe to call on any schedule; it is a no-op when nothing qualifies.
+func (m *BrowserManager) ReapIdleSessions() []string {
+	ttl := m.cfg.IdleTTL
+	if ttl <= 0 {
+		return nil
+	}
+
+	m.mu.Lock()
+	now := m.now()
+	var reaped []string
+	for sessionID, se := range m.sessions {
+		if se.viewers > 0 {
+			continue
+		}
+		// A session that has never been touched (zero lastActivity) is not
+		// treated as infinitely idle — that would reap a context created
+		// microseconds ago by a path that forgot to stamp it. Stamp it now and
+		// let the NEXT sweep judge it fairly.
+		if se.lastActivity.IsZero() {
+			se.lastActivity = now
+			continue
+		}
+		if now.Sub(se.lastActivity) < ttl {
+			continue
+		}
+		for _, t := range se.tabs {
+			t.cancel()
+		}
+		if se.browserCancel != nil {
+			se.browserCancel()
+		}
+		delete(m.sessions, sessionID)
+		reaped = append(reaped, sessionID)
+	}
+	m.mu.Unlock()
+
+	for _, sessionID := range reaped {
+		logger.InfoCF("browser", "reaped idle browsing context (no viewer and no agent activity within idle_ttl)",
+			map[string]any{"session_id": sessionID, "idle_ttl": ttl.String()})
+	}
+	return reaped
 }
 
 // browserAlive reports whether sessionID's browsing context — the

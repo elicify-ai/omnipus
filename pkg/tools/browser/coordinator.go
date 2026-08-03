@@ -69,6 +69,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -204,6 +205,16 @@ type BrowserCoordinator struct {
 // ownership marker lands at <homeDir>/browser/shared-chrome.pid; the profile
 // dir comes from cfg.ProfileDir). maxTotalTabs is the global tab budget (0 →
 // defaultDefaultTotalTabs).
+// startPageURL mirrors BrowserManager.StartPageURL for the coordinator's own
+// target-creation path, which builds targets from c.cfg rather than through a
+// manager. Same fallback: about:blank when nothing is configured.
+func (c *BrowserCoordinator) startPageURL() string {
+	if u := strings.TrimSpace(c.cfg.StartPageURL); u != "" {
+		return u
+	}
+	return BlankPageURL
+}
+
 func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) *BrowserCoordinator {
 	if maxTotalTabs <= 0 {
 		maxTotalTabs = defaultTotalTabs
@@ -382,7 +393,11 @@ func (c *BrowserCoordinator) Register(
 	// satisfied by WithNewWindow(true) below — purely additive, keeps
 	// window size and the screencast's own cap in lockstep so there is no
 	// separate magic-number size to drift out of sync.
-	ctParams := target.CreateTarget("about:blank").
+	// Start page rather than about:blank (see BrowserManager.StartPageURL):
+	// a blank void reads as "the panel is broken", which is precisely the
+	// confusion this surface does not need. Falls back to about:blank when no
+	// start page is configured, preserving the historical behavior exactly.
+	ctParams := target.CreateTarget(c.startPageURL()).
 		WithBrowserContextID(bid).
 		WithNewWindow(true).
 		WithWidth(screencastMaxWidth).

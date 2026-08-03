@@ -3039,6 +3039,16 @@ type BrowserToolConfig struct {
 	MaxTabs        int    `                                   json:"max_tabs"        env:"OMNIPUS_TOOLS_BROWSER_MAX_TABS"`
 	PersistSession bool   `                                   json:"persist_session" env:"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION"`
 	ProfileDir     string `                                   json:"profile_dir"     env:"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR"`
+	// IdleTTLSec reaps a browsing context after this many seconds with NO
+	// attached live-panel viewer and NO agent tool call. Zero (the unset
+	// default) leaves pkg/tools/browser's own DefaultIdleTTL in force;
+	// a negative value disables reaping entirely. Without reaping, closing
+	// the live panel leaks the context forever — the panel close is a pure UI
+	// dismiss, so reopening days later resurfaced the exact page left behind.
+	IdleTTLSec int `json:"idle_ttl" env:"OMNIPUS_TOOLS_BROWSER_IDLE_TTL"`
+	// StartPageURL is what a freshly created tab opens instead of about:blank.
+	// Empty keeps about:blank.
+	StartPageURL string `json:"start_page_url" env:"OMNIPUS_TOOLS_BROWSER_START_PAGE_URL"`
 	// ExecPath overrides Chromium/Chrome binary discovery entirely — when
 	// set, pkg/tools/browser.BrowserManager.resolveExecPath trusts this path
 	// as-is (a stat check only, not the `--version` probe applied to $PATH
