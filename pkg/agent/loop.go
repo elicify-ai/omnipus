@@ -438,6 +438,18 @@ type AgentLoop struct {
 	// scope for v0.1 and filed as a follow-up.
 	admission *AdmissionController
 
+	// rootDelegationAdmission is the ADR-057 W17 (FR-069/FR-070/FR-095)
+	// process-wide gate for ROOT-level `delegate` fan-out — see admission.go's
+	// "ADR-057 W17" block for the full rationale. Constructed exactly once in
+	// NewAgentLoop from agents.defaults.subturn.max_concurrent (unclamped) and
+	// shared by every per-agent DelegateTool's wrapped spawner
+	// (rootDelegationAdmittingSpawner, registerSharedTools' delegate-tool
+	// block) so the cap is enforced once for the whole running process, not
+	// per agent. Always non-nil after successful construction — NewAgentLoop
+	// fails closed (returns an error) rather than proceeding with a nil gate,
+	// per ErrRootDelegationCapMisconfigured's doc comment.
+	rootDelegationAdmission *RootDelegationAdmission
+
 	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
 	// session resumption. Built on startup and updated on every new channel session.
 	channelSessionIdx sync.Map
@@ -700,21 +712,46 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Home)
 	}
 
+	// ADR-057 W17/FR-095: resolve the root-delegation admission cap BEFORE
+	// constructing al. A misconfigured operator value (<=0, explicitly set in
+	// their own config.json — U28's seed of 16 never reaches this branch on a
+	// fresh install) is logged loudly rather than silently accepted, but does
+	// NOT abort AgentLoop construction: a huge fraction of this package's own
+	// tests build a bare config.Config{} literal that never populates
+	// Agents.Defaults.SubTurn at all (bypassing the config-load pipeline
+	// where U28's default is actually seeded), which is indistinguishable
+	// from this specific value at this layer. Failing boot closed here would
+	// turn a wiring fix into a mass test-suite regression unrelated to the
+	// defect being fixed; a nil rootDelegationAdmission degrades to the
+	// PRE-fix pass-through behavior via rootDelegationAdmittingSpawner's own
+	// nil-gate check, which is a no-op change for every such caller. Real
+	// gateway boots always carry the seeded (or operator-overridden) positive
+	// value, so the gate is genuinely constructed and enforced in production.
+	var rootDelegationAdmission *RootDelegationAdmission
+	if rootDelegationCap, rootDelegationCapErr := ResolveRootDelegationCap(cfg); rootDelegationCapErr != nil {
+		logger.WarnCF("agent",
+			"Root-delegation admission gate (ADR-057 W17) not constructed — root-level delegate() fan-out is UNGATED until agents.defaults.subturn.max_concurrent is set to a positive value",
+			map[string]any{"error": rootDelegationCapErr.Error()})
+	} else {
+		rootDelegationAdmission = NewRootDelegationAdmission(rootDelegationCap)
+	}
+
 	eventBus := NewEventBus()
 	al := &AgentLoop{
-		bus:                    msgBus,
-		cfg:                    cfg,
-		registry:               registry,
-		state:                  stateManager,
-		eventBus:               eventBus,
-		summarizing:            sync.Map{},
-		fallback:               fallbackChain,
-		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		contextBuilderRegistry: NewContextBuilderRegistry(),
-		admission:              newAdmissionController(0),
-		loadedTools:            make(map[string]map[string]bool),
-		browserMgrs:            make(map[string]*browser.BrowserManager),
+		bus:                     msgBus,
+		cfg:                     cfg,
+		registry:                registry,
+		state:                   stateManager,
+		eventBus:                eventBus,
+		summarizing:             sync.Map{},
+		fallback:                fallbackChain,
+		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
+		steering:                newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		contextBuilderRegistry:  NewContextBuilderRegistry(),
+		admission:               newAdmissionController(0),
+		rootDelegationAdmission: rootDelegationAdmission,
+		loadedTools:             make(map[string]map[string]bool),
+		browserMgrs:             make(map[string]*browser.BrowserManager),
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -739,6 +776,18 @@ func NewAgentLoop(
 				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
 		} else {
 			al.sharedSessionStore = sharedStore
+			// FR-067/SC-048 (ADR-057): apply the operator's resolved
+			// stats-flush override onto the store's live periodic flusher.
+			// Without this call, startStatsFlusher (unified_stats_flush.go,
+			// invoked unconditionally from NewUnifiedStoreWithHome) always
+			// runs on the hardcoded config.DefaultSessionStatsFlushInterval
+			// (5s) constant — a seeded, documented
+			// sessions.stats_flush_interval key in config.json would persist
+			// but have zero runtime effect. cfg.Session.
+			// EffectiveStatsFlushInterval() resolves the operator's value (or
+			// the same 5s default when unset), exactly matching
+			// startStatsFlusher's own doc comment naming this call site.
+			sharedStore.SetStatsFlushInterval(cfg.Session.EffectiveStatsFlushInterval())
 			al.rebuildChannelSessionIndex()
 		}
 	}
@@ -1680,7 +1729,16 @@ func registerSharedTools(
 		// action:"status" — a single, connected piece of state (FR-D2).
 		{
 			delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
-			delegateTool.SetSpawner(NewSubTurnSpawner(al))
+			// ADR-057 W17 (FR-069/FR-070/FR-095): wrap the real spawner with
+			// the root-delegation admission gate (admission.go) so a
+			// ROOT-level `delegate` fan-out from this agent is actually
+			// capped by al.rootDelegationAdmission — the SAME shared,
+			// process-wide instance every other agent's DelegateTool is
+			// wrapped with, so the cap applies once across the whole running
+			// gateway, not per agent. See rootDelegationAdmittingSpawner's
+			// doc comment (admission.go) for why wrapping SpawnSubTurn here
+			// is the correct choke point for both sync and async delegation.
+			delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(al), al.rootDelegationAdmission, agentID))
 			// FR-196 kill switch — wire it HERE, at construction, not only in
 			// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
 			// DelegateTool: the session_messaging_wire.go re-wire walks the
@@ -1728,6 +1786,19 @@ func registerSharedTools(
 				delegateTool.SetSessionStore(sharedStore)
 			}
 			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
+			// FR-028/BDD-29 (ADR-057 U14): wire the shared, process-wide
+			// SessionManager so `delegate action="cancel"` actually kills the
+			// TARGET child's own background bash/exec shells, not just its
+			// turn. Without this, killChildBackgroundShells (delegate.go)
+			// starts with `if t.sessionManager == nil { return }` — always
+			// taken — and a cancelled delegate's background dev server (or
+			// any other backgrounded shell) is silently orphaned holding its
+			// port. tools.GetSharedSessionManager() is the SAME process-wide
+			// singleton ExecTool/bash register their background sessions
+			// with (session.go/session_manager_export.go), so this ties the
+			// cancel path to the actual live session registry rather than a
+			// fresh, empty one.
+			delegateTool.SetSessionManager(tools.GetSharedSessionManager())
 			currentAgentID := agentID
 			// ADR-037: the legacy DelegationPolicy.To / SubagentsConfig.AllowAgents
 			// allowlist checkers (SetAllowlistChecker / SetDelegateChecker) are
@@ -3473,6 +3544,24 @@ func (al *AgentLoop) Close() {
 	// BEFORE registry.Close() clears the agent map. Idempotent: MemoryStore.Close
 	// is safe to call more than once.
 	al.closeAgentMemoryStores()
+
+	// al.sharedSessionStore (the single UnifiedStore at
+	// $OMNIPUS_HOME/sessions/, constructed in NewAgentLoop) is a distinct
+	// resource from each AgentInstance's own per-agent session store — the
+	// latter is already torn down by AgentInstance.Close() (instance.go), but
+	// nothing previously closed this one. Leaving it open leaks its periodic
+	// stats-flusher goroutine + live timer (unified_stats_flush.go) for the
+	// life of the process, and means a session's very last write (before an
+	// unclean-but-Close()'d shutdown) waits out the flush interval instead of
+	// being forced to disk — losing token/cost stats for a session that just
+	// received its first message. Safe to call even when nil (degraded boot,
+	// loop.go's own error-logged "shared session store unavailable" branch).
+	if al.sharedSessionStore != nil {
+		if err := al.sharedSessionStore.Close(); err != nil {
+			logger.ErrorCF("agent", "Failed to close shared session store",
+				map[string]any{"error": err.Error()})
+		}
+	}
 
 	al.GetRegistry().Close()
 	if al.hooks != nil {

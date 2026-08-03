@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -149,13 +150,13 @@ type RootDelegationAdmission struct {
 	active int
 }
 
-// NewRootDelegationAdmission constructs a gate with the given cap. Callers
-// MUST resolve cap via ResolveRootDelegationCap first (or otherwise validate
-// it is > 0) — NewRootDelegationAdmission itself does not re-validate, so
-// that its own zero value cannot be mistaken for "no cap configured yet"
-// versus "boot already rejected this config".
-func NewRootDelegationAdmission(cap int) *RootDelegationAdmission {
-	return &RootDelegationAdmission{cap: cap}
+// NewRootDelegationAdmission constructs a gate with the given maxCap. Callers
+// MUST resolve maxCap via ResolveRootDelegationCap first (or otherwise
+// validate it is > 0) — NewRootDelegationAdmission itself does not
+// re-validate, so that its own zero value cannot be mistaken for "no cap
+// configured yet" versus "boot already rejected this config".
+func NewRootDelegationAdmission(maxCap int) *RootDelegationAdmission {
+	return &RootDelegationAdmission{cap: maxCap}
 }
 
 // TryAdmit atomically claims a root-delegation slot. Returns (true, release)
@@ -198,17 +199,98 @@ func (r *RootDelegationAdmission) Cap() int {
 }
 
 // RefuseRootDelegation performs the BDD-77 operator-visible refusal: an
-// slog.Error record naming the cap, the delegating agent and the target
+// slog.Error record naming the maxCap, the delegating agent and the target
 // agent (mirroring pkg/tools/delegate.go:1150-1159's existing shape for the
 // sibling FR-015 refusal), plus the *tools.ToolResult a caller returns to the
 // calling agent. No separate user-facing notification is required
 // (operator decision 6) — the tool error is the whole contract.
-func RefuseRootDelegation(cap int, delegatingAgentID, targetAgentID string) *tools.ToolResult {
+func RefuseRootDelegation(maxCap int, delegatingAgentID, targetAgentID string) *tools.ToolResult {
 	slog.Error("delegate: refusing root-level delegation — concurrent root-delegation cap reached",
-		"cap", cap,
+		"cap", maxCap,
 		"delegating_agent_id", delegatingAgentID,
 		"target_agent_id", targetAgentID)
 	return tools.ErrorResult(fmt.Sprintf(
 		"delegate: refusing to start a new root-level delegation — the concurrent root-delegation cap (%d) has been reached; retry once an in-flight root delegation completes",
-		cap))
+		maxCap))
+}
+
+// ====================== ADR-057 W17 wiring: the live dispatch site ======================
+//
+// The gate primitive and refusal shape above were, until this fix, wholly
+// unreferenced from any production dispatch path (zero non-test callers of
+// RootDelegationAdmission/RefuseRootDelegation/ResolveRootDelegationCap
+// outside this file and its own unit test) — a root turn's `delegate` fan-out
+// sailed through completely ungated regardless of
+// agents.defaults.subturn.max_concurrent. rootDelegationAdmittingSpawner
+// closes that gap by wrapping the tools.SubTurnSpawner every per-agent
+// DelegateTool is given (pkg/agent/loop.go's registerSharedTools delegate
+// block, SetSpawner call site).
+//
+// Why wrapping the spawner is the correct dispatch point (not a workaround):
+// EVERY delegate() call, sync or async, for every agent, ultimately calls
+// spawner.SpawnSubTurn (pkg/tools/delegate.go executeSync/executeAsync) —
+// there is no other shared choke point. spawnSubTurn (pkg/agent/subturn.go)
+// runs the child's ENTIRE turn synchronously inside itself regardless of
+// cfg.Async — Async only changes how the result is delivered afterward
+// (return value vs deliverSubTurnResult), never whether the call blocks.
+// executeAsync's background goroutine calls SpawnSubTurn and blocks on it
+// for the child's full lifetime before that goroutine exits; executeSync's
+// await path blocks on the very same call on the delegating turn's own
+// goroutine. So wrapping SpawnSubTurn and releasing the admission slot only
+// after the wrapped call returns IS releasing on "the delegated child's
+// terminal state" (TryAdmit's own contract), not merely on dispatch
+// acknowledgement — true for both sync and async delegation alike.
+//
+// Root vs nested: parentTS.depth == 0 (turnState's own "0 for root turn"
+// invariant, turn.go) distinguishes a root-level dispatch from a NESTED one
+// (a child, itself mid-delegation, delegating further). Only root-level
+// calls consult this gate — FR-070 requires nested (concurrencySem-gated)
+// behaviour stay byte-identical, and this wrapper never reads, writes, or
+// otherwise touches concurrencySem.
+
+// rootDelegationAdmittingSpawner wraps a tools.SubTurnSpawner so a
+// ROOT-level delegate dispatch (parentTS.depth == 0) is admitted through a
+// shared, process-wide RootDelegationAdmission gate before being allowed to
+// spawn; nested (parentTS.depth > 0) calls pass straight through unchanged.
+type rootDelegationAdmittingSpawner struct {
+	inner tools.SubTurnSpawner
+	// gate may be nil (e.g. agents.defaults.subturn.max_concurrent resolved
+	// to <= 0 at AgentLoop construction — see NewAgentLoop's
+	// rootDelegationAdmission resolution, loop.go). A nil gate makes
+	// SpawnSubTurn a pure pass-through, matching the pre-fix (ungated)
+	// behavior rather than panicking on a nil dereference.
+	gate *RootDelegationAdmission
+	// delegatingAgentID is captured once at wiring time (the registering
+	// agent's own id) purely to label the BDD-77 refusal log/result when the
+	// gate is saturated; it does not affect admission decisions.
+	delegatingAgentID string
+}
+
+// newRootDelegationAdmittingSpawner constructs the wrapper described above.
+func newRootDelegationAdmittingSpawner(inner tools.SubTurnSpawner, gate *RootDelegationAdmission, delegatingAgentID string) *rootDelegationAdmittingSpawner {
+	return &rootDelegationAdmittingSpawner{inner: inner, gate: gate, delegatingAgentID: delegatingAgentID}
+}
+
+// SpawnSubTurn implements tools.SubTurnSpawner.
+func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnConfig) (*tools.ToolResult, error) {
+	if s == nil || s.inner == nil {
+		return nil, errors.New("rootDelegationAdmittingSpawner: nil spawner")
+	}
+	if s.gate == nil {
+		return s.inner.SpawnSubTurn(ctx, cfg)
+	}
+	parentTS := turnStateFromContext(ctx)
+	if parentTS == nil || parentTS.depth != 0 {
+		// Not a root-level dispatch (or no turnState in context at all, e.g.
+		// a bare unit-test call outside a real turn) — RootDelegationAdmission
+		// gates root-level fan-out only; a nested child's own fan-out stays
+		// governed exclusively by its concurrencySem (FR-070).
+		return s.inner.SpawnSubTurn(ctx, cfg)
+	}
+	ok, release := s.gate.TryAdmit()
+	if !ok {
+		return RefuseRootDelegation(s.gate.Cap(), s.delegatingAgentID, cfg.TargetAgentID), nil
+	}
+	defer release()
+	return s.inner.SpawnSubTurn(ctx, cfg)
 }
