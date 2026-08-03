@@ -345,14 +345,32 @@ func preArmKeyForScope(sessionID string, scope CancelScope) string {
 
 // preArmKeysForTurn returns the key(s) a newly-registered turn should be
 // checked against, most-specific first: the session-id form when the turn
-// has a transcript session id (matching the primary, web-SPA/CLI-style
-// cancel path), then the (channel, chatID) form when the turn carries both
+// has a routing session id (matching the primary, web-SPA/CLI-style cancel
+// path), then the (channel, chatID) form when the turn carries both
 // (matching the Tier B fallback path). Checking both is cheap and correct
 // even when only one could plausibly be armed for a given turn.
+//
+// ADR-057 FR-016: rebased from ts.transcriptSessionID onto
+// ts.routingSessionID (turn.go), preserving the "inherits verbatim"
+// invariant literally. preArmKeyForScope (above) keys a chat-level Stop's
+// latch under "s:"+the caller's own session id — for a root-level Stop that
+// id already equals the chat's own routingSessionID (FR-011: a root turn's
+// routingSessionID equals its own session id). Pre-D1 a delegate child's
+// transcriptSessionID equaled its parent's verbatim, so matching on it here
+// caught a chat-level Stop arming a latch microseconds before the FIRST
+// delegate child registered. Post-D1 a child's transcriptSessionID is its
+// OWN distinct, store-backed session id (ADR-057 D1/FR-005), so keeping this
+// keyed on transcriptSessionID would silently reopen that exact race for
+// every delegate child: the chat's latch (keyed "s:"+chat id) would never
+// match a child's own "s:"+childSessionID key. routingSessionID is inherited
+// verbatim through the whole subtree (turn.go), so rebasing here restores
+// the match — a delegate child's own preArmKeysForTurn now collapses onto
+// the SAME "s:"+chat-id key a chat-level Stop armed under, exactly
+// preserving the original invariant.
 func preArmKeysForTurn(ts *turnState) []string {
 	var keys []string
-	if ts.transcriptSessionID != "" {
-		keys = append(keys, "s:"+ts.transcriptSessionID)
+	if ts.routingSessionID != "" {
+		keys = append(keys, "s:"+string(ts.routingSessionID))
 	}
 	if ts.channel != "" && ts.chatID != "" {
 		keys = append(keys, "c:"+ts.channel+":"+ts.chatID)
@@ -592,7 +610,7 @@ func (al *AgentLoop) armCancelOrFindActiveTurn(
 // Synchronous, not spawned in a goroutine: registerActiveTurn runs on the
 // turn's own goroutine before any real turn work (message assembly, model
 // switch, the LLM call itself) begins, so by the time this call returns,
-// RequestCancel's InterruptSession has already fired providerCancel/
+// RequestCancel's Interrupt has already fired providerCancel/
 // requestGracefulInterrupt on ts — the turn cannot slip an LLM round-trip
 // through before observing the cancellation.
 func (al *AgentLoop) consumePreArmedCancel(ts *turnState) {

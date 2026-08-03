@@ -97,33 +97,50 @@ type CancelHooks struct {
 	SetSessionInterrupted func(sessionID string)
 
 	// KillBackgroundSessions cascades the cancel to every detached background
-	// bash/exec session owned by sessionID (FR-B10/FR-B11, User Story 5:
+	// bash/exec session owned by ONE session id (FR-B10/FR-B11, User Story 5:
 	// "Canceling a session also stops any background bash work it started").
 	//
-	// Called ONCE, unconditionally, for any resolvable (non-empty) sessionID
-	// — deliberately NOT gated on whether an active turn exists or
-	// ClaimCancel succeeds (wasFired). A `bash run_in_background=true` call's
-	// own turn ends immediately, so by the time a user cancels the
-	// still-running background job there is typically no active turn left
-	// to claim; gating this hook on wasFired would silently no-op the entire
-	// cascade in exactly that (the most common) case. A session with no
-	// background work sees no behavior change — this hook is a no-op in that
-	// case, not an error.
+	// Signature is deliberately unchanged (single id, not a set) even though
+	// ADR-057 FR-027 requires the cascade to reach sessionID's FULL
+	// descendant set, not sessionID alone: a delegated child now owns its OWN
+	// distinct session id (see pkg/tools/session.go's
+	// ProcessSession.OwnerSessionID doc comment), so a single exact match
+	// against the root id no longer reaches a child's background shells.
+	// RequestCancel closes that gap on ITS side instead of widening this
+	// hook's contract: it resolves the descendant set once
+	// (resolveBackgroundKillSessionIDs, this file) and invokes THIS hook
+	// once per id in that set, accumulating each call's (killed, failed) into
+	// the totals below — so every existing implementation of this hook
+	// (pkg/gateway/websocket.go's buildCancelHooks, pkg/gateway/schedules.go's
+	// watchDeadline) cascades correctly over the full descendant set with NO
+	// changes of their own, because each of their calls only ever has to
+	// reason about the ONE id it was actually given.
 	//
-	// Returns (killed, failed): killed is the count of background sessions
-	// actually killed, failed is the count that were RUNNING and eligible but
-	// whose kill call itself failed (the underlying syscall failing, not a
-	// benign lost-race — see tools.SessionManager.KillAllForSession's doc
-	// comment for that distinction). RequestCancel uses both to (a) emit its
-	// own turn.cancel.background_killed audit event — gated on killed>0 ||
-	// failed>0 so a cancel that finds nothing to kill does not emit a no-op
-	// audit row — carrying background_sessions_failed alongside
-	// background_sessions_killed, and (b) thread both counts into the
-	// turn_canceled audit event's fields map on the ClaimCancel-gated path.
-	// Before the failed count was added, a kill failure was invisible outside
-	// a slog.Warn deep in pkg/tools/session.go, uncorrelated with any audit
-	// event a security reviewer would actually go looking at — contradicting
-	// this very event's own doc comment below.
+	// Called ONCE PER RESOLVED ID, unconditionally, for any resolvable
+	// (non-empty) sessionID — deliberately NOT gated on whether an active
+	// turn exists or ClaimCancel succeeds (wasFired). A `bash
+	// run_in_background=true` call's own turn ends immediately, so by the
+	// time a user cancels the still-running background job there is
+	// typically no active turn left to claim; gating this hook on wasFired
+	// would silently no-op the entire cascade in exactly that (the most
+	// common) case. A session with no background work sees no behavior
+	// change — this hook is a no-op in that case, not an error.
+	//
+	// Returns (killed, failed) for the ONE id it was called with: killed is
+	// the count of background sessions actually killed, failed is the count
+	// that were RUNNING and eligible but whose kill call itself failed (the
+	// underlying syscall failing, not a benign lost-race — see
+	// tools.SessionManager.KillAllForSessions's doc comment for that
+	// distinction). RequestCancel sums both across every id in the resolved
+	// set to (a) emit its own turn.cancel.background_killed audit event —
+	// gated on killed>0 || failed>0 so a cancel that finds nothing to kill
+	// does not emit a no-op audit row — carrying background_sessions_failed
+	// alongside background_sessions_killed, and (b) thread both totals into
+	// the turn_canceled audit event's fields map on the ClaimCancel-gated
+	// path. Before the failed count was added, a kill failure was invisible
+	// outside a slog.Warn deep in pkg/tools/session.go, uncorrelated with any
+	// audit event a security reviewer would actually go looking at —
+	// contradicting this very event's own doc comment below.
 	KillBackgroundSessions func(sessionID string) (killed, failed int)
 
 	// OnLatchExpired is called when a pre-registration cancel latch
@@ -169,17 +186,22 @@ type CancelHooks struct {
 //     gated on ClaimCancel/wasFired below (see the inline comment at the call
 //     site for the root-cause this closes: a `bash run_in_background=true`
 //     call's turn ends immediately, so by the time a user cancels the still-
-//     running background job there is no active turn left to claim)
+//     running background job there is no active turn left to claim), and
+//     cascades over sessionID's FULL descendant set (ADR-057 FR-027 — see
+//     resolveBackgroundKillSessionIDs)
 //   - abuse-detection record
 //   - ClaimCancel atomic first-cancel-wins check
 //   - turn_cancel_attempt audit emission (always, even for no-op cancels)
-//   - graceful cascade via InterruptSession / providerCancel
+//   - graceful cascade via Interrupt(sessionID, ScopeSubtree, hint) / providerCancel
+//   - durable descendant lifecycle-record walk, own goroutine, off the
+//     escalation path (ADR-057 FR-025/FR-026 — see
+//     cancelDurableDescendantLifecycleRecords)
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
 //   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
 //   - turn_canceled audit on Finish
-//   - 3s timer → hard abort (InterruptSessionHard)
+//   - 3s timer → hard abort (InterruptSessionHard(sessionID, ScopeSubtree, hint))
 //   - 5s timer → detached / MarkAbandoned + turn_cancel_stuck audit
 //
 // Returns:
@@ -231,9 +253,20 @@ func (al *AgentLoop) RequestCancel(
 	var backgroundSessionsKilled int64
 	var backgroundSessionsFailed int64
 	if sessionID != "" && hooks.KillBackgroundSessions != nil {
-		killed, failed := hooks.KillBackgroundSessions(sessionID)
-		atomic.StoreInt64(&backgroundSessionsKilled, int64(killed))
-		atomic.StoreInt64(&backgroundSessionsFailed, int64(failed))
+		// ADR-057 FR-027: cascade over sessionID's FULL descendant set, not
+		// sessionID alone — a delegated child now owns its OWN distinct
+		// session id, so its background shells are invisible to a hook call
+		// scoped to only the root id. hooks.KillBackgroundSessions' own
+		// signature stays single-id (see its doc comment for why); this loop
+		// is what actually reaches every descendant, summing each call's
+		// result into the totals below.
+		for _, id := range al.resolveBackgroundKillSessionIDs(sessionID) {
+			killed, failed := hooks.KillBackgroundSessions(id)
+			atomic.AddInt64(&backgroundSessionsKilled, int64(killed))
+			atomic.AddInt64(&backgroundSessionsFailed, int64(failed))
+		}
+		killed := int(atomic.LoadInt64(&backgroundSessionsKilled))
+		failed := int(atomic.LoadInt64(&backgroundSessionsFailed))
 		// Gate emission on killed>0 || failed>0 (architect finding): a
 		// duplicate/no-op cancel that finds no background work at all (the
 		// common case — most cancels target a session with nothing running
@@ -320,21 +353,39 @@ func (al *AgentLoop) RequestCancel(
 		}, nil
 	}
 
-	// --- Compute descendants list BEFORE InterruptSession to close the race ---
+	// --- Compute descendants list BEFORE Interrupt to close the race ---
 	//
-	// Race window: InterruptSession calls providerCancel + requestGracefulInterrupt
+	// Race window: Interrupt calls providerCancel + requestGracefulInterrupt
 	// which wakes the agent goroutine. That goroutine may call Finish() before we
 	// reach SetOnCancelFinish below. If that happens, Finish() sees cancelFired==true
 	// but onCancelFinish==nil and returns without invoking the callback — the
 	// transcript entry, audit event, and MarkLastEntryTruncated are permanently lost.
 	//
-	// Fix: collect the descendants list now (same predicate as InterruptSession),
+	// Fix: collect the descendants list now (same predicate as Interrupt),
 	// build the callback closure with the pre-computed list, register it via
-	// SetOnCancelFinish, and THEN call InterruptSession. The callback is always
+	// SetOnCancelFinish, and THEN call Interrupt. The callback is always
 	// registered before any goroutine can reach Finish().
+	//
+	// ADR-057 FR-024: this list is computed EXACTLY ONCE, here, in PHASE A —
+	// PHASE B/C below thread it through (al.liveTurnStatesAmong(descendants))
+	// rather than re-deriving the subtree from sessionID afresh each time an
+	// escalation timer fires.
 	store := al.ResolveSessionStore(sessionID)
 	turnID := activeTurn.TurnID()
 	descendants := al.collectDescendantTurnIDs(sessionID)
+
+	// --- ADR-057 FR-025/FR-026: durable descendant lifecycle-record walk ---
+	// Runs on its OWN goroutine, off the 3s/5s escalation path below, so a
+	// subtree with many persisted lifecycle records never delays
+	// RequestCancel's return or the graceful/hard cascade timers. Reaches
+	// every descendant with a DURABLE lifecycle record — including one whose
+	// own intermediate parent turn has already finished and is no longer in
+	// al.activeTurnStates, a gap the in-memory descendants list above cannot
+	// close (see collectLiveDescendantTurnStates's KNOWN LIMITATION doc
+	// comment, steering.go) — and transitions each one's persisted record to
+	// cancelled. See cancelDurableDescendantLifecycleRecords's own doc
+	// comment for the full mechanism.
+	go al.cancelDurableDescendantLifecycleRecords(sessionID)
 
 	// backgroundSessionsKilled was already computed above (independent of
 	// wasFired, before this function's ClaimCancel gate) and is read here via
@@ -384,14 +435,26 @@ func (al *AgentLoop) RequestCancel(
 	// (The background-session kill cascade already fired above, independent
 	// of wasFired — see the comment at that call site.)
 	//
-	// Now that the callback is registered, fire InterruptSession. The ordering
+	// Now that the callback is registered, fire Interrupt. The ordering
 	// guarantee: SetOnCancelFinish (above) stores the callback under ts.mu before
-	// any goroutine awakened by InterruptSession can reach Finish() and read it.
-	interrupted, _ := al.InterruptSession(sessionID, hint)
+	// any goroutine awakened by Interrupt can reach Finish() and read it.
+	//
+	// ScopeSubtree: a Stop reaching RequestCancel always names a CHAT/session
+	// root (web SPA Stop button, Tier A /cancel, Tier B channels, CLI, and
+	// the ADR-045 orphan-reap path all resolve sessionID this way — see this
+	// file's own top-of-file doc comment) and users expect a chat-level Stop
+	// to sweep the WHOLE delegation tree, not just the turn directly
+	// registered under sessionID. This is also byte-identical to the
+	// pre-collapse InterruptSession's own reach (steering.go's
+	// resolveInterruptAnchors Range fallback already finds every descendant
+	// sharing sessionID's routingSessionID directly, so the descendant walk
+	// on top is redundant-but-harmless for a chat root) — ScopeSelfOnly would
+	// be a silent behavior regression here, not a neutral choice.
+	interrupted, _ := al.Interrupt(sessionID, ScopeSubtree, hint)
 
 	// Defensive consistency check: the pre-computed descendants list must match
-	// what InterruptSession collected. A mismatch means a turn was added or removed
-	// in the narrow window between collectDescendantTurnIDs and InterruptSession —
+	// what Interrupt collected. A mismatch means a turn was added or removed
+	// in the narrow window between collectDescendantTurnIDs and Interrupt —
 	// this should never happen in practice but is worth a WARN if it does.
 	if len(interrupted) != len(descendants) {
 		slog.Warn("agent: RequestCancel: descendants list mismatch — turn added/removed between collect and interrupt",
@@ -437,17 +500,24 @@ func (al *AgentLoop) RequestCancel(
 		hooks.SetSessionInterrupted(sessionID)
 	}
 
-	// --- PHASE B: 3s timer → hard abort if ANY turn in the session cascade
-	// (root or a still-running descendant, e.g. an orphaned background
-	// delegate) is still alive ---
+	// --- PHASE B: 3s timer → hard abort if ANY turn in the PHASE-A-computed
+	// descendant set (root or a still-running descendant, e.g. an orphaned
+	// background delegate) is still alive ---
 	//
-	// Gated on al.sessionTurnsStillAlive(sessionID) rather than
-	// activeTurn.IsAlive() alone: activeTurn is the single hook resolved once
-	// above (GetActiveTurnHookForSession prefers the root turn), so gating
-	// purely on ITS liveness meant a background delegate sub-turn that
-	// outlived its already-gracefully-finished parent was never escalated to
-	// — see sessionTurnsStillAlive's doc comment (pkg/agent/steering.go) for
-	// the full root-cause writeup of the delegation-cancel bug this closes.
+	// Gated on al.liveTurnStatesAmong(descendants) — the SAME descendants
+	// list PHASE A computed once above — rather than activeTurn.IsAlive()
+	// alone: activeTurn is the single hook resolved once above
+	// (GetActiveTurnHookForSession prefers the root turn), so gating purely
+	// on ITS liveness meant a background delegate sub-turn that outlived its
+	// already-gracefully-finished parent was never escalated to. ADR-057
+	// FR-024 requires threading PHASE A's once-computed subtree through here
+	// rather than re-deriving it fresh via al.sessionTurnsStillAlive
+	// (steering.go) each time this timer fires — a fresh re-derivation could
+	// silently widen the escalation to a turn that started AFTER
+	// turn_canceled's own descendants_canceled field was already decided.
+	// See sessionTurnsStillAlive's own doc comment (steering.go) for the full
+	// root-cause writeup of the underlying delegation-cancel bug this
+	// mechanism closes.
 	time.AfterFunc(3*time.Second, func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -459,10 +529,10 @@ func (al *AgentLoop) RequestCancel(
 				)
 			}
 		}()
-		if len(al.sessionTurnsStillAlive(sessionID)) == 0 {
+		if len(al.liveTurnStatesAmong(descendants)) == 0 {
 			return // already finished — no live descendants either
 		}
-		if _, err := al.InterruptSessionHard(sessionID, hint); err != nil {
+		if _, err := al.InterruptSessionHard(sessionID, ScopeSubtree, hint); err != nil {
 			slog.Warn("agent: RequestCancel: hard abort failed",
 				"session_id", sessionID, "error", err)
 		}
@@ -470,8 +540,9 @@ func (al *AgentLoop) RequestCancel(
 			hooks.SendStageFrame(sessionID, "hard")
 		}
 
-		// --- PHASE C: 5s after hard → detach any turn in the cascade still
-		// alive (same session-wide liveness check as PHASE B; see above) ---
+		// --- PHASE C: 5s after hard → detach any turn in the PHASE-A-computed
+		// descendant set still alive (same threaded liveness check as
+		// PHASE B; see above, ADR-057 FR-024) ---
 		hardAt := time.Now()
 		time.AfterFunc(5*time.Second, func() {
 			defer func() {
@@ -484,7 +555,7 @@ func (al *AgentLoop) RequestCancel(
 					)
 				}
 			}()
-			stillAlive := al.sessionTurnsStillAlive(sessionID)
+			stillAlive := al.liveTurnStatesAmong(descendants)
 			if len(stillAlive) == 0 {
 				return // finished in the meantime
 			}
@@ -509,6 +580,184 @@ func (al *AgentLoop) RequestCancel(
 		BackgroundSessionsKilled: int(atomic.LoadInt64(&backgroundSessionsKilled)),
 		BackgroundSessionsFailed: int(atomic.LoadInt64(&backgroundSessionsFailed)),
 	}, nil
+}
+
+// ============================================================================
+// ADR-057 U15 — descendant-set helpers (W8, FR-024…FR-027)
+// ============================================================================
+
+// collectDescendantSessionIDs performs a breadth-first walk of the durable
+// ParentDurableKey edge (pkg/session/lifecycle.go, U13's FR-019/FR-020
+// index) starting at rootSessionID and returns every reachable descendant's
+// OWN session id (rootSessionID itself is never included).
+//
+// Mirrors pkg/gateway/websocket.go's u11CollectDescendantSessionIDs — the
+// same primitive that hook already uses to cascade a cancel's
+// approval-denial (FR-032) over a session's descendants — because a
+// background bash/exec session (FR-027, below) and a persisted lifecycle
+// record (FR-025/FR-026, below) can each OUTLIVE the in-memory turnState
+// that spawned them: a `delegate async=true` child's own turn frequently
+// finishes almost immediately while its spawned background bash job keeps
+// running for minutes. Deriving this set from al.activeTurnStates (which
+// only knows about turns still registered right now) would silently miss
+// exactly the descendants FR-027/FR-025 exist to reach. Reads no turnState
+// field at all — in particular never ts.routingSessionID, whose reader set
+// FR-014 closes to the seven role-B predicates plus WS-payload stamping plus
+// the three pre-arm reads — so this walk is unaffected by that restriction.
+//
+// Returns nil when no lifecycle store is wired or rootSessionID is empty,
+// which degrades resolveBackgroundKillSessionIDs to exactly today's
+// single-id behavior (root only) rather than failing the cascade outright.
+func (al *AgentLoop) collectDescendantSessionIDs(rootSessionID string) []string {
+	lifecycleStore := al.GetSessionLifecycleStore()
+	if lifecycleStore == nil || rootSessionID == "" {
+		return nil
+	}
+	visited := map[string]struct{}{rootSessionID: {}}
+	queue := []string{rootSessionID}
+	var descendants []string
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		children, err := lifecycleStore.List(session.LifecycleFilter{ParentDurableKey: id})
+		if err != nil {
+			slog.Warn("agent: RequestCancel: descendant walk: could not list children",
+				"session_id", id, "root_session_id", rootSessionID, "error", err)
+			continue
+		}
+		for _, rec := range children {
+			if _, seen := visited[rec.SessionID]; seen {
+				continue
+			}
+			visited[rec.SessionID] = struct{}{}
+			descendants = append(descendants, rec.SessionID)
+			queue = append(queue, rec.SessionID)
+		}
+	}
+	return descendants
+}
+
+// resolveBackgroundKillSessionIDs returns the SET of real, store-backed
+// session ids whose background bash/exec work a cancel of sessionID must
+// reach (ADR-057 FR-027): sessionID itself, plus every durable descendant
+// collectDescendantSessionIDs finds. A delegated child's background shell is
+// owned by the CHILD's OWN session id (see pkg/tools/session.go's
+// ProcessSession.OwnerSessionID doc comment), never by the shared
+// routing/interrupt key sessionID names, so killing only sessionID's own
+// background shells silently orphans every descendant's as detached
+// processes — U16's KillAllForSessions red/green proved exactly this
+// failure mode against the single-id KillAllForSession call, which still
+// compiles and so gives no build-time warning that it is now wrong.
+func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) []string {
+	if sessionID == "" {
+		return nil
+	}
+	return append([]string{sessionID}, al.collectDescendantSessionIDs(sessionID)...)
+}
+
+// cancelDurableDescendantLifecycleRecords walks the durable ParentDurableKey
+// edge transitively from rootSessionID (via collectDescendantSessionIDs) and
+// transitions EVERY reachable descendant's persisted LifecycleRecord to
+// cancelled (FR-026), independent of whether that descendant still has a
+// live turnState in al.activeTurnStates. This is the DURABLE counterpart to
+// the in-memory turn cascade (Interrupt/InterruptSessionHard) RequestCancel
+// fires above: a descendant whose own intermediate parent turn has already
+// finished and been cleared from activeTurnStates is UNREACHABLE via the
+// in-memory parentTurnID chain (steering.go's collectLiveDescendantTurnStates
+// documents this limitation on itself) but remains reachable here, because
+// this walk is keyed on the durable ParentDurableKey edge persisted to disk,
+// never on any in-memory turn registration.
+//
+// FR-025: RequestCancel launches this via `go
+// al.cancelDurableDescendantLifecycleRecords(...)` — once per Stop, on its
+// OWN goroutine, off the 3s/5s escalation path — so a subtree with many
+// persisted lifecycle records never delays RequestCancel's return or the
+// graceful/hard cascade timers.
+//
+// rootSessionID's OWN lifecycle record is transitioned by RequestCancel's
+// existing session.TransitionSession call (PHASE A, above this function in
+// the file) — this walk starts its BFS AT rootSessionID (to enumerate its
+// direct children) but never re-writes rootSessionID's own record.
+// ErrLifecycleNotFound (no record for this descendant — e.g. it is itself a
+// plain, non-delegate session with no lifecycle record of its own) and
+// ErrLifecycleTerminalImmutable (the descendant already reached a terminal
+// state on its own, e.g. it completed naturally moments before the Stop)
+// are both expected, benign outcomes and are silenced rather than logged.
+func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("agent: cancelDurableDescendantLifecycleRecords: panic",
+				"root_session_id", rootSessionID, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	lifecycleStore := al.GetSessionLifecycleStore()
+	if lifecycleStore == nil {
+		return
+	}
+	for _, id := range al.collectDescendantSessionIDs(rootSessionID) {
+		childStore := al.ResolveSessionStore(id)
+		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleCancelled, "")
+		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) && !errors.Is(err, session.ErrLifecycleTerminalImmutable) {
+			slog.Warn("agent: cancelDurableDescendantLifecycleRecords: could not transition descendant to cancelled",
+				"session_id", id, "root_session_id", rootSessionID, "error", err)
+		}
+	}
+}
+
+// turnStatesByTurnID resolves the live turnState pointers registered under
+// any sessionKey in al.activeTurnStates whose OWN turnID appears in ids, via
+// a single Range pass. activeTurnStates is keyed by sessionKey, not turnID,
+// so there is no O(1) point lookup for a bare turn id — this mirrors the
+// same cost steering.go's collectLiveDescendantTurnStates already pays for
+// its own parentTurnID-chain walk.
+//
+// Deliberately reads only ts.turnID off each value — NEVER
+// ts.routingSessionID, whose reader set FR-014 closes to exactly the seven
+// role-B predicates plus WS-payload stamping plus the three pre-arm reads
+// (see "Three reads, five sites" in the ADR-057 spec). This function lets
+// RequestCancel's PHASE B/C escalation gate (FR-024, below via
+// liveTurnStatesAmong) consult the EXACT descendant set a legitimate role-B
+// predicate call (collectDescendantTurnIDs, steering.go) already produced,
+// without adding an eighth, illegitimate read site of its own.
+func (al *AgentLoop) turnStatesByTurnID(ids []string) []*turnState {
+	if len(ids) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	var found []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if ok && ts != nil && want[ts.turnID] {
+			found = append(found, ts)
+		}
+		return true
+	})
+	return found
+}
+
+// liveTurnStatesAmong filters turnStatesByTurnID(ids) to those still alive
+// (turnState.IsAlive()). ADR-057 FR-024: RequestCancel's PHASE B/C
+// escalation timers call this with the SAME descendant-id list PHASE A
+// computed once, rather than re-deriving the subtree afresh via
+// sessionTurnsStillAlive each time a timer fires — a re-derivation could
+// silently pick up a turn that started AFTER PHASE A's snapshot, widening
+// the escalation's reach beyond what turn_canceled's own
+// descendants_canceled field named.
+func (al *AgentLoop) liveTurnStatesAmong(ids []string) []*turnState {
+	states := al.turnStatesByTurnID(ids)
+	if len(states) == 0 {
+		return nil
+	}
+	live := make([]*turnState, 0, len(states))
+	for _, ts := range states {
+		if ts.IsAlive() {
+			live = append(live, ts)
+		}
+	}
+	return live
 }
 
 // RequestCancelForSession is a primitive-argument adapter for RequestCancel

@@ -26,15 +26,17 @@
 // The one property this redesign must never lose — the reason a naive
 // "just call RequestCancel unconditionally" was rejected in the ORIGINAL
 // ADR-045 decision — is that RequestCancel's PHASE B/C escalation
-// (InterruptSessionHard / sessionTurnsStillAlive, pkg/agent/cancel.go) is
-// SESSION-WIDE: it hard-aborts every turnState sharing a transcriptSessionID,
-// Critical/background delegate sub-turns included, once they're still alive
-// past the 3s mark. That is correct and desired for an explicit user
-// Stop-click, but would be wrong for an automatic, WS-close-triggered
-// timeout, which must NEVER touch a legitimate Critical background delegate
-// no matter how long the user stays away (`delegate async=true` always sets
-// Critical:true — see pkg/tools/delegate.go's executeAsync — so "Critical"
-// and "background/async" name the identical turnState.critical flag).
+// (InterruptSessionHard, pkg/agent/cancel.go, gated on liveness of the
+// PHASE-A-computed descendant set — ADR-057 FR-024) is SESSION-WIDE in
+// reach: it hard-aborts every turnState sharing a routingSessionID that was
+// still alive when the Stop/reap fired, Critical/background delegate
+// sub-turns included, once they're still alive past the 3s mark. That is
+// correct and desired for an explicit user Stop-click, but would be wrong
+// for an automatic, WS-close-triggered timeout, which must NEVER touch a
+// legitimate Critical background delegate no matter how long the user stays
+// away (`delegate async=true` always sets Critical:true — see
+// pkg/tools/delegate.go's executeAsync — so "Critical" and "background/
+// async" name the identical turnState.critical flag).
 //
 // The fix is NOT a parallel escalation timer family (the old design) — it is
 // simply: defer reaping entirely, for good, for this fire, whenever a live
@@ -278,13 +280,14 @@ func (al *AgentLoop) DisarmOrphanForegroundTurnWatch(sessionID string) {
 //     exist, covering the concurrent case (root still running, e.g. still
 //     processing other work, while an async delegate it spawned runs
 //     alongside it). RequestCancel's PHASE B/C escalation
-//     (InterruptSessionHard/sessionTurnsStillAlive) is session-wide by
-//     construction and cannot be scoped to "the root only" from the outside
-//     — so rather than reap anyway and rely on PHASE A's mere graceful nudge
-//     (which a delegate ignoring it, by design, would not obey), this
-//     mechanism defers reaping ENTIRELY while the delegate survives. The
-//     root's own turn keeps running unwatched a while longer; that is always
-//     an acceptable trade against ever cutting off wanted background work.
+//     (InterruptSessionHard, gated on the PHASE-A-computed descendant set —
+//     ADR-057 FR-024) is session-wide by construction and cannot be scoped
+//     to "the root only" from the outside — so rather than reap anyway and
+//     rely on PHASE A's mere graceful nudge (which a delegate ignoring it,
+//     by design, would not obey), this mechanism defers reaping ENTIRELY
+//     while the delegate survives. The root's own turn keeps running
+//     unwatched a while longer; that is always an acceptable trade against
+//     ever cutting off wanted background work.
 //
 //  3. No client has reconnected since arming (stillOrphaned()) — MA-5. Closes
 //     the race between the timer firing and a reattach that arrived just
