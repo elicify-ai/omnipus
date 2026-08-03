@@ -274,7 +274,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
     })
-    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Someone else is driving')
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Also viewing')
 
     act(() => {
       callbacksRef.current?.onStatus?.({
@@ -284,17 +284,23 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
       })
     })
 
-    // Still gated at the STATE level — the error frame never reported
-    // controlled_by_other, so the prior true value must be left alone (the
-    // chip itself now shows "Error", since an active error takes display
-    // priority — but the underlying controlledByOther guard must survive,
-    // proven below by the click NOT sending `take`).
+    // The error frame never reported controlled_by_other, so the prior true
+    // value must be left alone rather than being reset to false by a `?? false`
+    // — that state still drives the "Also viewing" chip once the error clears.
+    // The chip shows "Error" here because an active error takes display
+    // priority. The click below sends nothing because the session is in an
+    // ERROR state, NOT because another viewer is present: control is shared as
+    // of 2026-08-03, and controlledByOther no longer gates input at all.
     expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Error')
     expect(screen.getByRole('alert')).toHaveTextContent('browser session terminated unexpectedly')
-    mockSendControl.mockClear()
-    const container = stubFrameRect()
-    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).not.toHaveBeenCalled()
+
+    // The surviving controlledByOther is proven by the chip returning to
+    // "Also viewing" once the error clears — if the omitted field had reset it
+    // to false, the chip would fall through to "Click to drive" instead.
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached' })
+    })
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent('Also viewing')
   })
 
   it('calls detach() then close() on unmount so the backend engine can ref-count down', () => {

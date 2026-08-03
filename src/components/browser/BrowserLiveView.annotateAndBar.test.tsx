@@ -420,14 +420,21 @@ describe('BrowserLiveView — Annotate visibility gate (ADR-039 D-B1/B2, UAT FE-
 // browser session holds control (e.g. the docked panel and a pop-out both
 // watching the same agent).
 describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried into ADR-040 D2)', () => {
-  it('shows "Someone else is driving" and blocks click-to-drive when controlled_by_other is true', () => {
+  // Rewritten 2026-08-03. This previously asserted that controlled_by_other
+  // BLOCKED the local user's click ("blocks click-to-drive"). That was the
+  // operator-reported dead-input bug encoded as expected behaviour: any second
+  // viewer — another panel, a pop-out, a stale automation session — silently
+  // disabled the real human's mouse and keyboard. Control is shared now: the
+  // chip is informational only, and the click must still act.
+  it('still lets the local user act when another viewer is also present', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'attached', controlled_by_other: true })
     })
 
-    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent(/someone else is driving/i)
+    // Informational, not a lock-out.
+    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent(/also viewing/i)
 
     mockSendControl.mockClear()
     mockSendInput.mockClear()
@@ -437,8 +444,7 @@ describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried in
       toJSON() { return {} },
     } as DOMRect)
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockSendControl).toHaveBeenCalled()
   })
 
   it('shows "Click to drive" and allows click-to-drive when controlled_by_other is false/absent', () => {

@@ -1863,7 +1863,13 @@ export function BrowserLiveView({
       // will actually land, and takeWheelIfNeeded would silently no-op the
       // (redundant) take anyway, leaving this gesture's input to go out
       // regardless if it weren't guarded here too.
-      if ((mode !== 'idle' && mode !== 'agent-working') || pendingTakeRef.current) return
+      // 'other-driving' is explicitly ALLOWED through here (operator
+      // directive, 2026-08-03). It used to fall into this bail-out, which is
+      // what made the reported session's mouse and keyboard dead: another
+      // attached viewer put this panel in 'other-driving' and every pointer
+      // gesture returned right here, before dispatching anything. Control is
+      // shared — a human's click always acts.
+      if ((mode !== 'idle' && mode !== 'agent-working' && mode !== 'other-driving') || pendingTakeRef.current) return
       // Idle: the first pointer interaction implicitly takes the wheel
       // (ADR-040 D2). Agent-working (UAT fix): the click ALSO implicitly
       // takes the wheel — takeWheelIfNeeded pauses the agent (cancelStream)
@@ -2402,7 +2408,7 @@ export function BrowserLiveView({
         <button tabIndex={0}
           type="button"
           onClick={() => handleToolbarNav('navigate_back')}
-          disabled={!connected || (controlledByOther && !isControlling)}
+          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
           aria-label="Go back"
           title="Back"
           className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
@@ -2412,7 +2418,7 @@ export function BrowserLiveView({
         <button tabIndex={0}
           type="button"
           onClick={() => handleToolbarNav('reload')}
-          disabled={!connected || (controlledByOther && !isControlling)}
+          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
           aria-label="Refresh page"
           title="Refresh"
           className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
@@ -2564,10 +2570,10 @@ export function BrowserLiveView({
             <button tabIndex={0}
               type="button"
               onClick={takeWheelIfNeeded}
-              // FE-6, preserved: disabled while a DIFFERENT connection of
-              // this same session already holds the lock — clicking would
-              // just silently no-op (takeWheelIfNeeded's own guard).
-              disabled={!connected || controlledByOther}
+              // No longer disabled by controlledByOther (2026-08-03): another
+              // attached viewer must never make this button dead, since taking
+              // over from the agent is exactly what the user is trying to do.
+              disabled={!connected}
               aria-label={takeOverLabel}
               title={takeOverLabel}
               className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
