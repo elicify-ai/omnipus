@@ -286,7 +286,7 @@ const VIEWPORT_SETTLE_MS = 250
 // server's maxInputEventsPerSecond (50/s, pkg/tools/browser/live.go) with
 // headroom for the down/up/wheel events that share that budget: at ~16ms a
 // sustained drag alone would ride the cap and start losing events to the
-// limiter. Not requestAnimationFrame — see scheduleMoveFlush.
+// limiter. Not requestAnimationFrame — see scheduleInputFlush.
 const MOVE_FLUSH_MS = 25
 
 // textFieldHasFocus reports whether a text-entry element currently holds focus,
@@ -538,7 +538,30 @@ export function BrowserLiveView({
   // SAME ones the position was mapped against, not whatever is live when the
   // coalesced flush eventually fires.
   const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number; captureWidth?: number; captureHeight?: number } | null>(null)
-  const moveFlushScheduledRef = useRef(false)
+  // Wheel is coalesced on the SAME pacer as moves, with deltas ACCUMULATED
+  // (position = latest). Un-paced wheel was the second half of the operator's
+  // "clicks work only sometimes": a trackpad/momentum scroll emits wheel at the
+  // display refresh rate, so one gesture alone could exceed the server's
+  // per-second input budget and the click that followed it was silently
+  // dropped by the limiter. Summing deltas preserves total scroll distance, so
+  // pacing costs resolution in time, never travel.
+  const pendingWheelRef = useRef<{
+    x: number
+    y: number
+    modifiers: number
+    deltaX: number
+    deltaY: number
+    captureWidth?: number
+    captureHeight?: number
+  } | null>(null)
+  // Guards re-scheduling of the shared move+wheel flush, and OWNS the timer
+  // handle. Storing the id is what makes cancellation real: clearing the flag
+  // alone left the already-armed callback running, so the next move would arm a
+  // second, overlapping timer and the stale one would flush it early — sends
+  // bursting faster than the pacer's own cadence, straight into the server's
+  // rate limiter. Mirrors settleRef's handle-owning pattern.
+  const inputFlushScheduledRef = useRef(false)
+  const inputFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [frame, setFrame] = useState<BrowserScreencastFrame | null>(null)
   // WebRTC build (W2-B) — this component's OWN signaling result (populated
@@ -1384,6 +1407,14 @@ export function BrowserLiveView({
       // Deliberately checks LIVE focus rather than a stored flag: a blur that
       // never fires (element unmounted, window lost focus) would otherwise
       // wedge the guard on permanently, suppressing real resizes forever.
+      //
+      // This DEFERS the resize, it does not discard it. On a desktop browser
+      // focusing the address bar does not change the container size at all, so
+      // a genuine window resize performed while the address bar has focus
+      // would otherwise be swallowed here and never recovered — no blur-driven
+      // resize follows to replay it. The focusout listener registered below is
+      // what closes that hole: it re-runs this same path once focus leaves, at
+      // which point the size is real and either commits or dedups.
       if (textFieldHasFocus(el)) return
 
       const box = el.getBoundingClientRect()
@@ -1417,7 +1448,21 @@ export function BrowserLiveView({
           const now = el.getBoundingClientRect()
           const nw = Math.round(now.width)
           const nh = Math.round(now.height)
-          if (nw < 1 || nh < 1) return
+          // A degenerate measurement RE-ARMS rather than returns. Returning
+          // here would recreate, one branch over, the lost-resize bug the
+          // re-arm below exists to fix: a container that momentarily measures
+          // 0x0 mid-chase (parent hidden for a tick, display:none flash during
+          // an unrelated layout pass) would abandon the chase silently and the
+          // panel would stay wrong-sized until some unrelated resize happened
+          // to fire. Under the ResizeObserver path 0 -> real is itself an
+          // observed change, but the window-resize FALLBACK path only hears
+          // about window events, so there the resize really would be lost.
+          // Re-arming costs one 250ms timer while the panel is hidden, which
+          // browsers throttle anyway.
+          if (nw < 1 || nh < 1) {
+            trySettle(targetW, targetH)
+            return
+          }
           if (nw !== targetW || nh !== targetH) {
             trySettle(nw, nh) // still moving — chase the new size
             return
@@ -1426,19 +1471,33 @@ export function BrowserLiveView({
           // armed while nothing was focused would otherwise commit a size
           // measured AFTER the user clicked into the address bar — the
           // AutoFill-shrunk geometry the guard exists to reject, slipping
-          // through a 250ms window. Bail without re-arming: the blur that
-          // restores the real size will produce its own resize event.
+          // through a 250ms window. Bailing without re-arming is safe ONLY
+          // because the focusout listener below re-runs push() on blur; that
+          // is what makes this a DEFERRAL rather than a drop.
           if (textFieldHasFocus(el)) return
 
+          // Re-read the DPR instead of reusing push()'s: the chase can span a
+          // window being dragged between displays with different pixel ratios.
+          // That fires a window resize but need not change the container's CSS
+          // box, so ResizeObserver may never re-enter push() — committing
+          // push()'s stale DPR would stamp lastSentViewportRef with a ratio the
+          // client no longer has, which is the mis-scale this field exists to
+          // prevent.
+          const settleDpr = window.devicePixelRatio || 1
           const settled = lastSentViewportRef.current
           // Re-check the dedup gate against the SETTLED size: the box may have
           // travelled away and come back, in which case there is nothing to
           // send and a rebuild would be pure cost.
-          if (settled && Math.abs(settled.w - nw) < 8 && Math.abs(settled.h - nh) < 8 && settled.dpr === dpr) {
+          if (
+            settled &&
+            Math.abs(settled.w - nw) < 8 &&
+            Math.abs(settled.h - nh) < 8 &&
+            settled.dpr === settleDpr
+          ) {
             return
           }
-          if (wsRef.current?.sendViewport(nw, nh, dpr)) {
-            lastSentViewportRef.current = { w: nw, h: nh, dpr }
+          if (wsRef.current?.sendViewport(nw, nh, settleDpr)) {
+            lastSentViewportRef.current = { w: nw, h: nh, dpr: settleDpr }
           }
         }, VIEWPORT_SETTLE_MS)
       }
@@ -1458,6 +1517,23 @@ export function BrowserLiveView({
     // `connected` is a dependency and this re-runs when it flips true.
     if (connected) schedule()
 
+    // BLUR CATCH-UP — the other half of the focus guard, and the thing that
+    // makes suppression a deferral instead of a silent drop.
+    //
+    // Both review passes independently proved the same hole: a REAL resize
+    // that completes while a text field holds focus is suppressed by the
+    // guard and then never retried, because recovery was left to "some later
+    // resize event" that need not ever come. On a desktop browser, focusing
+    // the address bar does not change the container size at all, so blur
+    // produces no resize either — drag the window larger while typing a URL
+    // and the panel stayed pinned to the old geometry indefinitely.
+    //
+    // focusout fires on every focus departure, including the accessory-bar
+    // case (where it is redundant — the size change fires its own resize —
+    // and harmlessly dedups). Routing through schedule() rather than push()
+    // reuses the debounce, so focus churn cannot stampede the settle chase.
+    document.addEventListener('focusout', schedule)
+
     // ResizeObserver is guarded, not assumed. Adaptive sizing is an
     // enhancement; an environment without the API (jsdom under test, an old
     // or locked-down browser) must still get a working panel rather than a
@@ -1473,6 +1549,7 @@ export function BrowserLiveView({
         if (timer !== null) clearTimeout(timer)
         if (settleRef.current !== null) clearTimeout(settleRef.current)
         window.removeEventListener('resize', schedule)
+        document.removeEventListener('focusout', schedule)
       }
     }
 
@@ -1481,6 +1558,7 @@ export function BrowserLiveView({
     return () => {
       if (timer !== null) clearTimeout(timer)
       if (settleRef.current !== null) clearTimeout(settleRef.current)
+      document.removeEventListener('focusout', schedule)
       ro.disconnect()
     }
     // `frame !== null` is load-bearing, not incidental (BLOCKER caught in
@@ -1494,53 +1572,17 @@ export function BrowserLiveView({
     // wheel listener below already uses, for the same reason.
   }, [connected, frame !== null])
 
-  // ── Native (non-passive) wheel listener — React's synthetic onWheel is
-  // passive by default, so preventDefault() inside a JSX handler would warn
-  // and no-op. Attached once; reads live state via refs to avoid re-binding
-  // on every incoming frame. ──
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return undefined
-    function onWheel(e: WheelEvent) {
-      // ADR-040 D2: watch-only never dispatches page input, wheel included;
-      // annotate mode excludes driving too (canDispatchInput's driveMode
-      // gives annotating top priority — closes a latent gap where a stale
-      // isControlling:true during the annotate-entry release race used to
-      // let a scroll through).
-      if (!canDispatchInput(false) || !frameRef.current) return
-      e.preventDefault()
-      const rect = el!.getBoundingClientRect()
-      const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
-      if (!device) return
-      dispatchInput({
-        kind: 'wheel',
-        x: device.x,
-        y: device.y,
-        delta_x: e.deltaX,
-        delta_y: e.deltaY,
-        modifiers: computeModifiers(e),
-        // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
-        // captureDimsFields's doc comment for why this is a spread, not a
-        // direct assignment.
-        ...captureDimsFields(device),
-      })
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
-
-  // ── mouse_move RAF coalescing ────────────────────────────────────────────
+  // ── coalesced pointer-move + wheel pacing ────────────────────────────────
   // Native pointermove fires far faster than the backend's input rate limiter
   // (50 events/sec) can absorb — a 120Hz+ mouse/trackpad would flood it,
   // causing silent server-side drops and a janky remote cursor. Coalesce to
   // "at most one send per animation frame": every handlePointerMove call
   // overwrites pendingMoveRef with the latest position; a single scheduled
-  // flush (idempotent — moveFlushScheduledRef guards re-scheduling) drains
+  // flush (idempotent — inputFlushScheduledRef guards re-scheduling) drains
   // whatever is pending when the frame/timer fires. Mirrors the rAF-or-
   // setTimeout(0) fallback ws.ts already uses for inbound batching (rAF is
   // unavailable in jsdom/node and a hidden tab never fires it).
   const flushPendingMove = useCallback(() => {
-    moveFlushScheduledRef.current = false
     const pending = pendingMoveRef.current
     if (!pending) return
     pendingMoveRef.current = null
@@ -1582,18 +1624,97 @@ export function BrowserLiveView({
   // regardless of what the compositor is doing. MOVE_FLUSH_MS is set below the
   // server's own rate cap so the pacing stays client-side and predictable
   // instead of being shaped by server-side drops.
-  const scheduleMoveFlush = useCallback(() => {
-    if (moveFlushScheduledRef.current) return
-    moveFlushScheduledRef.current = true
-    setTimeout(flushPendingMove, MOVE_FLUSH_MS)
-  }, [flushPendingMove])
+  const flushPendingWheel = useCallback(() => {
+    const pending = pendingWheelRef.current
+    if (!pending) return
+    pendingWheelRef.current = null
+    // Same flush-time re-validation as the move drain: the agent can take over,
+    // annotate mode can engage, or the socket can drop between the wheel event
+    // and this tick.
+    if (!canDispatchInput(false)) return
+    dispatchInput({
+      kind: 'wheel',
+      x: pending.x,
+      y: pending.y,
+      delta_x: pending.deltaX,
+      delta_y: pending.deltaY,
+      modifiers: pending.modifiers,
+      // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+      // captureDimsFields's doc comment for why this is a spread, not a
+      // direct assignment.
+      ...captureDimsFields(pending),
+    })
+  }, [canDispatchInput, dispatchInput])
+
+  // Move is drained BEFORE wheel: that is the order a real browser delivers
+  // them in when a pointer moves and scrolls in the same tick, and the remote
+  // page's hit-testing depends on the cursor already being where the scroll
+  // happens.
+  const flushPendingInput = useCallback(() => {
+    inputFlushScheduledRef.current = false
+    inputFlushTimerRef.current = null
+    flushPendingMove()
+    flushPendingWheel()
+  }, [flushPendingMove, flushPendingWheel])
+
+  const cancelInputFlush = useCallback(() => {
+    if (inputFlushTimerRef.current !== null) clearTimeout(inputFlushTimerRef.current)
+    inputFlushTimerRef.current = null
+    inputFlushScheduledRef.current = false
+  }, [])
+
+  const scheduleInputFlush = useCallback(() => {
+    if (inputFlushScheduledRef.current) return
+    inputFlushScheduledRef.current = true
+    inputFlushTimerRef.current = setTimeout(flushPendingInput, MOVE_FLUSH_MS)
+  }, [flushPendingInput])
+
+  // ── Native (non-passive) wheel listener — React's synthetic onWheel is
+  // passive by default, so preventDefault() inside a JSX handler would warn
+  // and no-op. Attached once; reads live state via refs to avoid re-binding
+  // on every incoming frame. ──
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return undefined
+    function onWheel(e: WheelEvent) {
+      // ADR-040 D2: watch-only never dispatches page input, wheel included;
+      // annotate mode excludes driving too (canDispatchInput's driveMode
+      // gives annotating top priority — closes a latent gap where a stale
+      // isControlling:true during the annotate-entry release race used to
+      // let a scroll through).
+      if (!canDispatchInput(false) || !frameRef.current) return
+      e.preventDefault()
+      const rect = el!.getBoundingClientRect()
+      const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
+      if (!device) return
+      // Accumulate; the shared pacer dispatches. preventDefault() still has to
+      // happen synchronously above, or the host page scrolls instead.
+      const prev = pendingWheelRef.current
+      pendingWheelRef.current = {
+        x: device.x,
+        y: device.y,
+        modifiers: computeModifiers(e),
+        deltaX: (prev?.deltaX ?? 0) + e.deltaX,
+        deltaY: (prev?.deltaY ?? 0) + e.deltaY,
+        captureWidth: device.captureWidth,
+        captureHeight: device.captureHeight,
+      }
+      scheduleInputFlush()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [frame !== null, canDispatchInput, mapPointerToDeviceCoords, scheduleInputFlush])
+
 
   // Cancel any in-flight coalesced move on unmount — nothing to flush once
   // the socket is about to be closed/detached by the WS lifecycle effect.
   useEffect(() => {
     return () => {
-      moveFlushScheduledRef.current = false
+      if (inputFlushTimerRef.current !== null) clearTimeout(inputFlushTimerRef.current)
+      inputFlushTimerRef.current = null
+      inputFlushScheduledRef.current = false
       pendingMoveRef.current = null
+      pendingWheelRef.current = null
     }
   }, [])
 
@@ -1960,8 +2081,8 @@ export function BrowserLiveView({
       captureWidth: device.captureWidth,
       captureHeight: device.captureHeight,
     }
-    scheduleMoveFlush()
-  }, [scheduleMoveFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
+    scheduleInputFlush()
+  }, [scheduleInputFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
 
   // Focuses the frame container (so keyboard input starts flowing) and
   // best-effort captures the pointer so a drag that leaves the container
@@ -2059,7 +2180,11 @@ export function BrowserLiveView({
     // event's coordinates supersede it. Clearing the scheduled flag too means
     // the next real move re-arms the timer normally.
     pendingMoveRef.current = null
-    moveFlushScheduledRef.current = false
+    cancelInputFlush()
+    // A pending WHEEL is flushed rather than dropped: unlike the move, it is
+    // not superseded by this event, and letting it land after the press would
+    // scroll the target out from under a click that already happened.
+    flushPendingWheel()
 
     dispatchInput(
       {
@@ -2074,7 +2199,15 @@ export function BrowserLiveView({
       },
       { forceWs: implicitDriveRef.current },
     )
-  }, [annotateMode, focusAndCapturePointer, takeWheelIfNeeded, mapPointerToDeviceCoords, dispatchInput])
+  }, [
+    annotateMode,
+    focusAndCapturePointer,
+    takeWheelIfNeeded,
+    mapPointerToDeviceCoords,
+    dispatchInput,
+    cancelInputFlush,
+    flushPendingWheel,
+  ])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -2101,6 +2234,17 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
+    // Same supersede-the-stale-move rule as handlePointerDown, applied to the
+    // OTHER end of the gesture. mouse_up maps its own fresh coordinates, so a
+    // coalesced move captured up to MOVE_FLUSH_MS earlier would land AFTER the
+    // release and the remote page would see release-at-target followed by a
+    // move from a stale position. For a drag, slider, or text selection — all
+    // of which read the last move relative to the release — that is a wrong
+    // drop point, not merely a redundant event. A pending WHEEL is flushed
+    // rather than dropped, for the same ordering reason as in pointerdown.
+    pendingMoveRef.current = null
+    cancelInputFlush()
+    flushPendingWheel()
     // forceWs when this gesture implicitly took the wheel — a DC-routed
     // mouse_up racing ahead of the WS take frame would be dropped as
     // not-controlling and leave the remote page holding a stuck button
@@ -2118,7 +2262,15 @@ export function BrowserLiveView({
       },
       { forceWs: wasImplicitDrive },
     )
-  }, [annotateMode, finalizeSelection, canDispatchInput, mapPointerToDeviceCoords, dispatchInput])
+  }, [
+    annotateMode,
+    finalizeSelection,
+    canDispatchInput,
+    mapPointerToDeviceCoords,
+    dispatchInput,
+    cancelInputFlush,
+    flushPendingWheel,
+  ])
 
   const handleSendAnnotation = useCallback(() => {
     const annotation = pendingAnnotation

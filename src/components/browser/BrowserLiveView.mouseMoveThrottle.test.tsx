@@ -1,15 +1,17 @@
-// BrowserLiveView.mouseMoveThrottle.test.tsx — ADR-038 mouse_move RAF-coalescing.
+// BrowserLiveView.mouseMoveThrottle.test.tsx — pointer input coalescing.
 //
-// Reviewer finding: handlePointerMove sent one browser_input{kind:mouse_move}
+// Original finding: handlePointerMove sent one browser_input{kind:mouse_move}
 // per native pointermove (60-120Hz+, higher on gaming mice/some trackpads),
-// exceeding the backend's 50 events/sec input rate limiter — silent server-side
-// drops + a janky remote cursor. Fix: coalesce to "only the latest position per
-// animation frame", flushed once.
+// exceeding the backend's input rate limiter — silent server-side drops + a
+// janky remote cursor. Fix: coalesce to "only the latest position", flushed
+// once per pacing interval.
 //
-// Forces the setTimeout(0) fallback path (document hidden) so the flush is
-// deterministically controllable via fake timers, independent of whether jsdom
-// happens to implement requestAnimationFrame — the exact technique
-// src/lib/wsParser.test.ts already uses for WsConnection's inbound batching.
+// The pacer is a FIXED setTimeout(MOVE_FLUSH_MS), no longer
+// requestAnimationFrame with a visibility-based fallback (operator report
+// 2026-08-04, "inputs feel laggy/slowish", worst while a video plays: rAF ties
+// the network send to the local compositor, so pointer positions queued behind
+// video painting). There is now exactly ONE code path, so nothing here needs to
+// steer which branch runs — the tests drive it purely with fake timers.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -55,9 +57,6 @@ const initialChatState = useChatStore.getState()
 beforeEach(() => {
   vi.clearAllMocks()
   callbacksRef.current = null
-  // Force the setTimeout(0) fallback branch of scheduleMoveFlush (mirrors
-  // wsParser.test.ts's technique for WsConnection._scheduleFlush).
-  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
   vi.useFakeTimers()
   // Reset the real chat store's per-session buckets between tests so a prior
   // test's isStreaming:true doesn't leak into the next one (mirrors
@@ -286,5 +285,79 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
 
     // The queued position must NOT have leaked into the tab.
     expect(moveCalls()).toHaveLength(0)
+  })
+})
+
+// Every test above drains with runAllTimers, which proves coalescing happens
+// but says nothing about the INTERVAL. That mattered: the pacing constant is
+// what keeps the client under the server's per-second input budget, and a
+// regression to 0 (flood) or to something large (visible lag) would have gone
+// unnoticed by the whole suite. These pin the actual cadence.
+describe('BrowserLiveView — the pacing interval itself', () => {
+  it('holds a move until the pacing interval elapses, then sends exactly one', async () => {
+    const container = mountControllingWithFrame()
+    mockSendInput.mockClear()
+
+    act(() => {
+      fireEvent.pointerMove(container, { clientX: 10, clientY: 10 })
+    })
+
+    // Just short of the interval: still buffered, nothing on the wire.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20)
+    })
+    expect(moveCalls()).toHaveLength(0)
+
+    // Crossing it releases exactly one coalesced send.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15)
+    })
+    expect(moveCalls()).toHaveLength(1)
+  })
+
+  it('sustains at most ~40 moves/sec, staying inside the server budget', async () => {
+    const container = mountControllingWithFrame()
+    mockSendInput.mockClear()
+
+    // A 120Hz pointer stream for one second — what a real trackpad produces.
+    for (let i = 0; i < 120; i++) {
+      await act(async () => {
+        fireEvent.pointerMove(container, { clientX: i, clientY: i })
+        await vi.advanceTimersByTimeAsync(1000 / 120)
+      })
+    }
+
+    const moves = moveCalls().length
+    expect(moves).toBeLessThanOrEqual(41)
+    expect(moves).toBeGreaterThan(30)
+  })
+})
+
+// Both ends of a gesture must supersede a queued move, not just the press.
+// mouse_down already did this; mouse_up did not, which is asymmetric for
+// exactly the interactions that read the last move relative to the release.
+describe('BrowserLiveView — a queued move never lands after a button transition', () => {
+  it('discards a queued move on pointerup so the release is the last word', () => {
+    const container = mountControllingWithFrame()
+    act(() => {
+      fireEvent.pointerDown(container, { clientX: 5, clientY: 5 })
+    })
+    mockSendInput.mockClear()
+
+    // A drag: the move is still buffered when the button comes up. mouse_up
+    // maps its own fresh coordinates, so the buffered position is not merely
+    // redundant — it is stale, and arriving after the release it would tell the
+    // remote page the pointer moved back to where it no longer is. For a drag,
+    // slider, or text selection that is a wrong drop point.
+    act(() => {
+      fireEvent.pointerMove(container, { clientX: 50, clientY: 50 })
+      fireEvent.pointerUp(container, { clientX: 60, clientY: 60 })
+    })
+    act(() => {
+      vi.runAllTimers()
+    })
+
+    const kinds = mockSendInput.mock.calls.map(([arg]) => (arg as { kind?: string }).kind)
+    expect(kinds).toEqual(['mouse_up'])
   })
 })

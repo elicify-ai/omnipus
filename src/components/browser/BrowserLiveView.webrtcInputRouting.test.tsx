@@ -389,21 +389,67 @@ describe('BrowserLiveView — capture_width/capture_height on coordinate-carryin
     expect(payload).not.toHaveProperty('capture_height')
   })
 
-  it('video mode: wheel frames also carry capture_width/capture_height', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
-    connectAndFrame()
-    act(() => machineCallbacksRef.current.onInputChannelOpen?.())
-    const container = stubFrameRect()
-    stubVideoDims()
-    ackDriving(container)
+  // Wheel is COALESCED onto the shared input pacer (deltas accumulated,
+  // position = latest), so it no longer dispatches synchronously. The dims
+  // must survive that deferral: they are captured at the wheel event that
+  // computed x/y, not re-read from a possibly-since-drifted video element when
+  // the flush fires.
+  it('video mode: wheel frames also carry capture_width/capture_height', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectAndFrame()
+      act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+      const container = stubFrameRect()
+      stubVideoDims()
+      ackDriving(container)
+      mockMachineSendInput.mockClear()
 
-    fireEvent.wheel(container, { deltaX: 0, deltaY: 120, clientX: 10, clientY: 10 })
+      fireEvent.wheel(container, { deltaX: 0, deltaY: 120, clientX: 10, clientY: 10 })
+      await vi.advanceTimersByTimeAsync(60)
 
-    expect(mockMachineSendInput).toHaveBeenCalledTimes(1)
-    const payload = JSON.parse(mockMachineSendInput.mock.calls[0][0] as string)
-    expect(payload).toEqual(
-      expect.objectContaining({ kind: 'wheel', capture_width: 1280, capture_height: 720 }),
-    )
+      const wheels = mockMachineSendInput.mock.calls
+        .map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
+        .filter((p) => p.kind === 'wheel')
+      expect(wheels).toHaveLength(1)
+      expect(wheels[0]).toEqual(
+        expect.objectContaining({ kind: 'wheel', capture_width: 1280, capture_height: 720 }),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The point of coalescing: a burst becomes ONE send whose deltas sum, so
+  // pacing costs resolution in time but never scroll distance. An un-paced
+  // wheel stream (a trackpad emits at display refresh rate) was overrunning the
+  // server's per-second input budget on its own, and the click that followed
+  // the scroll was the event that got dropped.
+  it('video mode: a wheel burst coalesces into one frame with summed deltas', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectAndFrame()
+      act(() => machineCallbacksRef.current.onInputChannelOpen?.())
+      const container = stubFrameRect()
+      stubVideoDims()
+      ackDriving(container)
+      mockMachineSendInput.mockClear()
+
+      for (let i = 0; i < 10; i++) {
+        fireEvent.wheel(container, { deltaX: 2, deltaY: 12, clientX: 10, clientY: 10 })
+      }
+      await vi.advanceTimersByTimeAsync(60)
+
+      const wheels = mockMachineSendInput.mock.calls
+        .map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
+        .filter((p) => p.kind === 'wheel')
+      expect(wheels).toHaveLength(1)
+      expect(wheels[0].delta_y).toBe(120)
+      expect(wheels[0].delta_x).toBe(20)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('video mode: key_down frames never carry capture_width/capture_height (no x/y to correct)', () => {

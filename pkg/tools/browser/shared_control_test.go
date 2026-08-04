@@ -93,7 +93,7 @@ func TestSharedControl_RateLimitStillApplies(t *testing.T) {
 	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
 
 	var lastErr error
-	for i := 0; i < maxInputEventsPerSecond+5; i++ {
+	for i := 0; i < maxCoalescibleInputEventsPerSecond+5; i++ {
 		lastErr = lv.dispatchInput("human-viewer", LiveInput{Kind: "mouse_move"})
 	}
 	require.Error(t, lastErr)

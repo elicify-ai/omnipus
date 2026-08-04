@@ -47,10 +47,34 @@ const (
 	agentWindowHeight = 1440
 )
 
-// maxInputEventsPerSecond caps injected input events per LiveView session
-// (ADR-038 D6: "browser_input is rate-limited"). Generous enough for a real
-// mouse-move stream while bounding a runaway or malicious client.
-const maxInputEventsPerSecond = 50
+// Input rate limiting (ADR-038 D6: "browser_input is rate-limited") is split
+// into two budgets by event kind, because a single shared one made the limiter
+// itself a source of the bug it was meant to be neutral about.
+//
+// The budget is per SESSION, not per connection — and since the exclusive
+// controller lock was removed (2026-08-03) so a human and the agent can drive
+// together, several senders now draw from it concurrently. Under one shared
+// counter a sustained pointer stream could consume the whole allowance and the
+// NEXT mouse_up would be refused. A dropped mouse_move is self-healing (the
+// following one supersedes it); a dropped mouse_up is not — the remote page
+// keeps believing the button is held, which is a stuck drag or a runaway text
+// selection with nothing in the UI explaining why.
+//
+// So: coalescible position kinds get a large bucket, and discrete state
+// transitions get their own, which a flood of movement can no longer exhaust.
+// Both remain bounded, so a runaway or malicious client is still capped.
+const (
+	// maxCoalescibleInputEventsPerSecond bounds mouse_move and wheel. The
+	// client paces each at ~40/s (MOVE_FLUSH_MS) and coalesces both, so this
+	// leaves room for several concurrent viewers plus the agent before anyone
+	// is throttled. The old value of 50 sat BELOW what a single 60Hz pointer
+	// stream produces on its own, so legitimate input was being dropped
+	// routinely — reported as "clicks work only sometimes".
+	maxCoalescibleInputEventsPerSecond = 300
+	// maxDiscreteInputEventsPerSecond bounds button and key transitions. No
+	// human produces anywhere near this; it exists purely to cap automation.
+	maxDiscreteInputEventsPerSecond = 100
+)
 
 // screencastAckTimeout bounds each Page.screencastFrameAck CDP round trip
 // issued by runAckWorker. Acks are lightweight, so this is deliberately much
@@ -1118,7 +1142,8 @@ type LiveView struct {
 	// time, so one shared counter per LiveView is sufficient — no per-viewer
 	// bookkeeping needed.
 	inputWindowStart time.Time
-	inputCount       int
+	inputCount       int // coalescible kinds (mouse_move, wheel)
+	discreteCount    int // button/key transitions
 
 	// ackCh is the mailbox runAckWorker consumes from: handleScreencastEvent
 	// hands off each frame's session ID here (coalescing to the latest via
@@ -2099,9 +2124,13 @@ func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
 	// lv.controller is retained for PRESENTATION only (who to show as active
 	// in the header, the ADR-039 controlSinks broadcast); it must never again
 	// become an authorization decision on this path.
-	if !lv.allowInputLocked() {
+	if !lv.allowInputLocked(in.Kind) {
 		lv.mu.Unlock()
-		return benignInputError("browser live: input rate limit exceeded (%d/s)", maxInputEventsPerSecond)
+		limit := maxDiscreteInputEventsPerSecond
+		if isCoalescibleInputKind(in.Kind) {
+			limit = maxCoalescibleInputEventsPerSecond
+		}
+		return benignInputError("browser live: input rate limit exceeded for %s (%d/s)", in.Kind, limit)
 	}
 	tabCtx := lv.tabCtx
 	lv.mu.Unlock()
@@ -2283,16 +2312,33 @@ func rescaleInputCoords(x, y, capW, capH, cssW, cssH float64) (float64, float64)
 
 // allowInputLocked applies a simple fixed-window rate limiter. Must be called
 // with mu held.
-func (lv *LiveView) allowInputLocked() bool {
+// isCoalescibleInputKind reports whether a dropped event of this kind is
+// self-healing: a later event of the same kind fully supersedes it. Position
+// updates are; state transitions are not, and must not share their budget.
+func isCoalescibleInputKind(kind string) bool {
+	return kind == "mouse_move" || kind == "wheel"
+}
+
+// allowInputLocked charges the event against the bucket for its kind and
+// reports whether it may proceed. Both buckets share one fixed window.
+func (lv *LiveView) allowInputLocked(kind string) bool {
 	now := time.Now()
 	if now.Sub(lv.inputWindowStart) >= time.Second {
 		lv.inputWindowStart = now
 		lv.inputCount = 0
+		lv.discreteCount = 0
 	}
-	if lv.inputCount >= maxInputEventsPerSecond {
+	if isCoalescibleInputKind(kind) {
+		if lv.inputCount >= maxCoalescibleInputEventsPerSecond {
+			return false
+		}
+		lv.inputCount++
+		return true
+	}
+	if lv.discreteCount >= maxDiscreteInputEventsPerSecond {
 		return false
 	}
-	lv.inputCount++
+	lv.discreteCount++
 	return true
 }
 

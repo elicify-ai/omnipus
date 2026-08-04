@@ -344,7 +344,13 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
   // The settle check exists so a size captured mid-drag or mid-animation is
   // never committed: each commit rebuilds the capture stream, and an
   // intermediate geometry costs a stall for a size that is already obsolete.
-  it('does not commit a size that is still changing', async () => {
+  // Scope note (second review pass): this proves the INTERMEDIATE size is never
+  // committed, which is what it is named for. It is NOT differential coverage
+  // for the lost-resize race — it dispatches a trailing resize event, and that
+  // event alone would rescue even the old non-re-arming settle. The test that
+  // actually pins that race is "commits the final size when the box stops
+  // changing mid-settle", which deliberately dispatches no follow-up event.
+  it('does not commit an intermediate size while the box is still changing', async () => {
     vi.useFakeTimers()
     try {
       render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
@@ -474,6 +480,121 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// Coverage for the four failure modes both review passes flagged as real but
+// untested. Each is a "silent and permanent" class: the panel ends up pinned to
+// the wrong geometry with no error, no retry, and no symptom until some
+// unrelated resize happens to fire.
+describe('BrowserLiveView — viewport settle: recovery paths', () => {
+  const box = (w: number, h: number) =>
+    ({ width: w, height: h, top: 0, left: 0, right: w, bottom: h, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+
+  function mountSettled() {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+    act(() => {
+      callbacksRef.current?.onConnected?.()
+      emitFirstFrame()
+    })
+    return document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement
+  }
+
+  // The converse of the focus guard, and the one BOTH reviewers reproduced
+  // independently: a REAL resize that completes while a text field holds focus.
+  // On desktop, focusing the address bar does not change the container size, so
+  // blur produces no resize either — without an explicit blur catch-up the
+  // resize is suppressed once and never retried. Resize the window while typing
+  // a URL and the panel stayed pinned to the old geometry indefinitely.
+  it('commits a real resize that happened while a text field had focus, once focus leaves', async () => {
+    vi.useFakeTimers()
+    try {
+      const el = mountSettled()
+      el.getBoundingClientRect = () => box(890, 1010)
+      await vi.advanceTimersByTimeAsync(900)
+      mockSendViewport.mockClear()
+
+      // Focus first, THEN resize — the guard suppresses this push entirely.
+      act(() => {
+        screen.getByLabelText('Address bar').focus()
+      })
+      el.getBoundingClientRect = () => box(890, 1300)
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(mockSendViewport).not.toHaveBeenCalled()
+
+      // Blur with NO further resize event. The focusout catch-up is the only
+      // thing that can rescue the 1300 height now.
+      act(() => {
+        ;(document.activeElement as HTMLElement | null)?.blur()
+      })
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(mockSendViewport).toHaveBeenCalledWith(890, 1300, expect.any(Number))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // A container that momentarily measures 0x0 mid-chase (parent hidden for a
+  // tick, display:none flash during an unrelated layout pass). Bailing here
+  // recreated the lost-resize bug one branch over.
+  it('survives a transient zero-size measurement mid-chase', async () => {
+    vi.useFakeTimers()
+    try {
+      const el = mountSettled()
+      el.getBoundingClientRect = () => box(890, 1010)
+      await vi.advanceTimersByTimeAsync(900)
+      mockSendViewport.mockClear()
+
+      el.getBoundingClientRect = () => box(890, 1300)
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(450) // debounce done, settle armed
+
+      el.getBoundingClientRect = () => box(0, 0) // panel blinks out
+      await vi.advanceTimersByTimeAsync(600)
+      el.getBoundingClientRect = () => box(890, 1300) // and comes back
+
+      // No further resize event is dispatched — recovery must come from the
+      // chase re-arming, not from a new observation.
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(mockSendViewport).toHaveBeenCalledWith(890, 1300, expect.any(Number))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // DPR is re-read at commit time, not captured once in push(). Dragging a
+  // window between displays of different pixel ratios fires a window resize but
+  // need not change the container's CSS box, so committing push()'s stale DPR
+  // would stamp the cache with a ratio the client no longer has.
+  it('commits the DPR in effect at settle time, not the one sampled at push time', async () => {
+    vi.useFakeTimers()
+    const dprSpy = vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(1)
+    try {
+      const el = mountSettled()
+      el.getBoundingClientRect = () => box(890, 1010)
+      await vi.advanceTimersByTimeAsync(900)
+      mockSendViewport.mockClear()
+
+      el.getBoundingClientRect = () => box(890, 1300)
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(450) // settle armed while DPR is 1
+      dprSpy.mockReturnValue(2) // dragged onto a Retina display
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(mockSendViewport).toHaveBeenCalledWith(890, 1300, 2)
+    } finally {
+      dprSpy.mockRestore()
       vi.useRealTimers()
     }
   })

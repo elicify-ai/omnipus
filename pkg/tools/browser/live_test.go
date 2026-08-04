@@ -177,7 +177,7 @@ func TestLiveView_DispatchInput_RateLimited(t *testing.T) {
 	// which point the error message changes to the rate-limit message —
 	// proving allowInputLocked is consulted before the tabCtx check.
 	var lastErr error
-	for i := 0; i < maxInputEventsPerSecond+5; i++ {
+	for i := 0; i < maxCoalescibleInputEventsPerSecond+5; i++ {
 		lastErr = lv.dispatchInput("viewerA", LiveInput{Kind: "mouse_move"})
 	}
 	require.Error(t, lastErr)
@@ -415,17 +415,64 @@ func TestLiveView_AllowInputLocked_CapsPerSecond(t *testing.T) {
 	defer lv.mu.Unlock()
 
 	allowed := 0
-	for i := 0; i < maxInputEventsPerSecond+10; i++ {
-		if lv.allowInputLocked() {
+	for i := 0; i < maxCoalescibleInputEventsPerSecond+10; i++ {
+		if lv.allowInputLocked("mouse_move") {
 			allowed++
 		}
 	}
-	require.Equal(t, maxInputEventsPerSecond, allowed,
+	require.Equal(t, maxCoalescibleInputEventsPerSecond, allowed,
 		"allowInputLocked must allow exactly the configured cap within one window")
 
 	// Simulate the window rolling over: a stale window start must reset.
 	lv.inputWindowStart = time.Now().Add(-2 * time.Second)
-	require.True(t, lv.allowInputLocked(), "a new window must reset the counter")
+	require.True(t, lv.allowInputLocked("mouse_move"), "a new window must reset the counter")
+}
+
+// TestLiveView_AllowInputLocked_MoveFloodCannotStarveButtonRelease pins the
+// reason the budget is split at all.
+//
+// A dropped mouse_move is self-healing — the next one supersedes it. A dropped
+// mouse_up is not: the remote page goes on believing the button is held, so the
+// user gets a stuck drag or a runaway selection and nothing in the UI says why.
+// Under the previous single shared counter, a sustained pointer stream (which
+// now legitimately comes from several concurrent drivers at once, the exclusive
+// control lock having been removed) could exhaust the whole allowance and the
+// button release that followed was refused.
+func TestLiveView_AllowInputLocked_MoveFloodCannotStarveButtonRelease(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+
+	// Saturate the coalescible bucket well past its cap.
+	for i := 0; i < maxCoalescibleInputEventsPerSecond*2; i++ {
+		lv.allowInputLocked("mouse_move")
+	}
+	require.False(t, lv.allowInputLocked("wheel"),
+		"wheel shares the coalescible bucket and must be throttled once it is exhausted")
+
+	require.True(t, lv.allowInputLocked("mouse_up"),
+		"a button RELEASE must survive a move flood — this is the stuck-button bug")
+	require.True(t, lv.allowInputLocked("mouse_down"), "and so must a press")
+	require.True(t, lv.allowInputLocked("key_down"), "and key transitions")
+}
+
+// The discrete bucket is still bounded — splitting the budget must not create
+// an unmetered path for a runaway client.
+func TestLiveView_AllowInputLocked_DiscreteBucketStillBounded(t *testing.T) {
+	lv := &LiveView{sessionID: "s1", viewers: make(map[string]FrameSink)}
+
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+
+	allowed := 0
+	for i := 0; i < maxDiscreteInputEventsPerSecond+25; i++ {
+		if lv.allowInputLocked("mouse_down") {
+			allowed++
+		}
+	}
+	require.Equal(t, maxDiscreteInputEventsPerSecond, allowed,
+		"discrete transitions must remain capped, just on their own budget")
 }
 
 // --- viewer refcount: screencast stops only when the last viewer detaches ---
