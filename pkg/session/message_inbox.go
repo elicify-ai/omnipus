@@ -371,26 +371,102 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 	return &AppendResult{Accepted: true, MessageID: peek.MessageID}, nil
 }
 
+// AckResult reports which of the message_ids passed to AckDetailed actually
+// correspond to a real message ever appended under the owner key
+// ("Acknowledged") versus which do not ("Unknown") — M1 (2026-08 UAT): Ack's
+// own `error`-only return cannot distinguish these, which is exactly why the
+// delegate `inbox_ack` tool (pkg/tools/delegate.go's executeInboxAck) used to
+// report `len(messageIDs)` as "Acknowledged N message(s)." even when some or
+// all of those ids were wholly fabricated — a caller reconciling its inbox
+// against that count would silently drift. Acknowledged/Unknown always
+// partition messageIDs (every input id lands in exactly one of the two,
+// duplicates included) so len(Acknowledged)+len(Unknown) == len(messageIDs).
+type AckResult struct {
+	// Acknowledged lists the requested message_ids that match a message
+	// entry that was genuinely appended under this owner key at some point
+	// (whether or not it was already acked before this call — re-acking an
+	// already-acked real id is idempotent and still a genuine match).
+	Acknowledged []string
+	// Unknown lists requested message_ids that do not correspond to any
+	// message ever appended under this owner key (a caller typo or a
+	// fabricated id). Still recorded in the persisted ack entry below (the
+	// audit-trail contract is unchanged — see the doc comment two lines
+	// down), but callers MUST surface these rather than silently folding
+	// them into a success count.
+	Unknown []string
+}
+
 // Ack marks messageIDs as acknowledged for ownerKey (delegate.inbox_ack).
 // Acked messages are excluded from future Drain results and from the
 // per-child ceiling/inbox-cap counts, and — being an ordinary append —
 // persist permanently in this same durable log (audit trail, FR-125).
+//
+// Ack's own underlying acknowledgement mechanics (which ids get folded into
+// future Drain/UnackedCount reads) are UNCHANGED by AckDetailed below — both
+// share ackDetailed's single code path — so this keeps its exact historical
+// signature and behavior for existing callers (pkg/tools/delegate.go's
+// DelegateInboxStore interface). Callers that need to report an accurate
+// acknowledged count or surface unknown ids (M1) should call AckDetailed
+// instead.
 func (s *MessageInboxStore) Ack(ownerKey string, messageIDs []string) error {
+	_, err := s.ackDetailed(ownerKey, messageIDs)
+	return err
+}
+
+// AckDetailed is Ack's richer sibling (M1): it performs the EXACT SAME
+// acknowledgement (same lock, same persisted InboxEntryAck record covering
+// every requested id, same downstream Drain/UnackedCount effect for real
+// ids) but additionally reports, via AckResult, which requested ids matched
+// a real message under ownerKey and which did not — the information the
+// delegate `inbox_ack` tool needs to report a truthful "Acknowledged N
+// message(s)" count and surface unknown ids instead of silently absorbing
+// them into that count.
+func (s *MessageInboxStore) AckDetailed(ownerKey string, messageIDs []string) (*AckResult, error) {
+	return s.ackDetailed(ownerKey, messageIDs)
+}
+
+// ackDetailed is the shared implementation backing both Ack and AckDetailed.
+func (s *MessageInboxStore) ackDetailed(ownerKey string, messageIDs []string) (*AckResult, error) {
 	if strings.TrimSpace(ownerKey) == "" {
-		return ErrInboxEmptyOwnerKey
+		return nil, ErrInboxEmptyOwnerKey
 	}
 	if len(messageIDs) == 0 {
-		return nil
+		return &AckResult{}, nil
 	}
 	mu := s.lock.Get(ownerKey)
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Determine which requested ids correspond to a message genuinely
+	// appended under this owner key (across any child session — Ack has no
+	// session_id parameter; the inbox is owner-keyed, not session-keyed).
+	entries, err := s.readEntries(ownerKey)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		if p, _, perr := peekEnvelope(*e.Message); perr == nil {
+			known[p.MessageID] = true
+		}
+	}
+	result := &AckResult{}
+	for _, id := range messageIDs {
+		if known[id] {
+			result.Acknowledged = append(result.Acknowledged, id)
+		} else {
+			result.Unknown = append(result.Unknown, id)
+		}
+	}
+
 	entry := InboxEntry{Kind: InboxEntryAck, AckedIDs: append([]string(nil), messageIDs...), CreatedAt: s.now().UTC()}
 	if err := fileutil.AppendJSONL(s.path(ownerKey), entry); err != nil {
-		return fmt.Errorf("session: inbox: ack: %w", err)
+		return nil, fmt.Errorf("session: inbox: ack: %w", err)
 	}
-	return nil
+	return result, nil
 }
 
 // Drain returns up to maxMessages unacked messages for childSessionID under

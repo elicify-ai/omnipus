@@ -349,6 +349,118 @@ func TestMessageInboxStore_DrainCursor_NoRedeliveryAcrossPages(t *testing.T) {
 	}
 }
 
+// TestMessageInboxStore_AckDetailed_MixedRealAndFakeIDs_ReportsTruthfulCount
+// proves the M1 fix: AckDetailed's returned AckResult reports the REAL
+// acknowledged count and surfaces unknown ids, rather than the bug this
+// closes — pkg/tools/delegate.go's executeInboxAck used to report
+// "Acknowledged N message(s)." using len(requested ids), so a wholly
+// fabricated id was silently folded into a false success count.
+//
+// This is a genuine red-before/green-after regression guard: AckDetailed did
+// not exist before this fix (a caller had no way to get this information at
+// all — only Ack's bare `error`), so this test could not have compiled,
+// let alone passed, against the pre-fix code. Real store-backed state (a
+// temp-dir-rooted MessageInboxStore, not a spy) throughout.
+func TestMessageInboxStore_AckDetailed_MixedRealAndFakeIDs_ReportsTruthfulCount(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.ChildSendRatePerMinute = 1000 // isolate from the unrelated rate cap
+
+	real1 := questionMsg(t, "child-1", "real-1")
+	real2 := questionMsg(t, "child-1", "real-2")
+	if _, err := s.Append("owner-mixed", real1); err != nil {
+		t.Fatalf("Append real-1 failed: %v", err)
+	}
+	if _, err := s.Append("owner-mixed", real2); err != nil {
+		t.Fatalf("Append real-2 failed: %v", err)
+	}
+
+	// A mixed batch: two REAL message ids plus one WHOLLY FABRICATED id that
+	// was never sent — exactly the UAT repro (a fabricated id returned
+	// "Acknowledged 1 message(s)." under the old code).
+	result, err := s.AckDetailed("owner-mixed", []string{"real-1", "real-2", "totally-fabricated-id"})
+	if err != nil {
+		t.Fatalf("AckDetailed failed: %v", err)
+	}
+
+	// Binding Rule 4: pair the negative/zero-ish assertion (Unknown) with a
+	// positive lower bound (Acknowledged) so this test cannot pass
+	// identically if AckDetailed degenerated to "everything is unknown" or
+	// "everything is acknowledged".
+	if len(result.Acknowledged) != 2 {
+		t.Fatalf("Acknowledged = %v, want exactly 2 real ids", result.Acknowledged)
+	}
+	for _, want := range []string{"real-1", "real-2"} {
+		found := false
+		for _, got := range result.Acknowledged {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q in Acknowledged, got %v", want, result.Acknowledged)
+		}
+	}
+	if len(result.Unknown) != 1 || result.Unknown[0] != "totally-fabricated-id" {
+		t.Fatalf("Unknown = %v, want exactly [totally-fabricated-id]", result.Unknown)
+	}
+
+	// The underlying ack mechanism itself must be unaffected: both real ids
+	// are genuinely acknowledged (UAT: "the real half of a mixed batch DID
+	// get acknowledged") — verify via the real downstream effect (Drain),
+	// not just the returned struct.
+	msgs, _, _, derr := s.Drain("owner-mixed", "child-1", "", 10)
+	if derr != nil {
+		t.Fatalf("Drain after AckDetailed failed: %v", derr)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected both real messages to be acked (0 remaining unacked), got %d", len(msgs))
+	}
+}
+
+// TestMessageInboxStore_AckDetailed_AllFake_ZeroAcknowledgedWithPositiveUnknown
+// is the companion all-fake case: every id is unknown, Acknowledged must be
+// empty (not just "not 3") AND Unknown must carry a real positive count —
+// guards against a degenerate AckDetailed that always reports everything as
+// acknowledged regardless of what's actually in the store.
+func TestMessageInboxStore_AckDetailed_AllFake_ZeroAcknowledgedWithPositiveUnknown(t *testing.T) {
+	s := newTestInboxStore(t)
+	result, err := s.AckDetailed("owner-allfake", []string{"fake-a", "fake-b"})
+	if err != nil {
+		t.Fatalf("AckDetailed failed: %v", err)
+	}
+	if len(result.Acknowledged) != 0 {
+		t.Errorf("Acknowledged = %v, want empty (no real messages ever appended)", result.Acknowledged)
+	}
+	if len(result.Unknown) != 2 {
+		t.Fatalf("Unknown = %v, want exactly 2 (positive lower bound)", result.Unknown)
+	}
+}
+
+// TestMessageInboxStore_Ack_UnaffectedByAckDetailedRefactor is a narrow
+// regression guard that Ack's own historical signature/behavior (used today
+// by pkg/tools/delegate.go's DelegateInboxStore interface) is byte-for-byte
+// unchanged by routing through the shared ackDetailed helper: still returns
+// only an error, still accepts a mixed real+fake batch without rejecting it,
+// still durably acks the real id.
+func TestMessageInboxStore_Ack_UnaffectedByAckDetailedRefactor(t *testing.T) {
+	s := newTestInboxStore(t)
+	realMsg := questionMsg(t, "child-1", "still-real")
+	if _, err := s.Append("owner-compat", realMsg); err != nil {
+		t.Fatalf("Append failed: %v", err)
+	}
+	if err := s.Ack("owner-compat", []string{"still-real", "still-fake"}); err != nil {
+		t.Fatalf("Ack should still succeed (error-only contract) for a mixed batch, got: %v", err)
+	}
+	msgs, _, _, derr := s.Drain("owner-compat", "child-1", "", 10)
+	if derr != nil {
+		t.Fatalf("Drain failed: %v", derr)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected the real id to still be genuinely acked, got %d remaining", len(msgs))
+	}
+}
+
 func messageIDOf(t *testing.T, msg generated.SessionMessage) string {
 	t.Helper()
 	p, _, err := peekEnvelope(msg)
