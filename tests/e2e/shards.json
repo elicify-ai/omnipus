@@ -18,8 +18,16 @@
         "tests/e2e/handoff.spec.ts",
         "tests/e2e/cancel-cross-channel.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
-        "tests/e2e/hot-reload.spec.ts",
         "tests/e2e/recap-continuity.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-hot-reload",
+      "key_slot": "b",
+      "port": 6068,
+      "solo": true,
+      "specs": [
+        "tests/e2e/hot-reload.spec.ts"
       ]
     },
     {
