@@ -769,6 +769,11 @@ func distinctShardsOverlapped(intervals []shardInterval) bool {
 	return false
 }
 
+// Traces to: docs/internal/specs/adr-057-session-unification-spec.md:3045
+// (AC-20(a)/(c) — "assert wall-clock completion is close to the single-
+// session time... the assertion is on the SLOPE"; this test proves the same
+// underlying D10-sharding claim structurally instead of via that slope).
+//
 // TestUnifiedStore_ConcurrentSessionWritesGenuinelyOverlapAcrossShards is the
 // AC-20 STRUCTURAL, load-independent regression proof called for by this
 // unit's CI-hardening pass: TestUnifiedStore_ConcurrentWritesToDifferentSessionsDoNotSerialize
