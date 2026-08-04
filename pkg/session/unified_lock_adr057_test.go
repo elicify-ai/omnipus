@@ -22,7 +22,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -455,270 +454,48 @@ func newTestStoreForLockTests(t *testing.T) *UnifiedStore {
 
 // ---------------------------------------------------------------------
 // AC-20: concurrent writes to DIFFERENT sessions do not serialize
-// ---------------------------------------------------------------------
-
-// acWriteWorkload has n goroutines each create their OWN session and append
-// appendsPerSession transcript lines to it, and returns the wall-clock
-// elapsed. This is the exact hot path named in the R-8 regression this unit
-// fixes: NewSession (two fsync+rename cycles) followed by streamed
-// AppendTranscript calls.
-func acWriteWorkload(t *testing.T, store *UnifiedStore, n, appendsPerSession int) time.Duration {
-	t.Helper()
-	var wg sync.WaitGroup
-	wg.Add(n)
-	start := time.Now()
-	for i := 0; i < n; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			meta, err := store.NewSession(SessionTypeChat, "", "agent-load")
-			if err != nil {
-				t.Errorf("NewSession[%d] failed: %v", idx, err)
-				return
-			}
-			for a := 0; a < appendsPerSession; a++ {
-				if err := store.AppendTranscript(meta.ID, TranscriptEntry{
-					Role: "assistant", Content: fmt.Sprintf("line-%d-%d", idx, a),
-				}); err != nil {
-					t.Errorf("AppendTranscript[%d/%d] failed: %v", idx, a, err)
-				}
-			}
-		}(i)
-	}
-	wg.Wait()
-	return time.Since(start)
-}
-
-// minOfTrials runs fn `trials` times and returns the SMALLEST observed
-// duration. Scheduler jitter/GC pauses/a noisy shared devpod can only ever
-// ADD to a measured duration, never subtract from it, so the minimum across
-// several trials is a robust estimator of the actually-achievable time —
-// standard practice for wall-clock micro-measurements, and load-bearing
-// here: a single-trial measurement at these small absolute durations proved
-// too noisy in practice (see this unit's verification notes).
-func minOfTrials(trials int, fn func() time.Duration) time.Duration {
-	best := fn()
-	for i := 1; i < trials; i++ {
-		if d := fn(); d < best {
-			best = d
-		}
-	}
-	return best
-}
-
-// TestUnifiedStore_ConcurrentWritesToDifferentSessionsDoNotSerialize is
-// AC-20(a): N goroutines each creating+appending to their OWN session must
-// not serialize behind the store's locking. Per binding Rule 3, this asserts
-// a SLOPE — doubling concurrency must not double wall-clock — never an
-// absolute duration, since this devpod has variable specs. N is derived from
-// GOMAXPROCS (spec: "as many as the box allows"), not hardcoded, and capped
-// to keep the test fast on a small pod. Each of N/2N is the MINIMUM of
-// several independent trials (minOfTrials) to filter out scheduler-jitter
-// outliers at these small absolute durations.
 //
-// IMPORTANT, empirically-verified finding this bound accounts for: on this
-// project's devpod the underlying (virtualized) disk's fsync throughput
-// scales close to LINEARLY with total fsync count regardless of app-level
-// locking — a controlled git-stash A/B of this exact workload showed the
-// PRE-ADR-057 single-us.mu design ALSO produces an N-to-2N slope in the same
-// ~1.8-2.1x range as this design, because doubling N doubles total fsync
-// calls and the disk processes them at a roughly fixed rate either way. The
-// slope alone therefore does NOT reliably discriminate old vs new on this
-// hardware; what DOES is ABSOLUTE throughput at a fixed N, which the same
-// A/B measured this design at 2.2-2.7x FASTER than the pre-change store
-// (see this unit's final report for the full numbers) — satisfying SC-016's
-// literal "must be beaten" baseline requirement even though the pure slope
-// ratio hovers near, and can slightly exceed, 2.0 on a disk-fsync-bound run.
-// TestSessionLock_DifferentSessionsNeverBlockEachOther above is therefore
-// the AUTHORITATIVE, load- and disk-independent proof of the underlying
-// claim; this test is corroborating and deliberately loose (2.5x, not
-// ~1.9x) so it still catches a GROSS regression (e.g. a reintroduced
-// store-global lock, which serializes ALL work through one goroutine's wait
-// queue and empirically shows far worse than 2.5x — see the cold-start
-// outlier outliers recorded in this unit's report) without flapping on the
-// hardware-floor noise documented above.
-func TestUnifiedStore_ConcurrentWritesToDifferentSessionsDoNotSerialize(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping wall-clock slope test in -short mode")
-	}
-	if devpodUnderHeavyExternalLoad() {
-		t.Skip("skipping wall-clock slope measurement: host load average indicates heavy contention from " +
-			"OTHER processes on this shared devpod, which would make an fsync-bound timing measurement " +
-			"meaningless — see TestSessionLock_DifferentSessionsNeverBlockEachOther for the load-independent proof")
-	}
-	n := runtime.GOMAXPROCS(0)
-	if n < 4 {
-		n = 4
-	}
-	if n > 12 {
-		n = 12
-	}
-	const appendsPerSession = 8
-	// 5, not 3: minOfTrials is a floor estimator (the minimum can only ever be
-	// pulled UP by a bad trial, never down), so more samples tighten the floor
-	// against a single scheduler-jitter/GC-pause outlier without touching the
-	// 2.5x pass/fail bar itself. Cheap: each trial is single-digit milliseconds
-	// (see this test's own t.Logf baseline).
-	const trials = 5
-	// maxOuterAttempts: re-measure the WHOLE tN/t2N pair up to 3 independent
-	// times before treating an over-bound ratio as a regression. This unit's
-	// CI-hardening pass reproduced the exact failure mode this guards
-	// against: on the ci-omnipus worker, a run with tN=7.35ms (healthy) was
-	// immediately followed by t2N=111.87ms (ratio 15.21) — the SAME run's own
-	// baseline measurement was fine; the noise struck ONLY the second
-	// measurement, moments later. That is a transient burst on this
-	// project's shared/virtualized disk (see this function's doc comment:
-	// "swung from 1.74x to 22x ... with no code change"), not something a
-	// point-in-time load check (devpodUnderHeavyExternalLoad, or any
-	// calibration taken before the measurement starts) can catch, because it
-	// can appear AFTER that check ran. Retrying the full pair gives
-	// independent chances to land outside the burst window; a genuine
-	// regression (e.g. a reverted single global lock) is a STRUCTURAL
-	// property that reproduces on every attempt, so it still fails after
-	// exhausting all of them. The 2.5x bound itself is unchanged.
-	const maxOuterAttempts = 3
-
-	var lastTN, lastT2N time.Duration
-	var lastRatio float64
-	withinBound := false
-	for attempt := 1; attempt <= maxOuterAttempts; attempt++ {
-		tN := minOfTrials(trials, func() time.Duration {
-			store := newTestStoreForLockTests(t)
-			return acWriteWorkload(t, store, n, appendsPerSession)
-		})
-		t2N := minOfTrials(trials, func() time.Duration {
-			store := newTestStoreForLockTests(t)
-			return acWriteWorkload(t, store, 2*n, appendsPerSession)
-		})
-		ratio := float64(t2N) / float64(tN)
-		lastTN, lastT2N, lastRatio = tN, t2N, ratio
-
-		t.Logf("AC-20(a) slope attempt %d/%d: N=%d best-of-%d took %v, 2N=%d best-of-%d took %v (ratio %.2f)",
-			attempt, maxOuterAttempts, n, trials, tN, 2*n, trials, t2N, ratio)
-
-		// See this function's doc comment for why 2.5x (not ~1.9x): this
-		// hardware's disk-fsync floor makes a tight bound unreliable, while 2.5x
-		// still catches a genuine full-store-serialization regression.
-		if t2N <= time.Duration(float64(tN)*2.5) {
-			withinBound = true
-			break
-		}
-		t.Logf("AC-20(a): attempt %d/%d exceeded the 2.5x bound (ratio %.2f) — retrying with a fresh "+
-			"measurement pair before treating this as a regression (see maxOuterAttempts doc comment)",
-			attempt, maxOuterAttempts, ratio)
-	}
-
-	assert.Truef(t, withinBound,
-		"2N concurrent session writers took %v (best of %d), more than 2.5x the N-writer time %v (ratio %.2f) on "+
-			"EVERY one of %d independent attempts — this indicates writes to DIFFERENT sessions are still serializing",
-		lastT2N, trials, lastTN, lastRatio, maxOuterAttempts)
-}
-
-// TestAppendTranscript_NotDelayedBySessionBCreate is AC-20(c), the SPECIFIC
-// R-8 regression named in this unit's task: a stream of AppendTranscript
-// calls to session A must not be delayed by a concurrent NewSession for an
-// unrelated session B. Measures A's own append-only baseline (best of
-// several trials, see minOfTrials), then measures A's appends again while B
-// is being created+appended to concurrently, and asserts A's latency does
-// not balloon.
-func TestAppendTranscript_NotDelayedBySessionBCreate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping wall-clock slope test in -short mode")
-	}
-	if devpodUnderHeavyExternalLoad() {
-		t.Skip("skipping wall-clock slope measurement: host load average indicates heavy contention from " +
-			"OTHER processes on this shared devpod, which would make an fsync-bound timing measurement " +
-			"meaningless — see TestSessionLock_DifferentSessionsNeverBlockEachOther for the load-independent proof")
-	}
-	const appendsA = 40
-	const bFanOut = 8
-	// 5, not 3 — see the matching comment on AC-20(a)'s trials above: more
-	// best-of-N samples tighten the floor estimate without touching the 2.5x
-	// pass/fail bar.
-	const trials = 5
-	// maxOuterAttempts — see the matching comment on AC-20(a) above: this is
-	// the SAME test whose isolated (-p 1, single-package, no sibling Go test
-	// process) re-run on ci-omnipus still hit a 15.86x ratio during this
-	// unit's CI-hardening pass, proving the noise is bursty
-	// disk/infrastructure-level contention, not sibling-process CPU load —
-	// invisible to a point-in-time check and only survivable by re-measuring.
-	const maxOuterAttempts = 3
-
-	runA := func(store *UnifiedStore, sessionID string) time.Duration {
-		start := time.Now()
-		for i := 0; i < appendsA; i++ {
-			require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "assistant", Content: "a-line"}))
-		}
-		return time.Since(start)
-	}
-
-	var lastBaseline, lastWithContention time.Duration
-	var lastRatio float64
-	withinBound := false
-	for attempt := 1; attempt <= maxOuterAttempts; attempt++ {
-		baseline := minOfTrials(trials, func() time.Duration {
-			store := newTestStoreForLockTests(t)
-			metaA, err := store.NewSession(SessionTypeChat, "", "agent-a")
-			require.NoError(t, err)
-			return runA(store, metaA.ID)
-		})
-
-		withContention := minOfTrials(trials, func() time.Duration {
-			store := newTestStoreForLockTests(t)
-			metaA, err := store.NewSession(SessionTypeChat, "", "agent-a")
-			require.NoError(t, err)
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			var elapsed time.Duration
-			go func() {
-				defer wg.Done()
-				elapsed = runA(store, metaA.ID)
-			}()
-
-			var bWG sync.WaitGroup
-			bWG.Add(bFanOut)
-			for i := 0; i < bFanOut; i++ {
-				go func(idx int) {
-					defer bWG.Done()
-					metaB, err := store.NewSession(SessionTypeChat, "", "agent-b")
-					if err != nil {
-						t.Errorf("NewSession B[%d]: %v", idx, err)
-						return
-					}
-					for a := 0; a < 4; a++ {
-						if err := store.AppendTranscript(metaB.ID, TranscriptEntry{Role: "assistant", Content: "b-line"}); err != nil {
-							t.Errorf("AppendTranscript B[%d/%d]: %v", idx, a, err)
-						}
-					}
-				}(i)
-			}
-			bWG.Wait()
-			wg.Wait()
-			return elapsed
-		})
-
-		ratio := float64(withContention) / float64(baseline)
-		lastBaseline, lastWithContention, lastRatio = baseline, withContention, ratio
-
-		t.Logf("AC-20(c) attempt %d/%d: A-only baseline (best of %d)=%v, A-with-B-contention (best of %d)=%v (ratio %.2f)",
-			attempt, maxOuterAttempts, trials, baseline, trials, withContention, ratio)
-
-		// Same 2.5x slack rationale as AC-20(a) above (disk-fsync-floor
-		// dominance verified empirically on this devpod).
-		if withContention <= time.Duration(float64(baseline)*2.5) {
-			withinBound = true
-			break
-		}
-		t.Logf("AC-20(c): attempt %d/%d exceeded the 2.5x bound (ratio %.2f) — retrying with a fresh "+
-			"measurement pair before treating this as a regression (see maxOuterAttempts doc comment)",
-			attempt, maxOuterAttempts, ratio)
-	}
-
-	assert.Truef(t, withinBound,
-		"session A's append stream took %v with concurrent session-B creates, vs %v baseline (ratio %.2f) on EVERY "+
-			"one of %d independent attempts — session B's creates are delaying session A's streamed appends",
-		lastWithContention, lastBaseline, lastRatio, maxOuterAttempts)
-}
+// DECISION (2026-08-04, CI-flake follow-up): this claim was previously ALSO
+// covered by two wall-clock ratio tests —
+// TestUnifiedStore_ConcurrentWritesToDifferentSessionsDoNotSerialize
+// (AC-20(a), N-vs-2N slope) and TestAppendTranscript_NotDelayedBySessionBCreate
+// (AC-20(c), baseline-vs-contention) — each already hardened with a 2.5x
+// bound and up to 3 independent re-measurement attempts. CI still flaked on
+// them post-hardening (a DIFFERENT one of the two failing each run — see
+// this unit's CI report), because this project's shared/virtualized devpod
+// disk has fsync-throughput bursts (observed: a healthy 7.35ms measurement
+// immediately followed by a 111.87ms one, ratio 15.21, moments later in the
+// SAME run) that no point-in-time load check or bounded retry count can
+// fully rule out.
+//
+// Raising the ratio threshold further was rejected: it would erode the
+// signal until the test stops proving anything, and this test guards
+// ADR-057's D10/W15 lock striping that the project's concurrency claims rest
+// on. Instead, the two ratio tests were DELETED, not loosened, because the
+// underlying claim they existed to protect — independent session shards can
+// be held open at the same time; one session's I/O never blocks behind
+// another's — is proven twice below by DIRECT OBSERVATION of real lock
+// acquire/release instants (the FR-101 sessionLockAcquireFn/
+// sessionLockReleaseFn seam) instead of wall-clock inference, so neither
+// depends on machine speed:
+//
+//   - TestSessionLock_DifferentSessionsNeverBlockEachOther (below) holds one
+//     shard for a fixed, large window and asserts a DIFFERENT shard's
+//     unrelated op resolves in a small fraction of that window — the exact
+//     AC-20(c) scenario (A's work vs. B's), in fixed-op form.
+//   - TestUnifiedStore_ConcurrentSessionWritesGenuinelyOverlapAcrossShards
+//     runs the SAME real concurrent create+append workload the deleted
+//     AC-20(a) ratio test used, and asserts two DIFFERENT shards' critical
+//     sections were open at the same wall-clock instant — non-serialization
+//     proven by construction rather than by timing.
+//
+// Both were verified (2026-08-04) to still FAIL if the striped lock is
+// collapsed back to a single mutex (u4ShardFor forced to a constant shard);
+// see this file's introducing commit message for the before/after proof.
+// Host contention can only make a real overlap take LONGER, never turn it
+// into "no overlap" — unlike a ratio, neither assertion can be defeated by a
+// noisy shared box.
+// ---------------------------------------------------------------------
 
 // shardInterval is one fully-observed [acquire, release) window for a single
 // session shard, derived from a lockEvent stream by pairing each acquire with
@@ -776,18 +553,19 @@ func distinctShardsOverlapped(intervals []shardInterval) bool {
 //
 // TestUnifiedStore_ConcurrentSessionWritesGenuinelyOverlapAcrossShards is the
 // AC-20 STRUCTURAL, load-independent regression proof called for by this
-// unit's CI-hardening pass: TestUnifiedStore_ConcurrentWritesToDifferentSessionsDoNotSerialize
-// and TestAppendTranscript_NotDelayedBySessionBCreate above measure a
-// wall-clock RATIO, which this file's own doc comments already document as
-// noisy on a shared/contended box (1.74x-22x swings with no code change,
-// see TestSessionLock_DifferentSessionsNeverBlockEachOther's doc comment).
+// unit's CI-hardening pass. It replaces a wall-clock RATIO test that used to
+// live in this file (see the "AC-20: concurrent writes to DIFFERENT
+// sessions" section header above for the removal rationale) — this file's
+// own doc comments already documented that ratio as noisy on a
+// shared/contended box (1.74x-22x swings with no code change, see
+// TestSessionLock_DifferentSessionsNeverBlockEachOther's doc comment).
 // Host contention can only ever make an already-true overlap take LONGER —
 // it can never turn a real overlap into "no overlap", so this assertion
 // (unlike a ratio) survives arbitrary host/CI noise without a threshold.
 //
-// Method: run the SAME real concurrent create+append workload as AC-20(a)
-// (acWriteWorkload's shape), with the FR-101 seam's timestamped recorder
-// installed, then directly check whether two DIFFERENT session shards were
+// Method: run the SAME real concurrent create+append workload the deleted
+// ratio test used, with the FR-101 seam's timestamped recorder installed,
+// then directly check whether two DIFFERENT session shards were
 // EVER held open (acquired-but-not-yet-released) at the same wall-clock
 // instant. AppendTranscript/NewSession hold lockSession(id) across the real
 // fsync-bound filesystem work (unified.go), so a genuinely striped lock lets
@@ -1052,9 +830,10 @@ func TestSessionParentIndex_ClearAllWiresEviction(t *testing.T) {
 // to host scheduling noise by a wide margin: the test only fails if B is
 // ACTUALLY blocked waiting on A's shard, which host load cannot fake in
 // either direction. This is the authoritative, always-reliable proof that
-// different sessions use independent shards; the wall-clock tests further
-// below are additional, best-effort corroboration and skip themselves when
-// this specific run's host load makes them meaningless.
+// different sessions use independent shards — see the "AC-20: concurrent
+// writes to DIFFERENT sessions" section header above for why the
+// wall-clock ratio tests that used to corroborate it were removed instead
+// of further loosened.
 // ---------------------------------------------------------------------
 
 func TestSessionLock_DifferentSessionsNeverBlockEachOther(t *testing.T) {
@@ -1100,24 +879,4 @@ func TestSessionLock_DifferentSessionsNeverBlockEachOther(t *testing.T) {
 	case <-time.After(holdFor + 5*time.Second):
 		t.Fatal("session B never acquired its lock — deadlock, or idA/idB unexpectedly share a shard")
 	}
-}
-
-// devpodUnderHeavyExternalLoad reports whether the host's 1-minute load
-// average is high enough (relative to CPU count) that a wall-clock
-// measurement in THIS test run would be dominated by contention from OTHER
-// processes rather than by this store's own locking behavior — verified in
-// practice on this project's shared devpod (see this function's callers'
-// doc comments). Reading /proc/loadavg is Linux-specific and best-effort:
-// any read/parse failure is treated as "not overloaded" so the check itself
-// never becomes a source of flakiness on a platform where it doesn't apply.
-func devpodUnderHeavyExternalLoad() bool {
-	data, err := os.ReadFile("/proc/loadavg")
-	if err != nil {
-		return false
-	}
-	var load1 float64
-	if _, scanErr := fmt.Sscanf(string(data), "%f", &load1); scanErr != nil {
-		return false
-	}
-	return load1 > float64(runtime.NumCPU())*1.5
 }
