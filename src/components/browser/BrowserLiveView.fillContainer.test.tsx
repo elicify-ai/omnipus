@@ -285,9 +285,99 @@ describe('BrowserLiveView — adaptive viewport reporting (BLOCKER regression)',
         el.getBoundingClientRect = () =>
           ({ width: 890, height: 1010, top: 0, left: 0, right: 890, bottom: 1010, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
       }
-      await vi.advanceTimersByTimeAsync(500) // past the 400ms debounce
+      // Past the 400ms debounce AND the 250ms settle check (2026-08-04): a
+      // new size is only committed once it has held still, so the send lands
+      // ~650ms after the resize rather than ~400ms. See VIEWPORT_SETTLE_MS.
+      await vi.advanceTimersByTimeAsync(800)
 
       expect(mockSendViewport).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// Regression coverage for the three input/resize fixes (operator video 0804).
+describe('BrowserLiveView — transient-resize guard and input pacing', () => {
+  // The operator's recording contained 11 unintended capture rebuilds. Focusing
+  // the address bar opens Safari's AutoFill accessory bar, shrinking the
+  // container ~50px (measured: focused 644px, blurred 694px, focused 644px).
+  // Each transition pushed a viewport and rebuilt the capture — a stall the
+  // user never asked for.
+  it('does not push a viewport while focus sits in a panel input', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      act(() => {
+        callbacksRef.current?.onConnected?.()
+        emitFirstFrame()
+      })
+      const el = document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement | null
+      if (el) {
+        el.getBoundingClientRect = () =>
+          ({ width: 890, height: 1010, top: 0, left: 0, right: 890, bottom: 1010, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      }
+      await vi.advanceTimersByTimeAsync(800)
+
+      // Focus the address bar, then shrink the container the way the AutoFill
+      // bar does.
+      const bar = screen.getByLabelText('Address bar')
+      act(() => {
+        bar.focus()
+      })
+      mockSendViewport.mockClear()
+      if (el) {
+        el.getBoundingClientRect = () =>
+          ({ width: 890, height: 960, top: 0, left: 0, right: 890, bottom: 960, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      }
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(1200)
+
+      expect(mockSendViewport).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // The settle check exists so a size captured mid-drag or mid-animation is
+  // never committed: each commit rebuilds the capture stream, and an
+  // intermediate geometry costs a stall for a size that is already obsolete.
+  it('does not commit a size that is still changing', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      act(() => {
+        callbacksRef.current?.onConnected?.()
+        emitFirstFrame()
+      })
+      const el = document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement | null
+      const box = (h: number) =>
+        ({ width: 890, height: h, top: 0, left: 0, right: 890, bottom: h, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      if (el) el.getBoundingClientRect = () => box(1010)
+      await vi.advanceTimersByTimeAsync(800)
+      mockSendViewport.mockClear()
+
+      // A drag in progress: the box keeps moving across the debounce window.
+      if (el) el.getBoundingClientRect = () => box(900)
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      if (el) el.getBoundingClientRect = () => box(850) // moved again mid-settle
+      await vi.advanceTimersByTimeAsync(200)
+
+      // Nothing committed yet — the size never held still.
+      expect(mockSendViewport).not.toHaveBeenCalled()
+
+      // Drag ends: the size now holds, so exactly one commit lands.
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(mockSendViewport).toHaveBeenCalledTimes(1)
+      expect(mockSendViewport).toHaveBeenLastCalledWith(890, 850, expect.any(Number))
     } finally {
       vi.useRealTimers()
     }

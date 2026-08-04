@@ -274,6 +274,21 @@ const WEBRTC_CAPABILITY_GATE_REASONS = new Set(['disabled', 'not_capable', 'lite
 // firstFrameTimedOut for the silent-failure this bounds.
 const FIRST_FRAME_TIMEOUT_MS = 15_000
 
+// VIEWPORT_SETTLE_MS is how long a new panel size must hold still before it is
+// committed to the server. Each commit REBUILDS the capture stream (tabCapture
+// constraints are pinned per stream), so an intermediate size captured
+// mid-drag or mid-animation costs a visible stall for a geometry that is
+// already obsolete. Short enough to feel immediate after a deliberate resize,
+// long enough to swallow an animation's intermediate frames.
+const VIEWPORT_SETTLE_MS = 250
+
+// MOVE_FLUSH_MS paces coalesced pointer-move sends. Chosen to sit under the
+// server's maxInputEventsPerSecond (50/s, pkg/tools/browser/live.go) with
+// headroom for the down/up/wheel events that share that budget: at ~16ms a
+// sustained drag alone would ride the cap and start losing events to the
+// limiter. Not requestAnimationFrame — see scheduleMoveFlush.
+const MOVE_FLUSH_MS = 25
+
 // BLANK_TAB_URL is the placeholder a not-yet-navigated tab reports. The address
 // bar must not display it: showing "about:blank" to a user who is looking at the
 // Omnipus start page is noise, and it would also overwrite a url the user is
@@ -1310,6 +1325,9 @@ export function BrowserLiveView({
   // each rebuild is a brief visible blip. Sending per resize event would make
   // dragging a window a strobe.
   const lastSentViewportRef = useRef<{ w: number; h: number; dpr: number } | null>(null)
+  // settleRef holds the pending "has the size stopped changing?" check — see
+  // the SETTLE CHECK in push() below.
+  const settleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     const el = containerRef.current
     if (!el) return undefined
@@ -1327,6 +1345,38 @@ export function BrowserLiveView({
     lastSentViewportRef.current = null
 
     const push = () => {
+      // TRANSIENT-RESIZE GUARD (operator video 0804, 11 unintended rebuilds).
+      //
+      // Focusing the address bar makes Safari open its AutoFill accessory bar,
+      // which shrinks the browser viewport — and therefore this container — by
+      // ~50px. Measured in the recording: focused 644px, blurred 694px, focused
+      // 644px again. Each transition pushed a viewport and forced a full
+      // capture rebuild, which the operator sees as the panel resizing and
+      // stalling for no reason they initiated.
+      //
+      // The container really did change size, so the ResizeObserver is not
+      // wrong — what is wrong is treating a transient, focus-driven change like
+      // a deliberate one. While focus sits in one of the panel's own inputs
+      // (address bar, annotate field), hold the current geometry: the shrink
+      // lasts exactly as long as the accessory bar does, and re-pushing on blur
+      // would just replay the same rebuild in reverse.
+      //
+      // Deliberately checks LIVE focus rather than a stored flag: a blur that
+      // never fires (element unmounted, window lost focus) would otherwise
+      // wedge the guard on permanently, suppressing real resizes forever.
+      const active = document.activeElement
+      if (active && active !== el) {
+        const tag = active.tagName
+        // Scope: any text field ANYWHERE, not just inside the frame's own
+        // subtree. The address bar is a SIBLING of the frame's body wrapper,
+        // so an el.parentElement.contains() check misses it entirely — and the
+        // address bar is the field that actually triggers this (it is what
+        // opens the AutoFill accessory bar). The chat composer on the other
+        // side of the app opens the same bar and shrinks the same container,
+        // so a document-wide check is correct rather than merely convenient.
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
+      }
+
       const box = el.getBoundingClientRect()
       const w = Math.round(box.width)
       const h = Math.round(box.height)
@@ -1337,9 +1387,21 @@ export function BrowserLiveView({
       // scrollbar appearing, a 1px layout settle). 8px is below what a user
       // would notice as wrong aspect but well above incidental churn.
       if (prev && Math.abs(prev.w - w) < 8 && Math.abs(prev.h - h) < 8 && prev.dpr === dpr) return
-      if (wsRef.current?.sendViewport(w, h, dpr)) {
-        lastSentViewportRef.current = { w, h, dpr }
-      }
+
+      // SETTLE CHECK: only commit a size that has held still. A drag, an
+      // animated sidebar, or a transient overlay produces a stream of
+      // intermediate sizes; committing any of them costs a rebuild that the
+      // next frame invalidates. Re-measure after a short delay and bail if the
+      // box moved again — the trailing schedule() will bring us back.
+      if (settleRef.current !== null) clearTimeout(settleRef.current)
+      settleRef.current = setTimeout(() => {
+        settleRef.current = null
+        const now = el.getBoundingClientRect()
+        if (Math.round(now.width) !== w || Math.round(now.height) !== h) return // still moving
+        if (wsRef.current?.sendViewport(w, h, dpr)) {
+          lastSentViewportRef.current = { w, h, dpr }
+        }
+      }, VIEWPORT_SETTLE_MS)
     }
 
     const schedule = () => {
@@ -1367,6 +1429,7 @@ export function BrowserLiveView({
       window.addEventListener('resize', schedule)
       return () => {
         if (timer !== null) clearTimeout(timer)
+        if (settleRef.current !== null) clearTimeout(settleRef.current)
         window.removeEventListener('resize', schedule)
       }
     }
@@ -1375,6 +1438,7 @@ export function BrowserLiveView({
     ro.observe(el)
     return () => {
       if (timer !== null) clearTimeout(timer)
+      if (settleRef.current !== null) clearTimeout(settleRef.current)
       ro.disconnect()
     }
     // `frame !== null` is load-bearing, not incidental (BLOCKER caught in
@@ -1462,14 +1526,24 @@ export function BrowserLiveView({
     )
   }, [canDispatchInput, dispatchInput])
 
+  // Coalesce moves on a TIMER, not on requestAnimationFrame (operator report,
+  // 2026-08-04: "inputs feel laggy/slowish", worst while a video plays).
+  //
+  // rAF ties the network send to the LOCAL RENDERING pipeline. Whenever the
+  // page is busy compositing — exactly what happens while the panel is
+  // decoding and painting a video stream — frame callbacks stretch out, so
+  // pointer positions queue behind rendering work that has nothing to do with
+  // them. The delay is also unpredictable, which is what makes it feel
+  // sluggish rather than merely slow.
+  //
+  // A fixed interval decouples the two: input flows at a steady, known rate
+  // regardless of what the compositor is doing. MOVE_FLUSH_MS is set below the
+  // server's own rate cap so the pacing stays client-side and predictable
+  // instead of being shaped by server-side drops.
   const scheduleMoveFlush = useCallback(() => {
     if (moveFlushScheduledRef.current) return
     moveFlushScheduledRef.current = true
-    if (typeof requestAnimationFrame !== 'undefined' && document.visibilityState !== 'hidden') {
-      requestAnimationFrame(flushPendingMove)
-    } else {
-      setTimeout(flushPendingMove, 0)
-    }
+    setTimeout(flushPendingMove, MOVE_FLUSH_MS)
   }, [flushPendingMove])
 
   // Cancel any in-flight coalesced move on unmount — nothing to flush once
@@ -1930,6 +2004,21 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
+
+    // Drop any coalesced move still waiting to be sent (operator report,
+    // 2026-08-04: a click on the video's fullscreen button "did not show the
+    // effect"). mouse_down maps its OWN fresh coordinates from this event, so
+    // it is always accurate — but a pending move captured up to MOVE_FLUSH_MS
+    // earlier would otherwise flush AFTER it, and the remote browser would see
+    // press-at-target followed by move-from-an-older-position. That reordering
+    // can drag the press off its target or cancel the click outright.
+    //
+    // The stale position is not merely redundant, it is actively wrong: this
+    // event's coordinates supersede it. Clearing the scheduled flag too means
+    // the next real move re-arms the timer normally.
+    pendingMoveRef.current = null
+    moveFlushScheduledRef.current = false
+
     dispatchInput(
       {
         kind: 'mouse_down',
