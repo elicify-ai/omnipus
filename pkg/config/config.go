@@ -484,14 +484,58 @@ func clampParallelExplicit(v int) int {
 		return minPar
 	}
 	if v > physicalConcurrencySafetyCeiling {
-		logger.WarnCF("config",
-			"performance.max_parallel_agents is configured far above the physical OS-thread-safety ceiling — honoring it as configured (explicit values are never silently clamped), but this risks Go runtime thread exhaustion (a fatal process abort) under real concurrent load",
-			map[string]any{
-				"configured_value": v,
-				"safety_ceiling":   physicalConcurrencySafetyCeiling,
-			})
+		if shouldLogExplicitCeilingWarn(time.Now()) {
+			logger.WarnCF("config",
+				"performance.max_parallel_agents is configured far above the physical OS-thread-safety ceiling — honoring it as configured (explicit values are never silently clamped), but this risks Go runtime thread exhaustion (a fatal process abort) under real concurrent load",
+				map[string]any{
+					"configured_value": v,
+					"safety_ceiling":   physicalConcurrencySafetyCeiling,
+				})
+		}
 	}
 	return v
+}
+
+// explicitCeilingWarnInterval bounds how often clampParallelExplicit's
+// above-physical-ceiling WARN is logged (code review 2026-08-04, MINOR:
+// config.go:487-493 was un-throttled). EffectiveMaxParallelAgents is invoked
+// on every new-session admission check, every dispatch capacity sync, and
+// every GET /api/v1/performance (see EffectiveMaxParallelAgents' own doc
+// comment) — an un-throttled WARN on that live-resolved path can flood
+// gateway.log under real traffic even though the underlying condition (an
+// operator's configured value exceeding physicalConcurrencySafetyCeiling) is
+// static for the life of the process. A bounded interval keeps the warning
+// loud enough to be diagnosable (CLAUDE.md/ADR-037: never silently swallow
+// it) without the volume, rather than moving it to a boot-time-only
+// diagnostic — EffectiveMaxParallelAgents is deliberately never cached
+// (config.go's own "known limitation" doc comment on availableRAMBytes), and
+// a boot-time-only warn would miss a value changed later via PUT
+// /api/v1/performance while the gateway is running.
+const explicitCeilingWarnInterval = 5 * time.Minute
+
+// lastExplicitCeilingWarnNano stores the UnixNano timestamp of the last
+// above-ceiling warning, 0 meaning "never logged yet". Package-level so the
+// throttle is shared across every call site of clampParallelExplicit.
+var lastExplicitCeilingWarnNano atomic.Int64
+
+// shouldLogExplicitCeilingWarn reports whether at least
+// explicitCeilingWarnInterval has elapsed since the last above-ceiling
+// warning and, if so, atomically claims the slot so concurrent callers (this
+// path is hit from concurrent session-admission checks) don't all log at
+// once. Split out from clampParallelExplicit so the throttle logic can be
+// tested deterministically (fake clock) without depending on capturing real
+// logger output.
+func shouldLogExplicitCeilingWarn(now time.Time) bool {
+	nowNano := now.UnixNano()
+	for {
+		last := lastExplicitCeilingWarnNano.Load()
+		if last != 0 && now.Sub(time.Unix(0, last)) < explicitCeilingWarnInterval {
+			return false
+		}
+		if lastExplicitCeilingWarnNano.CompareAndSwap(last, nowNano) {
+			return true
+		}
+	}
 }
 
 // clampParallel floors the AUTO-DETECTED default at autoDetectFloorParallel
@@ -1443,40 +1487,43 @@ type RoutingConfig struct {
 // SubTurnConfig configures the SubTurn execution system.
 type SubTurnConfig struct {
 	MaxDepth int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
-	// MaxConcurrent is read from two, deliberately different places (ADR-057
-	// FR-095, operator decision 4):
+	// MaxConcurrent is an OPTIONAL per-delegation override of the concurrent
+	// fan-out cap. Both consumers below apply the SAME rule (concurrency-gate
+	// consolidation, 2026-08-04): Performance.EffectiveMaxParallelAgents() —
+	// the single, UI-configurable authority for agent concurrency
+	// (PerformanceSettings.max_parallel_agents) — is resolved LIVE whenever
+	// this field is <= 0 (unset, the shipped default: see DefaultConfig,
+	// defaults.go). A positive value here is an explicit, deliberate
+	// per-delegation override, honored exactly as configured — it may differ
+	// from the central value in either direction, an operator's own choice,
+	// never silently overridden. A negative value is a configuration error.
 	//   - getSubTurnConfig (pkg/agent/subturn.go) uses it, when > 0, as the
 	//     per-parent-turn in-turn fan-out semaphore, falling back to
-	//     Performance.EffectiveMaxParallelAgents() (clamped to 16) when <= 0.
+	//     Performance.EffectiveMaxParallelAgents() when <= 0.
 	//   - The W17 root-delegation admission gate (pkg/agent/admission.go,
-	//     owned by U19) reads this field DIRECTLY — never via
-	//     Performance.EffectiveMaxParallelAgents() — as the process-global
-	//     root-level admission cap, and MUST treat a configured value <= 0 as
-	//     a boot-time configuration error, never as "no gate".
-	// Seeded to DefaultSubTurnMaxConcurrent (16) in DefaultConfig
-	// (defaults.go) so a fresh install never takes the
-	// EffectiveMaxParallelAgents() branch FR-095 forbids for the root gate.
-	// Before this seed existed, a fresh install left this field at its Go
-	// zero value, so getSubTurnConfig's `if maxConcurrent <= 0` fell through
-	// to the hardware-autodetected, un-seeded EffectiveMaxParallelAgents()
-	// value (verified 2026-08-03 on this environment: 6, not any documented
-	// number) — grill #2 finding M2-1.
+	//     ResolveRootDelegationCap) reads this field DIRECTLY and applies the
+	//     identical fallback, so the two consumers can never disagree about
+	//     what "unset" means.
+	//
+	// HISTORY (superseded 2026-08-04, commit 536b7340's follow-up fix): this
+	// field used to be seeded to a fixed 16 (the retired
+	// DefaultSubTurnMaxConcurrent constant) specifically so the root gate
+	// would never take the EffectiveMaxParallelAgents() fallback branch —
+	// reasoning that depended entirely on that function ALSO being
+	// hard-clamped to 16 by clampParallelExplicit at the time, making the two
+	// numbers coincidentally equal. Commit 536b7340 removed that ceiling
+	// (clampParallelExplicit now only floors at 1), which invalidated the
+	// premise: the fixed seed became a SECOND, independently-sized cap that
+	// silently disagreed with an operator's own max_parallel_agents setting
+	// once the two diverged — the exact ADR-037 "control that moves,
+	// persists and governs nothing" anti-pattern this project bans. The seed
+	// is removed; a fresh install now leaves this field at its Go zero value
+	// (0) so both consumers take the central-authority branch by design.
 	MaxConcurrent         int `json:"max_concurrent"          env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
 	DefaultTokenBudget    int `json:"default_token_budget"    env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
 	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
-
-// DefaultSubTurnMaxConcurrent is the ADR-057 FR-095 seeded default for
-// agents.defaults.subturn.max_concurrent (operator decision 4). 16 matches
-// what clampParallelExplicit already caps the Performance.
-// EffectiveMaxParallelAgents() fallback at on capable hardware, so seeding it
-// explicitly changes no shipped behaviour on such hardware — it only makes
-// the value explicit, keeps the W17 root-delegation gate off the branch
-// FR-095 forbids, and gives an operator one number to raise. Two scopes
-// share this one number intentionally (see SubTurnConfig.MaxConcurrent's
-// doc comment).
-const DefaultSubTurnMaxConcurrent = 16
 
 type ToolFeedbackConfig struct {
 	Enabled       bool `json:"enabled"         env:"OMNIPUS_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`

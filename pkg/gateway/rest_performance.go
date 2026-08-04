@@ -16,7 +16,7 @@ import (
 // HandlePerformance handles GET and PUT /api/v1/performance.
 //
 // GET returns the current max_parallel_agents config and the effective
-// (clamped) value actually in use.
+// (auto-detected or explicit) value actually in use.
 //
 // PUT accepts {max_parallel_agents: int} and updates config.json atomically.
 // The dispatch semaphore is resized in-memory immediately so the new value
@@ -34,17 +34,42 @@ func (a *restAPI) HandlePerformance(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// wireMaxParallelAgentsMinimum is PerformanceSettings.yaml's declared
+// `minimum` for max_parallel_agents on the wire (response) side — NOT the
+// same number as PerformanceSettingsUpdate.yaml's request-side `minimum: 0`
+// (0 there means "reset to auto"; a response echoing 0 back is invalid,
+// since 0 on disk is an internal sentinel, never a real concurrency value).
+const wireMaxParallelAgentsMinimum = 1
+
+// wireMaxParallelAgents resolves the on-the-wire value for
+// PerformanceSettings.max_parallel_agents from the raw on-disk configured
+// value. 0 (and, defensively, any value below the schema floor) is the
+// "unconfigured / auto-detect" sentinel and is never valid to echo back
+// (PerformanceSettings.yaml declares `minimum: 1`) — it is substituted with
+// the resolved effective value instead, so the wire payload is always
+// schema-valid and shows the concurrency actually in use. Any configured
+// value >= 1 (including an operator's deliberate single-flight choice of 1)
+// is surfaced exactly as configured — never silently overridden — matching
+// this project's ban on the ADR-037 silent-clamping anti-pattern.
+//
+// Shared by getPerformance and putPerformance so both return the identical
+// shape: before this helper existed, putPerformance skipped this floor
+// entirely and echoed the raw on-disk 0 straight onto the wire (MAJOR-3,
+// code review 2026-08-04) — a successful PUT of 0 (the documented "reset to
+// auto" contract) produced a schema-invalid body that the SPA's zod
+// validation then rejected, surfacing a false "failed to save" toast on a
+// write that had, in fact, correctly persisted.
+func wireMaxParallelAgents(configured, effective int) int {
+	if configured < wireMaxParallelAgentsMinimum {
+		return effective
+	}
+	return configured
+}
+
 func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	cfg := a.agentLoop.GetConfig()
 	effective := cfg.Performance.EffectiveMaxParallelAgents()
-	// max_parallel_agents in the response must satisfy the contract minimum (2).
-	// A value of 0 means "unconfigured / auto" on disk; surface the effective
-	// clamped value (always >= 2) so the wire payload is schema-valid and the UI
-	// shows the concurrency actually in use.
-	configured := cfg.Performance.MaxParallelAgents
-	if configured < 2 {
-		configured = effective
-	}
+	configured := wireMaxParallelAgents(cfg.Performance.MaxParallelAgents, effective)
 	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
 	// true (default) = load tools on demand; false = all tools every message.
 	toolsOnDemand := cfg.Tools.Manifest.Compressed
@@ -121,8 +146,8 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newCfg := a.agentLoop.GetConfig()
-	configured := newCfg.Performance.MaxParallelAgents
 	effective := newCfg.Performance.EffectiveMaxParallelAgents()
+	configured := wireMaxParallelAgents(newCfg.Performance.MaxParallelAgents, effective)
 	toolsOnDemand := newCfg.Tools.Manifest.Compressed
 	jsonOK(w, gen.PerformanceSettings{
 		MaxParallelAgents:          &configured,

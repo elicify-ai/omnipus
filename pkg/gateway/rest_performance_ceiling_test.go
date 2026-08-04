@@ -120,3 +120,48 @@ func TestPerformancePUT_ZeroResetsToAutoDetectedDefault(t *testing.T) {
 	assert.NotEqual(t, float64(3), effective,
 		"after resetting to auto, the effective value must no longer be the previously-explicit 3 (unless auto genuinely also resolves to 3, which is astronomically unlikely on a real test machine)")
 }
+
+// TestPerformancePUT_Zero_ResponseBodySchemaValid is the MAJOR-3 regression
+// test from the 2026-08-04 code review: a PUT of {"max_parallel_agents":0}
+// (the documented "reset to auto-detect" contract) must return a response
+// body that satisfies PerformanceSettings.yaml's `max_parallel_agents`
+// `minimum: 1` — the same schema the SPA's zod PerformanceSettingsSchema
+// (src/lib/api.ts) enforces client-side. Before the fix, putPerformance
+// echoed the raw on-disk value (0) straight into the response instead of
+// substituting the resolved effective value the way getPerformance already
+// did, so this exact save-succeeded-but-body-was-schema-invalid case
+// produced a 200 with a payload the SPA then rejected as
+// ApiSchemaError, surfacing a false "failed to save" toast on a write that
+// had, in fact, correctly persisted.
+func TestPerformancePUT_Zero_ResponseBodySchemaValid(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"max_parallel_agents":0}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandlePerformance(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "PUT max_parallel_agents=0 must return 200; body=%s", w.Body.String())
+
+	raw := w.Body.Bytes()
+
+	// The literal assertion the review named: the wire body must not contain
+	// max_parallel_agents:0, which fails the schema's minimum:1.
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	configured, ok := resp["max_parallel_agents"].(float64)
+	require.True(t, ok, "max_parallel_agents must be present and numeric in the PUT response")
+	assert.NotEqual(t, float64(0), configured,
+		"PUT response must surface the resolved effective value, not the raw on-disk auto-detect sentinel 0 (violates PerformanceSettings.yaml minimum:1)")
+	assert.GreaterOrEqual(t, configured, float64(1), "max_parallel_agents must satisfy the contract minimum of 1")
+
+	// The general proof the review asked for: validate the RAW response body
+	// against the actual shipped PerformanceSettings schema (same embedded
+	// copy — byte-identical to contracts/components/schemas/
+	// PerformanceSettings.yaml — that the SPA's zod schema is generated
+	// from), not just the two fields above.
+	if errMsg, serverErr := validateBodyAgainstSchema("PerformanceSettings", raw); errMsg != "" {
+		t.Fatalf("PUT response body fails PerformanceSettings schema validation (serverErr=%v): %s\nbody=%s", serverErr, errMsg, raw)
+	}
+}

@@ -115,25 +115,95 @@ func readCgroupMemoryAvailableBytesAt(root string) (uint64, bool) {
 	// cgroup v2 unified hierarchy.
 	if limit, ok := readCgroupV2LimitBytes(root + "/memory.max"); ok {
 		if usage, ok := readCgroupPlainUintBytes(root + "/memory.current"); ok {
-			return cgroupAvailableBytes(limit, usage), true
+			reclaimable := readCgroupReclaimableBytesAt(root + "/memory.stat")
+			return cgroupAvailableBytes(limit, usage, reclaimable), true
 		}
 	}
 	// cgroup v1 fallback.
 	if limit, ok := readCgroupV1LimitBytes(root + "/memory/memory.limit_in_bytes"); ok {
 		if usage, ok := readCgroupPlainUintBytes(root + "/memory/memory.usage_in_bytes"); ok {
-			return cgroupAvailableBytes(limit, usage), true
+			reclaimable := readCgroupReclaimableBytesAt(root + "/memory/memory.stat")
+			return cgroupAvailableBytes(limit, usage, reclaimable), true
 		}
 	}
 	return 0, false
 }
 
-// cgroupAvailableBytes returns limitBytes-usageBytes floored at zero (usage
-// can transiently read at or slightly above a just-lowered limit).
-func cgroupAvailableBytes(limitBytes, usageBytes uint64) uint64 {
-	if usageBytes >= limitBytes {
+// reclaimableMemoryStatKeys are the memory.stat fields summed to estimate
+// reclaimable memory within cgroup usage (MAJOR-1, code review 2026-08-04):
+//   - inactive_file — reclaimable page cache on its way out under memory
+//     pressure. Present in both cgroup v1 and v2 memory.stat.
+//   - slab_reclaimable — reclaimable kernel slab allocations (dentries,
+//     inodes, etc). cgroup v2 only; v1's memory.stat has no slab breakdown,
+//     so it simply never matches and contributes 0 — a partial reclaimable
+//     figure UNDER-counts what's reclaimable, which makes "available" come
+//     out smaller than reality, never larger (the safe direction to be
+//     wrong in).
+//
+// This deliberately does NOT include active_file: memory still on the
+// active LRU list is not immediately reclaimable without first aging onto
+// the inactive list, so counting it would over-state available memory.
+var reclaimableMemoryStatKeys = []string{"inactive_file", "slab_reclaimable"}
+
+// readCgroupReclaimableBytesAt sums reclaimableMemoryStatKeys from the
+// memory.stat file at statPath. Returns 0 (never an error) when the file is
+// missing or a key is absent — see reclaimableMemoryStatKeys' doc comment on
+// why a partial/zero read is the conservative direction.
+func readCgroupReclaimableBytesAt(statPath string) uint64 {
+	var total uint64
+	for _, key := range reclaimableMemoryStatKeys {
+		if v, ok := readCgroupStatFieldBytesAt(statPath, key); ok {
+			total += v
+		}
+	}
+	return total
+}
+
+// readCgroupStatFieldBytesAt reads a single "<key> <N>" line (bytes, not kB —
+// unlike /proc/meminfo, cgroup memory.stat values are already in bytes) from
+// a memory.stat-formatted file. ok is false when the file can't be opened or
+// the key isn't present as an exact field-0 match (memory.stat also carries
+// hierarchical "total_<key>" variants on cgroup v1, which must NOT be
+// mistaken for the plain key via a prefix match).
+func readCgroupStatFieldBytesAt(path, key string) (uint64, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 || fields[0] != key {
+			continue
+		}
+		v, parseErr := strconv.ParseUint(fields[1], 10, 64)
+		if parseErr != nil {
+			return 0, false
+		}
+		return v, true
+	}
+	return 0, false
+}
+
+// cgroupAvailableBytes returns limitBytes minus the NON-reclaimable portion
+// of usageBytes, floored at zero. usageBytes (memory.current /
+// memory.usage_in_bytes) includes reclaimable page cache and slab (MAJOR-1,
+// code review 2026-08-04) — subtracting it raw systematically under-reports
+// available memory once the kernel has grown page cache toward the cgroup
+// limit, which is the normal steady state after sustained file I/O, not an
+// anomaly. reclaimableBytes (from readCgroupReclaimableBytesAt) is subtracted
+// from usage first so only genuinely pinned memory competes with the limit.
+func cgroupAvailableBytes(limitBytes, usageBytes, reclaimableBytes uint64) uint64 {
+	var nonReclaimableUsage uint64
+	if reclaimableBytes < usageBytes {
+		nonReclaimableUsage = usageBytes - reclaimableBytes
+	}
+	if nonReclaimableUsage >= limitBytes {
 		return 0
 	}
-	return limitBytes - usageBytes
+	return limitBytes - nonReclaimableUsage
 }
 
 // readCgroupPlainUintBytes reads a file containing a single unsigned integer

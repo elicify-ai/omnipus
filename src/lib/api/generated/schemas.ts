@@ -5619,7 +5619,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
-    description: `Returns the max-parallel-agents cap and the effective (clamped) value currently in use.
+    description: `Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
 `,
     requestFormat: "json",
     response: PerformanceSettings,
@@ -5640,7 +5640,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/performance",
     alias: "updatePerformanceSettings",
-    description: `Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
+    description: `Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
 `,
     requestFormat: "json",
     parameters: [

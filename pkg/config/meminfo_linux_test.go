@@ -194,6 +194,122 @@ func TestAvailableRAMBytes_PrefersTighterCgroupLimit(t *testing.T) {
 	}
 }
 
+// TestReadCgroupMemoryAvailableBytesAt_V2ExcludesReclaimablePageCache
+// reproduces MAJOR-1 from the 2026-08-04 code review: memory.current (v2)
+// includes reclaimable page cache, so a naive limit-usage subtraction
+// under-reports available memory whenever the kernel has grown page cache
+// toward the cgroup limit (the normal steady state after sustained file I/O,
+// not an anomaly). Fixed by subtracting memory.stat's inactive_file +
+// slab_reclaimable from usage before subtracting from the limit.
+//
+// Concrete numbers mirror the review's "--memory=2g container, 300 MB RSS"
+// scenario: memory.current sits 1 MiB below the 2 GiB limit (kernel reclaims
+// at the limit), and reclaimable cache (inactive_file + slab_reclaimable)
+// accounts for all but ~300 MB of that usage.
+func TestReadCgroupMemoryAvailableBytesAt_V2ExcludesReclaimablePageCache(t *testing.T) {
+	const (
+		limit           = uint64(2) * 1024 * 1024 * 1024 // 2 GiB --memory=2g
+		usage           = limit - 1*1024*1024            // memory.current: 1 MiB below limit (warm page cache steady state)
+		rss             = uint64(314572800)              // ~300 MB real app RSS
+		inactiveFile    = uint64(1_800_000_000)
+		slabReclaimable = usage - rss - inactiveFile // remainder of reclaimable cache
+	)
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "memory.max"), strconv.FormatUint(limit, 10))
+	writeFile(t, filepath.Join(dir, "memory.current"), strconv.FormatUint(usage, 10))
+	writeFile(t, filepath.Join(dir, "memory.stat"), "anon 100000000\n"+
+		"inactive_file "+strconv.FormatUint(inactiveFile, 10)+"\n"+
+		"slab_reclaimable "+strconv.FormatUint(slabReclaimable, 10)+"\n"+
+		"slab_unreclaimable 5000000\n")
+
+	got, ok := readCgroupMemoryAvailableBytesAt(dir)
+	if !ok {
+		t.Fatal("readCgroupMemoryAvailableBytesAt() ok = false, want true")
+	}
+
+	// Correct: limit - (usage - reclaimable) == limit - rss (approximately).
+	wantAvailable := limit - rss
+	if got != wantAvailable {
+		t.Fatalf("readCgroupMemoryAvailableBytesAt() = %d, want %d (limit minus true non-reclaimable usage, not limit minus raw memory.current)", got, wantAvailable)
+	}
+
+	// The naive (buggy) limit-usage subtraction would floor this to ~1 MiB,
+	// which after autoDetectMaxParallel's /3.5MB division and clampParallel's
+	// floor collapses concurrency to 2. Assert the fix yields something far
+	// above that floor-collapse regime so a regression back to the naive
+	// subtraction is caught even if the exact byte math above ever drifts.
+	naiveAvailable := limit - usage // what the old buggy code would have returned
+	if got <= naiveAvailable*10 {
+		t.Fatalf("readCgroupMemoryAvailableBytesAt() = %d is not meaningfully larger than the naive (buggy) limit-usage=%d; reclaimable cache is not being excluded from usage", got, naiveAvailable)
+	}
+}
+
+// TestReadCgroupMemoryAvailableBytesAt_V1ExcludesReclaimablePageCache is the
+// cgroup v1 equivalent: memory.usage_in_bytes also includes page cache, and
+// memory.stat carries the same inactive_file key (v1 has no slab_reclaimable
+// breakdown — that field is simply absent and must contribute 0, not error).
+func TestReadCgroupMemoryAvailableBytesAt_V1ExcludesReclaimablePageCache(t *testing.T) {
+	const (
+		limit        = uint64(2) * 1024 * 1024 * 1024
+		usage        = limit - 1*1024*1024
+		rss          = uint64(314572800)
+		inactiveFile = usage - rss
+	)
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "memory"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "memory", "memory.limit_in_bytes"), strconv.FormatUint(limit, 10))
+	writeFile(t, filepath.Join(dir, "memory", "memory.usage_in_bytes"), strconv.FormatUint(usage, 10))
+	writeFile(t, filepath.Join(dir, "memory", "memory.stat"), "rss "+strconv.FormatUint(rss, 10)+"\n"+
+		"cache "+strconv.FormatUint(inactiveFile, 10)+"\n"+
+		"inactive_file "+strconv.FormatUint(inactiveFile, 10)+"\n"+
+		"active_file 0\n")
+
+	got, ok := readCgroupMemoryAvailableBytesAt(dir)
+	if !ok {
+		t.Fatal("readCgroupMemoryAvailableBytesAt() ok = false, want true")
+	}
+	wantAvailable := limit - rss
+	if got != wantAvailable {
+		t.Fatalf("readCgroupMemoryAvailableBytesAt() (v1) = %d, want %d", got, wantAvailable)
+	}
+}
+
+// TestAutoDetectMaxParallel_WarmPageCacheContainerDoesNotCollapseToFloor is
+// the end-to-end reproduction of MAJOR-1's concrete failure: a
+// --memory=2g container with warm page cache must not silently collapse
+// agent concurrency to the auto-detect floor of 2 hours into uptime with no
+// restart and no log. The host-wide meminfo reading is deliberately generous
+// (plenty of free RAM on the host) so the tight cgroup limit is the binding
+// constraint, matching a real containerized deployment.
+func TestAutoDetectMaxParallel_WarmPageCacheContainerDoesNotCollapseToFloor(t *testing.T) {
+	withFakeMeminfo(t, "MemTotal:       32000000 kB\nMemAvailable:   24000000 kB\n") // generous host
+
+	const (
+		limit        = uint64(2) * 1024 * 1024 * 1024
+		usage        = limit - 1*1024*1024
+		rss          = uint64(314572800)
+		inactiveFile = usage - rss
+	)
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "memory.max"), strconv.FormatUint(limit, 10))
+	writeFile(t, filepath.Join(dir, "memory.current"), strconv.FormatUint(usage, 10))
+	writeFile(t, filepath.Join(dir, "memory.stat"), "inactive_file "+strconv.FormatUint(inactiveFile, 10)+"\nslab_reclaimable 0\n")
+
+	oldRoot := cgroupRoot
+	cgroupRoot = dir
+	t.Cleanup(func() { cgroupRoot = oldRoot })
+
+	got := autoDetectMaxParallel()
+	if got <= 2 {
+		t.Fatalf("autoDetectMaxParallel() = %d, want > 2 (must not collapse to the floor when the container has real headroom above its warm page cache)", got)
+	}
+}
+
 // TestAvailableRAMBytes_FallsBackToMeminfoWhenNoCgroup verifies that with no
 // cgroup memory-controller files present, availableRAMBytes() uses the
 // meminfo-derived value directly.
