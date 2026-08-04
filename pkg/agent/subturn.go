@@ -1448,13 +1448,31 @@ func spawnSubTurn(
 				// request-scoped descendants, e.g. the per-LLM-call
 				// turnCtx/providerCancel requestHardAbort actually cancels)
 				// ever observably transitions to context.Canceled. Placed
-				// LAST and gated on err == nil implicitly (every err != nil
-				// abort is already handled by one of the three cases above,
-				// unchanged) so this can only ever ADD coverage for the
-				// previously-unhandled nil-error gap — it can never change
-				// the classification of an existing, already-tested
-				// err != nil path.
+				// after the three err != nil cases above and gated on
+				// err == nil implicitly (every err != nil abort is already
+				// handled by one of those, unchanged) so this can only ever
+				// ADD coverage for the previously-unhandled nil-error gap —
+				// it can never change the classification of an existing,
+				// already-tested err != nil path.
 				endStatus = SubTurnStatusCancelled
+			case lastTurnStatus == TurnEndStatusParked:
+				// ADR-057 UAT defect C2 fix (2026-08-04): runTurn returns
+				// turnResult{status: TurnEndStatusParked} with a NIL error
+				// (pkg/agent/loop.go's park early-return, modeled on
+				// abortTurn's Case 1 above) when this sub-turn's own
+				// message_parent(kind="question", wait=true) call parked its
+				// session in needs_input. Without this case, a parked child
+				// fell all the way through to the endStatus :=
+				// SubTurnStatusSuccess initializer — the exact bug this fix
+				// closes: the live subagent_end WS frame said "success" for
+				// a child that is genuinely still waiting on its parent, so
+				// the UI showed it as finished. Mutually exclusive with the
+				// TurnEndStatusAborted case above by construction (runTurn
+				// returns exactly one terminal turnResult per invocation),
+				// so ordering relative to it is immaterial; placed after it
+				// only to read as an addendum to the same nil-error gap this
+				// file's M4 fix already established.
+				endStatus = SubTurnStatusParked
 			}
 
 			// Finding F (A-I4 round 5): mirror endStatus onto the returned/

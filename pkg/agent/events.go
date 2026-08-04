@@ -482,6 +482,24 @@ const (
 	// SPA's SUBAGENT_END_STATUSES validation set already includes it) and
 	// as a documented, intentional design choice, not an oversight.
 	SubTurnStatusTimeout SubTurnStatus = "timeout"
+	// SubTurnStatusParked indicates the sub-turn stopped because a
+	// message_parent(kind="question", wait=true) call parked its own
+	// session in needs_input (ADR-057 UAT defect C2 fix) — mirrors
+	// TurnEndStatusParked (this file, above), which spawnSubTurn's
+	// endStatus switch (pkg/agent/subturn.go) checks lastTurnStatus against
+	// to set this value. Named identically to TurnEndStatusParked's wire
+	// value ("parked") end-to-end — turn status, this SubTurnStatus, and
+	// the SubagentEndFrame.status wire enum all use the same literal — so
+	// no per-layer translation is needed. Deliberately NOT named
+	// "needs_input" to match the durable session-lifecycle state
+	// (session.LifecycleNeedsInput): that state is long-lived and outlives
+	// THIS span (a later `delegate respond` runs a fresh sub-turn with its
+	// own new span_id, not a continuation of this one), whereas this value
+	// describes only this one-shot span's own terminal outcome. Not an
+	// error, not a success, not a cancellation, not a timeout — the SPA
+	// must render it as a distinct "paused" state, not fall through to any
+	// of those (see src/lib/toolStatusConfig.tsx's getSpanStatusDot).
+	SubTurnStatusParked SubTurnStatus = "parked"
 )
 
 // SubTurnSpawnPayload describes the creation of a child turn.

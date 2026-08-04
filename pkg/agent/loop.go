@@ -9360,6 +9360,35 @@ turnLoop:
 			)
 			tcStatus := "success"
 			switch {
+			case toolResult.ParksTurn:
+				// ADR-057 UAT defect C2 fix (2026-08-04): a SYNCHRONOUS
+				// delegate/spawn call whose child sub-turn parked awaiting
+				// the parent's answer (message_parent(kind="question",
+				// wait=true) — see pkg/agent/subturn.go's spawnSubTurn,
+				// the `if turnRes.status == TurnEndStatusParked` branch
+				// that sets ToolResult.ParksTurn, the single source of
+				// truth for this signal). Without this case, a parked
+				// child's toolResult here has Interrupted==false and
+				// IsError==false (it is neither a failure nor a
+				// cancellation), so tcStatus fell through to the
+				// "success" initializer — persisting the OUTER delegate
+				// tool call's own tc.Status as "success" even though the
+				// live subagent_end WS frame (spawnSubTurn's endStatus
+				// switch, now SubTurnStatusParked) already correctly said
+				// "parked". That divergence meant a SESSION RELOAD
+				// (pkg/gateway/replay.go's resolveStatus(tc.Status), used
+				// to reconstruct the subagent_end frame from this exact
+				// persisted record) would show "success" for a
+				// synchronously-dispatched parked child even after the
+				// live-render half of this fix, exactly the class of
+				// live/reload-parity bug the surrounding tcStatus switch
+				// already exists to close for "interrupted" below.
+				// Checked FIRST (highest priority), mirroring this same
+				// loop's `parked := toolResult.ParksTurn` priority check
+				// (below, in the tool-execution loop) — a park must win
+				// over the (mutually exclusive, by construction) Interrupted/
+				// IsError cases.
+				tcStatus = "parked"
 			case toolResult.Interrupted:
 				// Finding F (A-I4 round 5): a synchronous delegate/spawn call
 				// whose child sub-turn was interrupted by a parent-turn
