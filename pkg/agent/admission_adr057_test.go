@@ -69,12 +69,15 @@ func TestRootDelegationCap_SourcedFromSubTurnMaxConcurrent(t *testing.T) {
 	}
 }
 
-// TestRootDelegationCap_MisconfiguredIsBootError asserts the second half of
-// FR-095: a configured value <= 0 is a boot-time configuration error, never
+// TestRootDelegationCap_NegativeIsBootError asserts the remaining half of
+// FR-095 post-consolidation (2026-08-04, commit 536b7340's follow-up fix):
+// only a NEGATIVE configured value is a boot-time configuration error, never
 // silently reinterpreted as "no gate" (the ADR-037 anti-pattern this project
-// bans).
-func TestRootDelegationCap_MisconfiguredIsBootError(t *testing.T) {
-	for _, v := range []int{0, -1, -100} {
+// bans). Zero is intentionally EXCLUDED from this table now — see
+// TestRootDelegationCap_UnsetResolvesToCentralValue — because 0 means
+// "unset", not "misconfigured".
+func TestRootDelegationCap_NegativeIsBootError(t *testing.T) {
+	for _, v := range []int{-1, -100} {
 		cfg := &config.Config{
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
@@ -92,50 +95,96 @@ func TestRootDelegationCap_MisconfiguredIsBootError(t *testing.T) {
 	}
 }
 
-// --- FR-095/M2-1 / test #112: the unset (fresh-install) case is gated at 16 ---
+// TestRootDelegationCap_UnsetResolvesToCentralValue is the 2026-08-04
+// consolidation's DELIBERATE INVERSION of the old
+// "MisconfiguredIsBootError"'s v==0 case: FR-095 originally treated
+// MaxConcurrent<=0 (including exactly 0) as a boot-time error, seeded away
+// on a fresh install by a fixed 16. That premise depended on
+// Performance.EffectiveMaxParallelAgents() ALSO being hard-clamped to 16 at
+// the time (clampParallelExplicit); commit 536b7340 removed that ceiling,
+// so treating 0 as an error (or seeding around it) would leave a second,
+// independent cap. 0 (unset) is now a VALID, common configuration meaning
+// "inherit the central authority" — no error, no coercion to a fixed number.
+func TestRootDelegationCap_UnsetResolvesToCentralValue(t *testing.T) {
+	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
-// TestRootDelegationCap_DefaultInstallIsGatedAt16 is test #112 (BDD-108): no
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				SubTurn: config.SubTurnConfig{MaxConcurrent: 0},
+			},
+		},
+		Performance: config.PerformanceConfig{MaxParallelAgents: 40},
+	}
+	got, err := ResolveRootDelegationCap(cfg)
+	if err != nil {
+		t.Fatalf("MaxConcurrent=0: ResolveRootDelegationCap returned an error, want nil (0 means 'unset', not misconfigured): %v", err)
+	}
+	if got != 40 {
+		t.Fatalf("ResolveRootDelegationCap = %d, want 40 (cfg.Performance.EffectiveMaxParallelAgents(), the central authority)", got)
+	}
+}
+
+// --- FR-095/M2-1 / test #112, AMENDED 2026-08-04: the unset (fresh-install) case now inherits the central value ---
+
+// TestRootDelegationCap_DefaultInstallInheritsCentralValue is the
+// consolidation's replacement for the retired
+// TestRootDelegationCap_DefaultInstallIsGatedAt16 (test #112 / BDD-108 as
+// originally written). That test asserted config.DefaultConfig() seeds the
+// root-delegation cap at a fixed 16 REGARDLESS of the central
+// max_parallel_agents setting — exactly the "control that moves, persists
+// and governs nothing" outcome this consolidation exists to close, once
+// Performance.EffectiveMaxParallelAgents() stopped being hard-clamped to 16
+// (commit 536b7340). This test proves the corrected property instead: no
 // operator override anywhere — config.DefaultConfig(), exactly what a fresh
-// install ships — resolves to the seeded 16, the gate built from it is
-// ACTIVE (17th concurrent root delegation refused), and the resolution path
-// never went through EffectiveMaxParallelAgents().
-func TestRootDelegationCap_DefaultInstallIsGatedAt16(t *testing.T) {
+// install ships — resolves to whatever the CENTRAL Performance.
+// EffectiveMaxParallelAgents() value is, and the gate built from it is
+// ACTIVE at that value (the N+1th concurrent root delegation is refused,
+// proving the gate is a real cap and not "no gate").
+func TestRootDelegationCap_DefaultInstallInheritsCentralValue(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
 	cfg := config.DefaultConfig()
 
-	if cfg.Agents.Defaults.SubTurn.MaxConcurrent != 16 {
-		t.Fatalf("config.DefaultConfig().Agents.Defaults.SubTurn.MaxConcurrent = %d, want the U28 seed of 16",
+	if cfg.Agents.Defaults.SubTurn.MaxConcurrent != 0 {
+		t.Fatalf("config.DefaultConfig().Agents.Defaults.SubTurn.MaxConcurrent = %d, want 0 (unset — the seed was removed)",
 			cfg.Agents.Defaults.SubTurn.MaxConcurrent)
 	}
+	// Pin the central value explicitly so this test is deterministic across
+	// hardware, rather than depending on this machine's auto-detected default.
+	cfg.Performance.MaxParallelAgents = 40
 
 	rootCap, err := ResolveRootDelegationCap(cfg)
 	if err != nil {
 		t.Fatalf("ResolveRootDelegationCap on a fresh-install config: unexpected error: %v", err)
 	}
-	if rootCap != 16 {
-		t.Fatalf("ResolveRootDelegationCap = %d, want 16", rootCap)
+	if want := cfg.Performance.EffectiveMaxParallelAgents(); rootCap != want {
+		t.Fatalf("ResolveRootDelegationCap = %d, want %d (cfg.Performance.EffectiveMaxParallelAgents(), the central authority)", rootCap, want)
+	}
+	if rootCap != 40 {
+		t.Fatalf("ResolveRootDelegationCap = %d, want 40 (the pinned central value) — a fresh install must NOT be gated at any fixed number", rootCap)
 	}
 
 	gate := NewRootDelegationAdmission(rootCap)
 	var releases []func()
-	for i := 0; i < 16; i++ {
+	for i := 0; i < rootCap; i++ {
 		ok, release := gate.TryAdmit()
 		if !ok {
-			t.Fatalf("admission %d/16 refused on a fresh-install config — the gate must admit up to the seeded cap", i+1)
+			t.Fatalf("admission %d/%d refused on a fresh-install config — the gate must admit up to the central-value cap", i+1, rootCap)
 		}
 		releases = append(releases, release)
 	}
-	// The 17th is refused — the gate is ACTIVE on an untouched default, not
-	// "no gate" (BDD-108's central assertion).
+	// The (N+1)th is refused — the gate is ACTIVE at the central value on an
+	// untouched default, not "no gate" (BDD-108's central assertion, now
+	// amended to the central-value cap rather than a fixed 16).
 	if ok, _ := gate.TryAdmit(); ok {
-		t.Fatal("17th concurrent root delegation was admitted on a fresh-install (cap=16) config — BDD-108 requires it refused")
+		t.Fatalf("concurrent root delegation #%d was admitted on a fresh-install (cap=%d) config — BDD-108 requires it refused", rootCap+1, rootCap)
 	}
 	for _, r := range releases {
 		r()
 	}
 	if gate.Active() != 0 {
-		t.Fatalf("Active() = %d after releasing all 16 slots, want 0", gate.Active())
+		t.Fatalf("Active() = %d after releasing all %d slots, want 0", gate.Active(), rootCap)
 	}
 }
 

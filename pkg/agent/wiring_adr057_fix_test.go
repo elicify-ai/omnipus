@@ -241,6 +241,115 @@ func TestWiring_RootDelegationAdmission_RefusesPastCapThenAdmitsOnRelease(t *tes
 	require.False(t, result.IsError, "a root-level delegation with a free slot must be admitted: %s", result.ForLLM)
 }
 
+// TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16 is the
+// concurrency-gate consolidation's headline regression test (2026-08-04,
+// commit 536b7340's follow-up fix): it proves root-level `delegate`
+// fan-out is bounded by the CENTRAL Performance.max_parallel_agents value,
+// not a second, independently-seeded 16 — the exact defect this fix closes.
+//
+// Before this fix: agents.defaults.subturn.max_concurrent was seeded to a
+// fixed 16 on every fresh install, and ResolveRootDelegationCap read that
+// field DIRECTLY, bypassing Performance.EffectiveMaxParallelAgents()
+// entirely. An operator who raised max_parallel_agents to 40 in the UI
+// (persisted, and honored by session admission and task dispatch) would
+// still have root-level delegate() fan-out silently refuse the 17th
+// subagent — a control that "moves, persists and governs nothing" for this
+// one dispatch path (the ADR-037 anti-pattern this project bans by name).
+//
+// This test drives the SAME rootDelegationAdmittingSpawner wrapper
+// loop.go's registerSharedTools installs on every per-agent DelegateTool,
+// with 16 root-level delegations already admitted (simulating the OLD
+// cap's exact boundary) and Performance.MaxParallelAgents=40 — then proves
+// the 17th is ADMITTED, not refused, closing the loop end to end through
+// the real dispatch wrapper (not just the RootDelegationAdmission
+// primitive in isolation, which admission_adr057_test.go already covers).
+func TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16(t *testing.T) {
+	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "") // keep the env override inert
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+				// SubTurn.MaxConcurrent deliberately left UNSET (Go zero
+				// value) — the shipped default post-consolidation — so the
+				// root-delegation cap inherits the central value below
+				// rather than any fixed number.
+			},
+		},
+		Performance: config.PerformanceConfig{MaxParallelAgents: 40},
+	}
+	msgBus := bus.NewMessageBus()
+	provider := &mockProvider{}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defer al.Close()
+
+	require.NotNil(t, al.rootDelegationAdmission)
+	require.Equal(t, 40, al.rootDelegationAdmission.Cap(),
+		"the resolved root-delegation cap must be the CENTRAL Performance.EffectiveMaxParallelAgents() value (40), "+
+			"not a second, independently-seeded 16 — this is the regression this fix closes")
+
+	// Simulate 16 root-level delegations already in flight — the exact
+	// boundary the OLD (pre-fix) hardcoded-16 seed would have refused the
+	// very next admission at.
+	var preRelease []func()
+	for i := 0; i < 16; i++ {
+		ok, release := al.rootDelegationAdmission.TryAdmit()
+		require.Truef(t, ok, "precondition: admission %d/16 unexpectedly refused", i+1)
+		preRelease = append(preRelease, release)
+	}
+	t.Cleanup(func() {
+		for _, r := range preRelease {
+			r()
+		}
+	})
+
+	sharedStore := al.GetSessionStore()
+	require.NotNil(t, sharedStore, "AgentLoop has no shared session store")
+	parentMeta, err := sharedStore.NewSession(session.SessionTypeChannel, "test-channel", "main")
+	require.NoError(t, err, "mint a real parent session")
+
+	parent := &turnState{
+		ctx:                 context.Background(),
+		turnID:              "wiring-fanout-root-parent",
+		depth:               0, // a real ROOT turn — concurrencySem intentionally left nil
+		pendingResults:      make(chan *tools.ToolResult, 8),
+		session:             &ephemeralSessionStore{},
+		transcriptSessionID: parentMeta.ID,
+		routingSessionID:    session.RoutingSessionID(parentMeta.ID),
+	}
+	rootCtx := withTurnState(context.Background(), parent)
+
+	spawner := newRootDelegationAdmittingSpawner(NewSubTurnSpawner(al), al.rootDelegationAdmission, "test-agent")
+
+	// THE 17th root-level delegation. Under the pre-fix defect (root cap
+	// hardcoded/seeded to 16, sourced independently of Performance.
+	// EffectiveMaxParallelAgents()) this would have been REFUSED. With the
+	// central value at 40, it must be ADMITTED.
+	result, spawnErr := spawner.SpawnSubTurn(rootCtx, tools.SubTurnConfig{
+		Model:             "test-model",
+		Tools:             []tools.Tool{},
+		SystemPrompt:      "task",
+		DelegateSessionID: "wiring-fanout-17th-" + uuid.NewString(),
+	})
+	require.NoError(t, spawnErr, "spawnSubTurn for the 17th root-level delegation: %v", spawnErr)
+	require.NotNil(t, result)
+	require.False(t, result.IsError,
+		"the 17th concurrent root-level delegation must be ADMITTED when the central max_parallel_agents is 40 — "+
+			"a refusal here means root-level delegate() fan-out is still bound to a stale, independent 16: %s", result.ForLLM)
+	// Note: spawnSubTurn runs the child's entire turn synchronously inside
+	// this call regardless of Async (see rootDelegationAdmittingSpawner's own
+	// doc comment), so by the time SpawnSubTurn returns here the 17th
+	// delegation's slot has ALREADY been released — Active() is back to the
+	// 16 simulated in-flight delegations, not 17. The admission itself (not
+	// a lingering Active() count) is this test's property.
+	require.Equal(t, 16, al.rootDelegationAdmission.Active(),
+		"the 17th delegation's slot must have been released on its own completion, leaving the 16 simulated ones")
+}
+
 // TestWiring_StatsFlushInterval_ReachesSharedSessionStore proves FR-067/
 // SC-048's sessions.stats_flush_interval operator override actually reaches
 // the shared UnifiedStore's live flusher. Before the fix,

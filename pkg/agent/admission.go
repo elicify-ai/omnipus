@@ -141,7 +141,7 @@ func (a *AdmissionController) SoftCap() int {
 
 // ====================== ADR-057 W17: root-level delegation admission ======================
 //
-// FR-069/FR-070/FR-095 (US-15). `turnState.concurrencySem` (pkg/agent/subturn.go)
+// FR-069/FR-070 (US-15). `turnState.concurrencySem` (pkg/agent/subturn.go)
 // is set only on a CHILD turnState — the sole assignment is subturn.go:1051,
 // guarded at subturn.go:607 — so it gates a delegated child's OWN further
 // fan-out but has nothing to guard a ROOT turn's first delegate call with: a
@@ -159,35 +159,62 @@ func (a *AdmissionController) SoftCap() int {
 // spawner (pkg/agent/subturn.go, explicitly out of this unit's file
 // ownership) must make — see this unit's final report for the specific,
 // as-yet-unwired call sites this blocks on.
+//
+// CONSOLIDATION UPDATE (2026-08-04, commit 536b7340's follow-up fix):
+// FR-095's original text required this gate to read
+// agents.defaults.subturn.max_concurrent DIRECTLY and forbade sourcing it
+// from Performance.EffectiveMaxParallelAgents(), on the premise that the
+// latter was hard-clamped to 16 by clampParallelExplicit while the former
+// was honored unclamped — two genuinely different numbers. 536b7340 removed
+// that ceiling (clampParallelExplicit now only floors at 1), which
+// invalidated the premise: with a fixed 16 seed, this gate silently
+// disagreed with an operator's own max_parallel_agents setting the instant
+// the two diverged — the exact "control that moves, persists and governs
+// nothing" anti-pattern (ADR-037) this project bans. Performance.
+// EffectiveMaxParallelAgents() is now the single, central authority for
+// agent concurrency; ResolveRootDelegationCap resolves to it whenever
+// subturn.max_concurrent is unset, and only an explicit positive override
+// diverges from it deliberately. See docs/internal/specs/
+// adr-057-session-unification-spec.md's 2026-08-04 amendment note on FR-095.
 
 // ErrRootDelegationCapMisconfigured is returned by ResolveRootDelegationCap
-// when agents.defaults.subturn.max_concurrent resolves to <= 0. FR-095 is
-// explicit that this MUST be treated as a boot-time configuration error,
-// never silently reinterpreted as "no gate" (the exact ADR-037 anti-pattern
-// this project bans) — U28 seeds the key to 16 precisely so a fresh install
-// never reaches this branch; it can only fire from an operator's OWN
-// config.json explicitly setting the key to <= 0.
+// when agents.defaults.subturn.max_concurrent resolves to a NEGATIVE value
+// (or cfg itself is nil). This MUST be treated as a boot-time configuration
+// error, never silently reinterpreted as "no gate" (the ADR-037
+// anti-pattern this project bans). A value of exactly 0 (unset — the shipped
+// default) is NOT an error: it means "inherit the central
+// Performance.EffectiveMaxParallelAgents() authority", see
+// ResolveRootDelegationCap.
 var ErrRootDelegationCapMisconfigured = errors.New(
-	"agents.defaults.subturn.max_concurrent must be > 0 for the root-delegation admission gate")
+	"agents.defaults.subturn.max_concurrent must be >= 0 for the root-delegation admission gate")
 
-// ResolveRootDelegationCap reads agents.defaults.subturn.max_concurrent
-// DIRECTLY off cfg — FR-095 requires this MUST NOT go through
-// getSubTurnConfig() (pkg/agent/subturn.go) or
-// Performance.EffectiveMaxParallelAgents(), because both apply a fallback
-// (the latter additionally hard-clamped to 16 by clampParallelExplicit,
-// pkg/config/config.go) that would silently defeat an operator's explicit,
-// unclamped override (e.g. AC-10's 24-deep topology). A resolved value <= 0
-// is returned as ErrRootDelegationCapMisconfigured rather than coerced into
-// any default — U28's seed (DefaultSubTurnMaxConcurrent = 16,
-// pkg/config/defaults.go) is the ONLY source of a default value, applied at
-// config-load time, not here.
+// ResolveRootDelegationCap reads agents.defaults.subturn.max_concurrent off
+// cfg and resolves the effective root-level delegation admission cap:
+//
+//   - == 0 (unset — the shipped default, see DefaultConfig/defaults.go): the
+//     cap IS cfg.Performance.EffectiveMaxParallelAgents(), the SAME central,
+//     UI-configurable authority getSubTurnConfig(), TaskExecutor's dispatch
+//     semaphore, and AdmissionController's session gate all resolve to. This
+//     is what makes max_parallel_agents the single authority for agent
+//     concurrency (concurrency-gate consolidation, 2026-08-04): an operator
+//     raising it in the UI raises the root-delegation cap too, with no
+//     second knob to also remember to change.
+//   - > 0: an EXPLICIT, deliberate per-delegation override, honored exactly
+//     as configured — it may differ from the central value in either
+//     direction (an operator's own choice, e.g. to constrain delegation
+//     fan-out specifically), and is never silently coerced towards it.
+//   - < 0: ErrRootDelegationCapMisconfigured — a genuine configuration
+//     error, surfaced rather than coerced into any default.
 func ResolveRootDelegationCap(cfg *config.Config) (int, error) {
 	if cfg == nil {
 		return 0, fmt.Errorf("resolve root-delegation cap: %w: nil config", ErrRootDelegationCapMisconfigured)
 	}
 	v := cfg.Agents.Defaults.SubTurn.MaxConcurrent
-	if v <= 0 {
+	if v < 0 {
 		return 0, fmt.Errorf("resolve root-delegation cap: %w (configured value %d)", ErrRootDelegationCapMisconfigured, v)
+	}
+	if v == 0 {
+		return cfg.Performance.EffectiveMaxParallelAgents(), nil
 	}
 	return v, nil
 }
@@ -199,18 +226,61 @@ func ResolveRootDelegationCap(cfg *config.Config) (int, error) {
 // immediately rather than blocking/queueing (BDD-75's "But it is not queued
 // behind the session-store lock").
 type RootDelegationAdmission struct {
-	mu     sync.Mutex
-	cap    int
-	active int
+	// cap is the fixed cap used when resolveCap is nil — the path taken by
+	// direct-int test construction (NewRootDelegationAdmission). Production
+	// wiring never uses this field; see resolveCap.
+	cap int
+	// resolveCap, when non-nil, is consulted FRESH on every TryAdmit/Cap call
+	// instead of cap. Production wiring (NewAgentLoop) sets this to a closure
+	// resolving ResolveRootDelegationCap(al.GetConfig()) live — mirroring
+	// AdmissionController.resolveCap (concurrency-gate consolidation,
+	// 2026-08-04): this gate must never freeze the cap at boot, or an
+	// operator's PUT /api/v1/performance write (or the auto-detected
+	// default's own boot-time-read self-correction, see pkg/config's
+	// availableRAMBytes doc comment) would silently fail to reach
+	// root-level delegation admission until a restart.
+	resolveCap func() int
+	mu         sync.Mutex
+	active     int
 }
 
-// NewRootDelegationAdmission constructs a gate with the given maxCap. Callers
-// MUST resolve maxCap via ResolveRootDelegationCap first (or otherwise
-// validate it is > 0) — NewRootDelegationAdmission itself does not
-// re-validate, so that its own zero value cannot be mistaken for "no cap
-// configured yet" versus "boot already rejected this config".
+// NewRootDelegationAdmission constructs a gate with a FIXED cap: maxCap if
+// positive, otherwise a defensive floor of 1 (never a hardcoded guess — see
+// newRootDelegationAdmissionWithResolver for the production, live-resolved
+// path NewAgentLoop actually uses). This constructor exists for direct unit
+// tests of TryAdmit's admission logic against a known, stable cap.
 func NewRootDelegationAdmission(maxCap int) *RootDelegationAdmission {
+	if maxCap <= 0 {
+		maxCap = 1
+	}
 	return &RootDelegationAdmission{cap: maxCap}
+}
+
+// newRootDelegationAdmissionWithResolver returns a gate whose cap is
+// resolved LIVE via resolveCap on every TryAdmit/Cap call, rather than fixed
+// at construction. This is the production constructor (NewAgentLoop wires
+// resolveCap to re-run ResolveRootDelegationCap against the live config on
+// every call) — see resolveCap's doc comment on the RootDelegationAdmission
+// struct for why live resolution, rather than a value cached once at
+// construction, is required.
+func newRootDelegationAdmissionWithResolver(resolveCap func() int) *RootDelegationAdmission {
+	return &RootDelegationAdmission{
+		resolveCap: resolveCap,
+		cap:        1, // defensive floor, only reachable if resolveCap ever returns <= 0
+	}
+}
+
+// effectiveCap returns the cap to enforce right now: resolveCap()'s current
+// value when set and positive, otherwise the fixed cap. Safe to call without
+// holding r.mu — resolveCap/cap are set once at construction and never
+// mutated afterward (mirrors AdmissionController.effectiveCap).
+func (r *RootDelegationAdmission) effectiveCap() int {
+	if r.resolveCap != nil {
+		if c := r.resolveCap(); c > 0 {
+			return c
+		}
+	}
+	return r.cap
 }
 
 // TryAdmit atomically claims a root-delegation slot. Returns (true, release)
@@ -222,7 +292,7 @@ func (r *RootDelegationAdmission) TryAdmit() (bool, func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.active >= r.cap {
+	if r.active >= r.effectiveCap() {
 		return false, nil
 	}
 	r.active++
@@ -247,9 +317,11 @@ func (r *RootDelegationAdmission) Active() int {
 	return r.active
 }
 
-// Cap returns the configured cap this gate was constructed with.
+// Cap returns the cap currently being enforced — the live-resolved value
+// when a resolver is configured (production wiring), otherwise the fixed
+// cap.
 func (r *RootDelegationAdmission) Cap() int {
-	return r.cap
+	return r.effectiveCap()
 }
 
 // RefuseRootDelegation performs the BDD-77 operator-visible refusal: an

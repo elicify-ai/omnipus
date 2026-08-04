@@ -712,66 +712,39 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Home)
 	}
 
-	// ADR-057 W17/FR-095: resolve the root-delegation admission cap BEFORE
-	// constructing al. A misconfigured operator value (<=0, explicitly set in
-	// their own config.json — U28's seed of 16 never reaches this branch on a
-	// fresh install) is logged loudly rather than silently accepted, but does
-	// NOT abort AgentLoop construction: a huge fraction of this package's own
-	// tests build a bare config.Config{} literal that never populates
-	// Agents.Defaults.SubTurn at all (bypassing the config-load pipeline
-	// where U28's default is actually seeded), which is indistinguishable
-	// from this specific value at this layer. Failing boot closed here would
-	// turn a wiring fix into a mass test-suite regression unrelated to the
-	// defect being fixed; a nil rootDelegationAdmission degrades to the
-	// PRE-fix pass-through behavior via rootDelegationAdmittingSpawner's own
-	// nil-gate check, which is a no-op change for every such caller. Real
-	// gateway boots always carry the seeded (or operator-overridden) positive
-	// value, so the gate is genuinely constructed and enforced in production.
-	// FAIL CLOSED, never nil: an unresolvable cap falls back to the seeded
-	// default rather than leaving the gate nil, because a nil gate means
-	// UNLIMITED root fan-out — the "silently reinterpreted as no gate"
-	// outcome FR-095 names as the banned ADR-037 anti-pattern. Coercion is
-	// confined to this failure branch precisely so it cannot defeat a valid
-	// operator override: any positive configured value is passed through
-	// untouched and unclamped (ResolveRootDelegationCap's contract). The
-	// error is still surfaced, loudly, so a genuine misconfiguration is
-	// diagnosable instead of manifesting as an unexplained refusal at 16.
-	rootDelegationCap, rootDelegationCapErr := ResolveRootDelegationCap(cfg)
-	if rootDelegationCapErr != nil {
-		rootDelegationCap = config.DefaultSubTurnMaxConcurrent
-		// Severity splits on WHICH failure this is, because the two are not
-		// equally alarming. A NEGATIVE value is an operator who wrote
-		// something wrong and needs to see it. An unset/zero value is the
-		// ordinary shape of a config literal that never went through the
-		// load pipeline where U28 seeds the key — every test in this package
-		// builds one, and a production boot always carries the seed. Logging
-		// both at ERROR made the common, harmless case spam CI badly enough
-		// to bury real errors, which is its own failure mode.
-		severity := logger.DebugCF
-		if cfg != nil && cfg.Agents.Defaults.SubTurn.MaxConcurrent < 0 {
-			severity = logger.ErrorCF
-		}
-		severity("agent",
-			"Root-delegation cap unresolvable — falling back to the seeded default so root-level delegate() fan-out stays GATED; set agents.defaults.subturn.max_concurrent to a positive value",
-			map[string]any{"error": rootDelegationCapErr.Error(), "fallback_cap": rootDelegationCap})
+	// ADR-057 W17: a boot-time diagnostic only — genuine construction of the
+	// root-delegation admission gate happens AFTER al exists, below, via a
+	// LIVE resolver (concurrency-gate consolidation, 2026-08-04). A NEGATIVE
+	// agents.defaults.subturn.max_concurrent is the only case
+	// ResolveRootDelegationCap treats as an error (an unset/zero value now
+	// resolves straight to the central Performance.EffectiveMaxParallelAgents()
+	// authority, not an error — see ResolveRootDelegationCap's doc comment).
+	// Logged loudly here so a genuine operator misconfiguration is
+	// diagnosable at boot; does not abort construction, since the live
+	// resolver's own error branch (below) keeps the gate GATED at the
+	// central value either way, never nil (nil would mean UNLIMITED root
+	// fan-out — the "silently reinterpreted as no gate" outcome ADR-037
+	// bans).
+	if _, err := ResolveRootDelegationCap(cfg); err != nil {
+		logger.ErrorCF("agent",
+			"agents.defaults.subturn.max_concurrent is configured to a negative value — the root-delegation admission gate falls back to the central Performance.EffectiveMaxParallelAgents() authority; set it to 0 (inherit the central value) or a positive explicit override",
+			map[string]any{"error": err.Error()})
 	}
-	rootDelegationAdmission := NewRootDelegationAdmission(rootDelegationCap)
 
 	eventBus := NewEventBus()
 	al := &AgentLoop{
-		bus:                     msgBus,
-		cfg:                     cfg,
-		registry:                registry,
-		state:                   stateManager,
-		eventBus:                eventBus,
-		summarizing:             sync.Map{},
-		fallback:                fallbackChain,
-		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:                newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		contextBuilderRegistry:  NewContextBuilderRegistry(),
-		rootDelegationAdmission: rootDelegationAdmission,
-		loadedTools:             make(map[string]map[string]bool),
-		browserMgrs:             make(map[string]*browser.BrowserManager),
+		bus:                    msgBus,
+		cfg:                    cfg,
+		registry:               registry,
+		state:                  stateManager,
+		eventBus:               eventBus,
+		summarizing:            sync.Map{},
+		fallback:               fallbackChain,
+		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
+		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		contextBuilderRegistry: NewContextBuilderRegistry(),
+		loadedTools:            make(map[string]map[string]bool),
+		browserMgrs:            make(map[string]*browser.BrowserManager),
 	}
 	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
 	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
@@ -782,6 +755,21 @@ func NewAgentLoop(
 	// here at construction time.
 	al.admission = newAdmissionControllerWithResolver(func() int {
 		return al.GetConfig().Performance.EffectiveMaxParallelAgents()
+	})
+	// ADR-057 W17, same live-resolution treatment: root-level delegate()
+	// fan-out must never drift from the central authority either. On
+	// ResolveRootDelegationCap's error branch (a NEGATIVE configured value)
+	// this falls back directly to EffectiveMaxParallelAgents() so the gate
+	// stays GATED at the central value rather than degrading to unlimited.
+	al.rootDelegationAdmission = newRootDelegationAdmissionWithResolver(func() int {
+		liveCfg := al.GetConfig()
+		if resolvedCap, capErr := ResolveRootDelegationCap(liveCfg); capErr == nil {
+			return resolvedCap
+		}
+		if liveCfg != nil {
+			return liveCfg.Performance.EffectiveMaxParallelAgents()
+		}
+		return 1
 	})
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)

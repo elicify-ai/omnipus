@@ -3316,14 +3316,34 @@ func TestContract_PerformanceSettings_ZeroValue(t *testing.T) {
 	mustPassComponent(t, "PerformanceSettings", FixturePerformanceSettings_ZeroValue())
 }
 
-func TestContract_PerformanceSettings_OutOfRange(t *testing.T) {
-	// max_parallel_agents must be within [2, 16].
+func TestContract_PerformanceSettings_LargeValueAccepted(t *testing.T) {
+	// 2026-08-04 concurrency-gate consolidation (commit 536b7340) removed the
+	// policy ceiling PerformanceSettings.yaml used to declare (`maximum: 16`):
+	// max_parallel_agents is now the single, UI-configurable authority for
+	// agent concurrency and an explicit operator value is never silently
+	// capped (see clampParallelExplicit, pkg/config/config.go). A large
+	// explicit value MUST validate — this replaces the old
+	// TestContract_PerformanceSettings_OutOfRange, which asserted the exact
+	// ceiling this change deliberately removed.
 	ps := FixturePerformanceSettings_Populated()
 	ps.MaxParallelAgents = intPtr(99)
 	raw, err := json.Marshal(ps)
 	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "PerformanceSettings", raw),
+		"max_parallel_agents=99 must PASS PerformanceSettings.yaml validation (no ceiling — only minimum:1 applies)")
+}
+
+func TestContract_PerformanceSettings_BelowFloorRejected(t *testing.T) {
+	// The floor still applies even though the ceiling is gone:
+	// max_parallel_agents must be >= 1 (PerformanceSettings.yaml `minimum: 1`).
+	// This is the guard that replaces the retired ceiling assertion — proves
+	// the schema still rejects SOMETHING, rather than accepting any integer.
+	ps := FixturePerformanceSettings_Populated()
+	ps.MaxParallelAgents = intPtr(0)
+	raw, err := json.Marshal(ps)
+	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PerformanceSettings", raw),
-		"max_parallel_agents=99 must FAIL PerformanceSettings.yaml validation (maximum: 16)")
+		"max_parallel_agents=0 must FAIL PerformanceSettings.yaml validation (minimum: 1)")
 }
 
 // ── AgentCreateRequestMain / AgentCreateRequestSubagent / AgentCreateRequestSubagent3p ──
