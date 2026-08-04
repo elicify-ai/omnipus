@@ -46,6 +46,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -164,6 +165,10 @@ type c2ParkTestHarness struct {
 	parentDurableKey string
 	childSessionID   string
 	spawnResult      *tools.ToolResult
+	// subTurnEndMu guards subTurnEndEvents (populated by a background
+	// goroutine draining al.SubscribeEvents — see setupC2ParkScenario).
+	subTurnEndMu     *sync.Mutex
+	subTurnEndEvents *[]SubTurnEndPayload
 }
 
 func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
@@ -232,6 +237,26 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 		LaunchProfile:    session.LaunchProfileUtility,
 	}))
 
+	// Subscribe to the event bus BEFORE dispatching, mirroring
+	// subturn_cancel_status_test.go's established pattern — this is what
+	// lets TestMessageParent_QuestionWaitTrue_SubagentEndFrameParked below
+	// observe the real EventKindSubTurnEnd (wire-level SubTurnEndPayload)
+	// spawnSubTurn emits, not just the in-process ToolResult.ParksTurn flag
+	// the other two tests in this file already check.
+	var subTurnEndMu sync.Mutex
+	var subTurnEndEvents []SubTurnEndPayload
+	sub := al.SubscribeEvents(32)
+	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
+	go func() {
+		for evt := range sub.C {
+			if payload, ok := evt.Payload.(SubTurnEndPayload); ok {
+				subTurnEndMu.Lock()
+				subTurnEndEvents = append(subTurnEndEvents, payload)
+				subTurnEndMu.Unlock()
+			}
+		}
+	}()
+
 	cfgSub := SubTurnConfig{
 		Model:             "c2-park-mock",
 		SystemPrompt:      c2ChildTaskMarker,
@@ -240,6 +265,15 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 	}
 	spawnResult, spawnErr := spawnSubTurn(withSpawnToolCallID(context.Background(), "call-c2-park"), al, parentTS, cfgSub)
 	require.NoError(t, spawnErr, "spawnSubTurn must complete without a dispatch error")
+
+	// spawnSubTurn returning only guarantees dispatch completed — the event
+	// bus subscription is drained by the SEPARATE goroutine above, so a
+	// brief poll is needed for it to have actually processed the event.
+	require.Eventually(t, func() bool {
+		subTurnEndMu.Lock()
+		defer subTurnEndMu.Unlock()
+		return len(subTurnEndEvents) > 0
+	}, 2*time.Second, 5*time.Millisecond, "EventKindSubTurnEnd must be observed by the subscriber")
 
 	return &c2ParkTestHarness{
 		al:               al,
@@ -250,6 +284,8 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 		parentDurableKey: parentTS.transcriptSessionID,
 		childSessionID:   childID,
 		spawnResult:      spawnResult,
+		subTurnEndMu:     &subTurnEndMu,
+		subTurnEndEvents: &subTurnEndEvents,
 	}
 }
 
@@ -304,6 +340,35 @@ func TestMessageParent_QuestionWaitTrue_ParksAndStopsTurn(t *testing.T) {
 		"spawnSubTurn's returned ToolResult must carry ParksTurn so callers (delegate.go's "+
 			"executeSync/executeAsync) can learn the child parked rather than completed")
 	assert.False(t, h.spawnResult.IsError, "a park is not an error")
+}
+
+// TestMessageParent_QuestionWaitTrue_SubagentEndFrameParked is the wire-level
+// proof for the LAST layer of the C2 fix: the child's own EventKindSubTurnEnd
+// (the in-process source of the subagent_end WS frame — see
+// pkg/gateway/websocket.go's EventKindSubTurnEnd handler, a pure passthrough
+// of this exact Status field) must carry SubTurnStatusParked, not
+// SubTurnStatusSuccess. Before spawnSubTurn's endStatus switch gained its
+// `lastTurnStatus == TurnEndStatusParked` case, this test FAILED: every case
+// in that switch is gated on err != nil except the (also nil-error)
+// TurnEndStatusAborted case, so a parked child — nil error, not aborted —
+// fell all the way through to the endStatus := SubTurnStatusSuccess
+// initializer. That is the exact operator-reported defect: "a sub-agent that
+// pauses to ask its parent a question ... emits a subagent_end frame with
+// status:'success' ... the UI can show a paused sub-agent as finished."
+func TestMessageParent_QuestionWaitTrue_SubagentEndFrameParked(t *testing.T) {
+	h := setupC2ParkScenario(t)
+
+	h.subTurnEndMu.Lock()
+	defer h.subTurnEndMu.Unlock()
+	events := *h.subTurnEndEvents
+	require.Len(t, events, 1, "exactly one EventKindSubTurnEnd must be emitted for the one child sub-turn")
+	assert.Equal(t, SubTurnStatusParked, events[0].Status,
+		"a child parked by message_parent(kind=\"question\", wait=true) must report its "+
+			"subagent_end status as \"parked\" — reporting \"success\" (the pre-fix default) or any "+
+			"other value lets the UI show a genuinely-waiting-on-its-parent child as finished")
+	assert.Equal(t, "", events[0].Reason,
+		"SubagentEndFrame.reason is documented as populated only when status is \"interrupted\" — "+
+			"a parked child must not carry a stale/spurious reason")
 }
 
 // TestMessageParent_QuestionWaitTrue_ParkedChildResumableViaRespond proves
