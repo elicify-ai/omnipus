@@ -1391,17 +1391,42 @@ export function BrowserLiveView({
       // SETTLE CHECK: only commit a size that has held still. A drag, an
       // animated sidebar, or a transient overlay produces a stream of
       // intermediate sizes; committing any of them costs a rebuild that the
-      // next frame invalidates. Re-measure after a short delay and bail if the
-      // box moved again — the trailing schedule() will bring us back.
+      // next frame invalidates.
+      //
+      // On a mismatch this RE-ARMS itself rather than returning. Relying on a
+      // trailing schedule() to come back would lose the resize outright
+      // whenever the size stops changing DURING the settle window: the last
+      // ResizeObserver event has already been consumed by the debounce, so
+      // nothing else is pending, and the panel would stay the wrong size until
+      // some unrelated resize happened to occur. Re-arming converges on the
+      // final size on its own, and cannot spin — each pass either commits or
+      // observes a NEW size, and a size that keeps changing forever is a
+      // resize that is genuinely still in progress.
+      const trySettle = (targetW: number, targetH: number) => {
+        settleRef.current = setTimeout(() => {
+          settleRef.current = null
+          const now = el.getBoundingClientRect()
+          const nw = Math.round(now.width)
+          const nh = Math.round(now.height)
+          if (nw < 1 || nh < 1) return
+          if (nw !== targetW || nh !== targetH) {
+            trySettle(nw, nh) // still moving — chase the new size
+            return
+          }
+          const settled = lastSentViewportRef.current
+          // Re-check the dedup gate against the SETTLED size: the box may have
+          // travelled away and come back, in which case there is nothing to
+          // send and a rebuild would be pure cost.
+          if (settled && Math.abs(settled.w - nw) < 8 && Math.abs(settled.h - nh) < 8 && settled.dpr === dpr) {
+            return
+          }
+          if (wsRef.current?.sendViewport(nw, nh, dpr)) {
+            lastSentViewportRef.current = { w: nw, h: nh, dpr }
+          }
+        }, VIEWPORT_SETTLE_MS)
+      }
       if (settleRef.current !== null) clearTimeout(settleRef.current)
-      settleRef.current = setTimeout(() => {
-        settleRef.current = null
-        const now = el.getBoundingClientRect()
-        if (Math.round(now.width) !== w || Math.round(now.height) !== h) return // still moving
-        if (wsRef.current?.sendViewport(w, h, dpr)) {
-          lastSentViewportRef.current = { w, h, dpr }
-        }
-      }, VIEWPORT_SETTLE_MS)
+      trySettle(w, h)
     }
 
     const schedule = () => {

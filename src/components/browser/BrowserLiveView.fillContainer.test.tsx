@@ -383,3 +383,52 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
     }
   })
 })
+
+// Regression coverage for the LOST-RESIZE race the settle check introduced
+// (found in review, 2026-08-04).
+//
+// The settle check re-measures after a delay and bails when the size moved
+// again. The first version then RETURNED, on the assumption that "a trailing
+// schedule() will bring us back". That assumption is false whenever the size
+// stops changing DURING the settle window: the last ResizeObserver event has
+// already been consumed by the 400ms debounce, so nothing else is pending, and
+// the panel stays the wrong size until some unrelated resize happens to occur.
+//
+// This test drives exactly that timeline — one resize event, then the box
+// settles at a DIFFERENT size before the settle timer fires, and no further
+// events. The settle must chase the new size on its own.
+describe('BrowserLiveView — settle must not lose the final size', () => {
+  it('commits the final size when the box stops changing mid-settle', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      act(() => {
+        callbacksRef.current?.onConnected?.()
+        emitFirstFrame()
+      })
+      const el = document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement | null
+      const box = (h: number) =>
+        ({ width: 890, height: h, top: 0, left: 0, right: 890, bottom: h, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      if (el) el.getBoundingClientRect = () => box(1010)
+      await vi.advanceTimersByTimeAsync(900)
+      mockSendViewport.mockClear()
+
+      // ONE resize event. push() will measure 900 after the 400ms debounce.
+      if (el) el.getBoundingClientRect = () => box(900)
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(450) // debounce elapsed, settle armed at 900
+
+      // The box reaches its FINAL size during the settle window — and no
+      // further resize events follow.
+      if (el) el.getBoundingClientRect = () => box(850)
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(mockSendViewport).toHaveBeenCalledTimes(1)
+      expect(mockSendViewport).toHaveBeenLastCalledWith(890, 850, expect.any(Number))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
