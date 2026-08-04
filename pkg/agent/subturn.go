@@ -233,6 +233,19 @@ type SubTurnConfig struct {
 	// the pre-ADR-053 default for any caller that does not set this.
 	DelegateSessionID string
 
+	// IsResume marks this dispatch as a WARM RESUME of an existing,
+	// store-backed session — native `delegate follow_up`'s own use case —
+	// rather than a brand-new session mint. DelegateSessionID in this case
+	// names a session that already exists on disk (the terminal session
+	// being resumed for its next generation): spawnSubTurn verifies it still
+	// exists (GetMeta) instead of calling CreateSessionWithID, which would
+	// ALWAYS collide with FR-096's create-path collision guard — a resume is
+	// not a create and must never be routed through that primitive. false
+	// (the default) is every other caller's existing create-path behavior,
+	// unchanged; the ParentSessionID edge is also left untouched on a
+	// resume (see spawnSubTurn's own comment at the call site).
+	IsResume bool
+
 	// ContextSnapshot carries the DISCRETIONARY portion of the ADR-053 D1
 	// curated context snapshot (R§8.5) — parent-named artifact references
 	// (not contents) plus optional parent-authored notes. Deny-by-default:
@@ -486,6 +499,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		TaskLabel:          cfg.TaskLabel,
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 		DelegateSessionID:  cfg.DelegateSessionID,
+		IsResume:           cfg.IsResume,
 	}
 	if cfg.ContextSnapshot != nil {
 		agentCfg.ContextSnapshot = &ContextSnapshot{
@@ -1037,29 +1051,59 @@ func spawnSubTurn(
 	if sharedStore == nil {
 		return nil, fmt.Errorf("subturn: no shared session store wired — cannot mint a real session for delegated child %q", childID)
 	}
-	if _, createErr := sharedStore.CreateSessionWithID(
-		childID,
-		parentTS.transcriptSessionID,
-		session.SessionTypeDelegate,
-		parentTS.channel,
-		agent.ID,
-	); createErr != nil {
-		return nil, fmt.Errorf("subturn: create child session %q: %w", childID, createErr)
-	}
-	// FR-008 (the parent->child edge itself): CreateSessionWithID mints the
-	// session but never persists ParentSessionID (grep -c ParentSessionID
-	// pkg/session/unified_api.go == 0) — SetMeta is the sole writer of that
-	// field and is also what wires the FR-097 in-memory parent index
-	// (u5WriteIdentityLocked, unified_meta_files.go), which is what makes
-	// ChildCount(parentID) non-zero and the whole nested-session hierarchy
-	// (sidebar/search tree, drill-down, durable-walk Stop, cascade delete)
-	// resolvable at all. Skipping this call leaves meta.json's
-	// ParentSessionID at its zero value with a green build and no compiler
-	// or runtime signal — the exact silent-success shape this migration
-	// exists to end.
-	childParentSessionID := parentTS.transcriptSessionID
-	if setMetaErr := sharedStore.SetMeta(childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); setMetaErr != nil {
-		return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", childID, setMetaErr)
+	if cfg.IsResume {
+		// Warm resume (native `delegate follow_up` on a terminal session —
+		// see SubTurnConfig.IsResume's doc comment): childID already names a
+		// REAL, store-backed session, minted by that session's very first
+		// generation. Routing a resume through CreateSessionWithID would
+		// ALWAYS collide with FR-096's own create-path collision guard
+		// (BDD-107, doc comment below) — that guard exists to refuse a
+		// create over an already-existing directory, and a resume is
+		// definitionally not a create; it must never be sent through that
+		// primitive (doing so was the exact regression this branch fixes —
+		// every `follow_up` on a terminal session failed this guard 100% of
+		// the time, since the directory it is "creating" is the very one it
+		// means to resume). Verify the session genuinely still exists
+		// instead, so a vanished/corrupted session on disk still surfaces as
+		// a real, non-nil error here rather than silently "resuming" into
+		// nothing.
+		if _, getErr := sharedStore.GetMeta(childID); getErr != nil {
+			return nil, fmt.Errorf("subturn: resume child session %q: %w", childID, getErr)
+		}
+		// No SetMeta here: this is not a new parent->child edge. childID's
+		// ParentSessionID was already stamped by the session's FIRST
+		// generation (the create branch below) and must not be re-derived
+		// from THIS caller — the follow_up caller is not necessarily the
+		// agent that originally spawned the session (spawnCorrectiveFollowUp's
+		// own doc comment on ParentAgentID makes the identical point for the
+		// lifecycle record; the same non-re-parenting rule applies here to
+		// the session store's own parent edge).
+	} else {
+		if _, createErr := sharedStore.CreateSessionWithID(
+			childID,
+			parentTS.transcriptSessionID,
+			session.SessionTypeDelegate,
+			parentTS.channel,
+			agent.ID,
+		); createErr != nil {
+			return nil, fmt.Errorf("subturn: create child session %q: %w", childID, createErr)
+		}
+		// FR-008 (the parent->child edge itself): CreateSessionWithID mints the
+		// session but never persists ParentSessionID (grep -c ParentSessionID
+		// pkg/session/unified_api.go == 0) — SetMeta is the sole writer of that
+		// field and is also what wires the FR-097 in-memory parent index
+		// (u5WriteIdentityLocked, unified_meta_files.go), which is what makes
+		// ChildCount(parentID) non-zero and the whole nested-session hierarchy
+		// (sidebar/search tree, drill-down, durable-walk Stop, cascade delete)
+		// resolvable at all. Skipping this call leaves meta.json's
+		// ParentSessionID at its zero value with a green build and no compiler
+		// or runtime signal — the exact silent-success shape this migration
+		// exists to end. Applies to a genuine create only — a resume (above)
+		// keeps its ORIGINAL edge untouched.
+		childParentSessionID := parentTS.transcriptSessionID
+		if setMetaErr := sharedStore.SetMeta(childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); setMetaErr != nil {
+			return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", childID, setMetaErr)
+		}
 	}
 
 	// Create processOptions for the child turn.

@@ -91,6 +91,13 @@ type SubTurnConfig struct {
 	// (the sibling field this converts into) for why reusing this exact
 	// value as the child's turn/steering-queue identity matters.
 	DelegateSessionID string
+
+	// IsResume marks this dispatch as a WARM RESUME of an existing session
+	// (native `delegate follow_up` on a terminal session) rather than a
+	// brand-new mint — see agent.SubTurnConfig.IsResume (the sibling field
+	// this converts into) for the full rationale. false for every other
+	// caller (delegate.run, team, evaluator-optimizer, ...), unchanged.
+	IsResume bool
 }
 
 // ContextSnapshot is the tools-side mirror of agent.ContextSnapshot (ADR-053
@@ -1459,7 +1466,11 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	}
 
 	if async {
-		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, cb)
+		// isResume: false — executeRun always mints a BRAND-NEW
+		// delegateSessionID (generation 0) just above; this is a genuine
+		// create, never a resume. Native `follow_up`'s warm resume goes
+		// through spawnCorrectiveFollowUp's own executeAsync call instead.
+		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, false, cb)
 	}
 	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap)
 }
@@ -1549,34 +1560,119 @@ func (t *DelegateTool) transitionLifecycle(sessionID string, state session.Lifec
 }
 
 // killChildBackgroundShells kills sessionID's own background bash/exec
-// shells (ADR-057 FR-028/BDD-29 — see the sessionManager field doc for the
-// full rationale) via the same KillAllForSessions primitive U16 exposes.
+// shells AND every one of its durable descendants' (ADR-057 D8/R-13,
+// FR-028/BDD-29 — see the sessionManager field doc for the full rationale)
+// via the same KillAllForSessions primitive U16 exposes.
 //
-// Returns (killed, failed) — previously both counts were discarded after
-// the log line below, so executeCancel had no way to know a real kill
-// failure happened and reported its own unconditional cancel-success
-// message regardless. The caller now folds failed into what it tells the
-// user (see executeCancel). A nil sessionManager (SetSessionManager never
-// called) is a silent no-op ((0, 0)), matching every other optional
+// [D8-CASCADE, 2026-08-04] Before this fix, this call reached ONLY sessionID's
+// own shells — never a descendant's — because KillAllForSessions was called
+// with the single-element []string{sessionID} regardless of whether
+// sessionID had any children. The UAT gap-closure report (2026-08-03) proved
+// this live against a real jim->ray->worker chain: hard-cancelling ray left
+// worker's detached background HTTP server (a genuine descendant, owned by
+// worker's own distinct session id per ProcessSession.OwnerSessionID's doc
+// comment) serving for minutes afterward. This mirrors the identical fix
+// pkg/agent/cancel.go's RequestCancel already applies to the chat-wide Stop
+// path (resolveBackgroundKillSessionIDs) — a per-delegation cancel must
+// reach the same descendant set a chat-wide Stop does.
+//
+// Returns (killed, failed, walkIncomplete). killed/failed were previously
+// the only return values; executeCancel folds failed into what it tells the
+// user. walkIncomplete is true when collectCancelDescendantSessionIDs hit a
+// t.lifecycle.List failure partway through the walk — in that case
+// killed/failed reflect only the PARTIAL subtree actually reached, and
+// executeCancel MUST surface that rather than reporting a clean success (a
+// caller reading "0 failed" must not conclude "the whole subtree was swept
+// clean" when this is true). A nil sessionManager (SetSessionManager never
+// called) is a silent no-op ((0, 0, false)), matching every other optional
 // capability this tool accepts via a setter.
-func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, failed int) {
+func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, failed int, walkIncomplete bool) {
 	if t.sessionManager == nil || sessionID == "" {
-		return 0, 0
+		return 0, 0, false
 	}
-	killed, failed = t.sessionManager.KillAllForSessions([]string{sessionID})
+	descendants, walkErr := t.collectCancelDescendantSessionIDs(sessionID)
+	if walkErr != nil {
+		walkIncomplete = true
+		slog.Warn("delegate: cancel: descendant walk failed partway through — the background-shell kill "+
+			"cascade below is INCOMPLETE; some descendants' background bash/exec work may be left running undetected",
+			"session_id", sessionID, "error", walkErr)
+	}
+	ids := append([]string{sessionID}, descendants...)
+	killed, failed = t.sessionManager.KillAllForSessions(ids)
 	switch {
 	case failed > 0:
 		// A REAL kill failure (KillAllForSessions already excludes the
 		// benign lost-the-race case from this count) deserves Warn, not
 		// the same Info level a clean kill gets — this is the actionable
 		// signal executeCancel's own result message is now built from.
-		slog.Warn("delegate: cancel: failed to kill some background shells for cancelled child",
-			"session_id", sessionID, "killed", killed, "failed", failed)
+		slog.Warn("delegate: cancel: failed to kill some background shells for cancelled child or its descendants",
+			"session_id", sessionID, "descendant_count", len(descendants), "killed", killed, "failed", failed)
 	case killed > 0:
-		slog.Info("delegate: cancel: killed background shells for cancelled child",
-			"session_id", sessionID, "killed", killed)
+		slog.Info("delegate: cancel: killed background shells for cancelled child and/or its descendants",
+			"session_id", sessionID, "descendant_count", len(descendants), "killed", killed)
 	}
-	return killed, failed
+	return killed, failed, walkIncomplete
+}
+
+// collectCancelDescendantSessionIDs performs a breadth-first walk of the
+// durable ParentDurableKey edge (pkg/session/lifecycle.go) starting at
+// rootSessionID and returns every reachable descendant's own session id
+// (rootSessionID itself is never included).
+//
+// This mirrors agent.CollectDescendantSessionIDs (pkg/agent/cancel.go)
+// byte-for-byte in walk semantics and error contract, duplicated here rather
+// than called directly because pkg/tools cannot import pkg/agent (pkg/agent
+// already imports pkg/tools — see AgentLoopSpawner/SubTurnConfig — so the
+// dependency can only run that direction). This is the same class of
+// cross-package duplication cancel.go's own CollectDescendantSessionIDs doc
+// comment describes for the (now-hoisted) pkg/gateway/websocket.go copy.
+//
+// Returns (nil, nil) when t.lifecycle is nil or rootSessionID is empty — not
+// an error, the documented degrade-gracefully path for a DelegateTool that
+// never had SetLifecycleStore called (killChildBackgroundShells's caller
+// already checks t.sessionManager != nil before reaching here, but this
+// function is defensive on its own terms too).
+//
+// Returns a non-nil error when ANY t.lifecycle.List call in the walk fails
+// partway through — the returned slice is still the PARTIAL set discovered
+// before the failure, never silently reported as "this node has no
+// children." Callers MUST treat a non-nil error as a truncated view of the
+// true descendant set, never as clean success with fewer descendants than
+// expected (D8-CASCADE, mirroring FIX-5's identical Defect-2 fix in
+// agent.CollectDescendantSessionIDs).
+func (t *DelegateTool) collectCancelDescendantSessionIDs(rootSessionID string) ([]string, error) {
+	if t.lifecycle == nil || rootSessionID == "" {
+		return nil, nil
+	}
+	visited := map[string]struct{}{rootSessionID: {}}
+	queue := []string{rootSessionID}
+	var descendants []string
+	var walkErrs []error
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		children, err := t.lifecycle.List(session.LifecycleFilter{ParentDurableKey: id})
+		if err != nil {
+			// This branch of the tree is now UNREACHABLE for this walk —
+			// recorded (not just logged) so the caller can distinguish this
+			// from "id has no children".
+			walkErrs = append(walkErrs, fmt.Errorf("list children of %q: %w", id, err))
+			continue
+		}
+		for _, rec := range children {
+			if _, seen := visited[rec.SessionID]; seen {
+				continue
+			}
+			visited[rec.SessionID] = struct{}{}
+			descendants = append(descendants, rec.SessionID)
+			queue = append(queue, rec.SessionID)
+		}
+	}
+	if len(walkErrs) > 0 {
+		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %d branch(es) failed to list children: %w",
+			rootSessionID, len(walkErrs), errors.Join(walkErrs...))
+	}
+	return descendants, nil
 }
 
 // executeAsync runs the background (async=true) delegation path. It records
@@ -1590,6 +1686,7 @@ func (t *DelegateTool) executeAsync(
 	delegateSessionID string,
 	timeout time.Duration,
 	snap *ContextSnapshot,
+	isResume bool,
 	cb AsyncCallback,
 ) *ToolResult {
 	if t.spawner == nil {
@@ -1721,6 +1818,7 @@ func (t *DelegateTool) executeAsync(
 			ResolvedMaxDepth:  resolvedMaxDepth,
 			ContextSnapshot:   snap,
 			DelegateSessionID: delegateSessionID,
+			IsResume:          isResume,
 		})
 
 		var lifecycleState session.LifecycleState
@@ -1751,6 +1849,23 @@ func (t *DelegateTool) executeAsync(
 
 		switch {
 		case err != nil:
+			// Kill the silent swallow: a spawn that dies before starting
+			// (e.g. a `follow_up` resume whose target session vanished, or
+			// any other SpawnSubTurn failure) must be operator-visible on
+			// its OWN, unconditionally — never dependent on whatever `cb`
+			// happens to do with the result downstream (a live channel that
+			// may already be gone, an AsyncNotifier publish that lands
+			// somewhere other than where an operator is watching, etc.).
+			// This is the ONE line that fires every single time this
+			// goroutine's spawn attempt fails, regardless of whether cb is
+			// nil, so `grep -i "async subturn spawn failed" gateway.log`
+			// always finds it.
+			slog.Error("delegate: async subturn spawn failed",
+				"session_id", delegateSessionID,
+				"task_id", taskID,
+				"agent_id", agentID,
+				"is_resume", isResume,
+				"error", err)
 			result = ErrorResult(fmt.Sprintf("Delegate failed: %v", err)).WithError(err)
 		case result != nil:
 			// Finding B (A-I4 round 4, live-verified): mirror executeSync's
@@ -2846,24 +2961,31 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		))
 	}
 
-	// ADR-057 FR-028/BDD-29: delegate action="cancel" now also kills that
-	// child's OWN background shells — before this fix, no such call existed
-	// on this path at all (only U15's RequestCancel/Stop-button cascade did,
-	// and only for a chat-wide Stop, not a targeted delegate cancel). Fired
-	// unconditionally of hard/soft and BEFORE the turn-level escalation
-	// below, mirroring RequestCancel's own "decoupled from the active-turn
-	// gate" design (pkg/agent/cancel.go): a background shell is an OS
-	// process, not a steerable LLM turn, so there is no reason to make it
-	// wait through the cooperative grace window that exists for the turn.
+	// ADR-057 FR-028/BDD-29/D8/R-13: delegate action="cancel" now also kills
+	// that child's OWN background shells AND every durable descendant's
+	// (D8-CASCADE) — before this fix, it reached only the single named
+	// session, silently leaking a grandchild's background work (see
+	// killChildBackgroundShells's own doc comment). Fired unconditionally of
+	// hard/soft and BEFORE the turn-level escalation below, mirroring
+	// RequestCancel's own "decoupled from the active-turn gate" design
+	// (pkg/agent/cancel.go): a background shell is an OS process, not a
+	// steerable LLM turn, so there is no reason to make it wait through the
+	// cooperative grace window that exists for the turn.
 	//
-	// killFailed is carried into both success messages below: this call
-	// previously reported the same unconditional "cancelled"/"hard-cancelled"
-	// success text regardless of whether a background shell for this
-	// session actually died — a real kill failure was visible only in a log
-	// line, never to the caller. The turn-level cancel outcome (hard/soft,
-	// checked separately just below) and the shell-kill outcome are
-	// distinct facts; a caller needs both to know what actually happened.
-	_, killFailed := t.killChildBackgroundShells(sessionID)
+	// killFailed and walkIncomplete are carried into both success messages
+	// below: this call previously reported the same unconditional
+	// "cancelled"/"hard-cancelled" success text regardless of whether a
+	// background shell for this session (or a descendant) actually died, or
+	// whether the descendant walk itself broke down partway through — a real
+	// kill failure or an incomplete walk was visible only in a log line,
+	// never to the caller. A partial cascade must not read as a clean
+	// success (binding requirement): walkIncomplete forces that WARNING into
+	// the response even when killFailed is 0, since a walk that broke down
+	// may have left descendants entirely unvisited (0 attempted, not 0
+	// failed). The turn-level cancel outcome (hard/soft, checked separately
+	// just below) and the shell-kill outcome are distinct facts; a caller
+	// needs both to know what actually happened.
+	_, killFailed, walkIncomplete := t.killChildBackgroundShells(sessionID)
 
 	if hard {
 		if t.cancelHard == nil {
@@ -2886,6 +3008,10 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 				" WARNING: %d of that session's background shell(s) could not be killed and may still be running.",
 				killFailed,
 			)
+		}
+		if walkIncomplete {
+			msg += " WARNING: the descendant walk for this session's background shells failed partway through — " +
+				"some of its descendants may not have been reached at all and their background shells could still be running."
 		}
 		return NewToolResult(msg)
 	}
@@ -2948,6 +3074,10 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			" WARNING: %d of that session's background shell(s) could not be killed and may still be running.",
 			killFailed,
 		)
+	}
+	if walkIncomplete {
+		msg += " WARNING: the descendant walk for this session's background shells failed partway through — " +
+			"some of its descendants may not have been reached at all and their background shells could still be running."
 	}
 	return NewToolResult(msg)
 }
@@ -3088,7 +3218,17 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// carry forward any original timeout_seconds override from the prior
 	// generation; the timeout_seconds thread-through is scoped to the
 	// initial `run` dispatch only.
-	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, cb)
+	//
+	// isResume: !rec.Is3P — mirrors newSessionID's own native/3P branch
+	// above. Native follow_up reuses sessionID VERBATIM (newSessionID ==
+	// sessionID), so the spawner must treat this as a WARM RESUME of that
+	// already-existing session rather than attempt to create it — routing it
+	// through the ordinary create path would always collide with FR-096's
+	// collision guard (BDD-107), since the directory it would be "creating"
+	// is the very one being resumed. A 3P respawn mints a genuinely NEW
+	// session_id (newSessionID != sessionID), so it is a real create like any
+	// other dispatch and must NOT set IsResume.
+	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, !rec.Is3P, cb)
 }
 
 func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *ToolResult {

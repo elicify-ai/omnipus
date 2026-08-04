@@ -40,6 +40,10 @@ type MessageParentInboxStore interface {
 // message_parent needs: reading the CALLING child's own durable record (to
 // resolve its parent/owner scope) and parking it in needs_input for a
 // wait=true question.
+//
+// delegate.go's DelegateTool also declares its own lifecycle field with this
+// exact type (rather than a second, narrower interface) so both tools share
+// one contract — see List's own doc comment for why delegate.go needs it too.
 type MessageParentLifecycleStore interface {
 	Load(sessionID string) (*session.LifecycleRecord, error)
 	Persist(rec *session.LifecycleRecord) error
@@ -48,6 +52,22 @@ type MessageParentLifecycleStore interface {
 	// parkNeedsInput routes through it so the park transition holds the
 	// per-session striped lock across the whole tail→decide→write RMW.
 	Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error
+	// List returns every LifecycleRecord matching filter — signature-
+	// identical to *session.LifecycleStore.List, so a real store satisfies
+	// this trivially and every existing test fake that embeds
+	// *session.LifecycleStore (callCountingLifecycleStore,
+	// fix6FaultyLifecycleStore) inherits it for free.
+	//
+	// ADR-057 D8/R-13: delegate.go's executeCancel uses this to walk the
+	// durable ParentDurableKey edge from the cancel target down to its own
+	// descendants (collectCancelDescendantSessionIDs, delegate.go) so the
+	// background-shell-kill cascade reaches a grandchild's own background
+	// bash/exec work, not just the directly-named session's. Before this,
+	// killChildBackgroundShells only ever killed the ONE named session's
+	// shells — a live leak the UAT gap-closure report (2026-08-03) proved
+	// against a real jim->ray->worker chain: cancelling ray left worker's
+	// detached background HTTP server running for minutes.
+	List(filter session.LifecycleFilter) ([]session.LifecycleRecord, error)
 }
 
 // MessageParentWakeEvent carries the fields needed to compose a bounded

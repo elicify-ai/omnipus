@@ -85,13 +85,17 @@ func TestKillChildBackgroundShells_ReturnsRealOutcome(t *testing.T) {
 		tool := NewDelegateTool("test-model", 0, 0)
 		tool.SetSessionManager(sm)
 
-		killed, failed := tool.killChildBackgroundShells(ownerSessionID)
+		killed, failed, walkIncomplete := tool.killChildBackgroundShells(ownerSessionID)
 		if failed != 1 {
 			t.Errorf("BLOCKER (defect 1): expected the real kill failure to be returned as failed=1, got %d — "+
 				"previously both counts were discarded after a log line", failed)
 		}
 		if killed != 0 {
 			t.Errorf("expected killed=0 alongside the failure, got %d", killed)
+		}
+		if walkIncomplete {
+			t.Errorf("expected walkIncomplete=false — no lifecycle store is configured on this tool, " +
+				"which is the documented degrade-gracefully (not error) path")
 		}
 	})
 
@@ -111,12 +115,16 @@ func TestKillChildBackgroundShells_ReturnsRealOutcome(t *testing.T) {
 		tool := NewDelegateTool("test-model", 0, 0)
 		tool.SetSessionManager(sm)
 
-		killed, failed := tool.killChildBackgroundShells(ownerSessionID)
+		killed, failed, walkIncomplete := tool.killChildBackgroundShells(ownerSessionID)
 		if killed != 1 {
 			t.Errorf("expected killed=1 for a clean kill, got %d", killed)
 		}
 		if failed != 0 {
 			t.Errorf("expected failed=0 for a clean kill, got %d", failed)
+		}
+		if walkIncomplete {
+			t.Errorf("expected walkIncomplete=false — no lifecycle store is configured on this tool, " +
+				"which is the documented degrade-gracefully (not error) path")
 		}
 	})
 }

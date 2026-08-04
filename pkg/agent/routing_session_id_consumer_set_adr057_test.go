@@ -246,11 +246,11 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 			// disambiguate by line number, verified 2026-08 against this
 			// tree (see the header comment's per-bucket file:line list).
 			switch r.line {
-			case 595:
+			case 609:
 				return u19BucketPreArm
-			case 1130:
+			case 1174:
 				return u19BucketInheritance
-			case 1283, 1529:
+			case 1327, 1573:
 				return u19BucketWSStamping
 			}
 		}
@@ -354,7 +354,7 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"subturn.go x2: SubTurnSpawnPayload + SubTurnEndPayload)", got)
 	}
 	if got := counts[u19BucketInheritance]; got != 1 {
-		t.Errorf("FR-011 inheritance-copy reads = %d, want 1 (subturn.go:1130, "+
+		t.Errorf("FR-011 inheritance-copy reads = %d, want 1 (subturn.go:1174, "+
 			"childTS.routingSessionID = parentTS.routingSessionID)", got)
 	}
 
