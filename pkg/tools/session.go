@@ -683,6 +683,58 @@ func (sm *SessionManager) Get(sessionID string) (*ProcessSession, error) {
 	return session, nil
 }
 
+// GetOwned is the caller-facing authorization gate for a single-session,
+// caller-supplied-ID lookup (M5 fix, live UAT 2026-07-31): it returns the
+// session with the given ID only when it is owned by callerSessionID
+// (ProcessSession.OwnerSessionID). This is what shell.go's getSessionArg
+// calls instead of the bare Get above for action=poll/read/kill — before
+// this fix, a caller from ANY chat/transcript session could address ANY
+// background bash job process-wide just by knowing its short session_id,
+// with zero ownership check anywhere in that path. Confirmed exploitable for
+// BOTH read (poll) and a DESTRUCTIVE action (kill: a foreign caller's kill
+// call terminated another session's real OS process, verified via
+// pidAlive) — not merely a theoretical read-only information leak.
+//
+// A session that exists but belongs to a DIFFERENT owner session returns the
+// SAME ErrSessionNotFound a genuinely-missing session would — never a
+// distinguishable "forbidden" error — so an unauthorized caller cannot use
+// this to enumerate/confirm the existence of another session's background
+// job. The mismatch is still logged at Warn (with both IDs) so operators
+// retain visibility into cross-session access attempts, mirroring this
+// file's existing pattern of logging real anomalies (KillAllForSessions's
+// failed-kill Warn line) without surfacing them to the caller.
+//
+// This is deliberately NOT the mechanism the legitimate cancel cascade uses.
+// KillAllForSession/KillAllForSessions (above) scan by OwnerSessionID
+// membership directly and never call Get/GetOwned at all, so a parent
+// canceling its own descendant's background jobs (stop_plan/delegate
+// cancel, resolving the full descendant set) is entirely unaffected by this
+// gate — it is not in that code path to begin with.
+//
+// callerSessionID is normally ToolTranscriptSessionID(ctx) at the tool-call
+// boundary. An empty callerSessionID only matches a session whose
+// OwnerSessionID is ALSO empty (an untracked-owner session — see
+// OwnerSessionID's own doc comment); it is never a wildcard that matches
+// every session regardless of owner. OwnerSessionID is set once at
+// process-creation time and never mutated afterward (see its own doc
+// comment), so reading it directly here — without session.mu — is safe and
+// matches KillAllForSessions' identical treatment above.
+func (sm *SessionManager) GetOwned(sessionID, callerSessionID string) (*ProcessSession, error) {
+	session, err := sm.Get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.OwnerSessionID != callerSessionID {
+		slog.Warn("tools: SessionManager.GetOwned: cross-session access denied",
+			"session_id", sessionID,
+			"owner_session_id", session.OwnerSessionID,
+			"caller_session_id", callerSessionID,
+		)
+		return nil, ErrSessionNotFound
+	}
+	return session, nil
+}
+
 func (sm *SessionManager) Remove(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

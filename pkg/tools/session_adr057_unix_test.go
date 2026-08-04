@@ -78,7 +78,16 @@ func startRealBackgroundSleep(t *testing.T, tool *ExecTool, ctx context.Context,
 	require.True(t, pidAlive(pid), "precondition: freshly spawned background process must be alive")
 
 	t.Cleanup(func() {
-		tool.Execute(context.Background(), map[string]any{"action": "kill", "session_id": sessionID})
+		// M5 fix (pkg/tools/session.go's GetOwned): action=kill is now
+		// ownership-gated — the caller's ToolTranscriptSessionID(ctx) must
+		// match the session's OwnerSessionID, or the kill is denied exactly
+		// like a genuinely-missing session_id. Cleanup must therefore act as
+		// the SAME owning session that spawned it (ctx, not
+		// context.Background()) or this force-kill would be silently denied,
+		// leaking the real sleep process past the test — which is exactly
+		// what happened when this used context.Background() before the M5
+		// fix was wired through getSessionArg.
+		tool.Execute(ctx, map[string]any{"action": "kill", "session_id": sessionID})
 	})
 	return sessionID, pid
 }

@@ -440,11 +440,11 @@ func (t *ExecTool) execute(ctx context.Context, args map[string]any, cb AsyncCal
 	case "run":
 		return t.executeRun(ctx, args, cb)
 	case "poll":
-		return t.executePoll(args)
+		return t.executePoll(ctx, args)
 	case "read":
-		return t.executeRead(args)
+		return t.executeRead(ctx, args)
 	case "kill":
-		return t.executeKill(args)
+		return t.executeKill(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s", action))
 	}
@@ -1244,12 +1244,21 @@ func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode
 
 // --- session actions (poll / read / kill) ------------------------------------
 
-func (t *ExecTool) getSessionArg(args map[string]any) (*ProcessSession, string, *ToolResult) {
+// getSessionArg resolves the action=poll/read/kill session_id argument
+// through SessionManager.GetOwned (M5 fix, live UAT 2026-07-31): the
+// caller's own ToolTranscriptSessionID(ctx) must match the session's
+// OwnerSessionID, or the lookup is denied with the same "session not found"
+// message a genuinely-missing session_id would produce — see GetOwned's own
+// doc comment for why this must not be a distinguishable "forbidden" error.
+// Before this fix, ANY chat/transcript session could poll/read/kill ANY
+// OTHER session's background bash job process-wide just by knowing its
+// short session_id, with zero ownership check.
+func (t *ExecTool) getSessionArg(ctx context.Context, args map[string]any) (*ProcessSession, string, *ToolResult) {
 	sessionID, ok := args["session_id"].(string)
 	if !ok || sessionID == "" {
 		return nil, "", ErrorResult("session_id is required")
 	}
-	session, err := t.sessionManager.Get(sessionID)
+	session, err := t.sessionManager.GetOwned(sessionID, ToolTranscriptSessionID(ctx))
 	if err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			return nil, "", ErrorResult(fmt.Sprintf("session not found: %s", sessionID))
@@ -1259,8 +1268,8 @@ func (t *ExecTool) getSessionArg(args map[string]any) (*ProcessSession, string, 
 	return session, sessionID, nil
 }
 
-func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
-	session, sessionID, errResult := t.getSessionArg(args)
+func (t *ExecTool) executePoll(ctx context.Context, args map[string]any) *ToolResult {
+	session, sessionID, errResult := t.getSessionArg(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
@@ -1281,8 +1290,8 @@ func (t *ExecTool) executePoll(args map[string]any) *ToolResult {
 	}
 }
 
-func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
-	session, sessionID, errResult := t.getSessionArg(args)
+func (t *ExecTool) executeRead(ctx context.Context, args map[string]any) *ToolResult {
+	session, sessionID, errResult := t.getSessionArg(ctx, args)
 	if errResult != nil {
 		return errResult
 	}
@@ -1311,8 +1320,8 @@ func (t *ExecTool) executeRead(args map[string]any) *ToolResult {
 // session.IsDone() is checked BEFORE any kill attempt, and
 // session.KillAndRelabel itself atomically no-ops (ErrSessionDone) if it lost
 // that race.
-func (t *ExecTool) executeKill(args map[string]any) *ToolResult {
-	session, sessionID, errResult := t.getSessionArg(args)
+func (t *ExecTool) executeKill(ctx context.Context, args map[string]any) *ToolResult {
+	session, sessionID, errResult := t.getSessionArg(ctx, args)
 	if errResult != nil {
 		return errResult
 	}

@@ -1068,6 +1068,13 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 
 	if newAttempt < maxAttempts && newAttempt <= hardCeiling {
 		te.writeSteeringPrompt(updated, taskSessionID, claimSummary, verdict)
+		// M6 fix: this attempt's own session is about to be superseded by a
+		// fresh one createTaskSessionSync mints when the caller's deferred
+		// closure re-enters ExecuteTask(updated.ID) — nothing else ever
+		// closes THIS session out otherwise. See supersedeTaskSession's doc
+		// comment for why this is a direct SetMeta, not just the lifecycle
+		// mediator.
+		te.supersedeTaskSession(updated.AgentID, taskSessionID)
 		return updated.ID
 	}
 
@@ -1206,7 +1213,64 @@ func (te *TaskExecutor) rejectBareEvidenceClaim(
 			}
 		}
 	}
+	// M6 fix: this is the OTHER redispatch path (the free re-dispatch that
+	// does not consume an attempt) — it mints a fresh session for the next
+	// attempt via the same createTaskSessionSync route and leaves THIS
+	// session's own status/lifecycle untouched otherwise. See
+	// supersedeTaskSession's doc comment for the full rationale.
+	te.supersedeTaskSession(updated.AgentID, taskSessionID)
 	return updated.ID
+}
+
+// supersedeTaskSession closes out a retry-attempt's own session when the
+// goal loop moves on to a fresh attempt (M6, UAT 2026-07-31): both
+// consumeAttemptOrExhaust's attempt-consuming redispatch and
+// rejectBareEvidenceClaim's free redispatch mint a BRAND NEW session for the
+// next attempt (createTaskSessionSync's sessStore.NewSession, reached again
+// when the caller's deferred closure re-enters ExecuteTask) but never closed
+// out the PREVIOUS attempt's session — only the FINAL attempt's session was
+// ever touched, by completeTaskWithResult's direct SetMeta(StatusArchived) +
+// finalizeTaskLifecycle. Every intermediate, superseded attempt kept
+// session.StatusActive permanently, misleading anything that counts or
+// reconciles active work (the sessions list, usage accounting, orphan
+// sweeps).
+//
+// This is a DIRECT SetMeta call — the same shape completeTaskWithResult uses
+// for its own terminal write — rather than relying solely on
+// transitionTaskLifecycle's mediator (session.TransitionSession):
+// transitionTaskLifecycle no-ops ENTIRELY (including its UnifiedMeta mirror)
+// when te.getLifecycleStore() returns nil, which a TaskExecutor can validly
+// run without (test harnesses, and any caller that has not wired the S2
+// durable lifecycle store) — a fix that only worked when that store happens
+// to be configured would silently fail to close out the session in exactly
+// the configurations most likely to go unnoticed. The direct SetMeta below
+// is called unconditionally (whenever sessStore is available at all); the
+// transitionTaskLifecycle call alongside it is best-effort, mirroring the
+// durable S2 record too when that store IS wired, exactly like
+// completeTaskWithResult's own belt-and-suspenders dual write.
+//
+// session.StatusInterrupted (via LifecycleCancelled — mirrors to
+// StatusInterrupted per lifecycle_bridge.go's canonical mapping) rather than
+// StatusArchived: this attempt didn't error out and the TASK itself has not
+// been judged failed (nextStatus is `next`, not `failed`) — the session's
+// own life simply ended in favor of a new attempt, the same "terminated, not
+// cleanly completed" shape a genuine execution error or a user Stop already
+// use StatusInterrupted for, rather than the "intentionally closed" shape
+// StatusArchived captures for a task that actually reached a terminal
+// outcome.
+func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
+	if taskSessionID == "" {
+		return
+	}
+	if sessStore := te.agentLoop.GetAgentStore(agentID); sessStore != nil {
+		statusInterrupted := session.StatusInterrupted
+		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusInterrupted}); setErr != nil {
+			logger.WarnCF("task_executor",
+				"goal-loop: could not mark superseded attempt's session interrupted",
+				map[string]any{"session_id": taskSessionID, "error": setErr.Error()})
+		}
+	}
+	te.transitionTaskLifecycle(taskSessionID, session.LifecycleCancelled, "")
 }
 
 // buildSteeringText renders the feedback fed forward into the next attempt.
