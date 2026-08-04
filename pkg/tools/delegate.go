@@ -1823,6 +1823,15 @@ func (t *DelegateTool) executeAsync(
 
 		var lifecycleState session.LifecycleState
 		var lifecycleFailedReason string
+		// parked: the child called message_parent(wait=true) and is waiting on
+		// the parent's respond(), NOT finished. Its turn stopped deliberately,
+		// so err is nil and the result is neither Interrupted nor IsError —
+		// exactly the shape that otherwise falls into `default` below and gets
+		// stamped LifecycleCompleted, overwriting the needs_input state
+		// parkNeedsInput just wrote. That overwrite is what made respond()
+		// fail closed with "session is not parked" in the ADR-057 UAT even
+		// once the turn loop itself was fixed to stop.
+		parked := false
 
 		t.mu.Lock()
 		if state, ok := t.tasks[taskID]; ok {
@@ -1835,6 +1844,10 @@ func (t *DelegateTool) executeAsync(
 				state.Status = "failed"
 				state.Result = fmt.Sprintf("Error: %v", err)
 				lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
+			case result != nil && result.ParksTurn:
+				parked = true
+				state.Status = "needs_input"
+				state.Result = result.ForLLM
 			default:
 				state.Status = "completed"
 				if result != nil {
@@ -1845,7 +1858,11 @@ func (t *DelegateTool) executeAsync(
 		}
 		t.mu.Unlock()
 
-		t.transitionLifecycle(delegateSessionID, lifecycleState, lifecycleFailedReason)
+		// Skip the transition entirely when parked — parkNeedsInput already
+		// owns this record's state, and any write here would clobber it.
+		if !parked {
+			t.transitionLifecycle(delegateSessionID, lifecycleState, lifecycleFailedReason)
+		}
 
 		switch {
 		case err != nil:
@@ -2030,6 +2047,16 @@ func (t *DelegateTool) executeSync(
 	case result.IsError:
 		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
 		t.finalizeSyncTask(taskID, "failed", result.ForLLM)
+	case result.ParksTurn:
+		// Parked on message_parent(wait=true): waiting for the parent's
+		// respond(), not finished. Deliberately transitions nothing —
+		// parkNeedsInput already wrote needs_input, and writing
+		// LifecycleCompleted here would clobber it and make respond() fail
+		// closed with "session is not parked" (the ADR-057 UAT symptom).
+		// The in-memory task status IS updated (finalizeSyncTask is a plain
+		// setter despite the name), so `delegate status` reports needs_input
+		// rather than a stale "running" — matching executeAsync's parked case.
+		t.finalizeSyncTask(taskID, "needs_input", result.ForLLM)
 	default:
 		t.transitionLifecycle(delegateSessionID, session.LifecycleCompleted, "")
 		t.finalizeSyncTask(taskID, "completed", result.ForLLM)
