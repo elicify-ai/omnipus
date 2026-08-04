@@ -213,7 +213,7 @@ export interface SubagentEndFrame {
   type: "subagent_end";
   session_id: string;
   span_id: string;
-  status: "success" | "error" | "cancelled" | "interrupted" | "timeout";
+  status: "success" | "error" | "cancelled" | "interrupted" | "timeout" | "parked";
   duration_ms?: number;
   final_result?: string;
   reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";

@@ -3066,11 +3066,11 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
              * @example success
              * @enum {string}
              */
-            status: "success" | "error" | "pending" | "denied" | "running" | "cancelled" | "interrupted";
+            status: "success" | "error" | "pending" | "denied" | "running" | "cancelled" | "interrupted" | "parked";
             /**
              * Format: int64
              * @description Elapsed time in milliseconds. Absent when still running.

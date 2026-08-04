@@ -1763,6 +1763,7 @@ const (
 	MessageToolCallsStatusDenied      MessageToolCallsStatus = "denied"
 	MessageToolCallsStatusError       MessageToolCallsStatus = "error"
 	MessageToolCallsStatusInterrupted MessageToolCallsStatus = "interrupted"
+	MessageToolCallsStatusParked      MessageToolCallsStatus = "parked"
 	MessageToolCallsStatusPending     MessageToolCallsStatus = "pending"
 	MessageToolCallsStatusRunning     MessageToolCallsStatus = "running"
 	MessageToolCallsStatusSuccess     MessageToolCallsStatus = "success"
@@ -1778,6 +1779,8 @@ func (e MessageToolCallsStatus) Valid() bool {
 	case MessageToolCallsStatusError:
 		return true
 	case MessageToolCallsStatusInterrupted:
+		return true
+	case MessageToolCallsStatusParked:
 		return true
 	case MessageToolCallsStatusPending:
 		return true
@@ -3671,6 +3674,7 @@ const (
 	SessionDetailMessagesToolCallsStatusDenied      SessionDetailMessagesToolCallsStatus = "denied"
 	SessionDetailMessagesToolCallsStatusError       SessionDetailMessagesToolCallsStatus = "error"
 	SessionDetailMessagesToolCallsStatusInterrupted SessionDetailMessagesToolCallsStatus = "interrupted"
+	SessionDetailMessagesToolCallsStatusParked      SessionDetailMessagesToolCallsStatus = "parked"
 	SessionDetailMessagesToolCallsStatusPending     SessionDetailMessagesToolCallsStatus = "pending"
 	SessionDetailMessagesToolCallsStatusRunning     SessionDetailMessagesToolCallsStatus = "running"
 	SessionDetailMessagesToolCallsStatusSuccess     SessionDetailMessagesToolCallsStatus = "success"
@@ -3686,6 +3690,8 @@ func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 	case SessionDetailMessagesToolCallsStatusError:
 		return true
 	case SessionDetailMessagesToolCallsStatusInterrupted:
+		return true
+	case SessionDetailMessagesToolCallsStatusParked:
 		return true
 	case SessionDetailMessagesToolCallsStatusPending:
 		return true
@@ -5177,6 +5183,7 @@ const (
 	ToolCallStatusDenied      ToolCallStatus = "denied"
 	ToolCallStatusError       ToolCallStatus = "error"
 	ToolCallStatusInterrupted ToolCallStatus = "interrupted"
+	ToolCallStatusParked      ToolCallStatus = "parked"
 	ToolCallStatusPending     ToolCallStatus = "pending"
 	ToolCallStatusRunning     ToolCallStatus = "running"
 	ToolCallStatusSuccess     ToolCallStatus = "success"
@@ -5192,6 +5199,8 @@ func (e ToolCallStatus) Valid() bool {
 	case ToolCallStatusError:
 		return true
 	case ToolCallStatusInterrupted:
+		return true
+	case ToolCallStatusParked:
 		return true
 	case ToolCallStatusPending:
 		return true
@@ -8422,7 +8431,7 @@ type Message struct {
 		// Result Return value from the tool. Shape is tool-specific.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+		// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -8493,7 +8502,7 @@ type MessageRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type MessageToolCallsStatus string
 
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
@@ -10672,7 +10681,7 @@ type SessionDetail struct {
 			// Result Return value from the tool. Shape is tool-specific.
 			Result *map[string]interface{} `json:"result,omitempty"`
 
-			// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+			// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 			Status SessionDetailMessagesToolCallsStatus `json:"status"`
 
 			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -10852,7 +10861,7 @@ type SessionDetailMessagesRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
@@ -12440,14 +12449,14 @@ type ToolCall struct {
 	// Result Return value from the tool. Shape is tool-specific.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+	// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
 	Tool string `json:"tool"`
 }
 
-// ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
+// ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case; unlike that frame, ToolCall carries no accompanying "reason" field here — subturn.go never persists one onto the ToolCall record (reason is WS-frame-only, via SubTurnEndPayload).
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.

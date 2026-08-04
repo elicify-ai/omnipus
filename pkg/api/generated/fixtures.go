@@ -409,6 +409,26 @@ func FixtureSubagentEndFrame_ZeroValue() SubagentEndFrame {
 	return SubagentEndFrame{}
 }
 
+// FixtureSubagentEndFrame_Parked — ADR-057 UAT defect C2 fix: the child
+// sub-turn stopped because a message_parent(kind="question", wait=true)
+// call parked it awaiting the parent's answer, not because it succeeded,
+// errored, was cancelled, or timed out. No `reason` (that field is
+// documented as populated only when status is "interrupted").
+func FixtureSubagentEndFrame_Parked() SubagentEndFrame {
+	agentId := "ava"
+	durationMs := 1200
+	parentCallId := "parent-call-2"
+	return SubagentEndFrame{
+		Type:         "subagent_end",
+		SessionId:    "sess-1",
+		SpanId:       "span-def-456",
+		Status:       "parked",
+		AgentId:      &agentId,
+		DurationMs:   &durationMs,
+		ParentCallId: &parentCallId,
+	}
+}
+
 // ReplayMessageFrame
 
 func FixtureReplayMessageFrame_Populated() ReplayMessageFrame {

@@ -122,7 +122,8 @@ type ToolCall = {
     | "denied"
     | "running"
     | "cancelled"
-    | "interrupted";
+    | "interrupted"
+    | "parked";
   duration_ms?: number | undefined;
   parameters?: {} | undefined;
   result?: {} | undefined;
@@ -1650,6 +1651,7 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
     "running",
     "cancelled",
     "interrupted",
+    "parked",
   ]),
   duration_ms: z.number().int().gte(0).optional(),
   parameters: z.object({}).partial().passthrough().optional(),
@@ -8828,7 +8830,7 @@ export const SubagentEndFrame = z
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
-    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout"]),
+    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout", "parked"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
     reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),

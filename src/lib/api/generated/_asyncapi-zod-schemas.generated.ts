@@ -197,7 +197,7 @@ export const SubagentEndFrame = z
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
-    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout"]),
+    status: z.enum(["success", "error", "cancelled", "interrupted", "timeout", "parked"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
     reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),

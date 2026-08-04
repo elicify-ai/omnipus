@@ -552,6 +552,13 @@ func TestContract_SubagentEndFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required type, session_id, span_id, status fields")
 }
 
+// TestContract_SubagentEndFrame_Parked proves the ADR-057 UAT defect C2 fix's
+// new "parked" status value is schema-valid — added to the enum alongside
+// success/error/cancelled/interrupted/timeout, not a parallel/undeclared value.
+func TestContract_SubagentEndFrame_Parked(t *testing.T) {
+	mustPassAsyncAPI(t, "SubagentEndFrame", FixtureSubagentEndFrame_Parked())
+}
+
 // ── ReplayMessageFrame ────────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.ReplayMessageFrame
 
