@@ -21,12 +21,8 @@
 
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { DownloadSimple, PencilSimple, ArrowsLeftRight, Trash, X, SpinnerGap } from '@phosphor-icons/react'
-import { Button } from '@/components/ui/button'
+import { X, SpinnerGap } from '@phosphor-icons/react'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { fileTypeMeta } from '@/components/chat/AttachmentCard'
-import { formatRelative } from '@/lib/formatRelative'
-import { formatLibrarySize } from './LibraryEntryRow'
 import { fetchLibraryContent, libraryQueryKeys } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import { classifyLibraryEntry } from './preview/libraryPreviewKind'
@@ -36,15 +32,23 @@ import { LibraryMarkdownPreview } from './preview/LibraryMarkdownPreview'
 import { LibraryMermaidPreview } from './preview/LibraryMermaidPreview'
 import { LibraryCodePreview } from './preview/LibraryCodePreview'
 import { LibraryDownloadCard } from './preview/LibraryDownloadCard'
+import { PreviewHeaderSlotProvider } from './preview/previewHeaderSlot'
+
+// Every control in the single header row is a bare icon, matching the browser
+// panel's toolbar treatment: no border, no fill, hover as the only chrome.
+export const LIBRARY_ICON_BTN =
+  'flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors ' +
+  'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-40 ' +
+  'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
 
 export interface LibraryPreviewPaneProps {
   workspaceId: string
   entry: LibraryEntry
   onClose: () => void
+  /** Still required: the download CARD (too-large / binary / unsupported
+   *  fallbacks) is the only remaining download affordance inside the pane. */
   onDownload: (entry: LibraryEntry) => void
-  onRename: () => void
-  onTransfer: (mode: 'move' | 'copy') => void
-  onDelete: () => void
 }
 
 export function LibraryPreviewPane({
@@ -52,9 +56,6 @@ export function LibraryPreviewPane({
   entry,
   onClose,
   onDownload,
-  onRename,
-  onTransfer,
-  onDelete,
 }: LibraryPreviewPaneProps) {
   const kind = classifyLibraryEntry(entry)
   const needsContent = kind === 'markdown' || kind === 'mermaid' || kind === 'text'
@@ -74,61 +75,53 @@ export function LibraryPreviewPane({
     staleTime: 10_000,
   })
 
-  const { Icon, color } = fileTypeMeta(liveEntry.name, liveEntry.mime)
+  const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null)
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="library-preview-pane">
-      {/* Header — entry identity + the same real actions the prior details
-          strip wired (Download/Rename/Move/Delete), plus Close. */}
-      <div className="flex shrink-0 items-start gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
-        <div
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md"
-          style={{ backgroundColor: `${color}22`, color }}
-          aria-hidden="true"
+      {/* ONE header row (operator direction, 2026-08-04). Was three: a tall
+          identity strip (40px type icon, name, size, modified), a row of
+          outline buttons (Download / Rename / Move / Delete), and the
+          view/edit/save toolbar inside the body — roughly 130px of chrome
+          above a pane that already only gets half the panel's height.
+
+          The four actions were not moved, they were REMOVED: every entry row
+          already carries the identical set in its own DotsThree menu
+          (LibraryEntryRow), so the strip was a second copy of a menu the user
+          had just used to open the file. Size/modified went with it — the list
+          row shows both, one click away.
+
+          Close stays. It is the ONLY way to dismiss the pane (LibraryExplorer
+          clears selectedEntry from here and from destructive mutations, not
+          from a second click on the row), so dropping it would strand an open
+          preview. It is an icon like the rest.
+
+          The middle slot is filled by whichever body mounts an editor — see
+          previewHeaderSlot for why that is a portal and not lifted state. */}
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-2">
+        <p
+          className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-secondary)]"
+          title={liveEntry.name}
+          data-testid="library-preview-title"
         >
-          <Icon size={20} weight="fill" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-[var(--color-secondary)]" title={liveEntry.name}>
-            {liveEntry.name}
-          </p>
-          <p className="mt-0.5 text-xs text-[var(--color-muted)]">
-            {formatLibrarySize(liveEntry.size)} · modified {formatRelative(liveEntry.modified_at)}
-            {liveEntry.is_text_editable && ' · text'}
-          </p>
-        </div>
+          {liveEntry.name}
+        </p>
+        <div ref={setHeaderSlot} className="flex shrink-0 items-center gap-0.5" />
         <button
           type="button"
           tabIndex={0}
           onClick={onClose}
           aria-label="Close preview"
+          title="Close preview"
           data-testid="library-preview-close"
-          className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          className={LIBRARY_ICON_BTN}
         >
-          <X size={14} />
+          <X size={15} />
         </button>
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 pb-2.5">
-        <Button variant="outline" size="sm" onClick={() => onDownload(liveEntry)} className="gap-1.5 text-xs">
-          <DownloadSimple size={13} /> Download
-        </Button>
-        <Button variant="outline" size="sm" onClick={onRename} className="gap-1.5 text-xs">
-          <PencilSimple size={13} /> Rename
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => onTransfer('move')} className="gap-1.5 text-xs">
-          <ArrowsLeftRight size={13} /> Move…
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onDelete}
-          className="ml-auto gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-error)]"
-        >
-          <Trash size={13} /> Delete
-        </Button>
       </div>
 
       {/* Body — the actual preview/edit surface. */}
+      <PreviewHeaderSlotProvider slot={headerSlot}>
       <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
         {kind === 'image' && <LibraryImagePreview workspaceId={workspaceId} entry={liveEntry} />}
         {kind === 'video' && <LibraryVideoPreview workspaceId={workspaceId} entry={liveEntry} />}
@@ -159,6 +152,7 @@ export function LibraryPreviewPane({
 
         {kind === 'other' && <LibraryDownloadCard entry={liveEntry} reason="unsupported" onDownload={onDownload} />}
       </div>
+      </PreviewHeaderSlotProvider>
     </div>
   )
 }

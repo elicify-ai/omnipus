@@ -13,9 +13,10 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Eye, PencilSimple, FloppyDisk } from '@phosphor-icons/react'
-import { Button } from '@/components/ui/button'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { cn } from '@/lib/utils'
+import { PreviewHeaderPortal } from './previewHeaderSlot'
+import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
 import { useLibraryFileEditor } from './useLibraryFileEditor'
 import { LibraryCodeEditor } from './LibraryCodeEditor'
 import type { LibraryEntry } from '@/lib/api'
@@ -51,54 +52,55 @@ export function LibraryTextPreview({
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5">
-        <div className="flex items-center gap-1" role="group" aria-label="View mode">
+      {/* These used to be this component's OWN header row — the third of three.
+          They now render into the pane's single row via a portal, as icons.
+          The labels are gone, so the aria-label/title are the only accessible
+          name each control has left and must stay. Mode is a two-button group
+          with aria-pressed rather than a single toggle, so a screen reader
+          hears which of view/edit is current instead of inferring it. */}
+      <PreviewHeaderPortal>
+        <div className="flex items-center gap-0.5" role="group" aria-label="View mode">
           <button
             type="button"
             tabIndex={0}
             onClick={() => setMode('view')}
             aria-pressed={mode === 'view'}
+            aria-label="View"
+            title="View"
             data-testid="library-preview-mode-view"
-            className={cn(
-              'flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors',
-              mode === 'view'
-                ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            )}
+            className={cn(LIBRARY_ICON_BTN, mode === 'view' && 'text-[var(--color-accent)]')}
           >
-            <Eye size={13} /> View
+            <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
           </button>
           <button
             type="button"
             tabIndex={0}
             onClick={() => setMode('edit')}
             aria-pressed={mode === 'edit'}
+            aria-label="Edit"
+            title="Edit"
             data-testid="library-preview-mode-edit"
-            className={cn(
-              'flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors',
-              mode === 'edit'
-                ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            )}
+            className={cn(LIBRARY_ICON_BTN, mode === 'edit' && 'text-[var(--color-accent)]')}
           >
-            <PencilSimple size={13} /> Edit
+            <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
           </button>
         </div>
-
-        <div className="flex items-center gap-3">
-          <AutoSaveIndicator status={status} error={error} lastSavedAt={lastSavedAt} />
-          <Button
-            size="sm"
-            onClick={save}
-            disabled={!isDirty || status === 'saving'}
-            data-testid="library-preview-save"
-            className="gap-1.5"
-          >
-            <FloppyDisk size={13} />
-            {status === 'saving' ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </div>
+        {/* Kept: it is the only feedback that a save happened at all, and it
+            renders nothing while idle, so it costs no width in the common case. */}
+        <AutoSaveIndicator status={status} error={error} lastSavedAt={lastSavedAt} />
+        <button
+          type="button"
+          tabIndex={0}
+          onClick={save}
+          disabled={!isDirty || status === 'saving'}
+          aria-label={status === 'saving' ? 'Saving' : 'Save'}
+          title={status === 'saving' ? 'Saving…' : 'Save'}
+          data-testid="library-preview-save"
+          className={cn(LIBRARY_ICON_BTN, isDirty && status !== 'saving' && 'text-[var(--color-accent)]')}
+        >
+          <FloppyDisk size={15} weight={isDirty ? 'fill' : 'regular'} />
+        </button>
+      </PreviewHeaderPortal>
 
       <div className="flex-1 min-h-0 overflow-auto">
         {mode === 'view' ? (

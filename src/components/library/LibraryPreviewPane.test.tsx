@@ -86,9 +86,6 @@ function makeContent(over: Partial<LibraryContentResponse> = {}): LibraryContent
 interface RenderPaneHandlers {
   onClose?: () => void
   onDownload?: (entry: LibraryEntry) => void
-  onRename?: () => void
-  onTransfer?: (mode: 'move' | 'copy') => void
-  onDelete?: () => void
 }
 
 function renderPane(entry: LibraryEntry, handlers: RenderPaneHandlers = {}) {
@@ -99,9 +96,6 @@ function renderPane(entry: LibraryEntry, handlers: RenderPaneHandlers = {}) {
         entry={entry}
         onClose={handlers.onClose ?? vi.fn()}
         onDownload={handlers.onDownload ?? vi.fn()}
-        onRename={handlers.onRename ?? vi.fn()}
-        onTransfer={handlers.onTransfer ?? vi.fn()}
-        onDelete={handlers.onDelete ?? vi.fn()}
       />
     </QueryClientProvider>,
   )
@@ -245,24 +239,61 @@ describe('LibraryPreviewPane — media kinds (no content fetch)', () => {
   })
 })
 
-describe('LibraryPreviewPane — header actions', () => {
-  it('wires Download/Rename/Move/Delete/Close to the callbacks passed down from the explorer', async () => {
-    const onClose = vi.fn()
-    const onRename = vi.fn()
-    const onTransfer = vi.fn()
-    const onDelete = vi.fn()
+describe('LibraryPreviewPane — the single header row', () => {
+  // Three header bars became one (operator direction, 2026-08-04). Download,
+  // Rename, Move and Delete were REMOVED from the pane, not relocated — every
+  // entry row already carries the same four in its own DotsThree menu, so the
+  // strip duplicated a menu the user had just used to open this very file.
+  it('no longer offers download/rename/move/delete inside the pane', async () => {
     mockedFetchContent.mockResolvedValue(makeContent())
-
-    renderPane(makeEntry(), { onClose, onRename, onTransfer, onDelete })
+    renderPane(makeEntry())
 
     const pane = await screen.findByTestId('library-preview-pane')
-    fireEvent.click(within(pane).getByRole('button', { name: /rename/i }))
-    expect(onRename).toHaveBeenCalled()
-    fireEvent.click(within(pane).getByRole('button', { name: /move/i }))
-    expect(onTransfer).toHaveBeenCalledWith('move')
-    fireEvent.click(within(pane).getByRole('button', { name: /delete/i }))
-    expect(onDelete).toHaveBeenCalled()
+    for (const name of [/rename/i, /move/i, /delete/i]) {
+      expect(within(pane).queryByRole('button', { name })).toBeNull()
+    }
+  })
+
+  // Close is the ONLY way to dismiss the pane — LibraryExplorer clears
+  // selectedEntry from here and from destructive mutations, never from a second
+  // click on the row — so it survives the cull that took the other four.
+  it('keeps Close reachable and wired', async () => {
+    const onClose = vi.fn()
+    mockedFetchContent.mockResolvedValue(makeContent())
+    renderPane(makeEntry(), { onClose })
+
+    await screen.findByTestId('library-preview-pane')
     fireEvent.click(screen.getByTestId('library-preview-close'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  // The editable body's view/edit/save controls portal INTO this row rather
+  // than rendering a second bar of their own.
+  it('hosts the view/edit/save controls in the same row as the title', async () => {
+    mockedFetchContent.mockResolvedValue(makeContent())
+    renderPane(makeEntry())
+
+    // The header row paints before the content query resolves, so wait for the
+    // editor's own control to arrive before asserting where it landed.
+    await screen.findByTestId('library-preview-save')
+    const title = screen.getByTestId('library-preview-title')
+    const row = title.parentElement as HTMLElement
+    for (const id of ['library-preview-mode-view', 'library-preview-mode-edit', 'library-preview-save']) {
+      expect(row.querySelector(`[data-testid="${id}"]`)).toBeTruthy()
+    }
+    expect(row.querySelector('[data-testid="library-preview-close"]')).toBeTruthy()
+  })
+
+  // Dropping the visible labels makes the accessible name the ONLY name.
+  it('gives every icon-only control an accessible name', async () => {
+    mockedFetchContent.mockResolvedValue(makeContent())
+    renderPane(makeEntry())
+
+    await screen.findByTestId('library-preview-save')
+    const pane = screen.getByTestId('library-preview-pane')
+    expect(within(pane).getByRole('button', { name: /^view$/i })).toBeInTheDocument()
+    expect(within(pane).getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
+    expect(within(pane).getByRole('button', { name: /^save$/i })).toBeInTheDocument()
+    expect(within(pane).getByRole('button', { name: /close preview/i })).toBeInTheDocument()
   })
 })

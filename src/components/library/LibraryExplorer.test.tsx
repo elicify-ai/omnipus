@@ -4,7 +4,7 @@
 // work/.library/, and the destructive-action (delete) confirm step.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import type { LibraryEntry, LibraryWorkspaceNode } from '@/lib/api'
@@ -97,6 +97,15 @@ beforeEach(() => {
 
 function act_setToasts() {
   useUiStore.setState({ toasts: [] })
+}
+
+// Download / Rename / Move / Delete were removed from the preview pane
+// (operator direction, 2026-08-04 — three header bars collapsed to one), so the
+// entry row's own DotsThree menu is now the single path to all four. The flows
+// themselves are unchanged; only the affordance that starts them moved.
+async function openRowMenuAndClick(path: string, nameRegex: RegExp) {
+  fireEvent.pointerDown(screen.getByTestId(`library-row-menu-${path}`), { ctrlKey: false, button: 0 })
+  fireEvent.click(await screen.findByRole('menuitem', { name: nameRegex }))
 }
 
 describe('LibraryExplorer — virtual root (sidebar entry point, D-3)', () => {
@@ -202,8 +211,7 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     fireEvent.click(screen.getByTestId('library-row-report.md'))
 
     await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
-    const pane = screen.getByTestId('library-preview-pane')
-    fireEvent.click(within(pane).getByRole('button', { name: /delete/i }))
+    await openRowMenuAndClick('report.md', /delete/i)
 
     // The delete has NOT happened yet — a confirm dialog must appear first.
     expect(mockedDelete).not.toHaveBeenCalled()
@@ -227,7 +235,7 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     fireEvent.click(screen.getByTestId('library-row-draft.md'))
 
     await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
-    fireEvent.click(within(screen.getByTestId('library-preview-pane')).getByRole('button', { name: /delete/i }))
+    await openRowMenuAndClick('draft.md', /delete/i)
 
     await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
@@ -306,10 +314,6 @@ describe('LibraryExplorer — empty and error states', () => {
 // reason where available), keeps the dialog open with their input intact,
 // and that the client never silently rewrites what was typed.
 describe('LibraryExplorer — surfacing real failures (rename / move / upload)', () => {
-  async function openPreviewAndClick(nameRegex: RegExp) {
-    await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
-    fireEvent.click(within(screen.getByTestId('library-preview-pane')).getByRole('button', { name: nameRegex }))
-  }
 
   it('a failed rename shows a persistent, actionable error banner — dialog stays open, typed name preserved, button reverts (never silent)', async () => {
     mockedFetchWorkspaces.mockResolvedValue([])
@@ -320,7 +324,7 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
-    await openPreviewAndClick(/rename/i)
+    await openRowMenuAndClick('report.md', /rename/i)
 
     await waitFor(() => expect(screen.getByTestId('library-rename-dialog')).toBeInTheDocument())
     const input = screen.getByTestId('library-rename-input') as HTMLInputElement
@@ -351,7 +355,7 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
-    await openPreviewAndClick(/move/i)
+    await openRowMenuAndClick('report.md', /move/i)
 
     await waitFor(() => expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument())
     const pathInput = screen.getByTestId('library-transfer-path') as HTMLInputElement
@@ -376,7 +380,7 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
-    await openPreviewAndClick(/move/i)
+    await openRowMenuAndClick('report.md', /move/i)
 
     await waitFor(() => expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument())
     const pathInput = screen.getByTestId('library-transfer-path') as HTMLInputElement
@@ -423,7 +427,7 @@ describe('LibraryExplorer — surfacing real failures (rename / move / upload)',
 
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
-    await openPreviewAndClick(/move/i)
+    await openRowMenuAndClick('report.md', /move/i)
 
     await waitFor(() => expect(screen.getByTestId('library-transfer-dialog')).toBeInTheDocument())
     const pathInput = screen.getByTestId('library-transfer-path') as HTMLInputElement

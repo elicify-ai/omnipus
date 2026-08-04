@@ -617,9 +617,6 @@ export function LibraryExplorer({
               setSelectedEntry(null)
             }}
             onDownload={handleDownload}
-            onRename={() => openRenameDialog(selectedEntry)}
-            onTransfer={(mode) => openTransferDialog(selectedEntry, mode)}
-            onDelete={() => setDeleteTarget(selectedEntry)}
           />
         </div>
       )}
