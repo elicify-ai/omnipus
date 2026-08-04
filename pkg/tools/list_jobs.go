@@ -53,6 +53,13 @@ type ListJobsTool struct {
 	// process. Nil (or a nil return) means no subagent handle is actionable,
 	// which is the honest answer rather than an error.
 	getResolver func() JobSessionResolver
+	// getLabelResolver reports the caller-supplied `delegate(label=...)`
+	// value for delegate session ids still live in THIS process (UAT M3
+	// fix). Nil (or a nil return) means no custom label is available for any
+	// subagent row, so label_contains falls back to matching the row's
+	// agent-display-name Label — never an error, and byte-identical to this
+	// fix's own pre-existing behavior. See JobLabelResolver's doc comment.
+	getLabelResolver func() JobLabelResolver
 	// getCapSource reads the plan engine's published cap snapshot. Nil means
 	// no engine is wired and the cap fields are omitted as a pair.
 	getCapSource func() JobCapSnapshotSource
@@ -162,6 +169,14 @@ func (t *ListJobsTool) SetAgentNamer(get func() JobAgentNamer) { t.getNamer = ge
 // SetSessionResolver installs the batch delegate-session resolver that decides
 // whether a subagent handle is actionable in this process.
 func (t *ListJobsTool) SetSessionResolver(get func() JobSessionResolver) { t.getResolver = get }
+
+// SetLabelResolver installs the batch delegate-label resolver that lets
+// label_contains match a subagent row's caller-supplied `delegate(label=...)`
+// value instead of only its agent display name (UAT M3 fix). A nil accessor,
+// or one returning nil, leaves matching exactly as it was before this setter
+// existed — never an error, never a behavior change for a caller that never
+// wires this.
+func (t *ListJobsTool) SetLabelResolver(get func() JobLabelResolver) { t.getLabelResolver = get }
 
 // SetCapSnapshotSource installs the plan engine's lock-free cap accessor.
 func (t *ListJobsTool) SetCapSnapshotSource(get func() JobCapSnapshotSource) { t.getCapSource = get }
@@ -465,7 +480,11 @@ func (t *ListJobsTool) collectKind(kind, principal, workspaceID string, red reda
 		if t.getResolver != nil {
 			resolver = t.getResolver()
 		}
-		return collectSubagentRows(t.lifecycles, principal, workspaceID, red, ceiling, namer, resolver)
+		var labelResolver JobLabelResolver
+		if t.getLabelResolver != nil {
+			labelResolver = t.getLabelResolver()
+		}
+		return collectSubagentRows(t.lifecycles, principal, workspaceID, red, ceiling, namer, resolver, labelResolver)
 	default:
 		return collectResult{err: fmt.Errorf("%s: unknown kind", kind)}
 	}
@@ -562,9 +581,13 @@ func (t *ListJobsTool) writeAudit(
 }
 
 // filterByLabel applies the caller's case-insensitive substring filter against
-// the REDACTED, pre-truncation label. It is never applied to native_status,
-// which carries unvalidated runtime text — a filter over that would be a query
-// interface onto wrapped error strings.
+// the REDACTED, pre-truncation filterLabel — NOT necessarily the same string
+// as the displayed Label (see filterLabel's own doc comment: for plan/task
+// rows the two are always identical; for a subagent row filterLabel prefers
+// the caller's own `delegate(label=...)` value when one is still resolvable,
+// UAT M3 fix). It is never applied to native_status, which carries
+// unvalidated runtime text — a filter over that would be a query interface
+// onto wrapped error strings.
 func filterByLabel(rows []jobRow, needle string) []jobRow {
 	if needle == "" {
 		return rows
@@ -572,7 +595,7 @@ func filterByLabel(rows []jobRow, needle string) []jobRow {
 	lowered := strings.ToLower(needle)
 	out := rows[:0:0]
 	for _, row := range rows {
-		if strings.Contains(strings.ToLower(row.Label), lowered) {
+		if strings.Contains(strings.ToLower(row.filterLabel), lowered) {
 			out = append(out, row)
 		}
 	}

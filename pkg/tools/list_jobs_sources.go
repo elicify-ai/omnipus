@@ -82,6 +82,40 @@ type JobSessionResolver interface {
 	ResolvableSessionIDs(ids []string) map[string]bool
 }
 
+// JobLabelResolver reports the caller-supplied `label` argument a caller
+// passed to `delegate(...)` for a batch of delegate session ids — read from
+// THIS process's in-memory delegate task-state index, the same store
+// JobSessionResolver's own index lives in.
+//
+// [UAT M3 fix] Before this interface existed, `label_contains` had no way to
+// reach that value at all for a subagent row: `session.LifecycleRecord` (the
+// durable store collectSubagentRows reads) carries no field for it — the
+// caller's `label` argument is stamped only into the delegate tool's own
+// live task-state map (keyed by delegate session id) for its unrelated
+// action:"status" display, and separately into a one-shot WS event payload
+// neither persisted nor readable here. `label_contains` therefore matched
+// only the row's agent-display-name `Label` for every subagent, silently
+// discarding the one thing an orchestrator juggling many delegations
+// actually tags them with.
+//
+// It is a BATCH accessor by the exact same contract as JobSessionResolver
+// (FR-028): the underlying index is guarded by the same mutex every delegate
+// status/inbox/steer/respond/cancel call takes, so resolving one id per row
+// would put a read-only visibility tool in contention with the live dispatch
+// path. list_jobs calls this at most once per invocation.
+//
+// A session id absent from the returned map, or mapped to "", means NO
+// custom label was set for that dispatch (the ordinary case for any
+// `delegate` call made without a `label` argument) — never an error, and the
+// caller MUST fall back to the row's already-resolved agent display name for
+// matching in that case (see collectSubagentRows). A nil accessor (or one
+// returning nil) means no custom label is available for ANY subagent row —
+// label_contains then matches only the agent display name, byte-identical to
+// this fix's own pre-existing behavior.
+type JobLabelResolver interface {
+	ResolvableLabels(ids []string) map[string]string
+}
+
 // JobCapSnapshotSource is FR-029's lock-free, read-only cap accessor on the
 // plan engine.
 //
@@ -187,10 +221,11 @@ func collectPlanRows(
 	}
 	for _, p := range kept {
 		norm := normalizePlan(p)
+		label := red.redact(p.Title)
 		res.rows = append(res.rows, jobRow{
 			Kind:                 jobKindPlan,
 			ID:                   p.ID,
-			Label:                red.redact(p.Title),
+			Label:                label,
 			Status:               norm.status,
 			NativeStatus:         red.redact(norm.nativeStatus),
 			Relation:             relationRuns,
@@ -202,6 +237,11 @@ func collectPlanRows(
 			IntentionallyStopped: norm.stopped,
 			draftRank:            norm.draftRank,
 			unmapped:             norm.unmapped,
+			// A plan has exactly one candidate free-text handle (its title),
+			// so filterLabel is always identical to Label here — see
+			// filterLabel's own doc comment for why that is NOT true for a
+			// subagent row.
+			filterLabel: label,
 		})
 	}
 	return res
@@ -270,10 +310,11 @@ func collectTaskRows(
 			relation = relationRuns
 		}
 		norm := normalizeTask(t)
+		label := red.redact(t.Title)
 		res.rows = append(res.rows, jobRow{
 			Kind:         jobKindTask,
 			ID:           t.ID,
-			Label:        red.redact(t.Title),
+			Label:        label,
 			Status:       norm.status,
 			NativeStatus: red.redact(norm.nativeStatus),
 			Relation:     relation,
@@ -291,6 +332,11 @@ func collectTaskRows(
 			// closed, always-populated stop-intent enum.
 			IntentionallyStopped: false,
 			unmapped:             norm.unmapped,
+			// A task has exactly one candidate free-text handle (its title),
+			// so filterLabel is always identical to Label here — see
+			// filterLabel's own doc comment for why that is NOT true for a
+			// subagent row.
+			filterLabel: label,
 		})
 	}
 	return res
@@ -332,6 +378,7 @@ func collectSubagentRows(
 	ceiling int,
 	namer JobAgentNamer,
 	resolver JobSessionResolver,
+	labelResolver JobLabelResolver,
 ) collectResult {
 	filter := session.LifecycleFilter{WorkspaceID: workspaceID, ParentAgentID: principal}
 	records, skipped, err := listLifecycleLeniently(store, filter)
@@ -361,10 +408,11 @@ func collectSubagentRows(
 	for i := range kept {
 		rec := kept[i]
 		norm := normalizeSubagent(rec)
+		displayLabel := red.redact(subagentLabel(rec, namer))
 		rows = append(rows, jobRow{
 			Kind:         jobKindSubagent,
 			ID:           rec.SessionID,
-			Label:        red.redact(subagentLabel(rec, namer)),
+			Label:        displayLabel,
 			Status:       norm.status,
 			NativeStatus: red.redact(norm.nativeStatus),
 			Relation:     relationDispatched,
@@ -377,10 +425,21 @@ func collectSubagentRows(
 			IntentionallyStopped: norm.stopped,
 			Generation:           rec.Generation,
 			unmapped:             norm.unmapped,
+			// Defaults to the displayed agent-name label; overwritten below,
+			// per row, ONLY when a resolvable custom label exists for this
+			// session id. See filterLabel's own doc comment.
+			filterLabel: displayLabel,
 		})
 		ids = append(ids, rec.SessionID)
 	}
 
+	// Exactly ONE resolver call for the whole batch, never one per row —
+	// same FR-028 contention rule as the session resolver immediately below,
+	// and the same underlying index (see JobLabelResolver's doc comment).
+	var customLabels map[string]string
+	if labelResolver != nil {
+		customLabels = labelResolver.ResolvableLabels(ids)
+	}
 	// Exactly ONE resolver call for the whole batch, never one per row.
 	var resolvable map[string]bool
 	if resolver != nil {
@@ -393,6 +452,16 @@ func collectSubagentRows(
 		// index does not. With no delegate tool wired, nothing resolves, which
 		// is the honest answer rather than an error.
 		rows[i].Actionable = !terminalStatus(rows[i].Status) && resolvable[rows[i].ID]
+
+		// [UAT M3 fix] label_contains must match the label the CALLER set,
+		// when one is still resolvable, not unconditionally the agent name.
+		// Redacted the same way Label is (FR-019a: the filter must never see
+		// unredacted free text) — never truncated, because filterLabel is
+		// never serialized (truncation exists only to bound the JSON payload
+		// Label/NativeStatus contribute).
+		if custom := strings.TrimSpace(customLabels[rows[i].ID]); custom != "" {
+			rows[i].filterLabel = red.redact(custom)
+		}
 	}
 	res.rows = rows
 	return res

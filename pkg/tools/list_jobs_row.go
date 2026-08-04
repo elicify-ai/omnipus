@@ -134,6 +134,32 @@ type jobRow struct {
 	// so the caller's per-kind `unmapped` counter can be incremented without
 	// re-parsing native_status (FR-006b). Not serialized.
 	unmapped bool
+
+	// filterLabel is what `label_contains` actually matches against — the
+	// caller-facing free-text handle for the row, redacted like `Label` but
+	// NOT necessarily identical to it. Not serialized: it is a match target,
+	// not a row field.
+	//
+	// For plan and task rows it is always the SAME value as `Label` (the
+	// title) — those two kinds have exactly one candidate string and no
+	// defect here (confirmed by live UAT: `label_contains` already finds a
+	// matching task/plan by title).
+	//
+	// For subagent rows it deliberately DIVERGES from `Label`: FR-005 fixes
+	// the DISPLAYED `Label` as the delegated agent's display name (never a
+	// caller-supplied value, so it is never empty and never depends on
+	// whether the caller happened to pass one), but `label_contains`'s whole
+	// point is to let an orchestrator recover the ONE dispatch it tagged out
+	// of many — and the caller-supplied `label` argument to `delegate(...)`
+	// is what it tagged it WITH. `filterLabel` carries that value, resolved
+	// via JobLabelResolver, when one was set and is still resolvable in this
+	// process; otherwise it falls back to the same agent-display-name value
+	// `Label` already carries. That fallback is deliberate, not incidental —
+	// it is what keeps every subagent row findable by `label_contains` even
+	// for the (very common) delegation made with no `label` argument at all,
+	// exactly matching pre-fix behavior for that case. See
+	// collectSubagentRows and JobLabelResolver's own doc comments.
+	filterLabel string
 }
 
 // terminalStatus reports whether a normalized status is terminal. Terminal
