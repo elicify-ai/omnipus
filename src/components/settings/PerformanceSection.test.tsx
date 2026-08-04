@@ -143,26 +143,93 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     })
   })
 
-  it('does NOT open the re-auth dialog for out-of-range values', async () => {
+  it('does NOT open the re-auth dialog for a negative value (still rejected — no ceiling, but a floor of 0 remains)', async () => {
     renderSection()
     // Wait for data with real timers.
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
     // Switch to fake timers to control the debounce.
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-7' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    // Dialog must NOT open — invalid value is silently skipped by autosave.
+    // Dialog must NOT open — a negative value is silently skipped by autosave.
     expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
     // PUT must not have been called.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
-  it('shows the over-limit warning when input exceeds the recommended ceiling', async () => {
+  it('accepts a value well above the old 16-ceiling (removed, ADR concurrency-gate consolidation) and submits it unchanged', async () => {
+    // The backend removed `maximum: 16` from PerformanceSettingsUpdate — an
+    // explicit value now has no ceiling and is honored exactly as configured
+    // (clampParallelExplicit only floors at 1). 40 must be accepted, open the
+    // reauth dialog, and be sent to updatePerformanceSettings verbatim.
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_40', expires_in: 300 } as never)
+    vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, max_parallel_agents: 40, effective_max_parallel_agents: 40 } as never)
+
     vi.useRealTimers()
-    // effective_max_parallel_agents = 4 → recommended = 4
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '40' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    vi.useRealTimers()
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
+        { max_parallel_agents: 40, tools_on_demand: true },
+        'reauth_tok_40',
+      )
+    })
+    // No validation error toast for a value that is now within bounds.
+    expect(addToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error', message: expect.stringContaining('max_parallel_agents') }),
+    )
+  })
+
+  it('accepts 0 and submits it as the auto-detect restore signal', async () => {
+    // Per PerformanceSettingsUpdate.yaml: "Set to 0 to restore the
+    // auto-detected default." Typing 0 explicitly must behave identically to
+    // leaving the field blank — both send max_parallel_agents: 0.
+    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_0', expires_in: 300 } as never)
+    vi.mocked(api.updatePerformanceSettings).mockResolvedValue(SETTINGS as never)
+
+    vi.useRealTimers()
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '0' } })
+    await act(async () => { vi.advanceTimersByTime(700) })
+    vi.useRealTimers()
+
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
+        { max_parallel_agents: 0, tools_on_demand: true },
+        'reauth_tok_0',
+      )
+    })
+  })
+
+  // The old "over-limit warning" (fired whenever the typed value exceeded
+  // the recommended auto-detected default, and claimed the runtime would
+  // "clamp" it back down) was removed: the backend no longer clamps explicit
+  // values at all, so that claim became false. It is replaced by a
+  // high-value caution that fires only near the real physical OS-thread
+  // safety ceiling the backend itself warns about (physicalConcurrencySafetyCeiling
+  // = 2000, pkg/config/config.go) — and never claims the value will be lowered.
+  it('shows the high-value caution when input exceeds the physical thread-safety ceiling (2000)', async () => {
+    vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 4,
       effective_max_parallel_agents: 4,
@@ -172,18 +239,20 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     renderSection()
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    // Type a value within [2,16] but above the recommended 4
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '5000' } })
 
     await waitFor(() => {
-      expect(screen.getByTestId('performance-over-limit-warning')).toBeInTheDocument()
+      expect(screen.getByTestId('performance-high-value-warning')).toBeInTheDocument()
     })
-    // Warning text mentions both the typed value and the recommended value
-    expect(screen.getByTestId('performance-over-limit-warning').textContent).toContain('8')
-    expect(screen.getByTestId('performance-over-limit-warning').textContent).toContain('4')
+    // Warning text mentions the typed value and the ceiling, and must NOT
+    // claim the value will be lowered — it is honored exactly as configured.
+    const text = screen.getByTestId('performance-high-value-warning').textContent ?? ''
+    expect(text).toContain('5000')
+    expect(text).toContain('2000')
+    expect(text).toContain('honored exactly as set')
   })
 
-  it('does not show the over-limit warning when input is within the recommended ceiling', async () => {
+  it('does not show the high-value caution for a value within the recommended range', async () => {
     vi.useRealTimers()
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       max_parallel_agents: 8,
@@ -196,7 +265,49 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
 
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '4' } })
 
-    expect(screen.queryByTestId('performance-over-limit-warning')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('performance-high-value-warning')).not.toBeInTheDocument()
+  })
+
+  it('does not show the high-value caution for a value above the old 16-ceiling but below the physical ceiling (2000)', async () => {
+    // Regression guard: 40 exceeds the OLD (removed) ceiling of 16 but is
+    // nowhere near the physical thread-safety ceiling of 2000 — no caution
+    // should render for it.
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+      max_parallel_agents: 4,
+      effective_max_parallel_agents: 4,
+      tools_on_demand: true,
+    } as never)
+
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '40' } })
+
+    expect(screen.queryByTestId('performance-high-value-warning')).not.toBeInTheDocument()
+  })
+
+  it('displays a recommendation reflecting the memory-based default, not the old CPU-based heuristic', async () => {
+    vi.useRealTimers()
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+      max_parallel_agents: 4,
+      effective_max_parallel_agents: 882,
+      tools_on_demand: true,
+    } as never)
+
+    renderSection()
+    await waitFor(() => screen.getByLabelText('Max parallel agents'))
+
+    // The recommendation must surface the API's resolved effective value
+    // (memory-based auto-detect) and explicitly say so. Both the headline
+    // and the sub-text below independently mention "available memory", so
+    // assert there are at least two matches rather than a single unique one.
+    expect(screen.getByText(/Recommended: 882 parallel agents/)).toBeInTheDocument()
+    expect(screen.getAllByText(/available memory/i).length).toBeGreaterThanOrEqual(2)
+    // The old CPU-based formula text must be gone.
+    expect(screen.queryByText(/NumCPU/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/RAM_GB\/1\.5/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/ceiling of 16/)).not.toBeInTheDocument()
   })
 
   it('shows AutoSaveIndicator (no legacy SaveStatus)', async () => {
@@ -284,7 +395,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
 
   it('stuck-spinner fix: save status clears to idle (not stuck on saving) when max_parallel_agents is out of range and tools_on_demand is toggled', async () => {
     // Regression test for the stuck-spinner bug: when max_parallel_agents is out
-    // of range (e.g. 99), buildBody returns null. If handleToolsOnDemandChange
+    // of range (e.g. -1, negative), buildBody returns null. If handleToolsOnDemandChange
     // left saveStatus='saving' before the null guard ran, the AutoSaveIndicator
     // would spin forever. The fix: the else-branch sets saveStatus='idle'
     // explicitly so the spinner clears.
@@ -292,11 +403,11 @@ describe('PerformanceSection — Tool loading toggle', () => {
     renderSection()
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    // Put an out-of-range value (99) into the input first.
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+    // Put an out-of-range value (-1, negative) into the input first.
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
 
     // Now toggle tools_on_demand — this calls handleToolsOnDemandChange which
-    // calls buildBody(inputValue='99', checked=false) → null (out of range).
+    // calls buildBody(inputValue='-1', checked=false) → null (out of range).
     fireEvent.click(screen.getByLabelText('Tool loading'))
 
     // Give React time to process state updates.
@@ -324,20 +435,20 @@ describe('PerformanceSection — Tool loading toggle', () => {
     renderSection()
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    // Put an out-of-range value (99) into the input first.
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+    // Put an out-of-range value (-1, negative) into the input first.
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
 
     const toggle = screen.getByLabelText('Tool loading')
     expect(toggle).toBeChecked() // starts ON (default from SETTINGS)
 
     // Toggle OFF — this calls handleToolsOnDemandChange, which calls
-    // buildBody(inputValue='99', checked=false) → null (out of range).
+    // buildBody(inputValue='-1', checked=false) → null (out of range).
     fireEvent.click(toggle)
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).',
+        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).',
       })
     })
 
@@ -365,19 +476,19 @@ describe('PerformanceSection — Tool loading toggle', () => {
     renderSection()
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
-    // Put an out-of-range value (99) into the input first.
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+    // Put an out-of-range value (-1, negative) into the input first.
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
 
     const toggle = screen.getByLabelText('Tool loading')
     expect(toggle).not.toBeChecked() // starts OFF
 
-    // Toggle ON — buildBody(inputValue='99', checked=true) -> null (out of range).
+    // Toggle ON — buildBody(inputValue='-1', checked=true) -> null (out of range).
     fireEvent.click(toggle)
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).',
+        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).',
       })
     })
 
@@ -400,14 +511,14 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '99' } })
+    fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '-1' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).',
+        message: 'max_parallel_agents must be zero or a positive whole number (0 or blank restores the auto-detected default).',
       })
     })
 
