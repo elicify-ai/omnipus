@@ -224,6 +224,19 @@ function computeDriveMode(state: {
  * this return value keeps the keys genuinely absent, not merely undefined,
  * matching the legacy JPEG-mode wire shape exactly.
  */
+// Toolbar icon buttons share ONE shape (operator direction, 2026-08-04: "the
+// buttons should be icons ... it needs to be flatter"). Back, refresh, annotate,
+// mute and the degraded-retry all render as a bare 32px glyph with no border and
+// no fill — the frames and pill backgrounds made a row of five controls read as
+// five competing objects. Hover is the only chrome; active state is carried by
+// COLOUR PLUS `aria-pressed`, never colour alone. The coarse-pointer floor keeps
+// the WCAG 2.5.8 target even though the visual box shrank.
+const TOOLBAR_ICON_BTN =
+  'shrink-0 flex h-8 w-8 items-center justify-center rounded-md transition-colors ' +
+  'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-40 ' +
+  'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
+
 function captureDimsFields(dims: { captureWidth?: number; captureHeight?: number }): { capture_width?: number; capture_height?: number } {
   if (dims.captureWidth === undefined || dims.captureHeight === undefined) return {}
   return { capture_width: dims.captureWidth, capture_height: dims.captureHeight }
@@ -2528,9 +2541,9 @@ export function BrowserLiveView({
             onClick={onPopOut}
             aria-label="Pop out"
             title="Pop out into its own window"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+            className={TOOLBAR_ICON_BTN}
           >
-            <ArrowSquareOut size={15} />
+            <ArrowSquareOut size={16} />
           </button>
         )}
         {onClose && (
@@ -2539,9 +2552,9 @@ export function BrowserLiveView({
             onClick={onClose}
             aria-label="Close live browser panel"
             title="Close"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+            className={TOOLBAR_ICON_BTN}
           >
-            <X size={15} />
+            <X size={16} />
           </button>
         )}
       </div>
@@ -2562,7 +2575,7 @@ export function BrowserLiveView({
           disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
           aria-label="Go back"
           title="Back"
-          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          className={TOOLBAR_ICON_BTN}
         >
           <CaretLeft size={16} weight="bold" />
         </button>
@@ -2572,7 +2585,7 @@ export function BrowserLiveView({
           disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
           aria-label="Refresh page"
           title="Refresh"
-          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          className={TOOLBAR_ICON_BTN}
         >
           <ArrowsClockwise size={15} />
         </button>
@@ -2602,7 +2615,7 @@ export function BrowserLiveView({
         <span
           data-testid="browser-live-agent-chip"
           title={`Driving ${agentDisplayName}'s browser context`}
-          className="flex shrink-0 items-center gap-1.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-secondary)] whitespace-nowrap"
+          className="flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-medium text-[var(--color-secondary)] whitespace-nowrap"
         >
           <span
             aria-hidden="true"
@@ -2624,7 +2637,7 @@ export function BrowserLiveView({
         </span>
         <span
           data-testid="browser-live-status-chip"
-          className={cn('flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
+          className={cn('flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
         >
           <span
             aria-hidden="true"
@@ -2644,12 +2657,9 @@ export function BrowserLiveView({
             }}
             title={`Live video degraded to picture mode (${degradedReason}). Click to retry.`}
             aria-label={`Live video degraded: ${degradedReason}. Retry live video.`}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
-              'bg-[var(--color-warning)]/15 text-[var(--color-warning)] hover:bg-[var(--color-warning)]/25',
-            )}
+            className={cn(TOOLBAR_ICON_BTN, 'text-[var(--color-warning)] hover:text-[var(--color-warning)]')}
           >
-            Picture mode — retry
+            <WarningCircle size={16} weight="fill" />
           </button>
         )}
         {canAnnotate && (
@@ -2659,16 +2669,10 @@ export function BrowserLiveView({
             disabled={!connected}
             aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
             title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium transition-colors',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-              annotateMode
-                ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:opacity-90'
-                : 'border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
-            )}
+            aria-pressed={annotateMode}
+            className={cn(TOOLBAR_ICON_BTN, annotateMode && 'text-[var(--color-accent)]')}
           >
-            <ChatCircleDots size={13} />
-            <span className="hidden lg:inline">{annotateMode ? 'Exit annotate' : 'Annotate'}</span>
+            <ChatCircleDots size={16} weight={annotateMode ? 'fill' : 'regular'} />
           </button>
         )}
         {mediaStream && hasAudio && (
@@ -2679,9 +2683,9 @@ export function BrowserLiveView({
             title={videoMuted ? 'Unmute audio' : 'Mute audio'}
             aria-pressed={!videoMuted}
             data-testid="browser-live-mute-toggle"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+            className={TOOLBAR_ICON_BTN}
           >
-            {videoMuted ? <SpeakerSlash size={15} /> : <SpeakerHigh size={15} />}
+            {videoMuted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}
           </button>
         )}
       </div>
