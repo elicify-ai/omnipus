@@ -250,7 +250,7 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				return u19BucketPreArm
 			case 1174:
 				return u19BucketInheritance
-			case 1327, 1612:
+			case 1327, 1612, 1630:
 				// C2/M4 (2026-08-04): the SubTurnEndPayload.SessionID site
 				// shifted from line 1573 to 1612 — pkg/agent/subturn.go grew
 				// ~39 lines earlier in spawnSubTurn (the lastTurnStatus
@@ -258,11 +258,21 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// ahead of this site in source order) fixing two verified
 				// defects (C2: message_parent(wait=true) park propagation;
 				// M4: a tool-call-time hard-abort incorrectly reporting
-				// SubTurnStatusSuccess). Re-verified against the current
-				// tree: still the SAME single site
+				// SubTurnStatusSuccess).
+				//
+				// C2-completion (2026-08-04, later same day): shifted again,
+				// 1612 -> 1630 (+18 lines), once the wire-status half of C2
+				// landed — the `case lastTurnStatus == TurnEndStatusParked`
+				// arm of the SAME endStatus switch (ahead of this site in
+				// source order), which is what actually makes a parked
+				// child's SubagentEndFrame.status say "parked" instead of
+				// falling through to "success". Re-verified against the
+				// current tree: still the SAME single site
 				// (al.emitEvent(EventKindSubTurnEnd, ..., SubTurnEndPayload{
 				// ..., SessionID: string(parentTS.routingSessionID)})) — no
-				// new consumer was added, only relocated.
+				// new consumer was added, only relocated. 1612 is kept in
+				// this set (not replaced) as a record of the shift history,
+				// matching how 1573 was itself superseded by 1612 above.
 				return u19BucketWSStamping
 			}
 		}
