@@ -146,7 +146,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     expect(mockSendInput).toHaveBeenCalledWith({
       kind: 'navigate',
-      url: 'https://www.google.com/search?q=cheap%20flights%20to%20tokyo',
+      url: 'https://duckduckgo.com/?q=cheap%20flights%20to%20tokyo',
     })
   })
 

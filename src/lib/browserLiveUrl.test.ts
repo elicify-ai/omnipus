@@ -81,12 +81,12 @@ describe('resolveOmniboxInput (ADR-040 D5)', () => {
 
   it('routes a multi-word phrase to a Google search', () => {
     expect(resolveOmniboxInput('cheap flights to tokyo')).toBe(
-      'https://www.google.com/search?q=cheap%20flights%20to%20tokyo',
+      'https://duckduckgo.com/?q=cheap%20flights%20to%20tokyo',
     )
   })
 
   it('routes a bare word with no dot to a Google search (not treated as a domain)', () => {
-    expect(resolveOmniboxInput('wikipedia')).toBe('https://www.google.com/search?q=wikipedia')
+    expect(resolveOmniboxInput('wikipedia')).toBe('https://duckduckgo.com/?q=wikipedia')
   })
 
   // Deliberate boundary: "host:port" with no dot and no explicit scheme is
@@ -94,16 +94,16 @@ describe('resolveOmniboxInput (ADR-040 D5)', () => {
   // strictly "has a dot, no spaces, or an explicit scheme") — distinct from
   // normalizeNavigateUrl's own broader bare-hostname handling.
   it('routes a bare host:port with no dot to a Google search', () => {
-    expect(resolveOmniboxInput('localhost:3000')).toBe('https://www.google.com/search?q=localhost%3A3000')
+    expect(resolveOmniboxInput('localhost:3000')).toBe('https://duckduckgo.com/?q=localhost%3A3000')
   })
 
   it('URL-encodes special characters in a search query', () => {
-    expect(resolveOmniboxInput('C++ vs Rust?')).toBe('https://www.google.com/search?q=C%2B%2B%20vs%20Rust%3F')
+    expect(resolveOmniboxInput('C++ vs Rust?')).toBe('https://duckduckgo.com/?q=C%2B%2B%20vs%20Rust%3F')
   })
 
   it('routes a single word containing a colon but no dot to a search (e.g. a scheme-less "javascript:" paste)', () => {
     expect(resolveOmniboxInput('javascript:alert(1)')).toBe(
-      'https://www.google.com/search?q=javascript%3Aalert(1)',
+      'https://duckduckgo.com/?q=javascript%3Aalert(1)',
     )
   })
 })

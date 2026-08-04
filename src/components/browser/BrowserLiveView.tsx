@@ -2435,36 +2435,184 @@ export function BrowserLiveView({
 
   return (
     <div className={cn('flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
-      {/* Header. pr-14 (not just px-4) reserves room past the row's own buttons.
-          Historical note (now stale, kept for context): this used to also
-          clear Radix's own built-in Sheet close button, which rendered in
-          the same top-right corner when this panel was hosted inside a
-          Radix Sheet overlay — and BrowserLivePanel.tsx passed
-          `showClose={false}` to that SheetContent specifically because THIS
-          row already renders its own labeled Close (`aria-label="Close live
-          browser panel"`, further down), avoiding a second, unlabeled close
-          stacked on top of it. The Sheet was retired 2026-07-16 (operator
-          direction, amends ADR-040 D4) — the panel is now ALWAYS a plain
-          docked `<aside>` (BrowserLivePanel.tsx), so there is no Radix
-          Content/Sheet anywhere in this tree and nothing else occupies that
-          corner. The pr-14 gap itself is kept regardless — harmless, and
-          still leaves clean room for this row's own Pop-out/Close
-          buttons. */}
-      <div
-        className="flex shrink-0 items-center gap-2 overflow-x-auto h-chrome-header min-h-chrome-header pl-4 pr-14"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-      >
-        {/* ADR-043 D3 / US-6 (multi-agent clarity) — agent-identity chip.
-            Unambiguously labels WHICH agent's browser context this panel is
-            driving. With multiple agents browsing concurrently (each in its
-            own isolated per-agent browser context per ADR-043 D2), this is the
-            persistent identity anchor — DISTINCT from the drive-status chip
-            below, which shows who is currently driving (agent vs. you vs.
-            someone else). The avatar reuses the exact same colour-circle +
-            IconRenderer/initial pattern as the composer AgentPicker and
-            message avatars (do not reinvent). Falls back to a muted 'Agent'
-            label on a query-cache miss (same fallback the drive chip already
-            uses) — never a dead or empty affordance. */}
+      {/* == Row A: tabs + window controls =============================
+          Header consolidation (operator direction, 2026-08-04): the panel used
+          to spend FOUR rows on chrome -- identity/controls, handback hint,
+          tabs, omnibox -- measured at 156px of a 900px panel (17.3 percent),
+          all of it taken from the remote page. It is now two, the way Chrome
+          and Safari do it: tabs share the top strip with the window controls,
+          everything else rides the toolbar below.
+
+          This row is UNCONDITIONAL even though the tab strip inside it is not.
+          Close and Pop-out live here now, and gating the row on
+          `tabs.length > 0` would take the only way to close the panel with it
+          the moment the tab list arrived empty.
+
+          FIXED height (h-browser-tabs), like the toolbar below: this panel
+          pushes its own box as the remote viewport, so a header row that
+          changes height forces a full capture rebuild. That is the same
+          measured regression the handback hint was made always-mounted for. */}
+      <div className="flex h-browser-tabs min-h-browser-tabs shrink-0 items-center gap-1 px-2">
+        {tabState && tabState.tabs.length > 0 ? (
+          <div
+            role="group"
+            aria-label="Browser tabs"
+            data-testid="browser-tab-strip"
+            className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
+          >
+            {tabState.tabs.map((tab) => {
+              const active = tab.index === tabState.activeIndex
+              const label = tabLabel(tab)
+              return (
+                <div
+                  key={tab.index}
+                  className={cn(
+                    'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-xs transition-colors',
+                    // Active tab: Forge-Gold underline + full opacity + a
+                    // heavier label weight — colour is never the only signal
+                    // (WCAG). Inactive: dimmed, transparent underline.
+                    active
+                      ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-secondary)] opacity-100'
+                      : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
+                  )}
+                >
+                  <button tabIndex={0}
+                    type="button"
+                    aria-pressed={active}
+                    disabled={!connected}
+                    onClick={() => handleTabSwitch(tab.index)}
+                    title={tab.title || tab.url || 'New tab'}
+                    data-testid={`browser-tab-${tab.index}`}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-1.5',
+                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
+                      'disabled:cursor-not-allowed',
+                    )}
+                  >
+                    <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
+                    <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
+                  </button>
+                  <button tabIndex={0}
+                    type="button"
+                    onClick={() => handleTabClose(tab.index)}
+                    disabled={!connected}
+                    aria-label={`Close tab: ${label}`}
+                    title="Close tab"
+                    data-testid={`browser-tab-close-${tab.index}`}
+                    className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <X size={10} weight="bold" />
+                  </button>
+                </div>
+              )
+            })}
+            <button tabIndex={0}
+              type="button"
+              onClick={handleTabOpen}
+              disabled={!connected}
+              aria-label="Open new tab"
+              title="Open a new tab"
+              data-testid="browser-tab-new"
+              className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Plus size={13} />
+            </button>
+          </div>
+        ) : (
+          <div className="min-w-0 flex-1" />
+        )}
+        {onPopOut && (
+          <button tabIndex={0}
+            type="button"
+            onClick={onPopOut}
+            aria-label="Pop out"
+            title="Pop out into its own window"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          >
+            <ArrowSquareOut size={15} />
+          </button>
+        )}
+        {onClose && (
+          <button tabIndex={0}
+            type="button"
+            onClick={onClose}
+            aria-label="Close live browser panel"
+            title="Close"
+            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
+
+      {/* == Row B: toolbar ============================================
+          [back] [refresh] [address] then the status/identity chips and the
+          mode toggles that used to occupy their own row above the tabs. The
+          address field is deliberately no longer the full width of the panel;
+          it gives that space to the controls, which is what removes the row.
+
+          Only the address input is wrapped in the <form>. Enter-to-submit is
+          all the form was ever for, and keeping the toggles outside it avoids
+          implying they take part in submission. */}
+      <div className="flex h-chrome-header min-h-chrome-header shrink-0 items-center gap-1 px-2">
+        <button tabIndex={0}
+          type="button"
+          onClick={() => handleToolbarNav('navigate_back')}
+          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
+          aria-label="Go back"
+          title="Back"
+          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        >
+          <CaretLeft size={16} weight="bold" />
+        </button>
+        <button tabIndex={0}
+          type="button"
+          onClick={() => handleToolbarNav('reload')}
+          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
+          aria-label="Refresh page"
+          title="Refresh"
+          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+        >
+          <ArrowsClockwise size={15} />
+        </button>
+        <form onSubmit={handleOmniboxSubmit} className="flex min-w-0 flex-1 items-center">
+        <Input
+          ref={addressBarRef}
+          type="text"
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          onFocus={() => {
+            urlBarEditingRef.current = true
+          }}
+          onBlur={() => {
+            urlBarEditingRef.current = false
+          }}
+          placeholder="Search or enter a URL…"
+          aria-label="Address bar"
+          className="h-8 flex-1 text-xs"
+        />
+        </form>
+        {/* Handback discoverability (UAT: neither tester worked out that
+            sending a chat message hands control back). Folded out of its own
+            23px row onto this one -- horizontal, so it cannot change the
+            header height and trigger a recapture. ALWAYS MOUNTED and merely
+            `invisible` when idle, preserving that invariant exactly. The full
+            sentence lives in `title`; the visible short form still names BOTH
+            exits, because advertising the Esc escape is what satisfies WCAG
+            2.1.2 (No Keyboard Trap). Hidden below `md`, where the panel is too
+            narrow to carry it without crowding out the address bar. */}
+        <span
+          data-testid="browser-live-handback-hint"
+          aria-hidden={visualState !== 'you-driving'}
+          title={`Send a message to hand back to ${resolvedAgentName ?? 'the agent'} - or press Esc to stop driving`}
+          className={cn(
+            'hidden max-w-[240px] shrink-0 truncate text-[11px] text-[var(--color-muted)] md:block',
+            visualState !== 'you-driving' && 'invisible',
+          )}
+        >
+          Esc to stop &middot; message to hand back
+        </span>
         <span
           data-testid="browser-live-agent-chip"
           title={`Driving ${agentDisplayName}'s browser context`}
@@ -2485,9 +2633,6 @@ export function BrowserLiveView({
           </span>
           <span className="max-w-[140px] truncate">{agentDisplayName}</span>
         </span>
-        {/* ADR-040 D6 — header chip replaces the old take/release-control-derived
-            corner status pill: words + icon + a pulsing "live" dot back up the
-            colour (never colour alone) for who's currently driving. */}
         <span
           data-testid="browser-live-status-chip"
           className={cn('flex shrink-0 items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
@@ -2499,23 +2644,6 @@ export function BrowserLiveView({
           <driveChip.Icon size={12} weight={driveChip.pulse ? 'fill' : 'regular'} />
           {driveChip.label}
         </span>
-        <div className="flex-1 min-w-2" />
-        {/* ADR-040 D1 — minimal header: Pen (annotate) · Pin · Pop out · Close.
-            The old Take/Release-control toggle and Hand-to-agent button are
-            gone entirely — see the file header comment for the replacement
-            implicit-control model. */}
-        {/* Annotate toggle (ADR-039 D-B1/B2, ADR-040 D3) — a third interaction
-            mode, mutually exclusive with driving: entering it releases control
-            (handleToggleAnnotate). Hidden entirely when !canAnnotate (FE-4) —
-            see the prop's doc comment. */}
-        {/* Degraded-mode badge + manual retry (review findings). Two gaps this
-            closes: (a) the ONLY prior signal that live video had fallen back
-            to stills was a 4s toast, so a broken path looked identical to a
-            working one to anyone who glanced away; (b) once the retry budget
-            was exhausted the panel was a dead end for the rest of the mount —
-            no affordance to try again, recoverable only by closing and
-            reopening. Clicking re-arms the budget via machine.start(), the
-            same entry point a fresh availability signal uses. */}
         {degradedReason && (
           <button
             type="button"
@@ -2554,12 +2682,6 @@ export function BrowserLiveView({
             {annotateMode ? 'Exit annotate' : 'Annotate'}
           </button>
         )}
-        {/* WebRTC build (W1-F) — mute/unmute toggle. Shown ONLY in video mode
-            (mediaStream set) with an audio track present (hasAudio) — mirrors
-            the Annotate button's opt-in gating pattern above. The <video>
-            sink itself always starts muted (autoplay-safe); this click IS
-            the user gesture that makes unmuting reliable. No signaling wave
-            wires a real stream yet, so this never renders until Wave 2. */}
         {mediaStream && hasAudio && (
           <button tabIndex={0}
             type="button"
@@ -2573,213 +2695,8 @@ export function BrowserLiveView({
             {videoMuted ? <SpeakerSlash size={15} /> : <SpeakerHigh size={15} />}
           </button>
         )}
-        {/* Pin toggle retired 2026-07-16 (operator direction, amends ADR-040
-            D4): the panel is ALWAYS docked when open — there is no overlay
-            layout to pin/unpin between. Fullscreen is the pop-out below. */}
-        {/* Pop out — de-emphasised utility affordance (ADR-040 D1). Gated on
-            `onPopOut` presence ONLY, exactly like onClose. */}
-        {onPopOut && (
-          <button tabIndex={0}
-            type="button"
-            onClick={onPopOut}
-            aria-label="Pop out"
-            title="Pop out into its own window"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-          >
-            <ArrowSquareOut size={15} />
-          </button>
-        )}
-        {onClose && (
-          <button tabIndex={0}
-            type="button"
-            onClick={onClose}
-            aria-label="Close live browser panel"
-            title="Close"
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-          >
-            <X size={15} />
-          </button>
-        )}
       </div>
 
-      {/* UAT finding (both testers): neither could discover that sending a
-          chat message hands control back to the agent — the file header
-          comment explains the mechanism ("handing back is just sending a
-          chat message") but nothing on screen ever hinted at it. A single
-          small, muted line — shown ONLY while the user actually holds the
-          wheel (`visualState === 'you-driving'`, which now also covers the
-          UAT-A8 optimistic pendingTake window right after Take-over) — right
-          under the header where the "You're driving" chip already lives.
-          WCAG 2.1.2: also advertises the Escape exit (releaseWheel, wired in
-          handleKeyDown above) — a keyboard-only escape hatch that isn't
-          advertised somewhere on screen doesn't satisfy "No Keyboard Trap"
-          even once it technically works. */}
-      {/* ALWAYS MOUNTED, visibility-toggled — never conditionally rendered
-          (measured fix, 2026-08-03). Mounting/unmounting this line on every
-          drive-state change resized the live frame by exactly its own height
-          (564 <-> 587px, reproduced deterministically), and the SPA pushes the
-          frame box as the viewport — so every click-to-drive triggered a
-          browser_viewport push -> OS window resize -> full capture rebuild,
-          and invalidated the cached CSS viewport (live.go's
-          invalidateCSSViewportCache). A click arriving inside that window
-          could then take dispatchInput's unmappable path. Reserving the space
-          unconditionally removes the resize, the recapture and the
-          invalidation window in one move.
-
-          aria-hidden while idle so screen readers do not announce an
-          instruction that does not currently apply, matching what sighted
-          users see. */}
-      <p
-        data-testid="browser-live-handback-hint"
-        aria-hidden={visualState !== 'you-driving'}
-        className={
-          'shrink-0 px-4 pb-1.5 text-[11px] text-[var(--color-muted)]' +
-          (visualState === 'you-driving' ? '' : ' invisible')
-        }
-      >
-        Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
-      </p>
-
-      {/* Tab strip (ADR-041 D4) — open tabs: favicon-or-globe + truncated
-          title/hostname + active highlight + close ✕, plus a trailing ＋ to
-          open a new tab. Rendered whenever the tab list is known (the
-          backend always keeps at least one tab — see `tabState`'s doc
-          comment — so "known" and "non-empty" coincide in practice; the
-          `tabState.tabs.length > 0` check is just defense in depth against
-          an ill-formed frame). Sits below the always-visible omnibox and
-          above the screencast frame, matching the ADR-040 header/omnibox
-          stack.
-
-          A11y fix: this used to be `role="tablist"` > `role="tab"` (with a
-          nested Close button inside each "tab") — the real ARIA tab pattern
-          promises arrow-key roving-tabindex + aria-controls linking each tab
-          to a tabpanel, none of which is wired here, AND `role="tab"` is
-          children-presentational per the ARIA spec, so the nested Close
-          button's own role/name got stripped for assistive tech (it read as
-          inert text, not an activatable button). Mirrors the exact fix
-          already applied to CalendarToolbar.tsx's view switcher (same a11y
-          audit): `role="group"` + `aria-pressed` per button correctly
-          describes a set of independently-tabbable toggle buttons instead of
-          promising a pattern that isn't implemented. Close is now a SIBLING
-          button, not nested, so it keeps its own accessible name. Disconnected
-          state uses native `disabled` (not aria-disabled + tabIndex=0 "inert"
-          stops) so a disconnected chip is genuinely removed from the tab
-          order and keyboard-inert, not just visually/ARIA-flagged. */}
-      {tabState && tabState.tabs.length > 0 && (
-        <div
-          role="group"
-          aria-label="Browser tabs"
-          data-testid="browser-tab-strip"
-          className="flex shrink-0 items-center gap-1 overflow-x-auto px-2 py-1.5"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-        >
-          {tabState.tabs.map((tab) => {
-            const active = tab.index === tabState.activeIndex
-            const label = tabLabel(tab)
-            return (
-              <div
-                key={tab.index}
-                className={cn(
-                  'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-xs transition-colors',
-                  // Active tab: Forge-Gold underline + full opacity + a
-                  // heavier label weight — colour is never the only signal
-                  // (WCAG). Inactive: dimmed, transparent underline.
-                  active
-                    ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-secondary)] opacity-100'
-                    : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
-                )}
-              >
-                <button tabIndex={0}
-                  type="button"
-                  aria-pressed={active}
-                  disabled={!connected}
-                  onClick={() => handleTabSwitch(tab.index)}
-                  title={tab.title || tab.url || 'New tab'}
-                  data-testid={`browser-tab-${tab.index}`}
-                  className={cn(
-                    'flex min-w-0 flex-1 items-center gap-1.5',
-                    connected ? 'cursor-pointer' : 'cursor-not-allowed',
-                    'disabled:cursor-not-allowed',
-                  )}
-                >
-                  <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
-                  <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
-                </button>
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => handleTabClose(tab.index)}
-                  disabled={!connected}
-                  aria-label={`Close tab: ${label}`}
-                  title="Close tab"
-                  data-testid={`browser-tab-close-${tab.index}`}
-                  className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <X size={10} weight="bold" />
-                </button>
-              </div>
-            )
-          })}
-          <button tabIndex={0}
-            type="button"
-            onClick={handleTabOpen}
-            disabled={!connected}
-            aria-label="Open new tab"
-            title="Open a new tab"
-            data-testid="browser-tab-new"
-            className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Plus size={13} />
-          </button>
-        </div>
-      )}
-
-      {/* Omnibox toolbar (ADR-039 D-A2, ADR-040 D5) — Chrome-style: sits BELOW
-          the tab strip, with [back] [refresh] [address bar]. Enter submits (no
-          Go button — Hick/Fitts: the keyboard path is already the fastest, the
-          button is redundant). ALWAYS visible; the server's ValidateURL SSRF
-          gate is the authority on navigate. Back (navigate_back) / refresh
-          (reload) take the wheel first, like the omnibox (D5). Icon-only
-          buttons carry aria-labels (WCAG 4.1.2) + 44px coarse-pointer targets. */}
-      <form
-        onSubmit={handleOmniboxSubmit}
-        className="flex shrink-0 items-center gap-1 px-2 py-1.5"
-      >
-        <button tabIndex={0}
-          type="button"
-          onClick={() => handleToolbarNav('navigate_back')}
-          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
-          aria-label="Go back"
-          title="Back"
-          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <CaretLeft size={16} weight="bold" />
-        </button>
-        <button tabIndex={0}
-          type="button"
-          onClick={() => handleToolbarNav('reload')}
-          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
-          aria-label="Refresh page"
-          title="Refresh"
-          className="shrink-0 flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-        >
-          <ArrowsClockwise size={15} />
-        </button>
-        <Input
-          ref={addressBarRef}
-          type="text"
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          onFocus={() => {
-            urlBarEditingRef.current = true
-          }}
-          onBlur={() => {
-            urlBarEditingRef.current = false
-          }}
-          placeholder="Search or enter a URL…"
-          aria-label="Address bar"
-          className="h-8 flex-1 text-xs"
-        />
-      </form>
 
       {/* Body */}
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">

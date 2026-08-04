@@ -449,3 +449,64 @@ describe('BrowserLiveView — address bar follows the active tab', () => {
     expect(addressBar().value).toBe('')
   })
 })
+
+// Header consolidation (operator direction, 2026-08-04). Four chrome rows
+// became two: tabs share the top strip with the window controls, everything
+// else rides the toolbar. These pin the two invariants that make that safe.
+describe('BrowserLiveView — consolidated two-row header', () => {
+  // The trap in this refactor. Close and Pop-out moved INTO the tab row, so if
+  // that row inherited the tab strip's `tabs.length > 0` guard, an empty tab
+  // list would take the only way to close the panel with it.
+  it('keeps Close and Pop-out reachable when the tab list is empty', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} onPopOut={() => {}} />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+    expect(screen.getByTestId('browser-tab-strip')).toBeInTheDocument()
+
+    // The tab list arrives empty — the strip itself may go, the controls may not.
+    emitTabs(0, [])
+
+    expect(screen.queryByTestId('browser-tab-strip')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Close live browser panel')).toBeInTheDocument()
+    expect(screen.getByLabelText('Pop out')).toBeInTheDocument()
+  })
+
+  // Both rows are FIXED height. The panel pushes its own box as the remote
+  // viewport, so a header that changes height forces a full capture rebuild —
+  // the measured regression that made the handback hint always-mounted. Folding
+  // that hint onto the toolbar keeps it horizontal for exactly this reason.
+  it('never changes header row count or height when the drive state changes', () => {
+    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+
+    const col = container.querySelector('[data-testid="browser-live-frame"]')?.closest('div')?.parentElement
+    const rowsIdle = [...(col?.children ?? [])].length
+    const hint = screen.getByTestId('browser-live-handback-hint')
+    expect(hint).toHaveClass('invisible')
+
+    act(() => {
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
+    })
+
+    // Same element, same row count — it becomes visible in place rather than
+    // mounting a row and displacing the frame.
+    expect(screen.getByTestId('browser-live-handback-hint')).toBe(hint)
+    expect(hint).not.toHaveClass('invisible')
+    expect([...(col?.children ?? [])].length).toBe(rowsIdle)
+  })
+
+  // The consolidation itself: chrome above the frame is two rows, not four.
+  it('renders exactly two chrome rows above the live frame', () => {
+    const { container } = render(<BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} />)
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+
+    const root = container.firstElementChild as HTMLElement
+    const kids = [...root.children]
+    const frameIdx = kids.findIndex((k) => k.querySelector('[data-testid="browser-live-frame"]') || k.getAttribute('data-testid') === 'browser-live-frame')
+    expect(frameIdx).toBe(2)
+    expect(kids[0].querySelector('[data-testid="browser-tab-strip"]')).toBeTruthy()
+    expect(kids[1].querySelector('input[aria-label="Address bar"]')).toBeTruthy()
+  })
+})
