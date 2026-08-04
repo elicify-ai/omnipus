@@ -105,7 +105,13 @@ export interface SubagentSpanRunning extends SubagentSpanBase {
 }
 
 export interface SubagentSpanTerminal extends SubagentSpanBase {
-  status: 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
+  /**
+   * 'parked' (ADR-057 UAT defect C2 fix): the child stopped because a
+   * message_parent(kind="question", wait=true) call parked it awaiting the
+   * parent's answer — not a success, error, cancellation, or timeout. See
+   * SubagentEndFrame.yaml for the full contract-level description.
+   */
+  status: 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
   durationMs: number
   finalResult?: string
   /** Reason populated when status is 'interrupted'. */

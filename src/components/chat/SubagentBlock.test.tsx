@@ -254,6 +254,9 @@ describe('SubagentBlock_TerminalStatuses', () => {
     { status: 'error', labelMatch: 'failed' },
     { status: 'interrupted', labelMatch: 'interrupted' },
     { status: 'cancelled', labelMatch: 'cancelled' },
+    // 'parked' (ADR-057 UAT defect C2 fix): a message_parent(kind="question",
+    // wait=true) call parked the child awaiting the parent's answer.
+    { status: 'parked', labelMatch: 'paused' },
   ]
 
   for (const { status, labelMatch } of terminalCases) {
@@ -272,6 +275,19 @@ describe('SubagentBlock_TerminalStatuses', () => {
   it('running state shows spinner and "working" label', () => {
     render(<SubagentBlock span={makeSpan({ status: 'running' })} />)
     expect(screen.getByTestId('subagent-collapsed')).toHaveTextContent('working')
+  })
+
+  it('parked span looks paused, not finished (no "done") and not failed (no "failed")', () => {
+    // Regression guard for the operator's explicit acceptance bar: before the
+    // fix a parked child had no dedicated wire status and fell back to
+    // "success" — this proves the rendered text is neither of the two
+    // terminal outcomes it must never be confused with.
+    const span = makeSpan({ status: 'parked', steps: [makeStep({ id: 't1', call_id: 't1' })] })
+    render(<SubagentBlock span={span} />)
+    const header = screen.getByTestId('subagent-collapsed')
+    expect(header).toHaveTextContent('paused')
+    expect(header.textContent).not.toMatch(/\bdone\b/)
+    expect(header.textContent).not.toMatch(/\bfailed\b/)
   })
 })
 

@@ -142,6 +142,11 @@ describe('getSpanStatusDot — span-status flat-line dot shape (SubagentBlock, A
     ['cancelled', 'cancelled', 'bg-[var(--color-cancelled)]'],
     ['interrupted', 'interrupted', 'bg-[var(--color-muted)]'],
     ['timeout', 'timed out', 'bg-[var(--color-muted)]'],
+    // 'parked' (ADR-057 UAT defect C2 fix): a child awaiting the parent's
+    // answer — deliberately NOT the success/error/muted colors above (must
+    // look paused, not finished and not failed) — reuses --color-warning,
+    // the same amber the D14 goal/plan pill uses for 'waiting_on_user'.
+    ['parked', 'paused', 'bg-[var(--color-warning)]'],
   ] as const)('status=%s → label=%s, dot color=%s', (status, label, dotColor) => {
     const config = getSpanStatusDot(status)
     expect(config.label).toBe(label)
@@ -171,7 +176,7 @@ describe('getSpanStatusDot — span-status flat-line dot shape (SubagentBlock, A
     expect(svg?.getAttribute('width')).toBe('12')
   })
 
-  it('falls back to a muted "unknown" dot for a status value outside the known 6-value domain (defensive wire guard)', () => {
+  it('falls back to a muted "unknown" dot for a status value outside the known 7-value domain (defensive wire guard)', () => {
     const config = getSpanStatusDot('bogus' as SpanLikeStatus)
     expect(config.label).toBe('unknown')
     const dot = renderIndicatorSpan(config.indicator)

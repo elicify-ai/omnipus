@@ -47,7 +47,7 @@ import { formatDuration } from './formatDuration'
 
 // ── Shared span-status domain ─────────────────────────────────────────────────
 
-export type SpanLikeStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
+export type SpanLikeStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
 
 export interface SpanStatusConfigOptions { // not-wire-format: SPA-internal call-site options bag (icon pixel size, running-label override) for getSpanStatusDot()'s local rendering behavior — a function parameter shape, never serialized
   /** Icon pixel size — affects only the 'running' spinner. SubagentBlock uses 13 (default); ActivityPanel uses 12. */
@@ -190,6 +190,13 @@ export function getSpanStatusDot(
       return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'interrupted' }
     case 'timeout':
       return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'timed out' }
+    case 'parked':
+      // ADR-057 UAT defect C2 fix: the child parked awaiting the parent's
+      // answer (message_parent(kind="question", wait=true)) — not a
+      // failure. Reuses --color-warning, the same amber the D14 goal/plan
+      // pill uses for its analogous 'waiting_on_user' state (planStateColors.ts/
+      // statusColors.ts), so "needs a human" reads consistently app-wide.
+      return { indicator: statusDot('bg-[var(--color-warning)]'), label: 'paused' }
     default: {
       // Safe fallback for any unexpected status value arriving from the wire.
       const _exhaustive: never = status

@@ -336,6 +336,16 @@ describe('ActivityBar — Fix 1: a retained failure keeps the pill mounted at id
     expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
   })
 
+  it('does NOT count a parked item as a failure (ADR-057 UAT C2: awaiting the parent, not a failure)', () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'parked' })])],
+      })
+    })
+    renderBar()
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+  })
+
   it('opening the panel from the failed-state pill still reveals the failed row', async () => {
     act(() => {
       useChatStore.setState({

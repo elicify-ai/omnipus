@@ -44,7 +44,7 @@ import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
 
-export type ActivityStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
+export type ActivityStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
 
 export interface AgentActivityItem {
   kind: 'agent'
