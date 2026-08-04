@@ -641,6 +641,24 @@ func (al *AgentLoop) resolveInterruptTargets(id string, scope InterruptScope) []
 	return targets
 }
 
+// markTurnsCancelling sets turnState.cancelling on every turn in targets —
+// the GATE half of the chain-reaction supersession of ADR-057 FR-024 (see
+// that field's own doc comment, turn.go, for the full mechanism). Called by
+// BOTH Interrupt and InterruptSessionHard, right after resolving targets and
+// before any interrupt signal actually fires, so the two cancel surfaces that
+// share this resolution (RequestCancel's chat-wide Stop, and
+// `delegate action=cancel`'s per-delegate cascade — both ultimately call
+// Interrupt/InterruptSessionHard) get the gate uniformly with one change.
+// Idempotent: setting an already-true flag is harmless, so calling this from
+// both Interrupt (PHASE A) and InterruptSessionHard (PHASE B) for the SAME
+// target is not a bug — it is redundant-but-safe, exactly like this file's
+// existing resolveInterruptTargets sharing.
+func markTurnsCancelling(targets []*turnState) {
+	for _, ts := range targets {
+		ts.cancelling.Store(true)
+	}
+}
+
 // Interrupt gracefully cancels the turn(s) addressed by id, according to
 // scope. FR-6, FR-10, FR-12a, FR-15, FR-41.
 //
@@ -673,6 +691,17 @@ func (al *AgentLoop) Interrupt(id string, scope InterruptScope, hint string) (de
 	if len(targets) == 0 {
 		return nil, nil // no active turn — caller emits turn_cancel_attempt{was_fired:false}
 	}
+	// [Chain-reaction supersession of ADR-057 FR-024 — the GATE half] Mark
+	// every resolved target as cancelling FIRST, before anything else in this
+	// function — see turnState.cancelling's doc comment (turn.go) for the
+	// full mechanism. This is what actually closes the "a new child born
+	// during cancellation escapes it" race: recursion (the fresh re-scan/
+	// chain-reaction-latch machinery elsewhere in this file and cancel.go)
+	// only ever reaches a child that has ALREADY registered, or is ALREADY
+	// known to be imminent — it cannot stop a spawn that has not even been
+	// attempted yet. spawnSubTurn (subturn.go) checks this flag, walking the
+	// parentTurnState ancestor chain, before creating any new child.
+	markTurnsCancelling(targets)
 	for _, ts := range targets {
 		descendants = append(descendants, ts.turnID)
 	}
@@ -735,6 +764,12 @@ func (al *AgentLoop) InterruptSessionHard(id string, scope InterruptScope, hint 
 	if len(targets) == 0 {
 		return nil, nil
 	}
+	// Chain-reaction supersession of ADR-057 FR-024 — GATE half; see
+	// Interrupt's identical call site (above) for the full rationale.
+	// Idempotent against a target Interrupt already marked moments earlier
+	// (the common PHASE-A-then-PHASE-B ordering) — atomic.Bool.Store(true)
+	// twice is harmless.
+	markTurnsCancelling(targets)
 	for _, ts := range targets {
 		descendants = append(descendants, ts.turnID)
 	}

@@ -44,6 +44,23 @@ var (
 	// sub-turn is aborted rather than silently falling back to the parent's
 	// own identity/tool policy (see spawnSubTurn's execSource resolution).
 	ErrDelegationTargetUnresolved = errors.New("subturn: delegation target agent not found")
+	// ErrSessionCancelling is returned by spawnSubTurn when parentTS or any
+	// of its ancestors (walked via parentTurnState) has already been marked
+	// cancelling (turnState.cancelling, set by markTurnsCancelling —
+	// steering.go — the instant Interrupt/InterruptSessionHard resolves it
+	// as a cancel target). This is the GATE half of the chain-reaction
+	// supersession of ADR-057 FR-024: it closes, by construction, the window
+	// where a brand-new delegate spawn is dispatched WHILE its own parent's
+	// (or an ancestor's) cancellation is already underway — a child born in
+	// that window would otherwise have to be caught after the fact by
+	// recursion (the fresh re-scan / pendingSpawn-latch machinery in
+	// cancel.go), which can only reach a spawn that has ALREADY registered
+	// or is ALREADY known to be imminent, never one that has not been
+	// attempted at all. Refusing outright (rather than creating the child
+	// and immediately tearing it down) means no session/workspace/transcript
+	// state is ever created for a delegation that was never going to be
+	// allowed to run.
+	ErrSessionCancelling = errors.New("subturn: refused — session is being cancelled")
 )
 
 // getSubTurnConfig returns the effective SubTurn configuration with defaults applied.
@@ -614,6 +631,37 @@ func spawnSubTurn(
 				al.cancelPreArm.clearPendingSpawn(pendingSpawnKeysForThisCall...)
 			}
 		}()
+	}
+
+	// -0.5. Cancellation gate (chain-reaction supersession of ADR-057
+	// FR-024 — the GATE half, see turnState.cancelling's doc comment, turn.go,
+	// and ErrSessionCancelling's doc comment, above, for the full rationale).
+	// Walk parentTS's own ancestor chain via parentTurnState, checking
+	// whether parentTS itself or ANY ancestor has already been marked
+	// cancelling by markTurnsCancelling (steering.go, called from
+	// Interrupt/InterruptSessionHard the instant either resolves that turn
+	// as a cancel target). A hit means a Stop (or a `delegate action=cancel`)
+	// targeting this turn or an ancestor of it is already underway — refuse
+	// the spawn outright rather than create a child that would immediately
+	// need to be torn down, or that recursion would have to notice and chase
+	// down after the fact. Checked BEFORE the concurrency semaphore
+	// acquisition below so a doomed spawn never occupies a slot at all.
+	//
+	// This walk terminates: parentTurnState is nil for a root turn (turn.go's
+	// own field doc comment), and every child's parentTurnState is set to a
+	// SPECIFIC, already-constructed parent turnState at spawn time (below,
+	// `childTS.parentTurnState = parentTS`) — never to itself or to a turn
+	// constructed later — so the chain is a strictly finite, acyclic list
+	// bounded by the actual (already depth-limited) delegation tree, not
+	// something this check could loop on by itself.
+	for p := parentTS; p != nil; p = p.parentTurnState {
+		if p.cancelling.Load() {
+			logger.WarnCF("subturn", "Refusing to spawn — parent or an ancestor is already being cancelled", map[string]any{
+				"parent_turn_id":     parentTS.turnID,
+				"cancelling_turn_id": p.turnID,
+			})
+			return nil, ErrSessionCancelling
+		}
 	}
 
 	// Get effective SubTurn configuration

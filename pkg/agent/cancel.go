@@ -26,6 +26,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
+// cancelHardAbortDelay is PHASE B's escalation delay: how long after a
+// graceful cancel (PHASE A) RequestCancel waits before hard-aborting whatever
+// is still alive in sessionID's tree. Declared as a var, not a const, so
+// tests can shrink it — mirrors cancel_prearm.go's cancelPreArmTTL/
+// turnSettleGrace, which exist for the identical reason (deterministic,
+// fast tests instead of sleeping the real production duration).
+var cancelHardAbortDelay = 3 * time.Second
+
+// cancelDetachDelay is PHASE C's escalation delay, measured from PHASE B's
+// own hard-abort firing (not from the original Stop). Declared as a var for
+// the same test-shrinking reason as cancelHardAbortDelay.
+var cancelDetachDelay = 5 * time.Second
+
 // CancelScope identifies what to cancel.
 // Exactly one of SessionID or (Channel + ChatID) must be set.
 //
@@ -400,10 +413,48 @@ func (al *AgentLoop) RequestCancel(
 	// SetOnCancelFinish, and THEN call Interrupt. The callback is always
 	// registered before any goroutine can reach Finish().
 	//
-	// ADR-057 FR-024: this list is computed EXACTLY ONCE, here, in PHASE A —
-	// PHASE B/C below thread it through (al.liveTurnStatesAmong(descendants))
-	// rather than re-deriving the subtree from sessionID afresh each time an
-	// escalation timer fires.
+	// [SUPERSEDED, 2026-08-04] ADR-057 FR-024 used to mandate computing this
+	// list EXACTLY ONCE here and threading it verbatim through PHASE B/C
+	// (al.liveTurnStatesAmong(descendants)) rather than re-deriving the
+	// subtree afresh. That rule is exactly what let a sub-turn that
+	// registers AFTER this point — most commonly a `delegate async=true`
+	// spawn, whose parent turn frequently finishes gracefully within
+	// milliseconds while the backgrounded spawnSubTurn goroutine keeps
+	// running and registers its child moments later — escape PHASE B/C
+	// entirely: the frozen snapshot below never named the late child, so
+	// al.liveTurnStatesAmong(descendants) filtered it out of existence no
+	// matter how long it kept running. The operator's own diagnosis:
+	// "either the list needs to be updated when something new starts, or it
+	// must be done like a chain reaction: each parent cancels first his
+	// children before its cancellation concludes" — chosen as the stronger
+	// of the two, because it closes the race BY CONSTRUCTION rather than by
+	// hoping a periodic re-scan lands often enough. PHASE B/C (below) now
+	// re-derive the live subtree FRESH at each checkpoint
+	// (al.collectDescendantTurnIDs(sessionID) again, not the snapshot this
+	// variable holds) and additionally arm a chain-reaction latch
+	// (armChainReactionCancelLatch) whenever a delegate spawn is still
+	// in-flight but not yet registered (hasPendingDescendantSpawn) — so a
+	// child that registers even after every checkpoint here has already
+	// fired is still caught, through the exact same
+	// consumePreArmedCancel -> RequestCancel machinery a cancel arriving
+	// before ANY turn ever registered already uses (cancel_prearm.go). That
+	// recursive re-invocation gives the newly-caught turn its OWN fresh
+	// PHASE A/B/C cycle — which applies this SAME re-derive-and-arm
+	// discipline to ITS OWN children — so the induction holds at arbitrary
+	// delegation depth, not just one level. See docs/internal/specs/
+	// adr-057-session-unification-spec.md's FR-024 entry for the full
+	// updated contract.
+	//
+	// This variable is KEPT (not deleted) for three uses that are still
+	// correct as a PHASE-A-time snapshot: the CancelOutcome.Descendants
+	// return value below (documented as "what PHASE A found," not a promise
+	// about the whole cascade's eventual reach), the defensive
+	// pre-collected-vs-Interrupt consistency check immediately below, and as
+	// the SetOnCancelFinish callback's fallback ordering guarantee — the
+	// callback itself now recomputes fresh at the moment it actually fires
+	// (see that closure below) rather than closing over this variable, so
+	// the audit/transcript record reflects reality at Finish() time, not
+	// PHASE-A time.
 	store := al.ResolveSessionStore(sessionID)
 	turnID := activeTurn.TurnID()
 	descendants := al.collectDescendantTurnIDs(sessionID)
@@ -429,6 +480,30 @@ func (al *AgentLoop) RequestCancel(
 	// atomic access is required for correct cross-goroutine visibility even
 	// though there is no write/write or write-after-read race to resolve.
 	activeTurn.SetOnCancelFinish(func(cancelMethod string) {
+		// [Chain-reaction supersession of ADR-057 FR-024 — NOT a fresh
+		// recompute here, deliberately] This callback reports the PHASE-A
+		// snapshot (`descendants`), captured once, above, at the moment this
+		// cancel activated — NOT a fresh al.collectDescendantTurnIDs(sessionID)
+		// call made right here. That was tried and reverted: runTurn's own
+		// cleanup order is `defer ts.Finish(...)` registered BEFORE
+		// `defer al.clearActiveTurn(ts)` in the SAME function (loop.go), and
+		// Go defers run LIFO — so clearActiveTurn ALWAYS runs BEFORE Finish()
+		// for the very turn whose Finish() is invoking this callback right
+		// now. By the time this closure runs, THIS turn's own entry (and, in
+		// the common single-descendant case, therefore the ENTIRE tree) has
+		// already been removed from al.activeTurnStates — a fresh re-scan at
+		// this exact point finds fewer entries than PHASE A did not because
+		// less was reached, but because cleanup already ran. Using it here
+		// would UNDER-report, not correct, the audit trail (confirmed by
+		// TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters going from
+		// green to red the moment this was tried). The dynamic, "reflects
+		// reality" reporting FR-030/requirement-3 calls for is instead
+		// produced by the chain-reaction mechanism itself: each
+		// recursively-caught late descendant (armChainReactionCancelLatch ->
+		// consumePreArmedCancel -> a FRESH RequestCancel call) gets its OWN
+		// independent PHASE A and therefore its OWN accurate
+		// turn_canceled audit event, computed at THE MOMENT it was caught —
+		// not by mutating this single event after the fact.
 		// Mark the last transcript entry as truncated.
 		if store != nil {
 			if err := store.MarkLastEntryTruncated(sessionID, turnID); err != nil {
@@ -550,25 +625,26 @@ func (al *AgentLoop) RequestCancel(
 		hooks.SetSessionInterrupted(sessionID)
 	}
 
-	// --- PHASE B: 3s timer → hard abort if ANY turn in the PHASE-A-computed
-	// descendant set (root or a still-running descendant, e.g. an orphaned
-	// background delegate) is still alive ---
+	// --- PHASE B: hard-abort timer → hard abort if ANY turn CURRENTLY live
+	// in sessionID's tree is still alive, OR arm a chain-reaction latch if a
+	// delegate spawn for this identity is still in flight ---
 	//
-	// Gated on al.liveTurnStatesAmong(descendants) — the SAME descendants
-	// list PHASE A computed once above — rather than activeTurn.IsAlive()
-	// alone: activeTurn is the single hook resolved once above
-	// (GetActiveTurnHookForSession prefers the root turn), so gating purely
-	// on ITS liveness meant a background delegate sub-turn that outlived its
-	// already-gracefully-finished parent was never escalated to. ADR-057
-	// FR-024 requires threading PHASE A's once-computed subtree through here
-	// rather than re-deriving it fresh via al.sessionTurnsStillAlive
-	// (steering.go) each time this timer fires — a fresh re-derivation could
-	// silently widen the escalation to a turn that started AFTER
-	// turn_canceled's own descendants_canceled field was already decided.
-	// See sessionTurnsStillAlive's own doc comment (steering.go) for the full
-	// root-cause writeup of the underlying delegation-cancel bug this
-	// mechanism closes.
-	time.AfterFunc(3*time.Second, func() {
+	// [Chain-reaction supersession of ADR-057 FR-024, see the doc comment at
+	// this function's PHASE-A `descendants` collection above for the full
+	// rationale.] Gated on a FRESH re-scan (al.collectDescendantTurnIDs
+	// (sessionID), called again right here — NOT the PHASE-A snapshot this
+	// file used to thread through), because activeTurn.IsAlive() alone is
+	// insufficient (a background delegate sub-turn can outlive its
+	// already-gracefully-finished parent) AND the frozen PHASE-A list is
+	// insufficient too (a delegate spawned moments before the Stop can
+	// register a brand-new child at any point in this window — the late
+	// registration is, structurally, indistinguishable from "was already
+	// there," since routingSessionID is inherited verbatim by every member
+	// of this chat's tree regardless of when it registers). Re-scanning here
+	// is a flat Range match on routingSessionID (see collectDescendantTurnIDs,
+	// steering.go) — never a graph walk — so there is no cycle or
+	// unbounded-recursion hazard in calling it again at each checkpoint.
+	time.AfterFunc(cancelHardAbortDelay, func() {
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("agent: RequestCancel: timer panic",
@@ -579,8 +655,26 @@ func (al *AgentLoop) RequestCancel(
 				)
 			}
 		}()
-		if len(al.liveTurnStatesAmong(descendants)) == 0 {
-			return // already finished — no live descendants either
+		liveNow := al.liveTurnStatesAmong(al.collectDescendantTurnIDs(sessionID))
+		pendingSpawn := al.hasPendingDescendantSpawn(sessionID, scope)
+		if len(liveNow) == 0 {
+			if pendingSpawn {
+				// Nothing is alive right now, but a delegate spawn for this
+				// identity is already dispatched and has not registered yet
+				// (MarkPendingDelegateSpawn fired, spawnSubTurn hasn't
+				// reached registerActiveTurn). Arm a chain-reaction latch so
+				// the INSTANT it registers, consumePreArmedCancel (turn.go's
+				// registerActiveTurn) catches it and re-invokes RequestCancel
+				// for it — the same mechanism a cancel arriving before any
+				// turn ever registered already uses (cancel_prearm.go) — this
+				// closes the race for a child that registers even AFTER this
+				// checkpoint (and PHASE C below) have already run.
+				al.armChainReactionCancelLatch(sessionID, scope, canceller, hooks)
+			}
+			return // nothing alive right now, and PHASE C below only makes
+			// sense once InterruptSessionHard has actually fired against
+			// something — the armed latch (if any) is this branch's own
+			// complete protection for whatever is still pending.
 		}
 		if _, err := al.InterruptSessionHard(sessionID, ScopeSubtree, hint); err != nil {
 			slog.Warn("agent: RequestCancel: hard abort failed",
@@ -589,12 +683,18 @@ func (al *AgentLoop) RequestCancel(
 		if hooks.SendStageFrame != nil {
 			hooks.SendStageFrame(sessionID, "hard")
 		}
+		if pendingSpawn {
+			// A DIFFERENT delegate spawn may still be in flight even though
+			// something else in the tree was alive and just got hard-aborted
+			// above — arm defensively so that spawn is not lost either.
+			al.armChainReactionCancelLatch(sessionID, scope, canceller, hooks)
+		}
 
-		// --- PHASE C: 5s after hard → detach any turn in the PHASE-A-computed
-		// descendant set still alive (same threaded liveness check as
-		// PHASE B; see above, ADR-057 FR-024) ---
+		// --- PHASE C: detach timer, measured from PHASE B's own hard abort →
+		// detach any turn CURRENTLY live in sessionID's tree (same fresh
+		// re-scan discipline as PHASE B; see above) ---
 		hardAt := time.Now()
-		time.AfterFunc(5*time.Second, func() {
+		time.AfterFunc(cancelDetachDelay, func() {
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("agent: RequestCancel: timer panic",
@@ -605,12 +705,25 @@ func (al *AgentLoop) RequestCancel(
 					)
 				}
 			}()
-			stillAlive := al.liveTurnStatesAmong(descendants)
+			stillAlive := al.liveTurnStatesAmong(al.collectDescendantTurnIDs(sessionID))
+			pendingSpawnAtC := al.hasPendingDescendantSpawn(sessionID, scope)
 			if len(stillAlive) == 0 {
+				if pendingSpawnAtC {
+					// This is the LAST scheduled checkpoint — no further
+					// timer re-scans this identity after this point. Arming
+					// here is the decisive close for a spawn that is still
+					// slow to register: however much later it eventually
+					// reaches registerActiveTurn, consumePreArmedCancel finds
+					// this latch and gives it its own full cancel cascade.
+					al.armChainReactionCancelLatch(sessionID, scope, canceller, hooks)
+				}
 				return // finished in the meantime
 			}
 			for _, ts := range stillAlive {
 				ts.MarkAbandoned()
+			}
+			if pendingSpawnAtC {
+				al.armChainReactionCancelLatch(sessionID, scope, canceller, hooks)
 			}
 			if hooks.SendStageFrame != nil {
 				hooks.SendStageFrame(sessionID, "detached")
@@ -887,13 +1000,19 @@ func (al *AgentLoop) turnStatesByTurnID(ids []string) []*turnState {
 }
 
 // liveTurnStatesAmong filters turnStatesByTurnID(ids) to those still alive
-// (turnState.IsAlive()). ADR-057 FR-024: RequestCancel's PHASE B/C
-// escalation timers call this with the SAME descendant-id list PHASE A
-// computed once, rather than re-deriving the subtree afresh via
-// sessionTurnsStillAlive each time a timer fires — a re-derivation could
-// silently pick up a turn that started AFTER PHASE A's snapshot, widening
-// the escalation's reach beyond what turn_canceled's own
-// descendants_canceled field named.
+// (turnState.IsAlive()).
+//
+// [Chain-reaction supersession of ADR-057 FR-024] This function's OWN
+// filtering behavior is unchanged — it still just narrows a given id list
+// down to the still-live subset. What changed is what RequestCancel's PHASE
+// B/C escalation timers now pass as ids: a FRESH al.collectDescendantTurnIDs
+// (sessionID) call made again at each checkpoint, not the single list PHASE A
+// computed once and threaded through verbatim. Widening the escalation's
+// reach to a turn that registered AFTER PHASE A's snapshot is now the
+// INTENDED behavior, not a hazard to guard against — see the doc comment on
+// RequestCancel's PHASE-A `descendants` collection (cancel.go) for the full
+// rationale for why the old "never widen beyond the snapshot" rule was itself
+// the bug (a late-registering sub-turn escaped the cascade entirely).
 func (al *AgentLoop) liveTurnStatesAmong(ids []string) []*turnState {
 	states := al.turnStatesByTurnID(ids)
 	if len(states) == 0 {
@@ -906,6 +1025,85 @@ func (al *AgentLoop) liveTurnStatesAmong(ids []string) []*turnState {
 		}
 	}
 	return live
+}
+
+// hasPendingDescendantSpawn reports whether a delegate sub-turn spawn is
+// currently in flight for the SAME identity this RequestCancel call is
+// scoped to (sessionID, or (scope.Channel, scope.ChatID) when sessionID is
+// empty) — i.e. pkg/tools/delegate.go's executeAsync has already called
+// MarkPendingDelegateSpawn (via the DelegateSpawnMarker seam) but the spawned
+// goroutine has not yet reached registerActiveTurn. See cancel_prearm.go's
+// pendingSpawns field for the full mark/clear/TTL contract.
+//
+// This is the second half of the chain-reaction fix (the first half is the
+// fresh re-scan liveTurnStatesAmong's callers now perform): a pending spawn
+// is evidence of a child that WILL exist soon but does not exist in
+// al.activeTurnStates YET, so no re-scan — however fresh — can find it. Nil
+// receiver-safe like every other cancelPreArm lookup (bare turnState-only
+// unit tests that never went through NewAgentLoop leave al.cancelPreArm nil).
+func (al *AgentLoop) hasPendingDescendantSpawn(sessionID string, scope CancelScope) bool {
+	if al.cancelPreArm == nil {
+		return false
+	}
+	return al.cancelPreArm.hasPendingSpawn(time.Now(), pendingSpawnKeys(sessionID, scope.Channel, scope.ChatID)...)
+}
+
+// armChainReactionCancelLatch arms a pre-registration cancel latch under the
+// SAME identity key (preArmKeyForScope) this RequestCancel call is already
+// scoped to, using the ORIGINAL scope/canceller/hooks — so that whichever
+// delegate spawn hasPendingDescendantSpawn detected as in-flight is caught
+// the INSTANT it registers, via the EXACT SAME
+// consumePreArmedCancel -> RequestCancel machinery cancel_prearm.go already
+// uses for "a cancel arrives before any turn has registered at all".
+//
+// This closes a gap that mechanism's own top-level entry point
+// (armCancelOrFindActiveTurn) cannot reach: it only runs when RequestCancel's
+// OWN initial lookup finds NO active turn at all (the `if activeTurn == nil`
+// branch, above in this file) — never when a turn WAS found and claimed,
+// which is exactly PHASE B/C's situation (the root, or an already-known
+// descendant, was found and is being escalated while a NEW, not-yet-
+// registered sibling spawn is also in flight).
+//
+// The recursive RequestCancel call this latch's eventual consumption
+// triggers gives the newly-caught turn its OWN full PHASE A/B/C cycle — which
+// re-applies this SAME hasPendingDescendantSpawn/armChainReactionCancelLatch
+// pair for ITS OWN children — so induction closes the race at arbitrary
+// delegation depth: there is no bespoke per-depth bookkeeping here, only the
+// SAME two functions being invoked again by the recursive call.
+//
+// No infinite-recursion or unbounded-depth hazard: unlike
+// CollectDescendantSessionIDs's durable ParentDurableKey BFS (which needs its
+// own `visited` set because a corrupt/cyclic persisted graph is a real
+// possibility), this recursion is driven entirely by REAL, freshly-created
+// turnState registrations — registerActiveTurn is called at most once per
+// actual spawned turn, and a latch is consumed AT MOST once
+// (cancelPreArm.consume's exactly-once delete), so the recursion depth is
+// bounded by the real, already depth/concurrency-limited delegation tree, not
+// by anything this mechanism could loop on by itself.
+//
+// Idempotent (armLocked simply overwrites the same key, so calling this more
+// than once for the same still-pending spawn is harmless) and nil-safe (a
+// nil al.cancelPreArm or an unresolvable key — CancelScope with neither a
+// session id nor a (channel, chatID) pair — is a silent no-op, mirroring
+// every other method on cancelPreArm).
+func (al *AgentLoop) armChainReactionCancelLatch(sessionID string, scope CancelScope, canceller CancelCanceller, hooks CancelHooks) {
+	if al.cancelPreArm == nil {
+		return
+	}
+	key := preArmKeyForScope(sessionID, scope)
+	if key == "" {
+		return
+	}
+	expired := al.cancelPreArm.arm(key, &cancelPreArmLatch{
+		scope:     scope,
+		canceller: canceller,
+		hooks:     hooks,
+		armedAt:   time.Now(),
+		ttl:       cancelPreArmTTL, // captured once, here — see cancelPreArmLatch.ttl's doc comment (cancel_prearm.go)
+	})
+	if len(expired) > 0 {
+		go notifyLatchExpired(expired...)
+	}
 }
 
 // RequestCancelForSession is a primitive-argument adapter for RequestCancel

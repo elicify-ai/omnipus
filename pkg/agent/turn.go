@@ -170,6 +170,36 @@ type turnState struct {
 	abandoned      atomic.Bool               // true once the stuck-watchdog gives up on the goroutine
 	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
 
+	// cancelling is the GATE half of the chain-reaction cancellation fix
+	// (ADR-057 FR-024, superseded 2026-08-04): set true by markTurnsCancelling
+	// (steering.go) for every turn Interrupt/InterruptSessionHard resolves as
+	// a target — the ANCHOR and every currently-known live descendant — as
+	// the VERY FIRST thing either function does, before any interrupt signal
+	// is actually fired. spawnSubTurn (subturn.go) walks parentTS's own
+	// ancestor chain via parentTurnState, checking THIS flag at every level,
+	// before creating a new child; any hit refuses the spawn outright
+	// (ErrSessionCancelling).
+	//
+	// This exists because recursion (re-scanning/re-arming for a child that
+	// ALREADY registered, or is ALREADY marked as about to via
+	// pendingSpawns) fixes the ORDER cancellation reaches existing/imminent
+	// descendants but cannot, by itself, stop a BRAND NEW child from being
+	// born after cancellation has begun: the child's own context is
+	// deliberately NOT derived from the parent's (spawnSubTurn's childCtx is
+	// context.WithTimeout(context.Background(), ...) so a Critical async
+	// delegate can outlive its parent's own graceful finish — re-parenting it
+	// would break that), so Go's ordinary context-cancellation propagation
+	// gives no signal here at all. This flag is that signal, checked
+	// explicitly at the one place a new child is actually created.
+	//
+	// Never explicitly cleared: each turnState is a fresh object per turn
+	// generation (newTurnState), so there is nothing to reset — a later,
+	// unrelated message in the same session constructs a brand-new root
+	// turnState (parentTurnState==nil, cancelling's zero value false), which
+	// the ancestor walk never even reaches. No TTL, no registry, no
+	// possibility of permanently "bricking" a session's ability to delegate.
+	cancelling atomic.Bool
+
 	restorePointHistory []providers.Message
 	restorePointSummary string
 	persistedMessages   []providers.Message

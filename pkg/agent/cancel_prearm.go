@@ -509,6 +509,40 @@ func (p *cancelPreArm) hasPendingSpawnLocked(now time.Time, keys ...string) bool
 	return false
 }
 
+// hasPendingSpawn is hasPendingSpawnLocked's self-locking counterpart, for
+// callers OUTSIDE armCancelOrFindActiveTurn's own already-locked critical
+// section. RequestCancel's PHASE B/C escalation timers (cancel.go) are
+// exactly such a caller: they run on their own goroutine (time.AfterFunc),
+// holding no lock at all, when they need to know whether a delegate spawn is
+// still in flight for the identity being escalated (the chain-reaction
+// supersession of ADR-057 FR-024 — see cancel.go's hasPendingDescendantSpawn).
+// Nil-safe like every other lookup on this type.
+func (p *cancelPreArm) hasPendingSpawn(now time.Time, keys ...string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hasPendingSpawnLocked(now, keys...)
+}
+
+// arm is armLocked's self-locking counterpart, for callers OUTSIDE
+// armCancelOrFindActiveTurn's own already-locked critical section — see
+// hasPendingSpawn's doc comment immediately above for why RequestCancel's
+// PHASE B/C escalation timers (cancel.go's armChainReactionCancelLatch) need
+// a self-locking entry point here rather than armLocked directly. Returns
+// armLocked's own eviction list unchanged so the caller can notify each
+// evicted latch's original requester exactly like armCancelOrFindActiveTurn
+// already does. Nil-safe: a nil receiver arms nothing and evicts nothing.
+func (p *cancelPreArm) arm(key string, latch *cancelPreArmLatch) []*cancelPreArmLatch {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.armLocked(key, latch)
+}
+
 // armCancelOrFindActiveTurn is called by RequestCancel exactly when its own
 // initial (unlocked, best-effort) lookup found no active turn for scope. It
 // re-resolves under al.cancelPreArm.mu — the SAME lock consumePreArmedCancel
