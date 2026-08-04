@@ -331,7 +331,15 @@ func collectTaskRows(
 			// such, not a derivation — revisit if CancelReason becomes a
 			// closed, always-populated stop-intent enum.
 			IntentionallyStopped: false,
-			unmapped:             norm.unmapped,
+			// M7 fix (third read surface, see jobRow's own doc comment):
+			// Priority via EffectivePriority() — never the raw t.Priority,
+			// which is 0 for "unset" and would misreport as a literal 0
+			// instead of the real default (3) — matching list_tasks's
+			// taskListRow and list_tasks_in_workspace's workspaceTaskRow.
+			Priority: t.EffectivePriority(),
+			WriteSet: t.WriteSet,
+			Stream:   t.Stream,
+			unmapped: norm.unmapped,
 			// A task has exactly one candidate free-text handle (its title),
 			// so filterLabel is always identical to Label here — see
 			// filterLabel's own doc comment for why that is NOT true for a

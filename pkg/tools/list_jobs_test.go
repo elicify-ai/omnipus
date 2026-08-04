@@ -456,6 +456,69 @@ func TestListJobs_TaskOwnershipUnion(t *testing.T) {
 	}
 }
 
+// TestListJobs_TaskSurfacesPriorityWriteSetStream is the M7 regression test
+// for list_jobs's task-kind rows — the THIRD and last read surface. list_tasks
+// (taskListRow) and list_tasks_in_workspace (workspaceTaskRow) were already
+// fixed to surface priority/write_set/stream; collectTaskRows here was the
+// remaining blind spot, and it is exactly the kind of gap that let the M2
+// out-of-range-priority bug ship unnoticed — a caller had no way to verify
+// what was actually persisted on ANY read surface. This test fails RED
+// against the pre-fix jobRow, which carried none of the three fields at all
+// (they are added, not renamed, so json.Unmarshal into the typed struct
+// silently zero-values them rather than erroring — the assertions below on
+// the actual values are what catches that).
+func TestListJobs_TaskSurfacesPriorityWriteSetStream(t *testing.T) {
+	tasks := &fakeJobTaskStore{tasks: []task.Task{
+		{ID: "tsk-rich", WorkspaceID: "ws1", Title: "Rich params task",
+			AgentID: "mia", Status: task.StatusInProgress,
+			Priority: 2, WriteSet: []string{"uat-output.txt"}, Stream: "uat-stream"},
+	}}
+	tool := NewListJobsTool(nil, tasks, nil)
+
+	roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), map[string]any{"kind": jobKindTask}))
+
+	// Binding Rule 4: a positive lower bound alongside the field assertions,
+	// so a query silently returning nothing cannot pass vacuously.
+	if len(roster.Rows) != 1 {
+		t.Fatalf("want exactly 1 row, got %d: %+v", len(roster.Rows), roster.Rows)
+	}
+	row := roster.Rows[0]
+	if row.ID != "tsk-rich" {
+		t.Fatalf("want row tsk-rich, got %+v", row)
+	}
+	if row.Priority != 2 {
+		t.Errorf("priority must be observable via list_jobs (M7), want 2, got %d", row.Priority)
+	}
+	if row.Stream != "uat-stream" {
+		t.Errorf("stream must be observable via list_jobs (M7), want %q, got %q", "uat-stream", row.Stream)
+	}
+	if len(row.WriteSet) != 1 || row.WriteSet[0] != "uat-output.txt" {
+		t.Errorf("write_set must be observable via list_jobs (M7), got %+v", row.WriteSet)
+	}
+}
+
+// TestListJobs_TaskPriorityDefaultsToThreeWhenUnset proves list_jobs's
+// task-kind rows report a meaningful priority (3, via EffectivePriority) for
+// a task with no explicit priority — matching how list_tasks and
+// list_tasks_in_workspace already report it — rather than surfacing the raw
+// 0 that means "unset" internally (task.Task.Priority's own doc comment).
+func TestListJobs_TaskPriorityDefaultsToThreeWhenUnset(t *testing.T) {
+	tasks := &fakeJobTaskStore{tasks: []task.Task{
+		{ID: "tsk-unset", WorkspaceID: "ws1", Title: "No explicit priority",
+			AgentID: "mia", Status: task.StatusInProgress},
+	}}
+	tool := NewListJobsTool(nil, tasks, nil)
+
+	roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), map[string]any{"kind": jobKindTask}))
+
+	if len(roster.Rows) != 1 {
+		t.Fatalf("want exactly 1 row, got %d: %+v", len(roster.Rows), roster.Rows)
+	}
+	if got := roster.Rows[0].Priority; got != 3 {
+		t.Errorf("a task with no explicit priority must read back as 3 via list_jobs, not %d", got)
+	}
+}
+
 // TestListJobs_PlanOwnershipIsOwnerAgentIDNotOwner: the plan-side mirror of the
 // same namespace hazard. Plan.Owner is a username on the REST path.
 func TestListJobs_PlanOwnershipIsOwnerAgentIDNotOwner(t *testing.T) {

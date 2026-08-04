@@ -124,6 +124,23 @@ type jobRow struct {
 	IntentionallyStopped bool   `json:"intentionally_stopped"`
 	Generation           int    `json:"generation,omitempty"`
 
+	// Priority, WriteSet, and Stream (M7 fix, third and last read surface):
+	// create_task/create_task_in_workspace accept all three, but before this
+	// fix `list_jobs`'s task-kind rows never showed them back to the calling
+	// agent — the same observability gap that let the M2 out-of-range-priority
+	// bug ship unnoticed on the other two read surfaces (list_tasks's
+	// taskListRow, list_tasks_in_workspace's workspaceTaskRow). Populated only
+	// by collectTaskRows (pkg/tools/list_jobs_sources.go); plan and subagent
+	// rows leave them at their zero value, which omitempty renders as absent
+	// rather than a misleading 0/null/"". Priority is always populated via
+	// task.Task.EffectivePriority(), never the raw Priority field — a raw 0
+	// means "unset" internally and would render as a misleading literal 0
+	// instead of the real default (3), matching how the other two surfaces
+	// already do it.
+	Priority int      `json:"priority,omitempty"`
+	WriteSet []string `json:"write_set,omitempty"`
+	Stream   string   `json:"stream,omitempty"`
+
 	// draftRank ranks `draft` plans below `approved` ones inside the `queued`
 	// group (FR-007). Not serialized: it is an ordering input, not a row
 	// field. Abandoned drafts accumulate monotonically (nothing sweeps them),
