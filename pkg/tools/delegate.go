@@ -1918,10 +1918,22 @@ func (t *DelegateTool) executeAsync(
 			if labelStr == "" {
 				labelStr = "(unnamed)"
 			}
+			// A parked child is NOT finished — it is waiting on this
+			// delegator's own respond(). Saying "completed" would tell the
+			// delegator's next turn the opposite of what the lifecycle
+			// record says (needs_input), which is how an orchestrator ends
+			// up believing work is done and never answering the question.
+			// ParksTurn must also survive this rebuild: dropping it here
+			// would silently kill the signal for every downstream reader.
+			headline := "Subagent task completed"
+			if result.ParksTurn {
+				headline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
+			}
 			result = &ToolResult{
-				ForLLM:  fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s", labelStr, result.ForLLM),
-				IsError: result.IsError,
-				Async:   true,
+				ForLLM:    fmt.Sprintf("%s:\nLabel: %s\nResult: %s", headline, labelStr, result.ForLLM),
+				IsError:   result.IsError,
+				ParksTurn: result.ParksTurn,
+				Async:     true,
 			}
 		}
 
@@ -2076,8 +2088,16 @@ func (t *DelegateTool) executeSync(
 	if labelStr == "" {
 		labelStr = "(unnamed)"
 	}
-	llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s",
-		labelStr, result.ForLLM)
+	// Same truthfulness rule as executeAsync's rebuild: a parked child is
+	// waiting on this delegator's respond(), not finished. Telling the
+	// delegator's next turn "completed" contradicts the needs_input record
+	// and is how an unanswered question turns into a permanently stuck child.
+	llmHeadline := "Subagent task completed"
+	if result.ParksTurn {
+		llmHeadline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
+	}
+	llmContent := fmt.Sprintf("%s:\nLabel: %s\nResult: %s",
+		llmHeadline, labelStr, result.ForLLM)
 
 	return &ToolResult{
 		ForLLM:      llmContent,
@@ -2085,7 +2105,11 @@ func (t *DelegateTool) executeSync(
 		Silent:      false,
 		IsError:     result.IsError,
 		Interrupted: result.Interrupted,
-		Async:       false,
+		// Carry the park signal across this rebuild. Dropping it would leave
+		// the delegator's OWN turn loop unaware that its child parked — the
+		// same class of silently-lost signal this defect started as.
+		ParksTurn: result.ParksTurn,
+		Async:     false,
 	}
 }
 
