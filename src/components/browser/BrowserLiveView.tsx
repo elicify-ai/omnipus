@@ -289,6 +289,26 @@ const VIEWPORT_SETTLE_MS = 250
 // limiter. Not requestAnimationFrame — see scheduleMoveFlush.
 const MOVE_FLUSH_MS = 25
 
+// textFieldHasFocus reports whether a text-entry element currently holds focus,
+// meaning any container resize right now is probably the on-screen keyboard or
+// an AutoFill accessory bar rather than something the user asked for.
+//
+// Scope is DOCUMENT-WIDE, not the frame's subtree: the address bar is a sibling
+// of the frame's body wrapper, and the chat composer on the other side of the
+// app opens the same accessory bar and shrinks the same container. `frameEl` is
+// excluded because the frame itself is focusable (tabIndex=0) and focusing it is
+// how normal driving begins — that must never suppress a real resize.
+//
+// Reads live focus rather than a stored flag deliberately: a blur that never
+// fires (element unmounted, window deactivated) would wedge a flag on forever
+// and suppress every subsequent resize.
+function textFieldHasFocus(frameEl: Element | null): boolean {
+  const active = document.activeElement
+  if (!active || active === frameEl) return false
+  const tag = active.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable === true
+}
+
 // BLANK_TAB_URL is the placeholder a not-yet-navigated tab reports. The address
 // bar must not display it: showing "about:blank" to a user who is looking at the
 // Omnipus start page is noise, and it would also overwrite a url the user is
@@ -1364,18 +1384,7 @@ export function BrowserLiveView({
       // Deliberately checks LIVE focus rather than a stored flag: a blur that
       // never fires (element unmounted, window lost focus) would otherwise
       // wedge the guard on permanently, suppressing real resizes forever.
-      const active = document.activeElement
-      if (active && active !== el) {
-        const tag = active.tagName
-        // Scope: any text field ANYWHERE, not just inside the frame's own
-        // subtree. The address bar is a SIBLING of the frame's body wrapper,
-        // so an el.parentElement.contains() check misses it entirely — and the
-        // address bar is the field that actually triggers this (it is what
-        // opens the AutoFill accessory bar). The chat composer on the other
-        // side of the app opens the same bar and shrinks the same container,
-        // so a document-wide check is correct rather than merely convenient.
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable) return
-      }
+      if (textFieldHasFocus(el)) return
 
       const box = el.getBoundingClientRect()
       const w = Math.round(box.width)
@@ -1413,6 +1422,14 @@ export function BrowserLiveView({
             trySettle(nw, nh) // still moving — chase the new size
             return
           }
+          // Re-check the focus guard HERE, not only at push() time. A settle
+          // armed while nothing was focused would otherwise commit a size
+          // measured AFTER the user clicked into the address bar — the
+          // AutoFill-shrunk geometry the guard exists to reject, slipping
+          // through a 250ms window. Bail without re-arming: the blur that
+          // restores the real size will produce its own resize event.
+          if (textFieldHasFocus(el)) return
+
           const settled = lastSentViewportRef.current
           // Re-check the dedup gate against the SETTLED size: the box may have
           // travelled away and come back, in which case there is nothing to

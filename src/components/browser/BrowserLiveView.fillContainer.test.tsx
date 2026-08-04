@@ -432,3 +432,49 @@ describe('BrowserLiveView — settle must not lose the final size', () => {
     }
   })
 })
+
+// Regression coverage for the focus guard slipping through the settle window
+// (found in the second review pass, 2026-08-04).
+//
+// The guard was applied only when push() ran. A settle armed while nothing was
+// focused would therefore commit a size measured AFTER the user clicked into
+// the address bar — i.e. the AutoFill-shrunk geometry the guard exists to
+// reject, arriving through a 250ms hole.
+describe('BrowserLiveView — focus guard covers the settle window', () => {
+  it('does not commit a size measured after focus entered a text field', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" fillContainer canAnnotate />)
+      act(() => {
+        callbacksRef.current?.onConnected?.()
+        emitFirstFrame()
+      })
+      const el = document.querySelector('[data-testid="browser-live-frame"]') as HTMLElement | null
+      const box = (h: number) =>
+        ({ width: 890, height: h, top: 0, left: 0, right: 890, bottom: h, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      if (el) el.getBoundingClientRect = () => box(1010)
+      await vi.advanceTimersByTimeAsync(900)
+      mockSendViewport.mockClear()
+
+      // A genuine resize begins with NOTHING focused, so push() passes the
+      // guard and arms the settle.
+      if (el) el.getBoundingClientRect = () => box(900)
+      act(() => {
+        window.dispatchEvent(new Event('resize'))
+      })
+      await vi.advanceTimersByTimeAsync(450) // debounce done, settle pending
+
+      // Mid-settle the user clicks the address bar; the accessory bar shrinks
+      // the container further.
+      act(() => {
+        screen.getByLabelText('Address bar').focus()
+      })
+      if (el) el.getBoundingClientRect = () => box(850)
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(mockSendViewport).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
