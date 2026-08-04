@@ -2102,15 +2102,105 @@ func (t *DelegateTool) ResolvableSessionIDs(ids []string) map[string]bool {
 	return out
 }
 
+// ResolvableLabels implements tools.JobLabelResolver (UAT M3, 2026-08-03):
+// for each delegate session id given, it reports the caller-supplied `label`
+// argument (delegate(..., label:"...")) recorded in THIS process's
+// in-memory task-state index at dispatch time — see JobLabelResolver's own
+// doc comment (pkg/tools/list_jobs_sources.go) for why no durable field
+// exists to read instead (session.LifecycleRecord carries no Label at all;
+// DelegateTaskState.Label plus a one-shot subagent_start WS payload are the
+// only places a custom label ever lives).
+//
+// Mirrors ResolvableSessionIDs exactly: a single t.mu acquisition for the
+// WHOLE batch (FR-028 — the same contract JobSessionResolver's own doc
+// comment documents), so this read-only visibility call never contends with
+// the live dispatch path over the same lock.
+//
+// A session id absent from t.sessionIndex, or whose task has no Label set,
+// is simply omitted from the returned map — never an error; list_jobs falls
+// back to the row's already-resolved agent display name for that case (see
+// JobLabelResolver's doc comment).
+func (t *DelegateTool) ResolvableLabels(ids []string) map[string]string {
+	out := make(map[string]string, len(ids))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, id := range ids {
+		taskID, ok := t.sessionIndex[id]
+		if !ok {
+			continue
+		}
+		task, ok := t.tasks[taskID]
+		if !ok || task.Label == "" {
+			continue
+		}
+		out[id] = task.Label
+	}
+	return out
+}
+
+// delegateTaskVisibleToCaller decides whether the caller identified by
+// (callerSessionID, callerChannel, callerChatID) may see/act on task via
+// action:"status" (C3, UAT 2026-07-31).
+//
+// pkg/gateway/websocket.go:615 mints a brand-new chatID ("webchat:" +
+// uuid.New().String()) on EVERY WebSocket connection — a page refresh, a
+// network blip, or any client that opens one connection per message all
+// rotate it. Worse, for webchat specifically Channel is a fixed literal
+// ("webchat", websocket.go:1707) shared by every webchat conversation, so
+// chatID was the ONLY thing giving that channel any per-conversation
+// isolation at all — and it is exactly what a reconnect breaks. The result
+// (pre-fix): a status lookup for a task dispatched in a prior turn, on the
+// SAME durable conversation, reported "No subagent found" the instant the
+// browser reconnected, even though the task was very much alive (peek/
+// list_jobs, which key off the durable session id, kept reporting it
+// correctly the whole time).
+//
+// The durable identity that DOES survive a reconnect is the ADR-053 session
+// id: the client resends the SAME session_id on every reconnect
+// (websocket.go's `sessionID` local only ever gets a NEW session minted when
+// the frame carries none at all — see websocket.go:1489 vs :1563), and
+// DelegateTaskState.SessionID already captures it at dispatch time (this
+// file's executeAsync, via ToolTranscriptSessionID(ctx) — the parent
+// turn's own durable transcript session id).
+//
+// So: when BOTH the caller and the task carry a durable session id, that id
+// is the authoritative scope check — it survives the caller's chatID
+// rotating out from under it, and (being an unguessable, per-conversation
+// identifier, unlike the shared "webchat" channel literal) is at least as
+// strong an isolation boundary as the legacy channel/chatID pair for the
+// cross-conversation case. When either side lacks a durable session id (a
+// direct programmatic Execute call, a task registered before any transcript
+// session was bound, or a non-webchat channel that never threads one
+// through), this falls back to the pre-existing channel+chatID comparison
+// unchanged — preserving check_spawn_status's original scoping exactly for
+// every caller this fix does not need to touch.
+func delegateTaskVisibleToCaller(callerSessionID, callerChannel, callerChatID string, task *DelegateTaskState) bool {
+	if callerSessionID != "" && task.SessionID != "" {
+		return callerSessionID == task.SessionID
+	}
+	if callerChannel != "" && task.OriginChannel != "" && task.OriginChannel != callerChannel {
+		return false
+	}
+	if callerChatID != "" && task.OriginChatID != "" && task.OriginChatID != callerChatID {
+		return false
+	}
+	return true
+}
+
 // executeStatus implements action:"status". It resolves against the exact
 // same t.tasks map the async path writes to (FR-D2) and preserves
 // check_spawn_status's channel/chatID scoping exactly: a lookup or listing is
 // restricted to tasks that originated from the SAME conversation, and all
 // tasks are listed only when no channel/chat context is injected at all
-// (e.g. direct programmatic Execute calls).
+// (e.g. direct programmatic Execute calls). C3 (UAT 2026-07-31): the scope
+// check now prefers the durable ADR-053 session id (delegateTaskVisibleToCaller)
+// whenever both sides have one, since that identity survives a WebSocket
+// reconnect where callerChatID does not — see that function's doc comment
+// for the full rationale.
 func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *ToolResult {
 	callerChannel := ToolChannel(ctx)
 	callerChatID := ToolChatID(ctx)
+	callerSessionID := ToolTranscriptSessionID(ctx)
 
 	var taskID string
 	if rawTaskID, ok := args["task_id"]; ok && rawTaskID != nil {
@@ -2141,14 +2231,32 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 	if taskID != "" {
 		taskCopy, ok := t.getTaskCopy(taskID)
 		if !ok {
+			// Genuine absence: log distinctly from the scope-mismatch branch
+			// below so an operator can tell the two apart, even though the
+			// caller-visible message is identical for both (UAT 2026-07-31 —
+			// the two paths were previously indistinguishable to anyone
+			// debugging a "status went blind" report).
+			slog.Debug("delegate: status lookup — task not found", "task_id", taskID)
 			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
 		}
 
-		// Restrict lookup to tasks that belong to this conversation.
-		if callerChannel != "" && taskCopy.OriginChannel != "" && taskCopy.OriginChannel != callerChannel {
-			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
-		}
-		if callerChatID != "" && taskCopy.OriginChatID != "" && taskCopy.OriginChatID != callerChatID {
+		// Restrict lookup to tasks visible to this conversation — see
+		// delegateTaskVisibleToCaller's doc comment (C3 fix: the durable
+		// session id takes priority over the legacy channel/chatID pair
+		// whenever both sides have one, since only the session id survives a
+		// WebSocket reconnect).
+		if !delegateTaskVisibleToCaller(callerSessionID, callerChannel, callerChatID, &taskCopy) {
+			// Deliberately the SAME caller-visible "not found" message a
+			// genuine miss returns above — never confirm to an untrusted
+			// caller that a task exists in a DIFFERENT conversation — but
+			// logged distinctly for diagnosability.
+			slog.Debug("delegate: status lookup — task exists but is not visible to this caller (scope mismatch)",
+				"task_id", taskID,
+				"caller_session_id", callerSessionID,
+				"task_session_id", taskCopy.SessionID,
+				"caller_channel", callerChannel,
+				"task_channel", taskCopy.OriginChannel,
+			)
 			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
 		}
 
@@ -2164,11 +2272,9 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 	for i := range origTasks {
 		cpy := &origTasks[i]
 
-		// Filter to tasks that originate from the current conversation only.
-		if callerChannel != "" && cpy.OriginChannel != "" && cpy.OriginChannel != callerChannel {
-			continue
-		}
-		if callerChatID != "" && cpy.OriginChatID != "" && cpy.OriginChatID != callerChatID {
+		// Filter to tasks visible to the current conversation only — see
+		// delegateTaskVisibleToCaller's doc comment.
+		if !delegateTaskVisibleToCaller(callerSessionID, callerChannel, callerChatID, cpy) {
 			continue
 		}
 
@@ -2422,6 +2528,15 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLin
 type DelegateInboxStore interface {
 	Drain(ownerKey, childSessionID, sinceCursor string, maxMessages int) ([]generated.SessionMessage, string, bool, error)
 	Ack(ownerKey string, messageIDs []string) error
+	// AckDetailed is Ack's richer sibling (M1, UAT 2026-08): it performs the
+	// identical acknowledgement but additionally reports which requested
+	// message_ids matched a real message ever appended under ownerKey
+	// (Acknowledged) versus which did not (Unknown) — see
+	// session.AckResult's doc comment. executeInboxAck uses this instead of
+	// Ack so its reported count is truthful: a caller passing a wholly
+	// fabricated message id used to get back "Acknowledged 1 message(s)."
+	// regardless, silently drifting any reconciliation against that count.
+	AckDetailed(ownerKey string, messageIDs []string) (*session.AckResult, error)
 	UnackedCount(ownerKey, childSessionID string) (int, error)
 	Peek(ownerKey, childSessionID string) (*session.PeekSnapshot, error)
 }
@@ -2646,10 +2761,22 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 	if ownerKey == "" {
 		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
 	}
-	if err := t.inbox.Ack(ownerKey, ids); err != nil {
+	result, err := t.inbox.AckDetailed(ownerKey, ids)
+	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", err)).WithError(err)
 	}
-	return NewToolResult(fmt.Sprintf("Acknowledged %d message(s).", len(ids)))
+	// M1 (UAT 2026-08): report the TRUTHFUL acknowledged count — a wholly
+	// fabricated or already-unknown message_id must never inflate it — and
+	// surface any unknown ids explicitly rather than silently folding them
+	// into "success," so a caller reconciling its inbox against this count
+	// notices the drift instead of trusting a number that doesn't match what
+	// actually happened.
+	msg := fmt.Sprintf("Acknowledged %d message(s).", len(result.Acknowledged))
+	if len(result.Unknown) > 0 {
+		msg += fmt.Sprintf(" %d message ID(s) were not recognized and could not be acknowledged: %s.",
+			len(result.Unknown), strings.Join(result.Unknown, ", "))
+	}
+	return NewToolResult(msg)
 }
 
 func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *ToolResult {

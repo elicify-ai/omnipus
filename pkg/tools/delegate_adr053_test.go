@@ -629,6 +629,13 @@ func (failingDrainInbox) Drain(string, string, string, int) ([]generated.Session
 	return nil, "", false, errors.New("simulated inbox read failure")
 }
 func (failingDrainInbox) Ack(string, []string) error { return nil }
+func (failingDrainInbox) AckDetailed(_ string, messageIDs []string) (*session.AckResult, error) {
+	// Mirrors Ack's own unconditional-success no-op stance above: this fake
+	// exists solely to prove respond's authority check is fail-closed on a
+	// Drain error, so AckDetailed simply reports every requested id as
+	// acknowledged rather than modeling the real store's known/unknown split.
+	return &session.AckResult{Acknowledged: messageIDs}, nil
+}
 func (failingDrainInbox) UnackedCount(string, string) (int, error) {
 	return 0, nil
 }
