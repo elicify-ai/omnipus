@@ -510,3 +510,32 @@ describe('BrowserLiveView — consolidated two-row header', () => {
     expect(kids[1].querySelector('input[aria-label="Address bar"]')).toBeTruthy()
   })
 })
+
+// Regression: the consolidated toolbar collapsed the address bar to 23px.
+//
+// Measured on UAT v59, not theorised — row B was 575px wide and its fixed
+// children summed to 581px, so the `min-w-0 flex-1` form was flexed to zero and
+// the field became unusable. jsdom performs no layout, so this cannot assert a
+// pixel width; it asserts the structural guarantee that replaced the arithmetic
+// coincidence — a min-width floor on the field, and that the handback hint (the
+// 185px offender) no longer sits in a chrome row at all.
+describe('BrowserLiveView — the address bar cannot be squeezed out', () => {
+  it('gives the address field a min-width floor and keeps the hint off the toolbar', () => {
+    const { container } = render(
+      <BrowserLiveView sessionId="s1" agentId="a1" onClose={() => {}} onPopOut={() => {}} canAnnotate />,
+    )
+    connectAndFrame()
+    emitTabs(0, [{ index: 0, title: 'One', url: 'https://example.com' }])
+
+    const form = container.querySelector('form')
+    expect(form?.className).toMatch(/min-w-\[\d+px\]/)
+    expect(form?.className).not.toMatch(/min-w-0/)
+
+    // The hint overlays the frame; it must not be a child of either chrome row.
+    const rows = [...(container.firstElementChild?.children ?? [])].slice(0, 2)
+    for (const row of rows) {
+      expect(row.querySelector('[data-testid="browser-live-handback-hint"]')).toBeNull()
+    }
+    expect(screen.getByTestId('browser-live-handback-hint')).toBeInTheDocument()
+  })
+})

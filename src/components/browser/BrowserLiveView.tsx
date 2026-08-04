@@ -2576,7 +2576,13 @@ export function BrowserLiveView({
         >
           <ArrowsClockwise size={15} />
         </button>
-        <form onSubmit={handleOmniboxSubmit} className="flex min-w-0 flex-1 items-center">
+        {/* min-w floor is load-bearing, not cosmetic: with `min-w-0 flex-1`
+            alone the field collapsed to 23px on a 575px row (measured on UAT
+            v59) once the chips and toggles were added beside it — flex happily
+            takes a min-content:0 item to zero. The floor makes "the address bar
+            stays usable" a guarantee instead of an arithmetic coincidence that
+            holds only until the next control is added. */}
+        <form onSubmit={handleOmniboxSubmit} className="flex min-w-[120px] flex-1 items-center">
         <Input
           ref={addressBarRef}
           type="text"
@@ -2593,26 +2599,6 @@ export function BrowserLiveView({
           className="h-8 flex-1 text-xs"
         />
         </form>
-        {/* Handback discoverability (UAT: neither tester worked out that
-            sending a chat message hands control back). Folded out of its own
-            23px row onto this one -- horizontal, so it cannot change the
-            header height and trigger a recapture. ALWAYS MOUNTED and merely
-            `invisible` when idle, preserving that invariant exactly. The full
-            sentence lives in `title`; the visible short form still names BOTH
-            exits, because advertising the Esc escape is what satisfies WCAG
-            2.1.2 (No Keyboard Trap). Hidden below `md`, where the panel is too
-            narrow to carry it without crowding out the address bar. */}
-        <span
-          data-testid="browser-live-handback-hint"
-          aria-hidden={visualState !== 'you-driving'}
-          title={`Send a message to hand back to ${resolvedAgentName ?? 'the agent'} - or press Esc to stop driving`}
-          className={cn(
-            'hidden max-w-[240px] shrink-0 truncate text-[11px] text-[var(--color-muted)] md:block',
-            visualState !== 'you-driving' && 'invisible',
-          )}
-        >
-          Esc to stop &middot; message to hand back
-        </span>
         <span
           data-testid="browser-live-agent-chip"
           title={`Driving ${agentDisplayName}'s browser context`}
@@ -2631,7 +2617,10 @@ export function BrowserLiveView({
               <Robot size={9} />
             )}
           </span>
-          <span className="max-w-[140px] truncate">{agentDisplayName}</span>
+          {/* Avatar always; the NAME yields first when the row is tight —
+              identity survives as the coloured avatar, and the full name is in
+              this chip's own `title`. */}
+          <span className="hidden max-w-[140px] truncate xl:inline">{agentDisplayName}</span>
         </span>
         <span
           data-testid="browser-live-status-chip"
@@ -2679,7 +2668,7 @@ export function BrowserLiveView({
             )}
           >
             <ChatCircleDots size={13} />
-            {annotateMode ? 'Exit annotate' : 'Annotate'}
+            <span className="hidden lg:inline">{annotateMode ? 'Exit annotate' : 'Annotate'}</span>
           </button>
         )}
         {mediaStream && hasAudio && (
@@ -2709,6 +2698,29 @@ export function BrowserLiveView({
           data-visual-state={visualState}
           className="pointer-events-none absolute inset-0 z-30"
         />
+        {/* Handback discoverability (UAT: neither tester worked out that sending
+            a chat message hands control back). It lived on its own 23px row,
+            then briefly on the toolbar — where it reserved 185px of a 575px row
+            and collapsed the address bar to 23px. It belongs on neither: it is
+            transient guidance about the FRAME, so it overlays the frame.
+            Absolutely positioned, so it costs zero layout and can never move
+            the frame — which is what the always-mounted rule was protecting
+            against (a header height change forces a full capture rebuild).
+            Still ALWAYS MOUNTED and merely `invisible` when idle.
+            pointer-events-none so it can never swallow a click meant for the
+            page. Names BOTH exits on screen: advertising the Esc escape is what
+            satisfies WCAG 2.1.2 (No Keyboard Trap), which a tooltip would not. */}
+        <p
+          data-testid="browser-live-handback-hint"
+          aria-hidden={visualState !== 'you-driving'}
+          className={cn(
+            'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-3 py-1.5 text-center text-[11px] text-[var(--color-secondary)]',
+            'bg-black/60 backdrop-blur-sm',
+            visualState !== 'you-driving' && 'invisible',
+          )}
+        >
+          Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
+        </p>
         {!frame && (
           <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
             {displayError ? (

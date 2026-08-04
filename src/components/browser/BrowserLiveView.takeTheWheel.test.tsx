@@ -929,17 +929,12 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
 
     expect(screen.getByTestId('browser-live-handback-hint')).not.toHaveClass('invisible')
 
-    // Header consolidation (2026-08-04): the hint moved out of its own row and
-    // onto the toolbar, so the VISIBLE text is the short form and the full
-    // sentence — including the resolved agent name — lives in `title`. No
-    // agents query cache is populated in this suite, so it falls back to
-    // "the agent".
+    // Header consolidation (2026-08-04): the hint no longer owns a chrome row —
+    // it overlays the FRAME (absolutely positioned, pointer-events-none), so it
+    // costs zero layout while keeping the whole sentence on screen. No agents
+    // query cache is populated in this suite, so it falls back to "the agent".
     expect(screen.getByTestId('browser-live-handback-hint')).toHaveTextContent(
-      /message to hand back/i,
-    )
-    expect(screen.getByTestId('browser-live-handback-hint')).toHaveAttribute(
-      'title',
-      expect.stringContaining('hand back to the agent') as unknown as string,
+      'Send a message to hand back to the agent',
     )
   })
 
@@ -955,11 +950,9 @@ describe('BrowserLiveView — hand-back discoverability hint (UAT polish)', () =
     })
 
     // Still advertised ON SCREEN after the header consolidation, not demoted to
-    // a tooltip: a keyboard escape that is only discoverable by hovering does
-    // not satisfy "No Keyboard Trap".
-    const hint = screen.getByTestId('browser-live-handback-hint')
-    expect(hint).toHaveTextContent(/Esc to stop/i)
-    expect(hint).toHaveAttribute('title', expect.stringContaining('Esc') as unknown as string)
+    // a tooltip: a keyboard escape only discoverable by hovering does not
+    // satisfy "No Keyboard Trap".
+    expect(screen.getByTestId('browser-live-handback-hint')).toHaveTextContent(/press Esc to stop driving/i)
   })
 
   it('does not render the hand-back hint while the agent is working', () => {
