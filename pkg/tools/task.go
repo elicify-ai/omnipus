@@ -171,17 +171,27 @@ const maxTaskListRows = 100
 // that make a row actionable ("what was I asked to do / what did I report"),
 // and the scoping above is what makes carrying them safe.
 type taskListRow struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Status      string   `json:"status"`
-	WorkspaceID string   `json:"workspace_id,omitempty"`
-	AgentID     string   `json:"agent_id,omitempty"`
-	PlanID      string   `json:"plan_id,omitempty"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	PlanID      string `json:"plan_id,omitempty"`
+	// Priority, WriteSet, and Stream (M7 fix): create_task accepts all three,
+	// but before this fix nothing on this read surface ever showed them back
+	// to the calling agent — the exact gap that let the M2 priority-validation
+	// bug go unnoticed (a caller had no way to verify what was actually
+	// persisted). Priority uses EffectivePriority() (never 0) so a task
+	// created without an explicit priority still reads back a meaningful, real
+	// value (3), matching the REST read surface (toWireTask).
+	Priority    int      `json:"priority,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Prompt      string   `json:"prompt,omitempty"`
 	Result      string   `json:"result,omitempty"`
 	Due         string   `json:"due,omitempty"`
 	BlockedBy   []string `json:"blocked_by,omitempty"`
+	WriteSet    []string `json:"write_set,omitempty"`
+	Stream      string   `json:"stream,omitempty"`
 	CreatedAt   string   `json:"created_at,omitempty"`
 	UpdatedAt   string   `json:"updated_at,omitempty"`
 	CompletedAt string   `json:"completed_at,omitempty"`
@@ -214,11 +224,14 @@ func projectTaskListRow(tk *task.Task) taskListRow {
 		WorkspaceID: tk.WorkspaceID,
 		AgentID:     tk.AgentID,
 		PlanID:      tk.PlanID,
+		Priority:    tk.EffectivePriority(),
 		Description: tk.Description,
 		Prompt:      tk.Prompt,
 		Result:      tk.Result,
 		Due:         tk.Due,
 		BlockedBy:   tk.BlockedBy,
+		WriteSet:    tk.WriteSet,
+		Stream:      tk.Stream,
 		CreatedAt:   tk.CreatedAt,
 		UpdatedAt:   tk.UpdatedAt,
 		CompletedAt: tk.CompletedAt,
@@ -668,9 +681,23 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		})
 	}
 
+	// M2(a)/(b) fix: args["priority"] being PRESENT (ok==true) means the caller
+	// supplied an explicit value — including an explicit 0 — which must be
+	// validated and, if invalid, REJECTED rather than silently replaced with
+	// the default. The previous `ok && p >= 1 && p <= 5` guard let any
+	// out-of-range value (0, 6, negative...) simply fail the condition and
+	// fall through to priority=3 with no error at all: the caller received a
+	// success response with their input silently discarded. task.ValidatePriority
+	// is the same shared range-check update_task, create_task_in_workspace, and
+	// the REST create/update handlers all use, so this can't drift out of sync
+	// with them again.
 	priority := 3
-	if p, ok := args["priority"].(float64); ok && p >= 1 && p <= 5 {
-		priority = int(p)
+	if p, ok := args["priority"].(float64); ok {
+		pr := int(p)
+		if err := task.ValidatePriority(pr); err != nil {
+			return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
+		}
+		priority = pr
 	}
 
 	// Optional due date (RFC 3339), mirroring update_task's own validation:
@@ -1016,11 +1043,12 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		updatedFields = append(updatedFields, "title")
 	}
 
-	// Priority (1-5).
+	// Priority (1-5). Shared range-check with create_task/create_task_in_
+	// workspace/REST (task.ValidatePriority) — see its doc comment.
 	if p, ok := args["priority"].(float64); ok {
 		pr := int(p)
-		if pr < 1 || pr > 5 {
-			return ErrorResult(fmt.Sprintf("priority must be between 1 and 5, got %d", pr))
+		if pErr := task.ValidatePriority(pr); pErr != nil {
+			return ErrorResult(pErr.Error())
 		}
 		patch.Priority = &pr
 		updatedFields = append(updatedFields, "priority")

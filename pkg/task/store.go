@@ -65,6 +65,32 @@ func verr(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrValidation}, args...)...)
 }
 
+// ValidatePriority rejects any priority value outside 1..5, with NO exception
+// for 0.
+//
+// This is the single shared range-check every entry point that holds
+// EXPLICIT-presence information about a caller-supplied priority must call:
+// REST's task-create handler (which discards a wire *int's presence into a
+// plain int before ever building a Task — see rest_tasks.go's
+// handleTaskCreate), the create_task / create_task_in_workspace tools (which
+// know presence via `args["priority"]`'s map "ok" — a key that IS present with
+// value 0 must still validate), and this store's own updateLocked (whose
+// Patch.Priority is already a *int, so presence is never in question there).
+//
+// Callers MUST NOT call this against a bare Task.Priority struct field read
+// back from disk/defaults, where 0 legitimately means "unset" (see
+// Task.Priority's own doc comment and EffectivePriority) — normalize() below
+// guards its own call with `t.Priority != 0` for exactly that reason. A
+// pointer/presence check at the seam is what makes "field absent" and "field
+// explicitly 0" distinguishable in the first place; this function is only the
+// shared range-check once that distinction has already been made.
+func ValidatePriority(p int) error {
+	if p < 1 || p > 5 {
+		return verr("priority must be between 1 and 5, got %d", p)
+	}
+	return nil
+}
+
 // Store manages per-entity JSON task files under a single directory
 // (~/.omnipus/tasks/). It is the unified task store. All read-modify-write
 // paths are serialized by the process-wide TaskFileLock keyed by task ID, plus
@@ -369,8 +395,15 @@ func (t *Task) normalize() error {
 			return verr("cancel_reason is only valid when status is failed")
 		}
 	}
-	if t.Priority != 0 && (t.Priority < 1 || t.Priority > 5) {
-		return verr("priority must be between 1 and 5, got %d", t.Priority)
+	// t.Priority == 0 always means "unset" at THIS layer (Task.Priority is a
+	// plain int with no way to carry presence information once the struct is
+	// built) — see ValidatePriority's doc comment for why the explicit-vs-
+	// absent distinction must be made by the CALLER (REST/tool seam) before
+	// ever populating this field, not here.
+	if t.Priority != 0 {
+		if err := ValidatePriority(t.Priority); err != nil {
+			return err
+		}
 	}
 	if t.WorkspaceID == "" {
 		return verr("workspace_id is required")
@@ -922,8 +955,12 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		t.AgentID = *patch.AgentID
 	}
 	if patch.Priority != nil {
-		if *patch.Priority < 1 || *patch.Priority > 5 {
-			return nil, verr("priority must be between 1 and 5, got %d", *patch.Priority)
+		// Patch.Priority is already a *int, so presence is never ambiguous here:
+		// a non-nil pointer to 0 IS an explicit priority:0 and must be rejected,
+		// unlike normalize()'s Create-time check above (which operates on a bare
+		// int with no such signal). See ValidatePriority's doc comment.
+		if err := ValidatePriority(*patch.Priority); err != nil {
+			return nil, err
 		}
 		t.Priority = *patch.Priority
 	}

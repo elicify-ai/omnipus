@@ -359,9 +359,15 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// (task.Task.EffectivePriority), matching create_task's own default.
 	if v, ok := args["priority"].(float64); ok {
 		pr := int(v)
-		if pr < 1 || pr > 5 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				fmt.Sprintf("priority must be between 1 and 5, got %d", pr), "priority"))
+		// args["priority"] IS present (ok==true), so this is an EXPLICIT value —
+		// including an explicit 0, which task.ValidatePriority rejects with no
+		// exception (unlike Task.Priority's own "0 = unset" struct-field
+		// contract). Shared with the plain create_task tool, update_task_in_
+		// workspace's store-layer check, and REST's create handler so "priority
+		// must be between 1 and 5" can never drift across entry points again
+		// (M2(b)).
+		if err := task.ValidatePriority(pr); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "priority"))
 		}
 		tk.Priority = pr
 	}
@@ -863,14 +869,25 @@ type workspaceTaskRow struct {
 	Status string `json:"status"`
 	// Relation says WHY this row is the caller's, mirroring list_jobs:
 	// "runs" = assigned to the caller, "dispatched" = created by the caller.
-	Relation    string   `json:"relation"`
-	WorkspaceID string   `json:"workspace_id,omitempty"`
-	AgentID     string   `json:"agent_id,omitempty"`
-	PlanID      string   `json:"plan_id,omitempty"`
-	Due         string   `json:"due,omitempty"`
-	BlockedBy   []string `json:"blocked_by,omitempty"`
-	CreatedAt   string   `json:"created_at,omitempty"`
-	UpdatedAt   string   `json:"updated_at,omitempty"`
+	Relation    string `json:"relation"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	PlanID      string `json:"plan_id,omitempty"`
+	// Priority, WriteSet, and Stream (M7 fix): create_task_in_workspace/
+	// update_task_in_workspace accept all three, but before this fix nothing
+	// on the tool read surface ever showed them back to the calling agent —
+	// which is exactly what let the M2 priority-validation gap go unnoticed
+	// (a caller had no way to verify what was actually persisted). Priority
+	// uses EffectivePriority() (never 0) so a task created without an explicit
+	// priority still reads back a meaningful, real value (3), matching what
+	// the REST read surface (toWireTask) already shows.
+	Priority  int      `json:"priority,omitempty"`
+	Due       string   `json:"due,omitempty"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
+	WriteSet  []string `json:"write_set,omitempty"`
+	Stream    string   `json:"stream,omitempty"`
+	CreatedAt string   `json:"created_at,omitempty"`
+	UpdatedAt string   `json:"updated_at,omitempty"`
 }
 
 // workspaceTaskListResponse is the list_tasks_in_workspace envelope. `matched`
@@ -1040,8 +1057,11 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *tools.
 			WorkspaceID: tk.WorkspaceID,
 			AgentID:     tk.AgentID,
 			PlanID:      tk.PlanID,
+			Priority:    tk.EffectivePriority(),
 			Due:         tk.Due,
 			BlockedBy:   tk.BlockedBy,
+			WriteSet:    tk.WriteSet,
+			Stream:      tk.Stream,
 			CreatedAt:   tk.CreatedAt,
 			UpdatedAt:   tk.UpdatedAt,
 		})

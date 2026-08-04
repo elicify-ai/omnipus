@@ -599,15 +599,29 @@ func TestHandleTasks_Priority_DefaultsToThree(t *testing.T) {
 
 // TestHandleTasks_Priority_Validation verifies priority range validation.
 // BDD:
-//   - priority=0 → 201 (treated as unset; Sprint 2 unified store defaults to 3 on read).
+//   - priority=0 → 400 (explicit zero is rejected, NOT treated as unset).
 //   - priority=6 → 400 (out of range 1–5).
 //   - priority=1 → 201 (boundary min).
 //   - priority=5 → 201 (boundary max).
 //
-// Sprint 2 change: priority=0 is no longer rejected with 400. The unified store
-// treats 0 as "unset" and stores/returns effective priority=3 (default). Old "400 on 0"
-// was the legacy boardtask behavior. The new store.Create normalizes 0 → 3.
-// Traces to: project-task-milestone-spec.md — FR-L2-007 (priority 1–5, 0=unset/default)
+// M2(a) fix (2026-08, uat-report-adr057-CONSOLIDATED-2026-08-03.md): this test
+// previously asserted `priority=0 → 201`, on the Sprint-2-era reasoning that
+// "the unified store treats 0 as unset". That reasoning conflated two
+// different things: Task.Priority==0 legitimately means "unset" once a Task
+// struct already exists with no priority ever supplied (e.g. the field
+// omitted from the request body entirely — see
+// TestHandleTasks_Priority_DefaultsToThree, unaffected by this fix) — but an
+// EXPLICIT `"priority":0` in the request body is a wire *int that IS non-nil,
+// and discarding that presence information before validating (as
+// handleTaskCreate used to do) meant a caller who explicitly sent 0 got a 201
+// with their input silently replaced by the default (persisted/read back as
+// 3) instead of an error telling them their value was invalid. `absent`
+// (nil pointer, never validated) and `explicit 0` (non-nil pointer to 0, now
+// validated and rejected) are no longer the same case — this is the
+// intentional, reviewed behavior change that closes M2(a), not a weakened
+// assertion: 0 now correctly ERRORS where it previously silently succeeded
+// with the wrong data.
+// Traces to: project-task-milestone-spec.md — FR-L2-007 (priority 1–5, 0=unset/default on the omitted-field path only)
 func TestHandleTasks_Priority_Validation(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
@@ -617,7 +631,7 @@ func TestHandleTasks_Priority_Validation(t *testing.T) {
 		priority     int
 		expectedCode int
 	}{
-		{"priority zero", 0, http.StatusCreated}, // Sprint 2: 0=unset→default 3 (not 400)
+		{"priority zero", 0, http.StatusBadRequest}, // M2(a): explicit 0 is now rejected, not silently defaulted
 		{"priority six", 6, http.StatusBadRequest},
 		{"priority one boundary min", 1, http.StatusCreated},
 		{"priority five boundary max", 5, http.StatusCreated},

@@ -872,6 +872,21 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		t.Description = *req.Description
 	}
 	if req.Priority != nil {
+		// M2(a) fix: req.Priority is a wire *int, so its presence is unambiguous
+		// here — a non-nil pointer to 0 IS an explicit priority:0 and must be
+		// rejected now, BEFORE that presence information is lost by assigning
+		// into t.Priority (a plain int, where 0 means "unset" per
+		// task.Task.Priority's own contract). Previously this block skipped
+		// straight to the assignment and relied on task.Store.Create's own
+		// validation to catch an out-of-range value — but that validation
+		// (task.go normalize()) deliberately treats Priority==0 as "unset, skip
+		// the check" for exactly the same reason, so an explicit priority:0
+		// sailed through uncaught and was silently persisted as unset (read
+		// back as 3 via EffectivePriority).
+		if err := task.ValidatePriority(*req.Priority); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		t.Priority = *req.Priority
 	}
 	if req.AgentId != nil && *req.AgentId != "" {
