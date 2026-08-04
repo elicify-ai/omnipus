@@ -20,7 +20,6 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -423,21 +422,30 @@ func (c *Config) FilterSensitiveData(content string) string {
 // It is stored in config.json under the "performance" key and may also be overridden
 // at runtime via the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 type PerformanceConfig struct {
-	// MaxParallelAgents is the maximum number of concurrent task/subagent dispatches.
-	// 0 means "use the auto-detected default" (clamped from CPU and RAM).
-	// The runtime clamps this to [2, min(NumCPU-2, RAM/1.5 GB)] ≤ 16.
-	// Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var when set.
+	// MaxParallelAgents is the maximum number of concurrent task/subagent
+	// dispatches. 0 means "use the auto-detected default", sized from
+	// available memory (see autoDetectMaxParallel) — floored so a small box
+	// still functions, and bounded only by a PHYSICAL OS-thread-safety
+	// ceiling (physicalConcurrencySafetyCeiling), never an arbitrary policy
+	// number. An explicit non-zero value here (or via
+	// OMNIPUS_MAX_PARALLEL_AGENTS) is a DEFAULT OVERRIDE: it always wins
+	// outright over the auto-detected value and is honored as configured —
+	// see clampParallelExplicit.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
 }
 
-// EffectiveMaxParallelAgents returns the clamped, environment-override-aware
-// value for MaxParallelAgents. It applies:
+// EffectiveMaxParallelAgents returns the environment-override-aware value for
+// MaxParallelAgents. It applies, in priority order:
 //  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid.
-//  2. The configured value (p.MaxParallelAgents), if non-zero.
-//  3. An auto-detect heuristic: min(NumCPU-2, RAM_GB/1.5), floor 2, ceiling 16.
+//  2. The configured value (p.MaxParallelAgents), if non-zero — an EXPLICIT
+//     operator choice, honored as given (clampParallelExplicit floors it at 1
+//     but never lowers a large explicit value).
+//  3. An auto-detect DEFAULT: availableMemory / bytesPerAgent (see
+//     autoDetectMaxParallel) — used only when neither of the above is set.
 //
-// An explicit MaxParallelAgents=1 is honored — only the auto-detect path
-// enforces a floor of 2 (to prevent accidental single-flight on capable hardware).
+// Steps 1 and 2 both take precedence over step 3 unconditionally: this
+// function must never let the auto-detected default override an operator's
+// explicit choice, by config, env, or (via PUT /api/v1/performance) the UI.
 func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 	// Env-var override has highest priority.
 	if s := os.Getenv("OMNIPUS_MAX_PARALLEL_AGENTS"); s != "" {
@@ -446,57 +454,161 @@ func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 		}
 	}
 	if p.MaxParallelAgents > 0 {
-		// Explicit user-set value: allow 1 (single-flight); cap at 16.
+		// Explicit user-set value: honored as configured (see
+		// clampParallelExplicit's own doc comment for why there is no
+		// ceiling here).
 		return clampParallelExplicit(p.MaxParallelAgents)
 	}
 	return autoDetectMaxParallel()
 }
 
-// clampParallelExplicit clamps an explicitly configured value to [1, 16].
-// The floor is 1 so that a user who deliberately sets max_parallel_agents=1
-// gets single-flight behavior. Use autoDetectMaxParallel for the auto path
-// (which floors at 2 to avoid accidental single-flight on capable hardware).
+// clampParallelExplicit enforces only a floor (1, so an operator who
+// deliberately sets max_parallel_agents=1 gets single-flight behavior) on an
+// EXPLICITLY configured value (config.json or OMNIPUS_MAX_PARALLEL_AGENTS).
+//
+// There is deliberately NO ceiling here. Silently lowering an operator's
+// explicit choice is the exact ADR-037 "silent clamping" anti-pattern this
+// project bans (CLAUDE.md). When a configured value exceeds
+// physicalConcurrencySafetyCeiling, it is still honored in full — but a loud
+// WARN is logged, because Go's runtime hard-aborts the entire process (not a
+// graceful degradation) once it exceeds 10,000 OS threads, and concurrent
+// agent turns can each pin an OS thread on a blocking syscall (see
+// physicalConcurrencySafetyCeiling's doc comment for the measured basis).
+// The operator who set this value explicitly is assumed to have made that
+// trade-off knowingly; the warning exists so a value that was a fat-fingered
+// typo (e.g. an extra zero) is loudly diagnosable rather than a silent
+// eventual crash.
 func clampParallelExplicit(v int) int {
-	const minPar, maxPar = 1, 16
+	const minPar = 1
 	if v < minPar {
 		return minPar
 	}
-	if v > maxPar {
-		return maxPar
+	if v > physicalConcurrencySafetyCeiling {
+		logger.WarnCF("config",
+			"performance.max_parallel_agents is configured far above the physical OS-thread-safety ceiling — honoring it as configured (explicit values are never silently clamped), but this risks Go runtime thread exhaustion (a fatal process abort) under real concurrent load",
+			map[string]any{
+				"configured_value": v,
+				"safety_ceiling":   physicalConcurrencySafetyCeiling,
+			})
 	}
 	return v
 }
 
-// clampParallel clamps the auto-detected value to [2, 16].
-// Only used by autoDetectMaxParallel; explicit user values use clampParallelExplicit.
+// clampParallel floors the AUTO-DETECTED default at autoDetectFloorParallel
+// (so a severely memory-constrained box still gets minimal concurrency) and
+// caps it at physicalConcurrencySafetyCeiling.
+//
+// Unlike clampParallelExplicit, this path DOES cap the ceiling: the
+// auto-detected value is a convenience default the system chose FOR the
+// operator, not something they explicitly asked for, so keeping it inside a
+// safe physical bound by construction is the appropriate default posture. An
+// operator who wants more than the physical ceiling can always set
+// max_parallel_agents explicitly (clampParallelExplicit path), which this
+// default never overrides (see EffectiveMaxParallelAgents).
 func clampParallel(v int) int {
-	const minPar, maxPar = 2, 16
-	if v < minPar {
-		return minPar
+	const autoDetectFloorParallel = 2
+	if v < autoDetectFloorParallel {
+		return autoDetectFloorParallel
 	}
-	if v > maxPar {
-		return maxPar
+	if v > physicalConcurrencySafetyCeiling {
+		return physicalConcurrencySafetyCeiling
 	}
 	return v
 }
 
-// autoDetectMaxParallel returns min(NumCPU-2, RAM_GB/1.5) clamped to [2, 16].
-// RAM_GB is derived from the virtual memory total reported by the OS.
+// physicalConcurrencySafetyCeiling bounds the AUTO-DETECTED default only
+// (clampParallel) — it never clamps an explicit operator value
+// (clampParallelExplicit honors any explicit value, warning loudly instead
+// of silently capping it).
+//
+// This is a PHYSICAL bound, not a policy number. Each concurrent agent
+// turn/sub-turn can end up blocked on a synchronous syscall (file fsync,
+// cgo, blocking DNS resolution) that parks its goroutine's OS thread rather
+// than Go's netpoller: prior measurement found ~1000 concurrent fsyncing
+// goroutines consumed ~999 OS threads. Go's runtime hard-aborts the entire
+// process — not a graceful degradation — once it exceeds 10,000 OS threads
+// ("runtime: program exceeds 10000-thread limit, fatal error: thread
+// exhaustion"). physicalConcurrencySafetyCeiling leaves a 5x margin below
+// that fatal threshold for every OTHER thread-consuming subsystem already
+// running in the process (channels, browser tooling, the HTTP server, GC,
+// etc.), so a default chosen automatically — without the operator's
+// explicit, informed sign-off — can never by itself push the process into
+// that fatal zone.
+const physicalConcurrencySafetyCeiling = 2000
+
+// bytesPerAgent is the assumed marginal memory cost of one concurrent agent
+// turn, used to size the auto-detected default from available memory.
+// Backed by live measurement, not a guess: gateway-RSS-only per-agent deltas
+// of 2.0-3.2 MB were measured across N=4/N=8/N=16 concurrency, for both a
+// browser-navigation workload and a bash-heavy workload (see
+// docs/internal/uat/parallelism-cost-browser-bash-2026-08-04.md and
+// docs/internal/uat/parallelism-cost-measurement-2026-08-04.md). 3.5 MB/agent
+// sits just above the observed range, leaving headroom without resurrecting
+// the old CPU/1.5GB-per-agent heuristic, which overestimated real per-agent
+// cost by roughly 500x.
+//
+// This deliberately does NOT budget for the separate, stochastic ~500 MB
+// Chromium/browser-tool event documented in the same measurement — that cost
+// is not proportional to agent count (it is one persistent, shared process
+// per agent identity, not N×), and sizing a per-agent constant around a
+// worst-case tail event would make the common case (no browser tool use)
+// wildly under-provisioned. A box that heavily uses browser tools at high
+// concurrency should set max_parallel_agents explicitly, lower than this
+// default — this is called out explicitly in this change's own report as an
+// operator-facing caveat, not silently absorbed into the constant.
+const bytesPerAgent = 3.5 * 1024 * 1024
+
+// autoDetectMaxParallel returns the DEFAULT (only) concurrency cap, sized as
+// availableMemory / bytesPerAgent and clamped by clampParallel. Used only
+// when the operator has not set an explicit performance.max_parallel_agents
+// (config or env) — see EffectiveMaxParallelAgents.
 func autoDetectMaxParallel() int {
-	cpuBased := runtime.NumCPU() - 2
-	ramBased := int(float64(totalRAMBytes()) / (1.5 * 1024 * 1024 * 1024))
-	val := cpuBased
-	if ramBased < val {
-		val = ramBased
-	}
+	avail := availableRAMBytes()
+	val := int(float64(avail) / bytesPerAgent)
 	return clampParallel(val)
 }
 
-// totalRAMBytes returns the total physical memory in bytes. It reads
-// /proc/meminfo on Linux and falls back to a conservative 4 GB constant
-// on other platforms.
-func totalRAMBytes() uint64 {
-	return readMemTotalBytes()
+// availableRAMBytes returns the current best estimate of memory available
+// for starting new work, in bytes. It combines two signals:
+//
+//  1. /proc/meminfo's MemAvailable (readMemAvailableBytes) — the kernel's own
+//     estimate, accounting for reclaimable page cache/slab (unlike MemFree).
+//  2. The process's cgroup memory limit minus current usage
+//     (readCgroupMemoryAvailableBytes), when a finite cgroup memory limit is
+//     configured — common in containerized deployments (Docker, Fly
+//     Machines, Kubernetes), where the cgroup limit is frequently far
+//     tighter than the host's own total memory and is a STABLE, explicitly
+//     configured ceiling rather than a live kernel heuristic.
+//
+// The smaller of the two is returned, so a tight container limit is never
+// exceeded by trusting an unconstrained host-wide reading.
+//
+// Known limitation, accepted deliberately (this sizes a DEFAULT ONLY — an
+// explicit performance.max_parallel_agents always overrides it, see
+// EffectiveMaxParallelAgents): MemAvailable can under-report for a period
+// after a fresh boot/container start before the page-cache subsystem has
+// warmed up (observed live: 28 MB measured on a box that settled at ~370 MB
+// once warm — docs/internal/uat/max-parallel-concurrency-gap-2026-07-31.md
+// G4, cross-referenced against parallelism-cost-measurement-2026-08-04.md's
+// clean-idle baseline). This is NOT "solved" by re-sampling with a short
+// in-process delay at boot — the warm-up lag observed is tied to the box's
+// actual workload history, not milliseconds, so a boot-time retry loop
+// would not reliably help and would only delay every gateway boot for no
+// real benefit. Instead, this value is deliberately never frozen at boot for
+// any live caller: every production call site either (a) re-invokes
+// EffectiveMaxParallelAgents() fresh on each use (pkg/agent's
+// getSubTurnConfig on every sub-turn spawn, the GET /api/v1/performance
+// handler), or (b) re-syncs its cached capacity against the current value on
+// every admission check (pkg/agent's AdmissionController live resolver and
+// TaskExecutor.syncDispatchCapacity) — so a transient low boot-time reading
+// self-corrects as soon as the host's real availability changes, with no
+// operator action required.
+func availableRAMBytes() uint64 {
+	avail := readMemAvailableBytes()
+	if cgAvail, ok := readCgroupMemoryAvailableBytes(); ok && cgAvail < avail {
+		avail = cgAvail
+	}
+	return avail
 }
 
 type HooksConfig struct {

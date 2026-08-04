@@ -769,11 +769,20 @@ func NewAgentLoop(
 		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:                newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		contextBuilderRegistry:  NewContextBuilderRegistry(),
-		admission:               newAdmissionController(0),
 		rootDelegationAdmission: rootDelegationAdmission,
 		loadedTools:             make(map[string]map[string]bool),
 		browserMgrs:             make(map[string]*browser.BrowserManager),
 	}
+	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
+	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
+	// semaphore uses (Performance.EffectiveMaxParallelAgents), instead of the
+	// former independent, hardcoded runtime.NumCPU()*4 soft cap — see
+	// AdmissionController.resolveCap's doc comment (admission.go) for why
+	// this must be resolved fresh on every check rather than cached once
+	// here at construction time.
+	al.admission = newAdmissionControllerWithResolver(func() int {
+		return al.GetConfig().Performance.EffectiveMaxParallelAgents()
+	})
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
 

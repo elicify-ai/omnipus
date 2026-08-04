@@ -11,12 +11,99 @@ import (
 )
 
 // TestAdmissionController_DefaultSoftCap verifies that a zero-arg controller
-// picks up a positive default soft cap.
+// falls back to a defensive floor of 1 — NOT a hardcoded hardware-derived
+// guess (runtime.NumCPU()*4, the pre-consolidation defect: an independent,
+// invisible cap well under the operator-advertised max_parallel_agents — see
+// docs/internal/uat/parallelism-cost-browser-bash-2026-08-04.md finding #1).
+// Production wiring never takes this path at all — see
+// TestAdmissionController_ResolverConstructor_LiveResolution below for the
+// constructor NewAgentLoop actually uses.
 func TestAdmissionController_DefaultSoftCap(t *testing.T) {
 	a := newAdmissionController(0)
-	if a.SoftCap() <= 0 {
-		t.Fatalf("SoftCap() = %d, want > 0", a.SoftCap())
+	if a.SoftCap() != 1 {
+		t.Fatalf("SoftCap() = %d, want 1 (defensive floor, not a hardcoded hardware guess)", a.SoftCap())
 	}
+}
+
+// TestAdmissionController_ResolverConstructor_LiveResolution is the
+// regression test for the concurrency-gate consolidation: a resolver-backed
+// controller must consult resolveCap AFRESH on every check, not cache the
+// value seen at construction. This is what makes the auto-detected default's
+// boot-time-read caveat (pkg/config's availableRAMBytes doc comment)
+// self-correcting: the SAME live AdmissionController must reflect a
+// changed central value without being reconstructed or explicitly resized.
+//
+// BDD: Given a resolver-backed controller whose resolver initially returns 2,
+//
+//	When two scopes are admitted (reaching that cap) and a third is refused,
+//	And the resolver is then changed to return 5,
+//	Then a new scope is admitted without any reconstruction or explicit resize.
+//
+// Traces to: pkg/agent/admission.go — AdmissionController.resolveCap/effectiveCap
+func TestAdmissionController_ResolverConstructor_LiveResolution(t *testing.T) {
+	capVal := 2
+	a := newAdmissionControllerWithResolver(func() int { return capVal })
+
+	if got := a.SoftCap(); got != 2 {
+		t.Fatalf("SoftCap() = %d, want 2 (from resolver)", got)
+	}
+
+	_, release1 := a.TryAdmit("scope-1")
+	defer release1()
+	_, release2 := a.TryAdmit("scope-2")
+	defer release2()
+
+	if ok, _ := a.TryAdmit("scope-3"); ok {
+		t.Fatal("TryAdmit scope-3 = true at resolver cap=2, want false")
+	}
+
+	// Change the underlying value the resolver reports — simulating a live
+	// config change (operator PUT, or the auto-detected default re-settling
+	// as the host's available memory changes) — WITHOUT reconstructing the
+	// controller or calling any resize method.
+	capVal = 5
+
+	if got := a.SoftCap(); got != 5 {
+		t.Fatalf("SoftCap() after resolver change = %d, want 5 (must re-read live, not cache the value seen at construction)", got)
+	}
+	ok, release3 := a.TryAdmit("scope-3")
+	if !ok {
+		t.Fatal("TryAdmit scope-3 = false after resolver raised the cap to 5, want true (live re-resolution)")
+	}
+	release3()
+}
+
+// TestAdmissionController_ResolverConstructor_NeverSmallerThanCentral proves
+// the specific invariant the operator required: the session-admission gate
+// must never impose a cap smaller than the central authority
+// (Performance.EffectiveMaxParallelAgents, simulated here by the resolver
+// closure) — it can only ever equal it, never independently drift below it.
+func TestAdmissionController_ResolverConstructor_NeverSmallerThanCentral(t *testing.T) {
+	central := 1
+	a := newAdmissionControllerWithResolver(func() int { return central })
+
+	for _, central = range []int{1, 3, 16, 17, 500, 2000} {
+		if got := a.SoftCap(); got != central {
+			t.Fatalf("SoftCap() = %d, want exactly %d (must track the central authority exactly, never a smaller independent value)", got, central)
+		}
+	}
+}
+
+// TestAdmissionController_ResolverConstructor_FallsBackOnNonPositive verifies
+// that a resolver returning <= 0 (a defensive/misconfiguration case — the
+// real EffectiveMaxParallelAgents() is documented to always floor at >= 1)
+// falls back to the defensive softCap floor rather than admitting nothing
+// (0) or panicking.
+func TestAdmissionController_ResolverConstructor_FallsBackOnNonPositive(t *testing.T) {
+	a := newAdmissionControllerWithResolver(func() int { return 0 })
+	if got := a.SoftCap(); got != 1 {
+		t.Fatalf("SoftCap() with a resolver returning 0 = %d, want 1 (defensive floor)", got)
+	}
+	ok, release := a.TryAdmit("scope-1")
+	if !ok {
+		t.Fatal("TryAdmit = false with resolver returning 0, want true (defensive floor of 1 still admits one scope)")
+	}
+	release()
 }
 
 // TestAdmissionController_ExplicitSoftCap verifies the caller-supplied cap is used.

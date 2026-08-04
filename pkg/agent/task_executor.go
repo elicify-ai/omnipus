@@ -150,6 +150,18 @@ type TaskExecutor struct {
 	// rather than a dedicated lock — SetLifecycleStore is a boot-time,
 	// low-frequency write and every read is equally cheap.
 	lifecycleStore *session.LifecycleStore
+
+	// autoSyncDispatchCapacity, when true, makes ExecuteTask/StartTaskNow
+	// re-resolve Performance.EffectiveMaxParallelAgents() and resize
+	// dispatchSema before every dispatch attempt (see syncDispatchCapacity).
+	// Set to true ONLY by newTaskExecutor (the real production constructor);
+	// deliberately false (Go's zero value) for every test that constructs a
+	// bare TaskExecutor{...} literal with its own hand-picked dispatchSema
+	// capacity for a specific test scenario (e.g. forcing
+	// ErrDispatchCapReached with cap=1) — such tests must keep full control
+	// of the capacity they set, so auto-resync is opt-in-by-construction
+	// rather than always-on.
+	autoSyncDispatchCapacity bool
 }
 
 // evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
@@ -172,12 +184,13 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 		}
 	}
 	return &TaskExecutor{
-		agentLoop:            al,
-		store:                store,
-		running:              make(map[string]*taskSlot),
-		maxConcurrent:        defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:         newDispatchSemaphore(capacity),
-		evidenceRejectStreak: make(map[string]int),
+		agentLoop:                al,
+		store:                    store,
+		running:                  make(map[string]*taskSlot),
+		maxConcurrent:            defaultMaxConcurrentTasksPerAgent,
+		dispatchSema:             newDispatchSemaphore(capacity),
+		evidenceRejectStreak:     make(map[string]int),
+		autoSyncDispatchCapacity: true,
 	}
 }
 
@@ -448,6 +461,7 @@ func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVeri
 		}
 	}
 
+	te.syncDispatchCapacity()
 	ok, release := te.dispatchSema.TryAcquire()
 	if !ok {
 		return fmt.Errorf(
@@ -2033,6 +2047,7 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		return "", fmt.Errorf("task_executor: StartTaskNow: agent %q not found for task %q", t.AgentID, taskID)
 	}
 
+	te.syncDispatchCapacity()
 	ok, release := te.dispatchSema.TryAcquire()
 	if !ok {
 		return "", fmt.Errorf(
@@ -2209,6 +2224,45 @@ func (te *TaskExecutor) ResizeDispatchSema(newCap int) {
 	te.dispatchSema.Resize(newCap)
 	logger.InfoCF("task_executor", "Dispatch semaphore resized",
 		map[string]any{"new_cap": te.dispatchSema.Cap(), "in_flight": te.dispatchSema.InFlight()})
+}
+
+// syncDispatchCapacity re-resolves Performance.EffectiveMaxParallelAgents()
+// and resizes dispatchSema when it has drifted from the currently-applied
+// capacity. Called at the top of every dispatch attempt (see the two
+// TryAcquire call sites in ExecuteTask and StartTaskNow) so this — the
+// single central authority for agent concurrency (concurrency-gate
+// consolidation, 2026-08-04) — never runs on a value frozen at
+// newTaskExecutor's construction time.
+//
+// This closes the SAME boot-time-read gap documented on
+// pkg/config's availableRAMBytes: when performance.max_parallel_agents is
+// unset (auto-detect), the capacity newTaskExecutor originally resolved may
+// have been computed from an available-memory reading taken moments after
+// process start, before the host's real availability settled. Re-checking
+// on every dispatch (a cheap config-field read; Resize itself is a no-op
+// unless the value actually changed) means that reading self-corrects the
+// moment EffectiveMaxParallelAgents() would return something different —
+// including an operator's own explicit override landing via
+// PUT /api/v1/performance's config write, independent of that handler's own
+// explicit ResizeDispatchSema call (defense in depth: this makes the
+// explicit call redundant-but-harmless rather than load-bearing).
+//
+// A no-op unless autoSyncDispatchCapacity is true — see that field's doc
+// comment for why this must be opt-in-by-construction (newTaskExecutor
+// only), not always-on: a bare TaskExecutor{...} test literal that
+// deliberately hand-picks a small dispatchSema capacity (e.g. to force
+// ErrDispatchCapReached) must keep full control of that capacity.
+func (te *TaskExecutor) syncDispatchCapacity() {
+	if !te.autoSyncDispatchCapacity || te.agentLoop == nil {
+		return
+	}
+	cfg := te.agentLoop.GetConfig()
+	if cfg == nil {
+		return
+	}
+	if eff := cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 && eff != te.dispatchSema.Cap() {
+		te.dispatchSema.Resize(eff)
+	}
 }
 
 // DispatchSemaCap returns the current dispatch semaphore capacity.

@@ -4838,16 +4838,16 @@ export interface components {
         };
         /**
          * PerformanceSettings
-         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch.
+         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04).
          */
         PerformanceSettings: {
             /**
-             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. The runtime clamps the configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. 0 (on the wire, surfaced here as the resolved effective value — see effective_max_parallel_agents) means "use the auto-detected default", sized from available memory (availableMemory / ~3.5 MB per agent), floored so a small box still functions. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor applies). A configured value is bounded only by a documented PHYSICAL OS-thread-safety ceiling (around 2000) when left on auto-detect; an explicit value above that ceiling is still honored in full, with a server-side warning logged rather than the value being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
              * @example 4
              */
             max_parallel_agents?: number;
             /**
-             * @description The clamped value actually in use (after applying CPU/RAM heuristics and env-var override). Always present in responses; absent in requests.
+             * @description The resolved value actually in use (after applying the auto-detect memory-based heuristic or env-var override). Always present in responses; absent in requests.
              * @example 4
              */
             effective_max_parallel_agents?: number;
@@ -4863,7 +4863,7 @@ export interface components {
          */
         PerformanceSettingsUpdate: {
             /**
-             * @description New value for the maximum concurrent task/subagent dispatch cap. The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+             * @description New value for the maximum concurrent task/subagent dispatch cap — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04). Set to 0 to restore the auto-detected default (sized from available memory, floored so a small box still functions). Any other value is honored EXACTLY as given — there is no ceiling; a value is never silently lowered. (Fixed 2026-08-04: this field previously declared `minimum: 2`, which contradicted this very description's "set to 0" instruction and would have rejected 0 under schema validation — corrected alongside the ceiling removal since both are the same field.)
              * @example 6
              */
             max_parallel_agents?: number;

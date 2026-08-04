@@ -2294,14 +2294,14 @@ export const RetentionSweepResult = z
   .passthrough();
 export const PerformanceSettings = z
   .object({
-    max_parallel_agents: z.number().int().gte(2).lte(16),
-    effective_max_parallel_agents: z.number().int().gte(2).lte(16),
+    max_parallel_agents: z.number().int().gte(1),
+    effective_max_parallel_agents: z.number().int().gte(1),
     tools_on_demand: z.boolean(),
   })
   .partial();
 export const PerformanceSettingsUpdate = z
   .object({
-    max_parallel_agents: z.number().int().gte(2).lte(16),
+    max_parallel_agents: z.number().int().gte(0),
     tools_on_demand: z.boolean(),
   })
   .partial();

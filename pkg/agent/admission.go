@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -21,24 +20,75 @@ import (
 // Phase 1: gates inbound user-message dispatch only. The counter tracks unique
 // active scopes (one per spawned session worker) — not per-turn, so a single
 // chatty session cannot pin admission slots indefinitely. Subagent spawn and
-// task-executor dispatch paths are NOT gated; see the v0.2 follow-up issue for
-// resource-aware admission that covers those paths as well.
+// task-executor dispatch paths are gated separately by TaskExecutor's own
+// dispatchSema (pkg/agent/dispatch_sema.go), the "single authority" for agent
+// concurrency (concurrency-gate consolidation, 2026-08-04) — see resolveCap's
+// doc comment below for how the two stay aligned.
 type AdmissionController struct {
-	softCap      int
+	// softCap is the fixed cap used when resolveCap is nil — the path taken
+	// by direct-int test construction (newAdmissionController). Production
+	// wiring never uses this field; see resolveCap.
+	softCap int
+	// resolveCap, when non-nil, is consulted FRESH on every effectiveCap()
+	// call instead of softCap. Production wiring (NewAgentLoop) always sets
+	// this to a closure reading al.GetConfig().Performance.
+	// EffectiveMaxParallelAgents() live — the SAME central authority
+	// TaskExecutor's dispatch semaphore uses (pkg/config's
+	// PerformanceConfig.EffectiveMaxParallelAgents) — so this gate can never
+	// silently impose an independent, smaller cap (the pre-fix defect: a
+	// hardcoded runtime.NumCPU()*4 rejected sessions well under the
+	// operator-advertised max_parallel_agents, with zero visibility — see
+	// docs/internal/uat/parallelism-cost-browser-bash-2026-08-04.md finding
+	// #1). Resolving live on every check (rather than caching a value
+	// resolved once at construction) is also the fix for the auto-detected
+	// default's own boot-time-read caveat: see
+	// pkg/config's availableRAMBytes doc comment — a transient low reading
+	// right after boot self-corrects the moment the host's real availability
+	// changes, with no restart or explicit resize required.
+	resolveCap   func() int
 	mu           sync.Mutex
 	activeScopes map[string]struct{}
 }
 
-// newAdmissionController returns a controller with softCap = NumCPU() * 4.
-// If softCap is provided and positive, it overrides the default.
+// newAdmissionController returns a controller with a FIXED cap: softCap if
+// positive, otherwise a defensive floor of 1 (never a hardcoded
+// hardware-derived guess — see newAdmissionControllerWithResolver for the
+// production, live-resolved path, which is what NewAgentLoop actually uses).
+// This constructor exists for direct unit tests of TryAdmit's admission
+// logic against a known, stable cap.
 func newAdmissionController(softCap int) *AdmissionController {
 	if softCap <= 0 {
-		softCap = runtime.NumCPU() * 4
+		softCap = 1
 	}
 	return &AdmissionController{
 		softCap:      softCap,
 		activeScopes: make(map[string]struct{}),
 	}
+}
+
+// newAdmissionControllerWithResolver returns a controller whose cap is
+// resolved LIVE via resolveCap on every admission check, rather than fixed
+// at construction. This is the production constructor (NewAgentLoop wires
+// resolveCap to al.GetConfig().Performance.EffectiveMaxParallelAgents()) —
+// see resolveCap's doc comment on the AdmissionController struct for why
+// live resolution, rather than a cached value, is required.
+func newAdmissionControllerWithResolver(resolveCap func() int) *AdmissionController {
+	return &AdmissionController{
+		resolveCap:   resolveCap,
+		softCap:      1, // defensive floor, only reachable if resolveCap ever returns <= 0
+		activeScopes: make(map[string]struct{}),
+	}
+}
+
+// effectiveCap returns the cap to enforce right now: resolveCap()'s current
+// value when set and positive, otherwise the fixed softCap.
+func (a *AdmissionController) effectiveCap() int {
+	if a.resolveCap != nil {
+		if c := a.resolveCap(); c > 0 {
+			return c
+		}
+	}
+	return a.softCap
 }
 
 // TryAdmit atomically claims a slot for scope. Returns (true, release) when
@@ -49,7 +99,8 @@ func newAdmissionController(softCap int) *AdmissionController {
 // call always succeeds without consuming an additional slot — the slot was
 // already claimed when the worker was first spawned.
 //
-// Returns (false, nil) when the softCap is reached and scope is a new scope.
+// Returns (false, nil) when the effective cap (see effectiveCap) is reached
+// and scope is a new scope.
 func (a *AdmissionController) TryAdmit(scope string) (bool, func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -59,7 +110,7 @@ func (a *AdmissionController) TryAdmit(scope string) (bool, func()) {
 		return true, func() {}
 	}
 
-	if len(a.activeScopes) >= a.softCap {
+	if len(a.activeScopes) >= a.effectiveCap() {
 		return false, nil
 	}
 
@@ -80,9 +131,12 @@ func (a *AdmissionController) ActiveScopes() int {
 	return len(a.activeScopes)
 }
 
-// SoftCap returns the configured soft cap value.
+// SoftCap returns the cap currently being enforced — the live-resolved value
+// when a resolver is configured (production wiring), otherwise the fixed
+// softCap. Safe to call without holding a.mu (effectiveCap only reads
+// resolveCap/softCap, never activeScopes).
 func (a *AdmissionController) SoftCap() int {
-	return a.softCap
+	return a.effectiveCap()
 }
 
 // ====================== ADR-057 W17: root-level delegation admission ======================

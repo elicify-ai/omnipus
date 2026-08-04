@@ -8824,12 +8824,12 @@ type PendingRestartEntry struct {
 	PersistedValue interface{} `json:"persisted_value"`
 }
 
-// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch.
+// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04).
 type PerformanceSettings struct {
-	// EffectiveMaxParallelAgents The clamped value actually in use (after applying CPU/RAM heuristics and env-var override). Always present in responses; absent in requests.
+	// EffectiveMaxParallelAgents The resolved value actually in use (after applying the auto-detect memory-based heuristic or env-var override). Always present in responses; absent in requests.
 	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
 
-	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. The runtime clamps the configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. 0 (on the wire, surfaced here as the resolved effective value — see effective_max_parallel_agents) means "use the auto-detected default", sized from available memory (availableMemory / ~3.5 MB per agent), floored so a small box still functions. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor applies). A configured value is bounded only by a documented PHYSICAL OS-thread-safety ceiling (around 2000) when left on auto-detect; an explicit value above that ceiling is still honored in full, with a server-side warning logged rather than the value being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 
 	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
@@ -8838,7 +8838,7 @@ type PerformanceSettings struct {
 
 // PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
 type PerformanceSettingsUpdate struct {
-	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap. The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04). Set to 0 to restore the auto-detected default (sized from available memory, floored so a small box still functions). Any other value is honored EXACTLY as given — there is no ceiling; a value is never silently lowered. (Fixed 2026-08-04: this field previously declared `minimum: 2`, which contradicted this very description's "set to 0" instruction and would have rejected 0 under schema validation — corrected alongside the ceiling removal since both are the same field.)
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 
 	// ToolsOnDemand New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
