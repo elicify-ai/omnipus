@@ -246,11 +246,24 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 			// disambiguate by line number, verified 2026-08 against this
 			// tree (see the header comment's per-bucket file:line list).
 			switch r.line {
-			case 609:
+			case 609, 626:
+				// Cancel-gate fix (2026-08-04, later same day): the pre-arm
+				// key read shifted 609 -> 626 (+17) once spawnSubTurn gained
+				// its "-0.5. Cancellation gate (chain-reaction supersession
+				// of ADR-057 FR-024)" check — ErrSessionCancelling's
+				// declaration (~17 lines, ahead of even the pre-arm block in
+				// source order) is the sole cause of this specific site's
+				// shift; the gate CHECK itself sits after the pre-arm read,
+				// so it does not additionally move this one. Still the same
+				// single site (pendingSpawnKeysForThisCall := pendingSpawnKeys(...)).
 				return u19BucketPreArm
-			case 1174:
+			case 1174, 1222:
+				// Cancel-gate fix: shifted 1174 -> 1222 (+48 total — the
+				// +17 ErrSessionCancelling declaration plus the ~31-line
+				// gate check block, both ahead of this site). Still the same
+				// single site (childTS.routingSessionID = parentTS.routingSessionID).
 				return u19BucketInheritance
-			case 1327, 1612, 1630:
+			case 1327, 1375, 1612, 1630, 1678:
 				// C2/M4 (2026-08-04): the SubTurnEndPayload.SessionID site
 				// shifted from line 1573 to 1612 — pkg/agent/subturn.go grew
 				// ~39 lines earlier in spawnSubTurn (the lastTurnStatus
@@ -266,13 +279,17 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				// arm of the SAME endStatus switch (ahead of this site in
 				// source order), which is what actually makes a parked
 				// child's SubagentEndFrame.status say "parked" instead of
-				// falling through to "success". Re-verified against the
-				// current tree: still the SAME single site
-				// (al.emitEvent(EventKindSubTurnEnd, ..., SubTurnEndPayload{
-				// ..., SessionID: string(parentTS.routingSessionID)})) — no
-				// new consumer was added, only relocated. 1612 is kept in
-				// this set (not replaced) as a record of the shift history,
-				// matching how 1573 was itself superseded by 1612 above.
+				// falling through to "success".
+				//
+				// Cancel-gate fix (2026-08-04, later still): shifted again,
+				// 1630 -> 1678 (+48), same cause as the pre-arm/inheritance
+				// shifts above (ErrSessionCancelling + the gate check, both
+				// ahead of this site) — 1327 (the OTHER WS-stamping site,
+				// SubTurnSpawnPayload.SessionID) moved by the same +48 to
+				// 1375. Re-verified against the current tree: still the
+				// SAME two single sites — no new consumer was added, only
+				// relocated. Every historical value is kept (not replaced)
+				// as a record of the shift history.
 				return u19BucketWSStamping
 			}
 		}
