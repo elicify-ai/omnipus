@@ -5025,6 +5025,26 @@ func (al *AgentLoop) wireJobRosterForAgent(agent *AgentInstance) {
 		}
 		return delegateTool
 	})
+	// SetLabelResolver over the SAME *tools.DelegateTool (UAT M3, 2026-08-03
+	// / #584): DelegateTool now also implements tools.JobLabelResolver via
+	// ResolvableLabels, so list_jobs' label_contains filter can match a
+	// subagent's custom delegate label instead of only its raw agent/session
+	// identifiers. Same live-closure discipline as SetSessionResolver
+	// immediately above — re-resolves on every call rather than capturing a
+	// value at wiring time — for the identical reasons (wiring-order
+	// independence, hot-reload safety, honest nil degradation when no
+	// delegate tool is registered).
+	listJobs.SetLabelResolver(func() tools.JobLabelResolver {
+		raw, ok := agent.Tools.Get("delegate")
+		if !ok {
+			return nil
+		}
+		delegateTool, ok := raw.(*tools.DelegateTool)
+		if !ok {
+			return nil
+		}
+		return delegateTool
+	})
 	// RegisterReplacing, not Register: registerSharedTools re-runs on every hot
 	// reload, so a same-name re-registration is EXPECTED and must not log a
 	// WARN per agent per reload.
@@ -9430,9 +9450,26 @@ turnLoop:
 				pendingMessages = append(pendingMessages, steerMsgs...)
 			}
 
+			// C2 (ADR-057 UAT 2026-08-03): a successful message_parent(kind=
+			// question, wait=true) call parks the CALLING child's own durable
+			// LifecycleRecord in needs_input (pkg/tools/message_parent.go's
+			// parkNeedsInput) — but until this check existed, this in-memory
+			// loop was completely blind to that transition and kept iterating,
+			// eventually overwriting the durable park with a later terminal
+			// state before any `delegate respond` could ever reach it (the
+			// child "kept running" past its own park, permanently stranding
+			// the correlation_id). toolResult.ParksTurn is the signal
+			// message_parent.go sets on exactly that success path; checked
+			// FIRST (highest priority) because a park must win over an
+			// in-flight steering message or graceful interrupt too.
+			parked := toolResult.ParksTurn
+
 			skipReason := ""
 			skipMessage := ""
-			if len(pendingMessages) > 0 {
+			if parked {
+				skipReason = "session parked (message_parent question wait=true)"
+				skipMessage = "Skipped: this session parked awaiting the parent's answer."
+			} else if len(pendingMessages) > 0 {
 				skipReason = "queued user steering message"
 				skipMessage = "Skipped due to queued user message."
 			} else if gracefulPending, _ := ts.gracefulInterruptRequested(); gracefulPending {
@@ -9471,6 +9508,28 @@ turnLoop:
 							ts.recordPersistedMessage(skippedMsg)
 						}
 					}
+				}
+				if parked {
+					// Stop the turn NOW — modeled on the hardAbortRequested
+					// early-return above (this same loop), not on the
+					// graceful-interrupt `break` below: `break` only exits
+					// THIS tool-execution loop and falls through to another
+					// LLM call at the top of the iteration loop (turnLoop),
+					// which is exactly the bug (the loop resuming past the
+					// park). A genuine `return` here is what actually stops
+					// runTurn. Unlike abortTurn, this deliberately does NOT
+					// call ts.restoreSession — a park is not a rollback: the
+					// history through this tool call's own recorded result
+					// must survive on disk exactly as-is so a later `delegate
+					// respond` resumes from this point, not from a rewound
+					// pre-turn snapshot.
+					ts.setPhase(TurnPhaseParked)
+					turnStatus = TurnEndStatusParked
+					return turnResult{
+						status:     TurnEndStatusParked,
+						followUps:  append([]bus.InboundMessage(nil), ts.followUps...),
+						turnFailed: ts.turnFailed,
+					}, nil
 				}
 				break
 			}

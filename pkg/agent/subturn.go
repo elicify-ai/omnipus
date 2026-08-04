@@ -1329,6 +1329,22 @@ func spawnSubTurn(
 		)
 	}
 
+	// lastTurnStatus mirrors turnRes.status (assigned immediately after the
+	// al.runTurn call in step 8 below) so the cleanup defer registered right
+	// here — textually BEFORE turnRes even exists as a local variable, and
+	// therefore unable to reference it directly — can still read the turn's
+	// real terminal status. M4 (2026-08-04, UAT): pkg/agent/loop.go's
+	// abortTurn Case 1 (a tool-call-time hard interrupt/cancel) deliberately
+	// returns turnResult{status: TurnEndStatusAborted} with a NIL error (see
+	// abortTurn's own doc comment: a clean, user-initiated stop, not a
+	// failure) — so the endStatus switch below, which used to branch solely
+	// on `err != nil`, fell through every case for that nil-error abort and
+	// reported endStatus=Success for a genuinely killed child (live UAT:
+	// chat-wide Stop killing a child blocked in a bash tool call reported
+	// success). Declaring this here, in the same top-level scope as the
+	// defer literal below, is what makes it a valid closure upvalue.
+	var lastTurnStatus TurnEndStatus
+
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
 		if r := recover(); r != nil {
@@ -1416,6 +1432,29 @@ func spawnSubTurn(
 				}
 			case err != nil:
 				endStatus = SubTurnStatusError
+			case lastTurnStatus == TurnEndStatusAborted:
+				// M4 (2026-08-04, UAT): every case above is gated on
+				// err != nil, but abortTurn's Case 1 (pkg/agent/loop.go) — a
+				// tool-call-time hard interrupt/cancel — deliberately
+				// returns a NIL error for that specific, intentional stop
+				// (see abortTurn's own doc comment). Without this case, a
+				// genuinely hard-aborted child (e.g. chat-wide Stop killing
+				// a child mid bash-tool-call) fell all the way through to
+				// the endStatus := SubTurnStatusSuccess initializer above,
+				// reporting a killed span as having succeeded. A hard abort
+				// is definitionally a cancellation, never a success,
+				// regardless of which specific mechanism armed it or
+				// whether childCtx itself (rather than one of its
+				// request-scoped descendants, e.g. the per-LLM-call
+				// turnCtx/providerCancel requestHardAbort actually cancels)
+				// ever observably transitions to context.Canceled. Placed
+				// LAST and gated on err == nil implicitly (every err != nil
+				// abort is already handled by one of the three cases above,
+				// unchanged) so this can only ever ADD coverage for the
+				// previously-unhandled nil-error gap — it can never change
+				// the classification of an existing, already-tested
+				// err != nil path.
+				endStatus = SubTurnStatusCancelled
 			}
 
 			// Finding F (A-I4 round 5): mirror endStatus onto the returned/
@@ -1631,6 +1670,11 @@ func spawnSubTurn(
 
 	// Native path (default, existing behavior — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
+	// M4/C2 (2026-08-04): mirror the real terminal status into the
+	// pre-declared upvalue the cleanup defer above reads — see
+	// lastTurnStatus's own doc comment for why a direct reference from that
+	// closure is not possible.
+	lastTurnStatus = turnRes.status
 
 	// Re-register childTS in activeTurnStates: runTurn's OWN internal defer
 	// chain (loop.go) already deleted it — al.clearActiveTurn(ts) (keyed by
@@ -1683,6 +1727,27 @@ func spawnSubTurn(
 		result = &tools.ToolResult{
 			ForLLM:  turnRes.finalContent,
 			ForUser: turnRes.finalContent,
+		}
+		// C2 (2026-08-04): surface the park onto the ToolResult the caller
+		// (pkg/tools/delegate.go's executeSync/executeAsync, for the
+		// synchronous and asynchronous delegation paths respectively) sees.
+		// KNOWN GAP, reported rather than fixed here (outside this file's
+		// scope): as of this change, neither executeSync's nor executeAsync's
+		// own post-dispatch switch (delegate.go, ~L2026 and ~L1837) checks
+		// this field yet — both still fall through to their `default` case
+		// and unconditionally call transitionLifecycle(..., LifecycleCompleted),
+		// overwriting the needs_input state message_parent.go's parkNeedsInput
+		// (and this fix) correctly left in place. A parked child dispatched
+		// via the real `delegate` tool therefore still reproduces the "session
+		// ... is not parked" respond() failure today, from a DIFFERENT cause
+		// than the one this file's fix closes (the turn loop no longer keeps
+		// running past the park, but delegate.go's own bookkeeping still
+		// stomps the record afterward). The exact fix: add a
+		// `case result.ParksTurn:` branch (checked before `default`) in both
+		// switches that skips transitionLifecycle entirely — message_parent.go
+		// already correctly parked the record; it must not be touched again.
+		if turnRes.status == TurnEndStatusParked {
+			result.ParksTurn = true
 		}
 	}
 

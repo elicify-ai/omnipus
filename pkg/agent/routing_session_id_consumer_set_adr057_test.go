@@ -250,7 +250,19 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 				return u19BucketPreArm
 			case 1174:
 				return u19BucketInheritance
-			case 1327, 1573:
+			case 1327, 1612:
+				// C2/M4 (2026-08-04): the SubTurnEndPayload.SessionID site
+				// shifted from line 1573 to 1612 — pkg/agent/subturn.go grew
+				// ~39 lines earlier in spawnSubTurn (the lastTurnStatus
+				// upvalue declaration + the M4 endStatus switch case, both
+				// ahead of this site in source order) fixing two verified
+				// defects (C2: message_parent(wait=true) park propagation;
+				// M4: a tool-call-time hard-abort incorrectly reporting
+				// SubTurnStatusSuccess). Re-verified against the current
+				// tree: still the SAME single site
+				// (al.emitEvent(EventKindSubTurnEnd, ..., SubTurnEndPayload{
+				// ..., SessionID: string(parentTS.routingSessionID)})) — no
+				// new consumer was added, only relocated.
 				return u19BucketWSStamping
 			}
 		}

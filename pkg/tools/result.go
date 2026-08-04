@@ -75,6 +75,26 @@ type ToolResult struct {
 	// not change the outer badge.
 	Interrupted bool `json:"interrupted,omitempty"`
 
+	// ParksTurn signals that this tool call requires the ENCLOSING turn to
+	// stop immediately, without being treated as an error or an abort. Set
+	// exclusively by pkg/tools/message_parent.go on a successful kind=
+	// question, wait=true call — the exact moment it has parked the calling
+	// child's own durable LifecycleRecord into needs_input (ADR-053 §5.1,
+	// parkNeedsInput). pkg/agent/loop.go's runTurn tool-execution loop is the
+	// sole consumer (Correctness-C2, ADR-057 UAT 2026-08-03): on seeing this
+	// flag it finishes this tool call's own bookkeeping (transcript/message
+	// append) exactly as normal, marks any REMAINING queued tool calls in the
+	// same LLM batch as skipped (mirroring the graceful-interrupt skip path),
+	// and returns TurnEndStatusParked — deliberately WITHOUT the session
+	// rollback a hard-abort performs, so the durable needs_input record and
+	// the turn's own conversation history survive untouched, exactly as they
+	// were at park time, ready for `delegate respond` to resume. Every other
+	// tool/result constructor leaves this at its zero value (false); it must
+	// never be set for a failed/rejected park attempt (message_parent.go only
+	// sets it once inbox.Append AND parkNeedsInput have both already
+	// succeeded).
+	ParksTurn bool `json:"parks_turn,omitempty"`
+
 	// ExitCode is the real process exit code for a shell/bash foreground
 	// execution (pkg/tools/shell.go's foregroundResultFromSandbox /
 	// runUnconstrained), or nil when no real exit code is available (a

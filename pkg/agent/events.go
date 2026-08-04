@@ -205,6 +205,24 @@ const (
 	TurnEndStatusError TurnEndStatus = "error"
 	// TurnEndStatusAborted indicates the turn was hard-aborted and rolled back.
 	TurnEndStatusAborted TurnEndStatus = "aborted"
+	// TurnEndStatusParked indicates the turn stopped because a tool call
+	// (message_parent kind=question wait=true) parked the calling session's
+	// own durable LifecycleRecord in needs_input (ADR-053 §5.1), awaiting a
+	// parent response via `delegate respond`. Deliberately distinct from
+	// Aborted: there is no rollback and no error — the turn's history up to
+	// and including the parking tool call's own recorded result is left
+	// intact (runTurn returns immediately after finishing that bookkeeping),
+	// so a later `respond` + steering-queue resume continues from exactly
+	// this point rather than replaying or discarding anything. See
+	// pkg/agent/loop.go's runTurn tool-execution loop (the
+	// toolResult.ParksTurn check, tools.ToolResult's doc comment) — the sole
+	// producer of this status — for the full defect this closes (C2/ADR-057
+	// UAT 2026-08-03): before it existed, a successful park still left the
+	// in-memory turn loop blind to its own session's lifecycle transition,
+	// so the turn kept running additional LLM iterations/tool calls past the
+	// park, eventually overwriting the durable needs_input record before any
+	// `respond` could ever reach it.
+	TurnEndStatusParked TurnEndStatus = "parked"
 )
 
 // TurnStartPayload describes the start of a turn.

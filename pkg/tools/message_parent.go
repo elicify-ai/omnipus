@@ -690,10 +690,23 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		resp.CorrelationId = &correlationID
 	}
 	payload, merr := json.Marshal(resp)
+	var result *ToolResult
 	if merr != nil {
-		return NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", appendResult.MessageID))
+		result = NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", appendResult.MessageID))
+	} else {
+		result = NewToolResult(string(payload))
 	}
-	return NewToolResult(string(payload))
+	// C2 (ADR-057 UAT 2026-08-03): signal pkg/agent/loop.go's runTurn to stop
+	// the calling child's turn NOW, immediately after this tool call's own
+	// bookkeeping — waitParks is only ever true once parkNeedsInput (above)
+	// has already succeeded, so this is reached exclusively on the genuine
+	// success path. Without this flag the in-memory turn loop has no way to
+	// learn its own session was just durably parked into needs_input and
+	// keeps iterating past it (the exact defect this fix closes).
+	if waitParks {
+		result.ParksTurn = true
+	}
+	return result
 }
 
 // parkNeedsInput transitions the calling child's own durable record to

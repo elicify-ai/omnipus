@@ -76,6 +76,13 @@ const (
 	TurnPhaseFinalizing TurnPhase = "finalizing"
 	TurnPhaseCompleted  TurnPhase = "completed"
 	TurnPhaseAborted    TurnPhase = "aborted"
+	// TurnPhaseParked mirrors TurnEndStatusParked (events.go) at the
+	// turnState.phase granularity: the turn stopped because a
+	// message_parent(question, wait=true) call parked this session in
+	// needs_input. Set immediately before runTurn's park early-return so any
+	// introspection reading ActiveTurnInfo.Phase mid-unwind sees the real
+	// reason rather than "aborted" or a stale "tools".
+	TurnPhaseParked TurnPhase = "parked"
 )
 
 type ActiveTurnInfo struct {
