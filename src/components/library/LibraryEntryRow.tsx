@@ -5,6 +5,7 @@
 // / Rename / Move-or-copy / Delete) is real — wired straight to the Library
 // REST endpoints via the callbacks LibraryExplorer passes down.
 
+import { useState } from 'react'
 import { Folder, DotsThree, DownloadSimple, PencilSimple, ArrowsLeftRight, Trash, Eye } from '@phosphor-icons/react'
 import { fileTypeMeta } from '@/components/chat/AttachmentCard'
 import {
@@ -15,6 +16,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { formatRelative } from '@/lib/formatRelative'
+import { libraryDownloadUrl } from '@/lib/api'
+import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
 
@@ -33,6 +36,8 @@ export function formatLibrarySize(bytes: number): string {
 }
 
 interface LibraryEntryRowProps {
+  /** Needed to build the media URL for inline image/video thumbnails. */
+  workspaceId: string
   entry: LibraryEntry
   selected: boolean
   onOpenDirectory: (entry: LibraryEntry) => void
@@ -44,6 +49,7 @@ interface LibraryEntryRowProps {
 }
 
 export function LibraryEntryRow({
+  workspaceId,
   entry,
   selected,
   onOpenDirectory,
@@ -54,6 +60,14 @@ export function LibraryEntryRow({
   onDelete,
 }: LibraryEntryRowProps) {
   const { Icon, color } = entry.is_dir ? { Icon: Folder, color: '#D4AF37' } : fileTypeMeta(entry.name, entry.mime)
+  const kind = entry.is_dir ? 'other' : classifyLibraryEntry(entry)
+  const isMedia = kind === 'image' || kind === 'video'
+  // Falls back to the generic type icon if the media itself won't load, so a
+  // broken or unreadable file degrades to exactly what it looked like before
+  // rather than an empty box.
+  const [thumbFailed, setThumbFailed] = useState(false)
+  const showThumb = isMedia && !thumbFailed
+  const thumbSrc = isMedia ? libraryDownloadUrl(workspaceId, entry.path) : ''
 
   function handleActivate() {
     if (entry.is_dir) onOpenDirectory(entry)
@@ -84,12 +98,43 @@ export function LibraryEntryRow({
         entry.is_hidden && 'opacity-60',
       )}
     >
+      {/* Inline media preview (operator direction, 2026-08-04: "images and
+          videos should be previewed also inline in the file list itself").
+          The real frame replaces the generic type glyph IN PLACE, so rows keep
+          a single uniform height and the list stays scannable however many
+          files it holds. Lazy-loaded, and `preload="metadata"` on video fetches
+          a frame rather than the whole file — a directory of large videos must
+          not become a directory of large downloads just by being listed. */}
       <div
-        className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center"
-        style={{ backgroundColor: `${color}22`, color }}
+        className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center overflow-hidden"
+        style={showThumb ? undefined : { backgroundColor: `${color}22`, color }}
         aria-hidden="true"
       >
-        <Icon size={18} weight={entry.is_dir ? 'fill' : 'regular'} />
+        {showThumb ? (
+          kind === 'image' ? (
+            <img
+              src={thumbSrc}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              onError={() => setThumbFailed(true)}
+              data-testid={`library-thumb-${entry.path}`}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <video
+              src={`${thumbSrc}#t=0.1`}
+              muted
+              playsInline
+              preload="metadata"
+              onError={() => setThumbFailed(true)}
+              data-testid={`library-thumb-${entry.path}`}
+              className="h-full w-full object-cover"
+            />
+          )
+        ) : (
+          <Icon size={18} weight={entry.is_dir ? 'fill' : 'regular'} />
+        )}
       </div>
 
       <div className="min-w-0 flex-1">

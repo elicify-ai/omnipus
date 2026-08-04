@@ -75,6 +75,11 @@ function LibraryRoute() {
     <LibraryExplorer
       key={workspace ?? 'root'}
       initialWorkspaceId={workspace}
+      // Side-by-side here, stacked in the docked aside (operator direction,
+      // 2026-08-04). A standalone tab has the width for a real split, and 60%
+      // of it beats a half-height strip for reading and editing a file; the
+      // narrow docked aside would be unusable cut in two.
+      layout="split"
       onWorkspaceChange={(id) => {
         currentWorkspaceRef.current = id ?? undefined
         announceLibraryWorkspaceChanged(id ?? undefined)

@@ -53,10 +53,15 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderExplorer(initialWorkspaceId?: string) {
+function renderExplorer(initialWorkspaceId?: string, over: { layout?: 'stacked' | 'split' } = {}) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <LibraryExplorer initialWorkspaceId={initialWorkspaceId} onClose={vi.fn()} onPopOut={vi.fn()} />
+      <LibraryExplorer
+        initialWorkspaceId={initialWorkspaceId}
+        onClose={vi.fn()}
+        onPopOut={vi.fn()}
+        {...over}
+      />
     </QueryClientProvider>,
   )
 }
@@ -732,5 +737,93 @@ describe('LibraryExplorer — reserved .library directory guard', () => {
 
     await waitFor(() => expect(screen.getByTestId('library-upload-button')).not.toBeDisabled())
     expect(screen.getByTestId('library-new-folder-button')).not.toBeDisabled()
+  })
+})
+
+// Layout + inline media (operator direction, 2026-08-04).
+describe('LibraryExplorer — list/preview split and inline media', () => {
+  async function openPreviewOn(name: string, layout?: 'stacked' | 'split') {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name, path: name })])
+    renderExplorer('ws-1', layout ? { layout } : undefined)
+    await waitFor(() => expect(screen.getByTestId(`library-row-${name}`)).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId(`library-row-${name}`))
+    return await screen.findByTestId('library-preview-pane-wrapper')
+  }
+
+  // The docked aside stacks; the fullscreen tab splits left/right. Asserted via
+  // the flex share + which border edge divides the two, because jsdom does no
+  // layout and cannot report the actual geometry.
+  it('stacks the preview below the list by default, giving it the larger share', async () => {
+    const wrapper = await openPreviewOn('notes.md')
+    expect(wrapper.className).toContain('flex-[55]')
+    expect(wrapper.className).toContain('border-t')
+    expect(wrapper.className).not.toContain('border-l')
+  })
+
+  it('puts the preview to the RIGHT at 60% when layout="split"', async () => {
+    const wrapper = await openPreviewOn('notes.md', 'split')
+    expect(wrapper.className).toContain('flex-[60]')
+    expect(wrapper.className).toContain('border-l')
+    expect(wrapper.className).not.toContain('border-t')
+  })
+
+  // With nothing open the list must reclaim the whole box rather than sitting
+  // at 45% beside empty space.
+  it('gives the list the full box while no file is open', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'notes.md', path: 'notes.md' })])
+    renderExplorer('ws-1')
+    await waitFor(() => expect(screen.getByTestId('library-row-notes.md')).toBeInTheDocument())
+
+    expect(screen.queryByTestId('library-preview-pane-wrapper')).toBeNull()
+    const list = screen.getByTestId('library-row-notes.md').closest('.overflow-y-auto') as HTMLElement
+    expect(list.className).toContain('flex-1')
+    expect(list.className).not.toContain('flex-[45]')
+  })
+
+  it('renders a real thumbnail inline for images and videos, and only for those', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({ name: 'shot.png', path: 'shot.png', mime: 'image/png' }),
+      makeEntry({ name: 'clip.mp4', path: 'clip.mp4', mime: 'video/mp4' }),
+      makeEntry({ name: 'notes.md', path: 'notes.md', mime: 'text/markdown' }),
+    ])
+    renderExplorer('ws-1')
+    await waitFor(() => expect(screen.getByTestId('library-row-shot.png')).toBeInTheDocument())
+
+    expect(screen.getByTestId('library-thumb-shot.png').tagName).toBe('IMG')
+    expect(screen.getByTestId('library-thumb-clip.mp4').tagName).toBe('VIDEO')
+    // A text file keeps its generic type glyph — no media fetch for it.
+    expect(screen.queryByTestId('library-thumb-notes.md')).toBeNull()
+  })
+
+  // A directory of large videos must not become a directory of large downloads
+  // just by being listed.
+  it('lazy-loads image thumbnails and fetches only metadata for video', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({ name: 'shot.png', path: 'shot.png', mime: 'image/png' }),
+      makeEntry({ name: 'clip.mp4', path: 'clip.mp4', mime: 'video/mp4' }),
+    ])
+    renderExplorer('ws-1')
+    await waitFor(() => expect(screen.getByTestId('library-row-shot.png')).toBeInTheDocument())
+
+    expect(screen.getByTestId('library-thumb-shot.png')).toHaveAttribute('loading', 'lazy')
+    expect(screen.getByTestId('library-thumb-clip.mp4')).toHaveAttribute('preload', 'metadata')
+  })
+
+  // Unreadable media degrades to exactly what the row looked like before,
+  // never an empty box.
+  it('falls back to the type icon when the media will not load', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'broken.png', path: 'broken.png', mime: 'image/png' })])
+    renderExplorer('ws-1')
+    const thumb = await screen.findByTestId('library-thumb-broken.png')
+
+    fireEvent.error(thumb)
+
+    await waitFor(() => expect(screen.queryByTestId('library-thumb-broken.png')).toBeNull())
+    expect(screen.getByTestId('library-row-broken.png')).toBeInTheDocument()
   })
 })

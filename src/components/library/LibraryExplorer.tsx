@@ -88,6 +88,17 @@ export interface LibraryExplorerProps {
    * tab closes, since the URL param alone goes stale the moment the user
    * navigates to a different workspace inside the explorer). */
   onWorkspaceChange?: (workspaceId: string | null) => void
+  /**
+   * How the file list and the open preview divide the space.
+   *
+   * 'stacked' (default, the docked <aside>): preview BELOW the list. The aside
+   * is a narrow column, so a side-by-side split there would leave neither half
+   * usable.
+   * 'split' (the fullscreen /#/library tab): preview to the RIGHT, taking 60%
+   * — a full-width window has the room, and an editor is far more useful tall
+   * than wide.
+   */
+  layout?: 'stacked' | 'split'
 }
 
 function sortEntries(entries: LibraryEntry[]): LibraryEntry[] {
@@ -103,6 +114,7 @@ export function LibraryExplorer({
   onPopOut,
   className,
   onWorkspaceChange,
+  layout = 'stacked',
 }: LibraryExplorerProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -112,6 +124,10 @@ export function LibraryExplorer({
   const [path, setPath] = useState('')
   const [includeHidden, setIncludeHidden] = useState(false)
   const [selectedEntry, setSelectedEntry] = useState<LibraryEntry | null>(null)
+  const isSplit = layout === 'split'
+  // The preview pane needs a real workspace to fetch from, so the virtual root
+  // never opens one however the selection got set.
+  const previewOpen = selectedEntry !== null && workspaceId !== null
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
   const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
@@ -529,8 +545,21 @@ export function LibraryExplorer({
         </div>
       )}
 
+      {/* ── List + preview split ────────────────────────────────────────────
+          Stacked in the docked aside, side-by-side in the fullscreen tab. In
+          BOTH the list stays visible and clickable while a file is open, which
+          is the in-app navigation path confirmDiscardLibraryEdits() guards. */}
+      <div className={cn('flex min-h-0 flex-1', isSplit ? 'flex-row' : 'flex-col')}>
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 relative">
+      <div
+        className={cn(
+          'min-h-0 min-w-0 overflow-y-auto p-2 relative',
+          // Preview open: it takes the larger share (60% split / 55% stacked —
+          // the stacked figure is the old even split plus the 10% the operator
+          // asked for). Closed: the list has the whole box to itself.
+          !previewOpen ? 'flex-1' : isSplit ? 'flex-[40]' : 'flex-[45]',
+        )}
+      >
         {workspaceId === null ? (
           <>
             {workspacesQuery.isLoading && <ListSkeleton />}
@@ -586,6 +615,7 @@ export function LibraryExplorer({
               sortedEntries.map((entry) => (
                 <LibraryEntryRow
                   key={entry.path}
+                  workspaceId={workspaceId}
                   entry={entry}
                   selected={selectedEntry?.path === entry.path}
                   onOpenDirectory={handleOpenDirectory}
@@ -600,15 +630,15 @@ export function LibraryExplorer({
         )}
       </div>
 
-      {/* ── Preview / edit pane (library-spec.md D-5) ───────────────────────
-          `flex-1 min-h-0` (a sibling of the entries-list body div above,
-          which is ALSO `flex-1 min-h-0`) splits the panel's remaining height
-          evenly between the file list and the open file — so a user can
-          still see and click a different row while previewing/editing the
-          current one (exactly the in-app navigation path
-          confirmDiscardLibraryEdits() guards above). */}
-      {selectedEntry && workspaceId !== null && (
-        <div className="flex-1 min-h-0 border-t border-[var(--color-border)]" data-testid="library-preview-pane-wrapper">
+      {/* ── Preview / edit pane (library-spec.md D-5) ─────────────────────── */}
+      {previewOpen && (
+        <div
+          className={cn(
+            'min-h-0 min-w-0 border-[var(--color-border)]',
+            isSplit ? 'flex-[60] border-l' : 'flex-[55] border-t',
+          )}
+          data-testid="library-preview-pane-wrapper"
+        >
           <LibraryPreviewPane
             workspaceId={workspaceId}
             entry={selectedEntry}
@@ -620,6 +650,7 @@ export function LibraryExplorer({
           />
         </div>
       )}
+      </div>
 
       {/* ── Rename dialog ────────────────────────────────────────────────── */}
       <LibraryRenameDialog
