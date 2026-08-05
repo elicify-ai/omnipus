@@ -1,6 +1,6 @@
 # ADR-058: Tool-denial semantics — say which denials are permanent, and bound the retry
 
-- **Status:** Accepted
+- **Status:** Accepted; **Amended 2026-08-05** (see [§10](#10-amendments-2026-08-05) — D4's mechanism superseded, W6 resolved by deletion, D1's reason enumeration corrected). Original decision text preserved throughout.
 - **Date:** 2026-08-05
 - **Related:** [#594](https://github.com/elicify-ai/omnipus/issues/594) (this ADR is the second half of it; `6d0735ef` was the first); [ADR-036](ADR-036-consolidate-shell-and-subagent-tools.md) §3.4 (the standing-grant consultation point); [ADR-057](ADR-057-session-parent-child-parity.md) FR-080/FR-081 (approval-entry identity); FR-011/FR-016/FR-082 (the approval gate); FR-084 (`turn_synthetic_error_floor`); FR-009/#264 (headless auto-deny)
 - **Deciders:** Operator (Daniel Piatkowski)
@@ -169,6 +169,8 @@ On a permanent denial the correct behaviour is to stop and report a blocker that
 
 ### D4 — A hard ceiling of 10, per turn, keyed by `(toolName, denialReason)`
 
+> **⚠️ AMENDED 2026-08-05 — see [§10 Amendments](#10-amendments-2026-08-05) (A1, A2, A4, A5).** D4's *intent* (a hard, named, per-turn backstop of 10 that opens no approval round-trip and terminates with a tool-naming reason) stands unchanged and is implemented. D4's *mechanism as written below* does not: a red-team of the implementation spec proved that quarantining at the ceiling makes AC-02 arithmetically unsatisfiable and the quarantine gate unobservable, and that per-pair keying leaves the heterogeneous storm in §1.2's own data unbounded. **The original text below is preserved exactly as decided; the superseding mechanism is in §10.**
+
 **Operator decision: the constant is 10.** It is not derived from a measurement and this ADR does not pretend otherwise; it is a chosen backstop, and it must be a **named constant** so it is greppable, reviewable and changeable in one place.
 
 Counter state lives on `turnState` (`pkg/agent/turn.go`), alongside the existing `syntheticErrorCount` (`turn.go:355-360`), keyed by the pair `(toolName, denialReason)`.
@@ -254,7 +256,7 @@ A denial-semantics fix makes those 24 failures *honest and fast*. It does not ma
 | **W3** | Rewrite the three `permission_denied` payload builders — `loop.go:8819`, `:8851`, `:8938` — to emit `"permanent"` and the classified `message`. Retire `"User denied tool execution."` from every path where a user did not deny. | D1, D2 |
 | **W4** | `turnState` counter keyed by `(toolName, denialReason)`; named ceiling constant = 10; short-circuit branch that opens **no** approval round-trip; turn termination naming tool + agent + reason; plumb that reason into a plan task's `failed` result. Resolve the FR-084 interaction explicitly (D4). | D4 |
 | **W5** | Invert — never quietly delete — the tests that pin the current strings. At minimum `pkg/agent/scenario_runturn_test.go:224,248-254` (asserts a `role="tool"` message containing `permission_denied`), `subturn_delegate_nesting_test.go:15,76,215,276`, `turn_recheck_test.go:16`. Precedent: ADR-057 W22. | D1–D4 |
-| **W6** | Fix FR-084's inverted sentinel (`loop.go::syntheticErrorFloor`) **or** record a deliberate decision not to. Today `config.go:3030-3032` documents a default of 8 that the code cannot produce from an unset field. Leaving both the doc and the behaviour as-is is the one option that is not acceptable. | §1.5 |
+| **W6** | Fix FR-084's inverted sentinel (`loop.go::syntheticErrorFloor`) **or** record a deliberate decision not to. Today `config.go:3030-3032` documents a default of 8 that the code cannot produce from an unset field. Leaving both the doc and the behaviour as-is is the one option that is not acceptable. **→ AMENDED 2026-08-05: resolved by DELETING FR-084 outright, not by repairing the sentinel. See §10.A3.** | §1.5 |
 
 ---
 
@@ -299,3 +301,66 @@ The four surfaces were traced individually:
 1. **Should the ceiling be per-turn or per-task?** A long autonomous plan task and a 3-message interactive chat get the same budget of 10 today. Not decided here.
 2. **Should `saturated` back off rather than retry immediately?** D1 keeps it retryable and D4 caps it at 10; neither introduces a delay, so 10 rapid retries against a full queue remain possible.
 3. **Does the marker extend to `PermissionDeniedResult` / `DelegationDeniedResult`?** §7 prices it; §3 scopes it out. A follow-on decision, with a contract-pipeline cost attached to one of the two.
+
+---
+
+## 10. Amendments (2026-08-05)
+
+**Status:** Accepted. **Author:** architect, at the operator's design resolution. **Trigger:** a red-team of the implementation spec (`docs/internal/specs/adr-058-tool-denial-semantics-spec.md`, revision 1) found that two clauses of this ADR are in direct conflict, and that three of §2's supporting claims are wrong. Nothing in §1–§9 is rewritten — the original decision text stands as decided, and each amendment names what it supersedes.
+
+### A1 — D4's quarantine engages on the FIRST permanent denial, not at the ceiling
+
+**Supersedes:** D4's opening clause (*"On reaching the ceiling for a given pair, all four of the following, together"*), for items 1–3 only.
+
+D4 as written is internally unsatisfiable, on two independent grounds:
+
+- **Arithmetic.** D4 #3 exists so that a permanently-denied tool stops costing a full approval window per attempt — §4 calls it *"the largest wall-clock win in the change"*. But with quarantine engaging only at the ceiling, attempts 1…10 each open a real approval round-trip. At the 600 s default that is **100 minutes**. §8's AC-02 simultaneously requires the turn be bounded *"by a stated multiple of one approval window, **not** by 10 windows"*. Both cannot hold.
+- **Observability.** Quarantine engaged on the same denial that terminated the turn, so the quarantine map and its short-circuit gate had a lifetime of zero dispatches. No test could assert that a short-circuit ever occurred — a control that cannot be observed is the defect class this project keeps shipping.
+
+**Amended decision.** A denial classified PERMANENT quarantines its tool **immediately, on its first occurrence** — which is what "permanent" means, and what D1/D2/D3 already imply. The turn **continues**; every subsequent call to that tool is answered from the cached denial payload with no hook call, no policy re-resolution, no `RequestApproval` and no approval round-trip. Wall clock is capped at ~one approval window per tool, making AC-02 satisfiable and giving the gate a real lifetime.
+
+**Accepted losses, recorded:** a `user` denial is a decision about one call with one set of arguments, and quarantining the whole tool for the turn is broader than that decision; and a standing "Always Allow" grant issued *after* a tool is quarantined does not un-quarantine it for the remainder of that turn.
+
+### A2 — The ceiling of 10 becomes an AGGREGATE per-turn bound, not per `(tool, reason)`
+
+**Supersedes:** D4's title and its clause *"keyed by the pair `(toolName, denialReason)`"* for the counter. (The **quarantine map** is keyed by tool name alone — see A5.)
+
+Per-pair counting leaves a hole this ADR's own evidence describes. §1.2 records agents cycling through **2–3 distinct denied tools each** ("bash denied, delegate/run_task also denied"); under per-pair counting that is 20–30 attempts before any single pair reaches 10.
+
+**Amended decision.** `turnDenialBudget = 10` counts **every denial response handed to the model in the turn** — any tool, any reason, including responses served from the quarantine cache. On the 10th, the turn terminates via `abortTurn` with the reason of D4 #4 (tool + reason + agent), unchanged. The operator's constant of 10 is preserved; only its population widens.
+
+Counting cache-served replays is deliberate: without it, a model repeating a quarantined tool would be bounded only by `MaxIterations` (200) — cheap in wall clock, expensive in tokens.
+
+**Consequence, stated plainly:** a turn whose *only* denials are `saturated` now terminates on the 10th, even though every one was retryable. Accepted — ten saturation denials in one turn means the queue has not drained for the whole turn, which is the same unbounded shape this ADR exists to stop. §8's AC-06 remains binding: a `saturated` denial must never quarantine, and a retry after the queue drains must genuinely execute.
+
+### A3 — W6 is resolved by DELETING FR-084, not by repairing its sentinel
+
+**Supersedes:** W6's *"fix … or record a deliberate decision not to"*, and D4's **[INFERRED]** recommendation that FR-084 keep catching heterogeneous storms.
+
+The one FR-084 call site that survives the D4 rewiring is the tool-assembly-duplicate branch (`loop.go:7625-7639`). **Both of its branches `return` from `runTurn`**, so its counter can reach at most 1 — a floor of 8 is unreachable. Repairing the inverted sentinel would therefore produce a documented-live, permanently-dead control: precisely the defect filed as **#595**, re-created by the fix for #595.
+
+**Amended decision.** FR-084 is deleted in full: `config.GatewayConfig.TurnSyntheticErrorFloor`, `defaultSyntheticErrorFloor`, `AgentLoop.syntheticErrorFloor`, `AgentLoop.recordSyntheticDeny`, `turnState.syntheticErrorCount`, all four call sites, the `synthetic_error_floor` abort stage, the `audit.EventTurnAbortedSyntheticLoop` event, and their tests. Nothing is lost — the duplicate branch already terminates the turn unconditionally via its second `return`. A3 also dissolves the D4/FR-084 conflict §2 flagged: the competitor is gone, so §8's AC-08 is satisfied by asserting the deletion behaviourally, not by asserting a precedence.
+
+**#595 is resolved by deletion rather than by fixing the sentinel.**
+
+### A4 — §1.3 and D1 miscount the denial reasons
+
+**Corrects:** §1.3's *"one of `user`, `timeout`, `saturated`, `restart`, `cancel`, `batch_short_circuit` (`approvals.go:148` enumerates them …)"* and D1's nine-row table.
+
+Verified in-session against `9f5f5c4b`:
+
+- **`approvals.go` produces six denial reasons, not seven.** `Reason: "approved"` (`:380`) carries `Approved: true` and is not a denial. Any classifier asserting it "known" would be asserting a lie.
+- **`internal_error` was missed.** `pkg/gateway/policy_approver.go:58` returns `(false, "internal_error")` when `requestApproval` yields a nil entry. It is a denial reason the model can receive and must be classified. It is PERMANENT (a gateway fault).
+- **`batch_short_circuit` cannot be produced by a real turn.** `cancelBatchShortCircuit` (`approvals.go:408`) has **zero production callers** — only its definition and test files. D1 #6's classification stands, but §8's AC-01 must not demand a *driven* denial for it; the FR-065 control being dead is filed as a separate finding.
+
+The classification table therefore has ten rows (adding `internal_error` and the empty-reason branch that `askDenialText` already handles), of which exactly one — `saturated` — is retryable.
+
+### A5 — The quarantine map is keyed by tool name alone
+
+**Clarifies:** D4's *"keyed by the pair `(toolName, denialReason)`"* as applied to the short-circuit lookup.
+
+The short-circuit gate runs **before** the approval path, so at gate time only the tool name is known — the denial reason of a hypothetical fresh attempt does not exist yet. Keying the lookup by `(tool, reason)` while quarantining by the same pair was a latent key-shape mismatch that becomes a real bug once quarantine has a lifetime (A1). The quarantine map is keyed by **tool name**, and its value carries the reason and payload that caused it. Once a tool has produced one permanent denial, every further call to it in that turn short-circuits regardless of what a fresh attempt might have returned.
+
+### A6 — §7's env-tag reasoning, as restated by spec revision 1, was false
+
+**Corrects:** not this ADR's text, but a claim spec revision 1 derived while assessing §7's contract scope, recorded here so it is not repeated: `pkg/config`'s `env:` struct tags are **not** decorative. `pkg/config/config.go:29` imports `github.com/caarlos0/env/v11` and `config.go:3723` calls `env.Parse(cfg)`; there are 214 live `env:` tags. §7's four contract conclusions are unaffected and stand.
