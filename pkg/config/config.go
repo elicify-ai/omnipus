@@ -3039,12 +3039,16 @@ type BrowserToolConfig struct {
 	MaxTabs        int    `                                   json:"max_tabs"        env:"OMNIPUS_TOOLS_BROWSER_MAX_TABS"`
 	PersistSession bool   `                                   json:"persist_session" env:"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION"`
 	ProfileDir     string `                                   json:"profile_dir"     env:"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR"`
-	// IdleTTLSec reaps a browsing context after this many seconds with NO
-	// attached live-panel viewer and NO agent tool call. Zero (the unset
-	// default) leaves pkg/tools/browser's own DefaultIdleTTL in force;
-	// a negative value disables reaping entirely. Without reaping, closing
-	// the live panel leaks the context forever — the panel close is a pure UI
-	// dismiss, so reopening days later resurfaced the exact page left behind.
+	// IdleTTLSec is how long an individual TAB may sit untouched before it is
+	// reaped. Reaping is per tab, not per browsing context: each tab is judged
+	// on its own last-touched time, and a context is torn down only once every
+	// tab in it has gone. A context with an attached live-panel viewer is
+	// exempt in full — every tab in it is listed in the panel's tab strip, so
+	// all of them count as open in the UI. Zero (the unset default) leaves
+	// pkg/tools/browser's own DefaultIdleTTL in force; a negative value
+	// disables reaping entirely. Without reaping, closing the live panel leaks
+	// the context forever — the panel close is a pure UI dismiss, so reopening
+	// days later resurfaced the exact page left behind.
 	IdleTTLSec int `json:"idle_ttl" env:"OMNIPUS_TOOLS_BROWSER_IDLE_TTL"`
 	// StartPageURL is what a freshly created tab opens instead of about:blank.
 	// Empty keeps about:blank.
@@ -3068,7 +3072,9 @@ type BrowserToolConfig struct {
 	// each renderer measured 74-268MB RSS on the UAT box — so an operator
 	// running many agents on a small host should set this explicitly rather
 	// than rely on the per-agent cap alone. Unlimited is safe as the default
-	// because the coordinator's idle-context reaper runs per-tab on a short
+	// because each BrowserManager's own idle reaper (ReapIdleSessions — a
+	// manager method, swept per agent by the gateway; the coordinator has no
+	// reaping role at all) runs per-tab on a short
 	// TTL (tools.browser.idle_ttl, default 5 minutes as of the same change
 	// that removed this cap), so steady-state tab count — and therefore RSS —
 	// stays low without a global ceiling. Enforced by the coordinator's

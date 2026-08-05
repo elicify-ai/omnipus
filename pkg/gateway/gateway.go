@@ -2868,11 +2868,15 @@ func setupAndStartServices(
 	//
 	// The interval MUST stay well under idle_ttl, or the TTL is a floor rather
 	// than the actual lifetime: a tab going idle just after a sweep waits out
-	// the TTL *plus* the remainder of the interval. At the old 5m/5m pairing a
-	// "5 minute" cleanup really meant 5-10 minutes. One minute keeps the
-	// observed lifetime inside ~5-6 minutes, and a sweep that reaps nothing is
-	// a map scan — the cost of sweeping more often is negligible next to a
-	// leaked renderer process (measured 74-268MB RSS each).
+	// the TTL *plus* the remainder of the interval. Shipped history was a 5m
+	// sweep against a 30m TTL, where the slack was proportionally small; the
+	// TTL dropping to 5m made the interval the dominant term, so a "5 minute"
+	// cleanup would really have meant 5-10. One minute keeps the observed
+	// lifetime inside ~5-6 minutes, and a sweep that reaps nothing is a map
+	// scan — sweeping more often costs far less than a renderer outliving its
+	// TTL (measured 74-268MB RSS each). "Outliving", not "leaked": issue #592's
+	// headline leak turned out to be one Chrome's normal process tree, and
+	// this comment should not quietly reintroduce the word that misled it.
 	go func() {
 		const reapInterval = time.Minute
 		ticker := time.NewTicker(reapInterval)

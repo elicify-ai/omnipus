@@ -19,11 +19,12 @@ import (
 // and its resident Chrome — outlived the panel indefinitely. Reopening the
 // panel days later showed the exact page the user had left.
 //
-// The reaper's contract is deliberately conservative: a context is closed only
-// when BOTH signals are quiet (no attached viewer AND no agent tool call).
-// An agent can legitimately be mid-task in a tab nobody is watching, and
-// reaping that out from under it would be strictly worse than the stale tab
-// this fixes.
+// NOTE (2026-08-05): reaping became PER TAB — each tab is judged on its own
+// last-touched time, and a context is closed only once every tab in it has
+// gone. An attached live-panel viewer still exempts the whole context. The
+// tests below remain valid as the session-level happy path (one tab per
+// session), but read reaper_edge_test.go for the authoritative per-tab
+// contract before adding anything here.
 
 // newReapableManager builds a fake-tab manager with a controllable clock and a
 // known idle TTL, so idleness can be aged deterministically without sleeping.

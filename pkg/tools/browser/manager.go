@@ -2463,24 +2463,36 @@ type reapedSessionInfo struct {
 	cancel    context.CancelFunc
 }
 
-// cancelBoundedTimeout bounds how long ReapIdleSessions waits for a single
+// cancelBoundedTimeout bounds how long a teardown path waits for a single
 // cancel() call (a tab's own, or a browsing context's browserCancel) to
-// return. This is NOT theoretical: chromedp.NewContext's returned cancel is
-// not a bare stdlib context.CancelFunc — it additionally waits on an
-// internal sync.WaitGroup and, for a context that owns a browser allocation,
-// a channel that is only ever closed by the real allocate/attach flow
-// (chromedp v0.15.1's chromedp.go — see cancelWait's "if c.allocated != nil
-// { <-c.allocated }"). In production this is bounded and fast (the
-// allocation always completed by the time a tab is ever reachable to cancel
-// — createTab never returns a tabEntry until its first chromedp.Run has
-// already succeeded), but a tab's cancel func is not guaranteed idempotent
-// against every possible external cancellation race, and this reaper must
-// never be the thing that turns a slow or double cancel into a manager-wide
-// freeze. A cancel call that doesn't return within the bound is logged and
-// abandoned (its goroutine is leaked until the call eventually does return,
-// if ever) rather than blocking this sweep — or every browser tool call
-// waiting on m.mu, since the caller may hold it — forever. Sized like this
-// file's other CDP-round-trip bounds (reconcileTargetListTimeout).
+// return. chromedp.NewContext's returned cancel is not a bare stdlib
+// context.CancelFunc — it also waits on an internal sync.WaitGroup and, for a
+// context that OWNS a browser allocation, on a channel drained by the real
+// allocate/attach flow.
+//
+// Be precise about when that channel can actually block, because getting this
+// wrong in either direction is expensive. In chromedp v0.15.1 (chromedp.go),
+// `c.allocated` is created ONLY when `c.Browser == nil`, and both wait sites
+// guard on `if c.allocated != nil`. A TAB context is always a child of an
+// already-allocated browsing context (createTab is only ever called with
+// se.browserCtx as parent), so c.Browser is non-nil, c.allocated is nil, and
+// the wait is skipped entirely — tab cancels cannot hang on this mechanism at
+// all, however many times they are called.
+//
+// The real exposure is narrow: a context that owns an allocation, whose
+// Allocate() never ran, cancelled a SECOND time — the first call drains the
+// single buffered token and nothing refills or closes the channel. That is
+// reachable for browserCancel after a failed bootstrap, not for tabs.
+//
+// So this bound is deliberate insurance, not a fix for a demonstrated
+// production tab hang: it is cheap, and it guarantees no teardown path can
+// turn a slow or double cancel into a manager-wide freeze. Do NOT remove it on
+// the strength of "tabs were never at risk" — browserCancel still is, and
+// every caller here runs with no manager lock held precisely so that a wedged
+// cancel cannot strand m.mu. A call that doesn't return within the bound is
+// logged and abandoned (its goroutine leaked until it eventually returns, if
+// ever). Sized like this file's other CDP-round-trip bounds
+// (reconcileTargetListTimeout).
 const cancelBoundedTimeout = 5 * time.Second
 
 // cancelBounded runs cancel with a bounded wait — see cancelBoundedTimeout's
@@ -2550,8 +2562,13 @@ func cancelBounded(cancel context.CancelFunc, logFields map[string]any) {
 // index down, and silently pointing an agent's next tool call at a DIFFERENT
 // tab than the one it was using would be a correctness bug no test on the
 // return value alone would catch. If the active tab itself was the one
-// reaped, activeIdx falls back to the new last tab, mirroring CloseTab's own
-// "closed the active tab" fallback.
+// reaped, activeIdx falls back to the new last tab, which is NOT what CloseTab does (it keeps activeIdx when a
+// tab slides into the same slot, and only falls back to the last tab when
+// the closed one WAS last). Deliberately simpler here: reaping can remove
+// several tabs at once, so there is no single "tab that slid into this
+// slot" to inherit, and the edge case has no one correct answer — see
+// TestReapIdleSessions_ActiveTabItselfReaped_ActiveIdxStaysCoherent, which
+// pins only that the index stays in range.
 //
 // ADR-043 D7 tab-budget accounting: every tab this closes releases the
 // global tab-budget slot it may have held (m.releaseGlobalTab() — the exact
