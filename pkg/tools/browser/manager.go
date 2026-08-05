@@ -168,6 +168,17 @@ type tabEntry struct {
 	// broadcast (ADR-041 D3/D4). Never load-bearing for tool correctness.
 	title string
 	url   string
+	// holdsGlobalReservation records whether THIS tab owns a slot in the
+	// coordinator's global tab budget. Only tabs opened through
+	// browser_open_tab do: that tool reserves via TryOpenTab BEFORE calling
+	// OpenTab. A session's FIRST tab comes from Session()/createFirstTab,
+	// which is deliberately not budget-gated, so it owns nothing.
+	//
+	// The reaper consults this rather than releasing for every tab it closes —
+	// see the release loop in ReapIdleSessions for why an unconditional
+	// release quietly loosens a configured max_total_tabs.
+	holdsGlobalReservation bool
+
 	// lastActivity is when THIS SPECIFIC TAB was last touched — by its own
 	// creation (createTab), an agent tool call resolving it via Session()
 	// (it is the browsing context's active tab at that moment), SwitchTab
@@ -226,6 +237,13 @@ type sessionEntry struct {
 	// inspect_test.go) — every nil-checked at its two call sites.
 	browserCtx    context.Context
 	browserCancel context.CancelFunc
+
+	// emptySince is when this session was first observed with ZERO tabs, and
+	// exists ONLY so a stranded empty session can still be reaped — every
+	// other idle decision is per-tab (tabEntry.lastActivity). Zero whenever the
+	// session has tabs. See ReapIdleSessions' zero-tab branch for why this is
+	// stamped-then-judged rather than acted on immediately.
+	emptySince time.Time
 	// viewers counts currently-attached live-panel viewers. A browsing
 	// context with a viewer attached is NEVER idle no matter how long ago
 	// any of its tabs were last touched — somebody is literally watching it,
@@ -943,6 +961,10 @@ func probeChromiumBinary(ctx context.Context, path string) (ok bool, reason stri
 // concurrent caller waits and then observes the now-populated
 // m.sessions[sessionID] instead of creating a second one.
 func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
+	// Cancels collected under m.mu and run after it is dropped (see the
+	// crash-recovery branch below). Declared out here so the retry loop reuses
+	// one slice rather than allocating per iteration.
+	var pendingCancels []func()
 	for {
 		m.mu.Lock()
 		if err := m.ensureStarted(); err != nil {
@@ -972,15 +994,28 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 			// possible future refinement; out of scope here — an active tab
 			// dying out from under the manager, as opposed to an explicit
 			// CloseTab, is not the case ADR-041 targets.)
+			// Collected, NOT cancelled, while m.mu is held — see cancelBounded.
+			// This is the hottest path in the file (every browser_* tool call
+			// resolves through Session()) AND it fires precisely when a tab's
+			// context has already died, which is the condition most likely to
+			// wedge a chromedp cancel. Cancelling here under the lock would
+			// freeze every browser tool call for every agent on this manager,
+			// with no error and no log — a harder failure than the reaper's,
+			// because nothing would even warn.
 			for _, t := range se.tabs {
-				t.cancel()
+				pendingCancels = append(pendingCancels, t.cancel)
 			}
 			if se.browserCancel != nil {
-				se.browserCancel()
+				pendingCancels = append(pendingCancels, se.browserCancel)
 			}
 			delete(m.sessions, sessionID)
 		}
 		m.mu.Unlock()
+
+		for _, cancel := range pendingCancels {
+			cancelBounded(cancel, map[string]any{"session_id": sessionID, "origin": "session_crash_recovery"})
+		}
+		pendingCancels = nil
 
 		if err := m.createFirstTab(sessionID); err != nil {
 			return nil, err
@@ -1688,6 +1723,17 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		if err := m.createFirstTab(sessionID); err != nil {
 			return Tab{}, err
 		}
+		// browser_open_tab reserved a slot before calling us, and this branch
+		// satisfied that request with the session's FIRST tab. Mark it as the
+		// owner so the reservation is returned exactly once, by whichever of
+		// close/reap retires this tab.
+		m.mu.Lock()
+		if se := m.sessions[sessionID]; se != nil {
+			if t := se.active(); t != nil {
+				t.holdsGlobalReservation = true
+			}
+		}
+		m.mu.Unlock()
 		return m.activeTabSnapshot(sessionID)
 	}
 
@@ -1750,6 +1796,9 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		newTab.cancel()
 		return Tab{}, maxTabsReachedErr(m.cfg.MaxTabs)
 	}
+	// browser_open_tab reserved a global slot before calling us — record that
+	// THIS tab owns it, so exactly one close/reap hands it back.
+	newTab.holdsGlobalReservation = true
 	se.tabs = append(se.tabs, newTab)
 	se.activeIdx = len(se.tabs) - 1
 	m.installTargetListenerLocked(sessionID, se) // no-op: tab 0 is unchanged by an append
@@ -2280,17 +2329,26 @@ func applyStealth(tabCtx context.Context, timeout time.Duration) {
 // whole-session teardown is one of the few places that's actually meant to
 // happen, per sessionEntry.browserCtx's doc comment).
 func (m *BrowserManager) CloseSession(sessionID string) {
+	// Same cancel-outside-the-lock discipline as ReapIdleSessions, and for the
+	// same reason: a chromedp cancel can block indefinitely (see
+	// cancelBounded's doc comment), and doing that under m.mu freezes every
+	// browser tool call for every agent on this manager. Collect the cancels
+	// while holding the lock, drop it, then run them bounded.
+	var pending []func()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if se, ok := m.sessions[sessionID]; ok {
 		for _, t := range se.tabs {
-			t.cancel()
+			pending = append(pending, t.cancel)
 		}
 		if se.browserCancel != nil {
-			se.browserCancel()
+			pending = append(pending, se.browserCancel)
 		}
 		delete(m.sessions, sessionID)
+	}
+	m.mu.Unlock()
+
+	for _, cancel := range pending {
+		cancelBounded(cancel, map[string]any{"session_id": sessionID, "origin": "close_session"})
 	}
 }
 
@@ -2532,6 +2590,37 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 			continue
 		}
 
+		// A session with NO tabs has no clock of its own, so without this it
+		// would be skipped by the per-tab loop below forever — a leak this
+		// rewrite would otherwise INTRODUCE, since the old session-level clock
+		// used to catch it. Reachable in production: CloseTab's last-tab path
+		// empties se.tabs and then calls createFirstTab to restore the
+		// "never zero tabs" invariant; if that replacement fails (Chrome under
+		// load — precisely the condition this reaper exists to survive) the
+		// entry stays in m.sessions with a live browserCtx and no tabs.
+		//
+		// Stamped-then-judged rather than torn down on sight, because
+		// CloseTab's empty window is legitimate and momentary; tearing down
+		// inside it would race a normal tab replacement. A real replacement
+		// completes in milliseconds, so anything still empty a whole TTL later
+		// is genuinely stranded.
+		if len(se.tabs) == 0 {
+			if se.emptySince.IsZero() {
+				se.emptySince = now
+				continue
+			}
+			if now.Sub(se.emptySince) < ttl {
+				continue
+			}
+			if se.browserCancel != nil {
+				reapedBrowsers = append(reapedBrowsers, reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel})
+			}
+			delete(m.sessions, sessionID)
+			reapedSessions = append(reapedSessions, sessionID)
+			continue
+		}
+		se.emptySince = time.Time{}
+
 		var keep []*tabEntry
 		var closing []*tabEntry
 		for _, t := range se.tabs {
@@ -2598,10 +2687,18 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 
 	for _, rt := range reapedTabs {
 		cancelBounded(rt.tab.cancel, map[string]any{"session_id": rt.sessionID, "target_id": string(rt.tab.targetID)})
-		// ADR-043 D7 — see doc comment above for why this must run per tab,
-		// unlocked, and why it is safe even for a tab that was never
-		// actually reserved.
-		m.releaseGlobalTab()
+		// ADR-043 D7 — hand back the global slot, but ONLY for a tab that
+		// actually owns one. A session's first tab is created through
+		// createFirstTab, which is deliberately not budget-gated and therefore
+		// never reserved; releasing for it would decrement a counter that only
+		// tracks real reservations and hand back somebody else's concurrent
+		// open, quietly making a configured max_total_tabs more permissive
+		// than the operator asked for. Harmless under the unlimited default,
+		// wrong under any cap — and now on a once-a-minute sweep rather than a
+		// human-paced close.
+		if rt.tab.holdsGlobalReservation {
+			m.releaseGlobalTab()
+		}
 		logger.InfoCF("browser", "reaped idle browser tab (no viewer and no agent activity within idle_ttl)",
 			map[string]any{"session_id": rt.sessionID, "idle_ttl": ttl.String(), "tab_url": rt.tab.url})
 	}
@@ -2767,25 +2864,33 @@ func (m *BrowserManager) Shutdown() {
 		cs.Stop()
 	}
 
+	// Cancels are collected under the lock and run after it — a wedged chromedp
+	// cancel here would hang shutdown (and therefore hot-reload) forever. See
+	// cancelBounded and ReapIdleSessions for the same discipline.
+	var pending []func()
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	for id, se := range m.sessions {
 		for _, t := range se.tabs {
-			t.cancel()
+			pending = append(pending, t.cancel)
 		}
 		if se.browserCancel != nil {
-			se.browserCancel()
+			pending = append(pending, se.browserCancel)
 		}
 		delete(m.sessions, id)
 	}
 
-	if m.allocCancel != nil {
-		m.allocCancel()
-		m.allocCancel = nil
-	}
+	allocCancel := m.allocCancel
+	m.allocCancel = nil
 	m.started = false
 	m.browserCtxID = ""
+	m.mu.Unlock()
+
+	for _, cancel := range pending {
+		cancelBounded(cancel, map[string]any{"agent_id": m.agentID, "origin": "shutdown"})
+	}
+	if allocCancel != nil {
+		cancelBounded(allocCancel, map[string]any{"agent_id": m.agentID, "origin": "shutdown_allocator"})
+	}
 
 	logger.InfoCF("browser", "Browser manager connection shut down", map[string]any{
 		"agent_id":    m.agentID,
@@ -2871,13 +2976,19 @@ func (m *BrowserManager) invalidateConnection() {
 		cs.Stop()
 	}
 
+	// Cancels are COLLECTED here and run after the lock is dropped — see
+	// cancelBounded. This path runs on coordinator-detected crash recovery,
+	// i.e. exactly when a chromedp cancel is most likely to be wedged, so
+	// cancelling under m.mu would freeze every browser tool call for every
+	// agent on this manager.
+	var pending []func()
 	m.mu.Lock()
 	for id, se := range m.sessions {
 		for _, t := range se.tabs {
-			t.cancel()
+			pending = append(pending, t.cancel)
 		}
 		if se.browserCancel != nil {
-			se.browserCancel()
+			pending = append(pending, se.browserCancel)
 		}
 		delete(m.sessions, id)
 	}
@@ -2885,12 +2996,17 @@ func (m *BrowserManager) invalidateConnection() {
 	// connection). Do NOT nil it under lock in a way that races a concurrent
 	// ensureStarted — the next ensureStarted runs under m.mu and overwrites
 	// allocCtx/allocCancel/browserCtxID atomically after observing started==false.
-	if m.allocCancel != nil {
-		m.allocCancel()
-		m.allocCancel = nil
-	}
+	allocCancel := m.allocCancel
+	m.allocCancel = nil
 	m.allocCtx = nil
 	m.started = false
 	m.browserCtxID = ""
 	m.mu.Unlock()
+
+	for _, cancel := range pending {
+		cancelBounded(cancel, map[string]any{"agent_id": m.agentID, "origin": "invalidate_connection"})
+	}
+	if allocCancel != nil {
+		cancelBounded(allocCancel, map[string]any{"agent_id": m.agentID, "origin": "invalidate_allocator"})
+	}
 }

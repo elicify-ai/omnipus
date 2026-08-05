@@ -213,12 +213,17 @@ func TestReapIdleSessions_ReleasesGlobalTabBudgetReservation(t *testing.T) {
 	_, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
 
-	// Simulate this tab having gone through browser_open_tab's
-	// reserveGlobalTab call (tabs.go), which increments reservedTabs and is
-	// normally only released by a later browser_close_tab.
+	// Simulate this tab having gone through browser_open_tab: that tool
+	// reserves a slot (incrementing reservedTabs) AND the resulting tab owns
+	// it, which is what a later browser_close_tab — or this reap — hands back.
+	// Both halves matter: the counter alone is not enough now that ownership
+	// is explicit, because a tab that never reserved must not release.
 	coordinator.mu.Lock()
 	coordinator.reservedTabs = 1
 	coordinator.mu.Unlock()
+	m.mu.Lock()
+	m.sessions[DefaultSessionID].tabs[0].holdsGlobalReservation = true
+	m.mu.Unlock()
 
 	*clock = clock.Add(31 * time.Minute)
 	reaped := m.ReapIdleSessions()
@@ -231,6 +236,42 @@ func TestReapIdleSessions_ReleasesGlobalTabBudgetReservation(t *testing.T) {
 		"reaping a tab must release any global-tab-budget reservation it held — otherwise reservedTabs "+
 			"leaks upward forever under an operator-configured max_total_tabs cap, since only "+
 			"browser_close_tab's tool wrapper releases it otherwise")
+}
+
+// TestReapIdleSessions_DoesNotReleaseBudgetForNeverReservedTab is the
+// complement of the test above, and pins the precision that makes it safe.
+//
+// A session's FIRST tab is created by Session()/createFirstTab, which is
+// deliberately NOT budget-gated and therefore never reserved a slot. Releasing
+// on its behalf would decrement a counter that only tracks real reservations,
+// handing back a slot belonging to somebody else's concurrent open — quietly
+// making an operator-configured max_total_tabs more permissive than they asked
+// for. Harmless while the budget is unlimited (the new default), wrong under
+// any cap, and now driven by a once-a-minute sweep rather than a human-paced
+// close.
+func TestReapIdleSessions_DoesNotReleaseBudgetForNeverReservedTab(t *testing.T) {
+	m, clock := newReapableManager(t, 30*time.Minute)
+	coordinator := &BrowserCoordinator{}
+	m.AttachSharedChrome(coordinator, "agent-under-test")
+
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+
+	// Someone else has an open in flight; this tab owns none of it.
+	coordinator.mu.Lock()
+	coordinator.reservedTabs = 1
+	coordinator.mu.Unlock()
+
+	*clock = clock.Add(31 * time.Minute)
+	reaped := m.ReapIdleSessions()
+	require.Equal(t, []string{DefaultSessionID}, reaped, "sanity: the tab must actually be reaped")
+
+	coordinator.mu.Lock()
+	got := coordinator.reservedTabs
+	coordinator.mu.Unlock()
+	assert.Equal(t, 1, got,
+		"reaping a tab that never reserved a slot must NOT decrement the budget — that reservation "+
+			"belongs to a concurrent opener, and stealing it loosens a configured max_total_tabs")
 }
 
 // --- start page --------------------------------------------------------------

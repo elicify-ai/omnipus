@@ -2877,23 +2877,35 @@ func setupAndStartServices(
 		const reapInterval = time.Minute
 		ticker := time.NewTicker(reapInterval)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				a := agentLoop
-				if a == nil {
+		// Each tick is recovered INDIVIDUALLY, matching the boot-time
+		// warm-up goroutine above: an unrecovered panic in any goroutine takes
+		// the WHOLE gateway process down — chat, every channel, every agent —
+		// and this is a best-effort idle sweep. Recovering per tick (rather
+		// than around the loop) also means one bad sweep does not stop all
+		// future ones, which a single outer recover would.
+		sweep := func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("browser-reaper: sweep panicked; cleanup paused until the next tick",
+						"panic", fmt.Sprintf("%v", r))
+				}
+			}()
+			a := agentLoop
+			if a == nil {
+				return
+			}
+			for _, mgr := range a.BrowserManagers() {
+				if mgr == nil {
 					continue
 				}
-				for _, mgr := range a.BrowserManagers() {
-					if mgr == nil {
-						continue
-					}
-					if reaped := mgr.ReapIdleSessions(); len(reaped) > 0 {
-						slog.Info("browser-reaper: closed idle browsing contexts",
-							"count", len(reaped), "session_ids", reaped)
-					}
+				if reaped := mgr.ReapIdleSessions(); len(reaped) > 0 {
+					slog.Info("browser-reaper: closed idle browsing contexts",
+						"count", len(reaped), "session_ids", reaped)
 				}
 			}
+		}
+		for range ticker.C {
+			sweep()
 		}
 	}()
 
