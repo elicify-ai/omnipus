@@ -25,11 +25,10 @@ func newTestTaskExecutor(t *testing.T) (*TaskExecutor, *task.Store) {
 	dir := t.TempDir()
 	store := task.New(filepath.Join(dir, "tasks"))
 	te := &TaskExecutor{
-		agentLoop:     nil, // not needed for orchestrator/store logic
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(4),
+		agentLoop:    nil, // not needed for orchestrator/store logic
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(4),
 	}
 	return te, store
 }
@@ -395,11 +394,10 @@ func TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection(t *testing.T) {
 	// Build a minimal TaskExecutor with cap=1 — then fill the semaphore manually
 	// so TryAcquire fails.
 	te := &TaskExecutor{
-		agentLoop:     nil,
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: 5,
-		dispatchSema:  newDispatchSemaphore(1),
+		agentLoop:    nil,
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(1),
 	}
 
 	// Pre-fill the single slot.

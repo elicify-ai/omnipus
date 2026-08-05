@@ -21,11 +21,10 @@ func newEmitTestExecutor(t *testing.T) (*TaskExecutor, *task.Store, *AgentLoop) 
 	store := task.New(filepath.Join(dir, "tasks"))
 	al := &AgentLoop{eventBus: NewEventBus()}
 	te := &TaskExecutor{
-		agentLoop:     al,
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(4),
+		agentLoop:    al,
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(4),
 	}
 	return te, store, al
 }
@@ -181,11 +180,10 @@ func TestTaskStatusEmit_NilAgentLoopSkipped(t *testing.T) {
 	dir := t.TempDir()
 	store := task.New(filepath.Join(dir, "tasks"))
 	te := &TaskExecutor{
-		agentLoop:     nil,
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(4),
+		agentLoop:    nil,
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(4),
 	}
 
 	// Must not panic.

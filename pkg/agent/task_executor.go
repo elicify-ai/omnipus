@@ -23,8 +23,7 @@ import (
 )
 
 const (
-	defaultMaxConcurrentTasksPerAgent = 3
-	maxTaskDepth                      = 10
+	maxTaskDepth = 10
 )
 
 // ErrDispatchCapReached is returned by StartTaskNow when the global dispatch
@@ -72,13 +71,23 @@ type taskSlot struct {
 // dispatchable task is `next`, running is `in_progress`, terminal is
 // `done`/`failed`.
 type TaskExecutor struct {
-	agentLoop     *AgentLoop
-	store         *task.Store
-	mu            sync.Mutex
-	running       map[string]*taskSlot
-	maxConcurrent int
-	// dispatchSema gates the total number of concurrently dispatched tasks
-	// across all agents.
+	agentLoop *AgentLoop
+	store     *task.Store
+	mu        sync.Mutex
+	running   map[string]*taskSlot
+	// dispatchSema is the ONLY concurrency gate on task dispatch. It bounds
+	// the total number of concurrently dispatched tasks across all agents and
+	// resolves from the single central authority
+	// (config.PerformanceConfig.EffectiveMaxParallelAgents), live-resized by
+	// syncDispatchCapacity.
+	//
+	// There is deliberately NO per-agent cap. A hardcoded
+	// defaultMaxConcurrentTasksPerAgent = 3 used to sit alongside this field
+	// and was the gate that actually bound: the semaphore would resize to the
+	// configured value (~1026 on a 4 GB box) while real behaviour stayed
+	// pinned at 3 per agent, so the UI control reported success while
+	// changing nothing. Do not reintroduce a per-agent bound without making
+	// it resolve from the same central, operator-configurable authority.
 	dispatchSema *DispatchSemaphore
 
 	// parentFollowUp is a test seam ONLY — production leaves it nil.
@@ -177,7 +186,11 @@ const evidenceGateMaxConsecutiveRejections = 2
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
 func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
-	capacity := defaultMaxConcurrentTasksPerAgent
+	// Resolve from the central authority. When al.cfg is nil (test seams
+	// only — production always supplies a config), fall back to the SAME
+	// auto-detect a zero-valued PerformanceConfig produces rather than a
+	// magic number, so there is exactly one formula in the codebase.
+	capacity := config.PerformanceConfig{}.EffectiveMaxParallelAgents()
 	if al.cfg != nil {
 		if eff := al.cfg.Performance.EffectiveMaxParallelAgents(); eff > 0 {
 			capacity = eff
@@ -187,7 +200,6 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 		agentLoop:                al,
 		store:                    store,
 		running:                  make(map[string]*taskSlot),
-		maxConcurrent:            defaultMaxConcurrentTasksPerAgent,
 		dispatchSema:             newDispatchSemaphore(capacity),
 		evidenceRejectStreak:     make(map[string]int),
 		autoSyncDispatchCapacity: true,
@@ -480,20 +492,9 @@ func (te *TaskExecutor) executeTask(ctx context.Context, taskID string, planVeri
 		return fmt.Errorf("task_executor: agent %q not found", t.AgentID)
 	}
 
-	// Per-agent cap: count running (in_progress) tasks for this agent.
-	runningTasks, err := te.store.List(task.Filter{Status: task.StatusInProgress, AgentID: t.AgentID})
-	if err != nil {
-		release()
-		return fmt.Errorf("task_executor: list running tasks for agent %q: %w", t.AgentID, err)
-	}
-	if len(runningTasks) >= te.maxConcurrent {
-		release()
-		return fmt.Errorf(
-			"task_executor: concurrency limit reached for agent %q (%d running)",
-			t.AgentID, len(runningTasks),
-		)
-	}
-
+	// No per-agent cap: dispatchSema (acquired above) is the sole concurrency
+	// gate, so a single agent may use the whole configured budget.
+	//
 	// Atomically claim the task (next→in_progress) under the store lock.
 	now := time.Now().UTC()
 	claimed, err := te.store.ClaimForRun(taskID, now)
@@ -637,6 +638,20 @@ func (te *TaskExecutor) runTask(ctx context.Context, t *task.Task, taskSessionID
 	// mirrors pkg/tools/delegate.go's transitionLifecycle(..., LifecycleRunning,
 	// "") at the start of its own executeAsync/executeSync.
 	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
+
+	// Test seam: when goroutineCtxHook is set, invoke it and return without
+	// performing real agent execution — mirrors runTaskFromInProgress's
+	// identical seam below (see goroutineCtxHook's doc comment). Added so a
+	// test can intercept THIS (ExecuteTask) dispatch path too: this is where
+	// the now-removed per-agent concurrency cap used to live (the
+	// `defaultMaxConcurrentTasksPerAgent = 3` gate deleted from executeTask
+	// above), and the regression test for its removal needs to hold a real
+	// runTask goroutine in flight to measure peak concurrent dispatch for one
+	// agent — see task_executor_no_per_agent_cap_test.go.
+	if te.goroutineCtxHook != nil {
+		te.goroutineCtxHook(ctx, t.ID)
+		return
+	}
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {

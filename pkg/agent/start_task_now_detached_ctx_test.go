@@ -42,11 +42,10 @@ func newStartTaskNowWithRegistry(t *testing.T) (*TaskExecutor, *task.Store, *Age
 	store := task.New(filepath.Join(dir, "tasks"))
 
 	te := &TaskExecutor{
-		agentLoop:     al,
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(4),
+		agentLoop:    al,
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(4),
 	}
 	return te, store, al, agentID
 }

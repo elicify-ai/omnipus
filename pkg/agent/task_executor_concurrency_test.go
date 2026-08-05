@@ -43,11 +43,10 @@ func TestStartTaskNow_NoConcurrentDoubleLaunch(t *testing.T) {
 	store := task.New(dir + "/tasks")
 
 	te := &TaskExecutor{
-		agentLoop:     al,
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(2), // cap>1 so sema is not the bottleneck
+		agentLoop:    al,
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(2), // cap>1 so sema is not the bottleneck
 	}
 
 	// Register a fake agent so the registry look-up succeeds.

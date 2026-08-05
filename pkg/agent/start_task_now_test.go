@@ -26,11 +26,10 @@ func newStartTaskNowExecutor(t *testing.T) (*TaskExecutor, *task.Store) {
 	// attempting to call GetAgentStore, so the nil registry path exercises the
 	// "registry not available" error branch cleanly.
 	te := &TaskExecutor{
-		agentLoop:     &AgentLoop{eventBus: NewEventBus()},
-		store:         store,
-		running:       make(map[string]*taskSlot),
-		maxConcurrent: defaultMaxConcurrentTasksPerAgent,
-		dispatchSema:  newDispatchSemaphore(4),
+		agentLoop:    &AgentLoop{eventBus: NewEventBus()},
+		store:        store,
+		running:      make(map[string]*taskSlot),
+		dispatchSema: newDispatchSemaphore(4),
 	}
 	return te, store
 }
