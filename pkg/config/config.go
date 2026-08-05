@@ -3018,7 +3018,10 @@ type GatewayConfig struct {
 
 	// Tool approval configuration (FR-016, SC-006).
 	// ToolApprovalTimeout is the seconds to wait for a user to approve/deny a
-	// tool call before auto-denying. 0 or negative uses the default (300 s).
+	// tool call before auto-denying. 0 or negative uses the default (600 s —
+	// gateway.go::defaultToolApprovalTimeout, raised from 300 s per #594).
+	// Expiry always fails CLOSED: the call is denied with reason "timeout",
+	// never approved.
 	ToolApprovalTimeout int `json:"tool_approval_timeout,omitempty" env:"OMNIPUS_TOOL_APPROVAL_TIMEOUT"`
 	// ToolApprovalMaxPending is the maximum number of concurrently-pending tool
 	// approvals before new requests are auto-denied (FR-016, MAJ-009).

@@ -199,10 +199,14 @@ const defaultTerminalRetention = 60 * time.Second
 // maxCap == 0 means unlimited (ShouldSaturate always returns false per FR-016).
 // maxCap > 0 is the saturation limit. Negative maxCap must not reach here (caller
 // must validate via policy.ValidateSaturationCap before constructing).
-// timeout <= 0 selects the spec default (300 s).
+// timeout <= 0 selects defaultToolApprovalTimeout — the SAME constant the
+// boot path uses (see gateway.go), deliberately shared so the two fallbacks
+// cannot drift apart. This one existed as an independent literal `300 *
+// time.Second` while boot used its own; raising only one would have left the
+// effective default depending on which path constructed the registry.
 func newApprovalRegistryV2(maxCap int, timeout time.Duration) *approvalRegistryV2 {
 	if timeout <= 0 {
-		timeout = 300 * time.Second
+		timeout = defaultToolApprovalTimeout
 	}
 	r := &approvalRegistryV2{
 		entries:           make(map[string]*approvalEntry),

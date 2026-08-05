@@ -88,6 +88,21 @@ const (
 	providerReloadTimeout   = 30 * time.Second
 	gracefulShutdownTimeout = 15 * time.Second
 
+	// defaultToolApprovalTimeout bounds how long an `ask`-gated tool call
+	// waits for a human before the approval registry fails it CLOSED (denied,
+	// reason "timeout") — never open. Applies only when
+	// `gateway.tool_approval_timeout` is unset; operators override it there or
+	// via OMNIPUS_TOOL_APPROVAL_TIMEOUT.
+	//
+	// Raised 300s -> 600s (issue #594). Five minutes was too short for a human
+	// who stepped away, and the expiry is indistinguishable to the agent from
+	// a real denial: a live UAT saw an agent re-request the same denied tool
+	// every ~5 minutes, once per expiry window, with no ceiling — the turn
+	// never terminated on its own. Ten minutes is a more honest "nobody is
+	// coming" signal. Note this only lengthens each window; it does NOT bound
+	// the retry loop, which is the other half of #594 and is fixed separately.
+	defaultToolApprovalTimeout = 600 * time.Second
+
 	logPath   = "logs"
 	panicFile = "gateway_panic.log"
 	logFile   = "gateway.log"
@@ -2933,7 +2948,7 @@ func setupAndStartServices(
 	if approvalTimeout > 0 {
 		approvalTimeoutDur = time.Duration(approvalTimeout) * time.Second
 	} else {
-		approvalTimeoutDur = 300 * time.Second
+		approvalTimeoutDur = defaultToolApprovalTimeout
 	}
 	approvalReg := newApprovalRegistryV2(effectiveCap, approvalTimeoutDur)
 	wsHandler.approvalRegV2 = approvalReg
