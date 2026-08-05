@@ -71,17 +71,30 @@ type BrowserConfig struct {
 	// host). Operators who deliberately want a custom Chrome set this to
 	// true (or use the explicit ExecPath override, which always wins).
 	TrustPathChrome bool `json:"trust_path_chrome,omitempty"`
-	// IdleTTL reaps a browsing context that has had NO activity for this long
-	// — no attached live-panel viewer and no agent tool call. Without it a
-	// browsing context lived forever: closing the live panel is a pure UI
-	// dismiss (the SPA sends no shutdown), so reopening it days later showed
-	// the exact page the user left, on a Chrome that had been resident the
-	// whole time. Zero disables reaping entirely.
+	// IdleTTL reaps individual browser TABS that have had NO activity for this
+	// long — no attached live-panel viewer on the tab's browsing context, and
+	// no agent tool call touching that specific tab. Without it a browsing
+	// context lived forever: closing the live panel is a pure UI dismiss (the
+	// SPA sends no shutdown), so reopening it days later showed the exact
+	// page the user left, on a Chrome that had been resident the whole time.
+	// Zero disables reaping entirely.
 	//
-	// Deliberately generous (default 30m): an agent can legitimately be
-	// mid-task in a tab with no viewer watching, and reaping that out from
-	// under it would be worse than the stale tab this fixes. Both halves of
-	// "activity" gate the reap — see BrowserManager.touchSession.
+	// Reaping runs PER TAB, not per browsing context (see
+	// BrowserManager.ReapIdleSessions): an idle tab is individually closed
+	// while any tab still in active use survives untouched, and a browsing
+	// context with an attached live-panel viewer is skipped in its ENTIRETY
+	// regardless of any individual tab's own idle time — the tab strip shows
+	// every tab in that context to the watching human, so none of them
+	// should vanish out from under them.
+	//
+	// Default 5m (operator directive, 2026-08): safe to keep short BECAUSE
+	// reaping is per-tab and gated on real activity — an agent mid-task in a
+	// tab refreshes that tab's own clock on every tool call that touches it
+	// (see BrowserManager.touchTabLocked), and a tab a human is watching is
+	// fully protected via the viewer count regardless of this TTL. What a
+	// short TTL actually cleans up is tabs nobody is using or watching at
+	// all — exactly the steady-state resident-tab count this reaper exists
+	// to bound.
 	IdleTTL time.Duration `json:"idle_ttl,omitempty"`
 	// StartPageURL is what a fresh tab opens instead of about:blank. Empty
 	// falls back to about:blank (the pre-existing behavior). The gateway sets
@@ -114,10 +127,11 @@ func DefaultConfig() (BrowserConfig, error) {
 	}, nil
 }
 
-// DefaultIdleTTL is how long a browsing context may sit with no viewer and no
-// agent tool call before ReapIdleSessions closes it. See BrowserConfig.IdleTTL
-// for why this is deliberately generous rather than aggressive.
-const DefaultIdleTTL = 30 * time.Minute
+// DefaultIdleTTL is how long an individual browser tab may sit with no
+// viewer on its browsing context and no agent tool call touching it before
+// ReapIdleSessions closes it. See BrowserConfig.IdleTTL for the per-tab
+// reaping model and why 5 minutes is safe rather than aggressive.
+const DefaultIdleTTL = 5 * time.Minute
 
 // BlankPageURL is the fallback a fresh tab opens when no start page is
 // configured — the historical behavior, kept as the floor so a misconfigured
@@ -154,6 +168,19 @@ type tabEntry struct {
 	// broadcast (ADR-041 D3/D4). Never load-bearing for tool correctness.
 	title string
 	url   string
+	// lastActivity is when THIS SPECIFIC TAB was last touched — by its own
+	// creation (createTab), an agent tool call resolving it via Session()
+	// (it is the browsing context's active tab at that moment), SwitchTab
+	// making it the active tab, or a live-panel viewer attaching/detaching
+	// on this tab's browsing context (which touches EVERY tab in the
+	// context, not just the active one — see touchAllTabsLocked).
+	// BrowserManager.ReapIdleSessions judges every tab in a browsing context
+	// independently against this timestamp; a context with an attached
+	// live-panel viewer is additionally protected in its entirety regardless
+	// of any individual tab's value here (see ReapIdleSessions' doc comment
+	// for why). Guarded by BrowserManager.mu like every other tabEntry
+	// field — see touchTabLocked/touchAllTabsLocked.
+	lastActivity time.Time
 }
 
 // sessionEntry is a browsing context: an ordered set of tabs (chromedp
@@ -199,16 +226,13 @@ type sessionEntry struct {
 	// inspect_test.go) — every nil-checked at its two call sites.
 	browserCtx    context.Context
 	browserCancel context.CancelFunc
-	// lastActivity is when this browsing context was last touched by EITHER
-	// an agent tool call (Session()) or a live-panel viewer attach/detach —
-	// the two independent things that mean "somebody still cares about this
-	// browser". ReapIdleSessions closes a context only once BOTH have been
-	// quiet for BrowserConfig.IdleTTL. Guarded by m.mu like every other
-	// sessionEntry field; see touchSession.
-	lastActivity time.Time
-	// viewers counts currently-attached live-panel viewers. A context with a
-	// viewer attached is NEVER idle no matter how long ago the last tool call
-	// was — somebody is literally watching it. Incremented/decremented via
+	// viewers counts currently-attached live-panel viewers. A browsing
+	// context with a viewer attached is NEVER idle no matter how long ago
+	// any of its tabs were last touched — somebody is literally watching it,
+	// and the tab strip shows them EVERY tab in the context, not just the
+	// active one, so ReapIdleSessions protects the whole context in its
+	// entirety while viewers > 0 rather than judging tabs individually (see
+	// ReapIdleSessions' doc comment). Incremented/decremented via
 	// ViewerAttached/ViewerDetached.
 	viewers int
 	// listenerTarget tracks which tab's chromedp ctx currently has the
@@ -928,10 +952,14 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 
 		if se, ok := m.sessions[sessionID]; ok {
 			if tab := se.active(); tab != nil && tab.ctx.Err() == nil {
-				// An agent tool call resolving this session is activity — it
-				// keeps ReapIdleSessions from closing a context an agent is
-				// actively working in, even with no viewer attached.
-				m.touchSessionLocked(se)
+				// An agent tool call resolving this session is activity ON
+				// THIS SPECIFIC TAB — it keeps ReapIdleSessions (which judges
+				// each tab in a browsing context independently) from closing
+				// the tab an agent is actively working in, even with no
+				// viewer attached. Every browser_* tool funnels through here,
+				// so this single call site covers every "agent tool call
+				// resolves/uses this tab" path.
+				m.touchTabLocked(tab)
 				m.mu.Unlock()
 				return tab.ctx, nil
 			}
@@ -1325,7 +1353,18 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	// landing page would be a far worse trade.
 	m.navigateNewTabToStartPage(ctx, targetID)
 
-	tab := &tabEntry{ctx: ctx, cancel: cancel, targetID: resolvedID}
+	// Stamp lastActivity at the moment of creation ("on tab creation" is one
+	// of the required touch points — see tabEntry.lastActivity's doc
+	// comment): a brand-new tab must never read as already-idle to
+	// ReapIdleSessions just because nothing has explicitly touched it yet.
+	// m.now() is read under a brief m.mu acquisition, matching every other
+	// call site in this file that reads m.nowFn (ADR-038 discipline: this
+	// function itself runs with NO BrowserManager lock held).
+	m.mu.Lock()
+	createdAt := m.now()
+	m.mu.Unlock()
+
+	tab := &tabEntry{ctx: ctx, cancel: cancel, targetID: resolvedID, lastActivity: createdAt}
 	tab.title, tab.url = refreshTabMeta(ctx, m.PageTimeout())
 	return tab, nil
 }
@@ -1477,6 +1516,10 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 		return Tab{}, err
 	}
 	se.activeIdx = index
+	// Switching TO a tab is activity on it — a human/agent flipping to a tab
+	// via browser_switch_tab is unambiguously "using" it, so it must not read
+	// as idle to ReapIdleSessions the instant this call returns.
+	m.touchTabLocked(se.tabs[index])
 	tabs := snapshotTabsLocked(se)
 	// Capture the newly-active tab's context under the SAME lock that just
 	// moved activeIdx, so the BringToFront below targets exactly the tab this
@@ -2256,17 +2299,18 @@ func (m *BrowserManager) PageTimeout() time.Duration {
 	return m.cfg.PageTimeout
 }
 
-// touchSession records activity on sessionID's browsing context, resetting its
-// idle clock. Called on every path that means "somebody still cares about this
-// browser": an agent tool call resolving the session, and a live-panel viewer
-// attaching or detaching.
+// touchTabLocked records activity on ONE specific tab, resetting its own
+// idle clock. Called wherever a single tab is created, made active, or
+// directly acted on by an agent tool call — createTab (the tab's own
+// creation instant), Session() (resolving the active tab for every
+// browser_* tool call), and SwitchTab (the tab that becomes active).
 //
 // Must be called with m.mu HELD — it is a plain field write on an entry the
 // caller already looked up, deliberately not re-locking (Session() holds the
 // lock across its own lookup, and re-entering would deadlock).
-func (m *BrowserManager) touchSessionLocked(se *sessionEntry) {
-	if se != nil {
-		se.lastActivity = m.now()
+func (m *BrowserManager) touchTabLocked(tab *tabEntry) {
+	if tab != nil {
+		tab.lastActivity = m.now()
 	}
 }
 
@@ -2279,6 +2323,38 @@ func (m *BrowserManager) now() time.Time {
 	return time.Now()
 }
 
+// touchAllTabsLocked records activity on EVERY tab in a browsing context —
+// used by ViewerAttached/ViewerDetached, where the activity signal applies
+// to the WHOLE session, not one tab: the live panel's tab strip displays
+// every tab in the context, so a viewer attaching or detaching is a
+// "somebody (was/is) looking at ALL of these" event, not just the
+// currently-active one. This preserves the PRE-EXISTING, already-shipped
+// session-level semantics of a viewer detach "restarting the idle clock"
+// (touchSession's old doc comment: "Detaching also COUNTS as activity: it
+// starts the idle clock from the moment the last viewer left, rather than
+// from whenever the session was last touched before that") — now applied to
+// every tab in the context individually rather than one session-wide
+// timestamp: each tab gets a fresh grace window from the moment the last
+// viewer leaves, so a tab that was visible in the tab strip a moment ago
+// does not age straight into reap-eligibility the instant the panel closes.
+// This is a deliberate carry-forward of existing behavior, not a new
+// design — see reaper_edge_test.go's
+// TestReapIdleSessions_ViewerDetach_RestartsIdleClockFromDetachMoment for the
+// pinned contract.
+//
+// Must be called with m.mu HELD, same discipline as touchTabLocked.
+func (m *BrowserManager) touchAllTabsLocked(se *sessionEntry) {
+	if se == nil {
+		return
+	}
+	now := m.now()
+	for _, t := range se.tabs {
+		if t != nil {
+			t.lastActivity = now
+		}
+	}
+}
+
 // ViewerAttached records that a live-panel viewer attached to sessionID's
 // browsing context. A context with at least one attached viewer is never
 // considered idle — somebody is watching it right now.
@@ -2287,13 +2363,14 @@ func (m *BrowserManager) ViewerAttached(sessionID string) {
 	defer m.mu.Unlock()
 	if se, ok := m.sessions[sessionID]; ok {
 		se.viewers++
-		m.touchSessionLocked(se)
+		m.touchAllTabsLocked(se)
 	}
 }
 
 // ViewerDetached records that a live-panel viewer detached. Detaching also
-// COUNTS as activity: it starts the idle clock from the moment the last viewer
-// left, rather than from whenever the session was last touched before that.
+// COUNTS as activity on every tab in the context: it starts each tab's idle
+// clock from the moment the last viewer left, rather than from whenever that
+// tab was last touched before that — see touchAllTabsLocked's doc comment.
 // Never lets the count go negative (a detach without a matching attach — e.g.
 // a viewer that outlived a session recreation — must not underflow into a
 // permanently unreapable session).
@@ -2304,24 +2381,136 @@ func (m *BrowserManager) ViewerDetached(sessionID string) {
 		if se.viewers > 0 {
 			se.viewers--
 		}
-		m.touchSessionLocked(se)
+		m.touchAllTabsLocked(se)
 	}
 }
 
-// ReapIdleSessions closes every browsing context that has had NO attached
-// viewer and NO agent tool call for at least cfg.IdleTTL, returning the
-// session IDs it closed.
+// reapedTabInfo records one tab ReapIdleSessions actually closed during a
+// sweep, carried past the m.mu.Unlock() below so the coordinator tab-budget
+// release, the actual cancel() call, and the log line can all run WITHOUT
+// the lock held (ADR-038 discipline — releaseGlobalTab itself takes m.mu,
+// and cancel() can legitimately block on real work, either of which running
+// under the lock acquired at the top of ReapIdleSessions would freeze every
+// OTHER browser tool call across the whole manager until it returned).
+type reapedTabInfo struct {
+	sessionID string
+	tab       *tabEntry
+}
+
+// reapedSessionInfo pairs a fully-torn-down session's ID with its
+// browserCancel func, carried past the unlock for the same reason as
+// reapedTabInfo — see its doc comment.
+type reapedSessionInfo struct {
+	sessionID string
+	cancel    context.CancelFunc
+}
+
+// cancelBoundedTimeout bounds how long ReapIdleSessions waits for a single
+// cancel() call (a tab's own, or a browsing context's browserCancel) to
+// return. This is NOT theoretical: chromedp.NewContext's returned cancel is
+// not a bare stdlib context.CancelFunc — it additionally waits on an
+// internal sync.WaitGroup and, for a context that owns a browser allocation,
+// a channel that is only ever closed by the real allocate/attach flow
+// (chromedp v0.15.1's chromedp.go — see cancelWait's "if c.allocated != nil
+// { <-c.allocated }"). In production this is bounded and fast (the
+// allocation always completed by the time a tab is ever reachable to cancel
+// — createTab never returns a tabEntry until its first chromedp.Run has
+// already succeeded), but a tab's cancel func is not guaranteed idempotent
+// against every possible external cancellation race, and this reaper must
+// never be the thing that turns a slow or double cancel into a manager-wide
+// freeze. A cancel call that doesn't return within the bound is logged and
+// abandoned (its goroutine is leaked until the call eventually does return,
+// if ever) rather than blocking this sweep — or every browser tool call
+// waiting on m.mu, since the caller may hold it — forever. Sized like this
+// file's other CDP-round-trip bounds (reconcileTargetListTimeout).
+const cancelBoundedTimeout = 5 * time.Second
+
+// cancelBounded runs cancel with a bounded wait — see cancelBoundedTimeout's
+// doc comment for why a chromedp cancel func needs this instead of a bare
+// synchronous call. Must be called with NO BrowserManager lock held.
+func cancelBounded(cancel context.CancelFunc, logFields map[string]any) {
+	if cancel == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		cancel()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(cancelBoundedTimeout):
+		logger.WarnCF("browser", "reap: cancel did not return within the bound — abandoning the wait, not the sweep",
+			logFields)
+	}
+}
+
+// ReapIdleSessions closes every browser TAB that has had NO agent tool call
+// touching it for at least cfg.IdleTTL, in every browsing context that has NO
+// attached live-panel viewer — returning the session IDs of any browsing
+// contexts whose LAST tab was closed this way (i.e. whose underlying Chrome
+// browsing context/process was fully torn down this sweep). A context that
+// merely lost SOME of its tabs but still has at least one survivor is NOT in
+// the returned list — callers (pkg/gateway/gateway.go) log the returned IDs
+// as "browsing contexts closed", which only applies to a full teardown.
 //
-// Why this exists: closing the live panel is a pure UI dismiss — the SPA sends
-// no shutdown frame, and browser.CloseSession had ZERO production callers — so
-// a browsing context outlived the panel indefinitely. Reopening the panel days
-// later showed the exact page the user left, served by a Chrome that had been
-// resident the entire time.
+// Why per TAB, not per browsing context (how this used to work): a browsing
+// context can hold several tabs (ADR-041), and an agent legitimately leaves
+// stale ones open — a lookup tab from ten minutes ago sitting behind the tab
+// it is actually working in right now. Reaping the WHOLE context because ONE
+// tab was recently touched let every other tab in it live forever; reaping
+// the whole context because ANY tab went idle would kill a tab the agent is
+// mid-task in, just because a sibling tab happened to be older. Judging each
+// tab independently against its own tabEntry.lastActivity fixes both.
 //
-// Both halves of "idle" are required. An agent can legitimately be mid-task in
-// a tab with nobody watching, so a viewer-only check would reap live work; and
-// a viewer can sit on a long-idle page, so a tool-call-only check would reap a
-// context somebody is staring at. A zero IdleTTL disables reaping entirely.
+// The one whole-context exception is viewers: se.viewers > 0 PROTECTS THE
+// ENTIRE BROWSING CONTEXT, not just the active tab, regardless of any
+// individual tab's own idle time. The live panel's tab strip lists EVERY tab
+// in that context — all of them read as "open in the UI" to the human
+// watching it — so a background tab vanishing out from under a session
+// someone is actively looking at would be a UI-visible bug, not a cleanup. A
+// viewed context is therefore skipped wholesale: nothing in it is even
+// evaluated this sweep.
+//
+// A tab that has never been touched (zero lastActivity) is not treated as
+// infinitely idle — that would reap a tab created microseconds ago by a path
+// that raced this sweep before its first touch landed. It is stamped now and
+// judged fairly on the NEXT sweep, mirroring the pre-per-tab session-level
+// guard this replaces.
+//
+// Never leaves a browsing context with zero tabs silently forgotten: if every
+// tab in a context is idle past the TTL in the same sweep, the context itself
+// (se.browserCancel, its underlying Chrome browsing context) is torn down and
+// removed from m.sessions — exactly the pre-per-tab behavior for a fully idle
+// session. There is no "closed every tab but left an empty sessionEntry"
+// state.
+//
+// activeIdx correctness (the highest-risk part of this change): when the
+// browsing context's active tab survives the sweep, activeIdx is recomputed
+// to keep pointing at that SAME tab by IDENTITY (its CDP target ID), never by
+// numeric index — removing an earlier tab from the slice shifts every later
+// index down, and silently pointing an agent's next tool call at a DIFFERENT
+// tab than the one it was using would be a correctness bug no test on the
+// return value alone would catch. If the active tab itself was the one
+// reaped, activeIdx falls back to the new last tab, mirroring CloseTab's own
+// "closed the active tab" fallback.
+//
+// ADR-043 D7 tab-budget accounting: every tab this closes releases the
+// global tab-budget slot it may have held (m.releaseGlobalTab() — the exact
+// same call browser_close_tab's tool wrapper makes on an explicit close, see
+// tabs.go's CloseTabTool.Execute). Reaping is just another way a tab closes,
+// and the coordinator's reservedTabs counter has no other way to find out
+// about it. This is guarded at zero by BrowserCoordinator.ReleaseTab, so
+// releasing a tab that was never actually reserved (e.g. a session's first
+// tab, opened via Session()/navigate rather than browser_open_tab) cannot
+// drive the counter negative — it mirrors the exact same "release
+// regardless of whether THIS tab was ever reserved" imprecision
+// browser_close_tab's own unconditional release already accepts today.
+// Without this release, idle reaping — now running on a 5-minute TTL instead
+// of 30 — would permanently and monotonically leak reservations on any
+// install with an operator-configured tools.browser.max_total_tabs,
+// eventually denying every browser_open_tab call regardless of how few tabs
+// are actually live.
 //
 // Safe to call on any schedule; it is a no-op when nothing qualifies.
 func (m *BrowserManager) ReapIdleSessions() []string {
@@ -2332,38 +2521,98 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 
 	m.mu.Lock()
 	now := m.now()
-	var reaped []string
+	var reapedSessions []string
+	var reapedTabs []reapedTabInfo
+	var reapedBrowsers []reapedSessionInfo
 	for sessionID, se := range m.sessions {
+		// The live panel's tab strip shows every tab in this context — a
+		// viewer watching it protects ALL of them, in full, regardless of
+		// any individual tab's idle time. See doc comment above.
 		if se.viewers > 0 {
 			continue
 		}
-		// A session that has never been touched (zero lastActivity) is not
-		// treated as infinitely idle — that would reap a context created
-		// microseconds ago by a path that forgot to stamp it. Stamp it now and
-		// let the NEXT sweep judge it fairly.
-		if se.lastActivity.IsZero() {
-			se.lastActivity = now
-			continue
-		}
-		if now.Sub(se.lastActivity) < ttl {
-			continue
-		}
+
+		var keep []*tabEntry
+		var closing []*tabEntry
 		for _, t := range se.tabs {
-			t.cancel()
+			if t.lastActivity.IsZero() {
+				// Never touched yet — stamp it now and judge it fairly on
+				// the NEXT sweep, not as infinitely idle.
+				t.lastActivity = now
+				keep = append(keep, t)
+				continue
+			}
+			if now.Sub(t.lastActivity) < ttl {
+				keep = append(keep, t)
+				continue
+			}
+			closing = append(closing, t)
 		}
-		if se.browserCancel != nil {
-			se.browserCancel()
+		if len(closing) == 0 {
+			continue
 		}
-		delete(m.sessions, sessionID)
-		reaped = append(reaped, sessionID)
+
+		// Defer the actual t.cancel() calls until AFTER m.mu is released
+		// below (ADR-038 discipline) — cancel() is not guaranteed to return
+		// quickly (see cancelBoundedTimeout's doc comment), and calling it
+		// while holding m.mu would freeze every other browser tool call
+		// across this entire manager for however long it took.
+		for _, t := range closing {
+			reapedTabs = append(reapedTabs, reapedTabInfo{sessionID: sessionID, tab: t})
+		}
+
+		if len(keep) == 0 {
+			// Every tab in this browsing context was idle past the TTL —
+			// tear the whole context down too, exactly the pre-per-tab
+			// behavior for a fully idle session. browserCancel is likewise
+			// deferred past the unlock, for the same reason as the tabs.
+			if se.browserCancel != nil {
+				reapedBrowsers = append(reapedBrowsers, reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel})
+			}
+			delete(m.sessions, sessionID)
+			reapedSessions = append(reapedSessions, sessionID)
+			continue
+		}
+
+		// Some tabs survive — shrink the tab set and keep the browsing
+		// context alive. Recompute activeIdx by IDENTITY (target ID), not by
+		// numeric index: see the activeIdx-correctness section of this
+		// function's doc comment above.
+		oldActive := se.active()
+		se.tabs = keep
+		newIdx := -1
+		if oldActive != nil {
+			newIdx = se.indexOfTarget(oldActive.targetID)
+		}
+		if newIdx < 0 {
+			// The active tab itself was the one reaped — fall back to the
+			// new last tab, mirroring CloseTab's own fallback.
+			newIdx = len(se.tabs) - 1
+		}
+		se.activeIdx = newIdx
+		// ADR-041 fix F3 precedent: re-arm the passive target-created
+		// listener if tab 0 itself was replaced by this sweep.
+		m.installTargetListenerLocked(sessionID, se)
 	}
 	m.mu.Unlock()
 
-	for _, sessionID := range reaped {
-		logger.InfoCF("browser", "reaped idle browsing context (no viewer and no agent activity within idle_ttl)",
+	for _, rt := range reapedTabs {
+		cancelBounded(rt.tab.cancel, map[string]any{"session_id": rt.sessionID, "target_id": string(rt.tab.targetID)})
+		// ADR-043 D7 — see doc comment above for why this must run per tab,
+		// unlocked, and why it is safe even for a tab that was never
+		// actually reserved.
+		m.releaseGlobalTab()
+		logger.InfoCF("browser", "reaped idle browser tab (no viewer and no agent activity within idle_ttl)",
+			map[string]any{"session_id": rt.sessionID, "idle_ttl": ttl.String(), "tab_url": rt.tab.url})
+	}
+	for _, rb := range reapedBrowsers {
+		cancelBounded(rb.cancel, map[string]any{"session_id": rb.sessionID})
+	}
+	for _, sessionID := range reapedSessions {
+		logger.InfoCF("browser", "reaped idle browsing context (last tab closed; no viewer and no agent activity within idle_ttl)",
 			map[string]any{"session_id": sessionID, "idle_ttl": ttl.String()})
 	}
-	return reaped
+	return reapedSessions
 }
 
 // browserAlive reports whether sessionID's browsing context — the

@@ -128,18 +128,19 @@ func TestReapIdleSessions_ZeroTTLDisablesReaping(t *testing.T) {
 	assert.Contains(t, m.sessions, DefaultSessionID)
 }
 
-// TestReapIdleSessions_NeverReapsUnstampedSessionOnFirstSweep — a context
-// created microseconds ago by a path that forgot to stamp lastActivity must
-// not read as infinitely idle. It is stamped and judged on the NEXT sweep.
+// TestReapIdleSessions_NeverReapsUnstampedSessionOnFirstSweep — a TAB created
+// microseconds ago by a path that forgot to stamp its lastActivity must not
+// read as infinitely idle. It is stamped and judged on the NEXT sweep.
 func TestReapIdleSessions_NeverReapsUnstampedSessionOnFirstSweep(t *testing.T) {
 	m, clock := newReapableManager(t, 30*time.Minute)
 
 	_, err := m.Session(DefaultSessionID)
 	require.NoError(t, err)
 
-	// Simulate an entry that never got stamped (zero value).
+	// Simulate a tab entry that never got stamped (zero value) — lastActivity
+	// now lives on the tab, not the session (per-tab reaping).
 	m.mu.Lock()
-	m.sessions[DefaultSessionID].lastActivity = time.Time{}
+	m.sessions[DefaultSessionID].tabs[0].lastActivity = time.Time{}
 	m.mu.Unlock()
 
 	assert.Empty(t, m.ReapIdleSessions(),
@@ -185,6 +186,51 @@ func TestReapIdleSessions_UnknownSessionIsNoOp(t *testing.T) {
 		m.ViewerAttached("never-opened")
 		m.ViewerDetached("never-opened")
 	})
+}
+
+// TestReapIdleSessions_ReleasesGlobalTabBudgetReservation — ADR-043 D7
+// tab-budget accounting. A tab opened via browser_open_tab reserves a global
+// slot (BrowserCoordinator.reservedTabs, via TryOpenTab) that is only ever
+// released by browser_close_tab's tool wrapper (tabs.go's
+// CloseTabTool.Execute calling releaseGlobalTab) or, per this fix, by the
+// reaper closing the tab instead. Without this release, a tab that was
+// opened via the tool and later closed by ReapIdleSessions — rather than an
+// explicit browser_close_tab call — would leak its reservation forever: the
+// coordinator's own doc comments (coordinator.go's reservedTabs field and
+// ReleaseTab) are explicit that the matching release for a successful open
+// is "on a successful open+later close", and there is no other release path
+// anywhere in tabs.go's OpenTabTool.Execute (only the reserve-then-open-
+// failed branch calls releaseGlobalTab on the tool side). Under any
+// operator-configured tools.browser.max_total_tabs cap, that leak
+// permanently and monotonically shrinks the effective budget every time the
+// reaper — not the tool — is what actually closes a tab, which is now the
+// COMMON case at a 5-minute TTL.
+func TestReapIdleSessions_ReleasesGlobalTabBudgetReservation(t *testing.T) {
+	m, clock := newReapableManager(t, 30*time.Minute)
+	coordinator := &BrowserCoordinator{}
+	m.AttachSharedChrome(coordinator, "agent-under-test")
+
+	_, err := m.Session(DefaultSessionID)
+	require.NoError(t, err)
+
+	// Simulate this tab having gone through browser_open_tab's
+	// reserveGlobalTab call (tabs.go), which increments reservedTabs and is
+	// normally only released by a later browser_close_tab.
+	coordinator.mu.Lock()
+	coordinator.reservedTabs = 1
+	coordinator.mu.Unlock()
+
+	*clock = clock.Add(31 * time.Minute)
+	reaped := m.ReapIdleSessions()
+	require.Equal(t, []string{DefaultSessionID}, reaped, "sanity: the tab must actually be reaped")
+
+	coordinator.mu.Lock()
+	got := coordinator.reservedTabs
+	coordinator.mu.Unlock()
+	assert.Zero(t, got,
+		"reaping a tab must release any global-tab-budget reservation it held — otherwise reservedTabs "+
+			"leaks upward forever under an operator-configured max_total_tabs cap, since only "+
+			"browser_close_tab's tool wrapper releases it otherwise")
 }
 
 // --- start page --------------------------------------------------------------

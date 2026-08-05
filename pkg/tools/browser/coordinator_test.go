@@ -9,8 +9,10 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -376,5 +378,136 @@ func TestCoordinator_OwnershipMarker_RoundTrip(t *testing.T) {
 	}
 	if pidAlive(999999) {
 		t.Fatal("pid 999999 should not be alive — foreign-marker detection relies on pidAlive")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Global tab-budget default change — operator directive: "remove the limit
+// of 30 and keep infinite like chrome, but we keep the limit of 5 per agent".
+// Pure unit tests over the coordinator's in-memory budget bookkeeping only
+// (TryOpenTab/ReleaseTab/SetMaxTotalTabs) — no Register call, no Chrome
+// launch, matching coordinator_review_test.go's TestCoordinator_TabBudgetDenial
+// pattern so these run even when no managed Chrome binary is available (e.g.
+// offline CI).
+// ---------------------------------------------------------------------------
+
+// budgetTestConfig returns a minimal BrowserConfig for budget-only unit tests
+// that never call Register/AttachSharedChrome — no ExecPath resolution (and
+// therefore no Chrome download/lookup) needed.
+func budgetTestConfig(t *testing.T) (BrowserConfig, string) {
+	t.Helper()
+	home := t.TempDir()
+	return BrowserConfig{
+		Enabled:     true,
+		Headless:    true,
+		PageTimeout: 30_000_000_000, // 30s
+		MaxTabs:     5,              // per-agent cap — untouched by this change
+		ProfileDir:  filepath.Join(home, "browser", "profiles", "default"),
+	}, home
+}
+
+// TestCoordinator_UnlimitedDefault_AllowsPastOldCap proves max_total_tabs<=0
+// now means UNLIMITED (the new default) rather than "fall back to 30": well
+// more than the old defaultTotalTabs=30 concurrent reservations must all
+// succeed with no configured cap.
+func TestCoordinator_UnlimitedDefault_AllowsPastOldCap(t *testing.T) {
+	cfg, home := budgetTestConfig(t)
+	coord := NewBrowserCoordinator(home, cfg, 0) // unset -> unlimited (new default)
+
+	const wellPastOldCap = 45 // strictly more than the retired default of 30
+	for i := 0; i < wellPastOldCap; i++ {
+		ok, reason := coord.TryOpenTab(fmt.Sprintf("agent-%d", i))
+		if !ok {
+			t.Fatalf(
+				"tab reservation %d/%d should be allowed under the unlimited default; denied: %q",
+				i+1, wellPastOldCap, reason,
+			)
+		}
+	}
+}
+
+// TestCoordinator_PositiveCap_StillRejectsAtBoundary proves an operator can
+// still opt back into a hard cross-agent ceiling: a positive max_total_tabs
+// continues to deny at the boundary exactly as before this change.
+func TestCoordinator_PositiveCap_StillRejectsAtBoundary(t *testing.T) {
+	cfg, home := budgetTestConfig(t)
+	coord := NewBrowserCoordinator(home, cfg, 3) // operator opted back into a cap
+
+	for i := 0; i < 3; i++ {
+		ok, reason := coord.TryOpenTab(fmt.Sprintf("agent-%d", i))
+		if !ok {
+			t.Fatalf("reservation %d/3 should be allowed at cap=3; denied: %q", i+1, reason)
+		}
+	}
+	ok, reason := coord.TryOpenTab("agent-overflow")
+	if ok {
+		t.Fatal("4th reservation should be denied at a positive cap of 3")
+	}
+	if !strings.Contains(reason, "budget") {
+		t.Fatalf("denied reason should mention budget; got %q", reason)
+	}
+}
+
+// TestCoordinator_ConcurrentOpeners_PositiveCap_ExactlyOneWinner proves the
+// reserve-under-one-lock guarantee (I-1/W3/C1) still holds after adding the
+// unlimited short-circuit branch to TryOpenTab: with a positive cap of 1,
+// many concurrent openers at the boundary must yield EXACTLY one winner —
+// not a check-then-act race that lets several through.
+func TestCoordinator_ConcurrentOpeners_PositiveCap_ExactlyOneWinner(t *testing.T) {
+	cfg, home := budgetTestConfig(t)
+	coord := NewBrowserCoordinator(home, cfg, 1) // cap=1: at most one winner possible
+
+	const openers = 25
+	results := make(chan bool, openers)
+	var wg sync.WaitGroup
+	for i := 0; i < openers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ok, _ := coord.TryOpenTab(fmt.Sprintf("agent-%d", i))
+			results <- ok
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+
+	winners := 0
+	for ok := range results {
+		if ok {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("expected exactly one winner among %d concurrent openers at cap=1; got %d", openers, winners)
+	}
+}
+
+// TestCoordinator_SetMaxTotalTabs_ReloadRestoresUnlimited proves a reload can
+// move the budget back to unlimited (0), not just down to a positive cap:
+// SetMaxTotalTabs must no longer treat n<=0 as "ignore the update" now that 0
+// is a valid, deliberate target state (unlimited) rather than an accidental
+// zero to guard against.
+func TestCoordinator_SetMaxTotalTabs_ReloadRestoresUnlimited(t *testing.T) {
+	cfg, home := budgetTestConfig(t)
+	coord := NewBrowserCoordinator(home, cfg, 2) // start capped at 2
+
+	if ok, reason := coord.TryOpenTab("a"); !ok {
+		t.Fatalf("1st reservation should be allowed at cap=2; denied: %q", reason)
+	}
+	if ok, reason := coord.TryOpenTab("b"); !ok {
+		t.Fatalf("2nd reservation should be allowed at cap=2; denied: %q", reason)
+	}
+	if ok, _ := coord.TryOpenTab("c"); ok {
+		t.Fatal("3rd reservation should be denied at cap=2 before the reload")
+	}
+
+	// Reload with max_total_tabs unset (0) — operator moved back to unlimited.
+	coord.SetMaxTotalTabs(0)
+
+	if ok, reason := coord.TryOpenTab("c"); !ok {
+		t.Fatalf(
+			"after SetMaxTotalTabs(0) (reload back to unlimited), reservation should succeed; denied: %q",
+			reason,
+		)
 	}
 }

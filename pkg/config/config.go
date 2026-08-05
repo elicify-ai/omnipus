@@ -3058,9 +3058,23 @@ type BrowserToolConfig struct {
 	// install under <profile_dir>/../chromium/.
 	ExecPath string `json:"exec_path" env:"OMNIPUS_TOOLS_BROWSER_EXEC_PATH"`
 	// MaxTotalTabs is the GLOBAL tab budget across ALL agents' browser contexts
-	// in the shared Chrome (ADR-043 D7). 0/unset → default (30). Bounds total
-	// browsing RSS so ~10 concurrent agents can't OOM the host. Enforced by the
-	// coordinator's TryOpenTab (browser_open_tab is denied when over budget).
+	// in the shared Chrome (ADR-043 D7). 0/unset → UNLIMITED, like a normal
+	// Chrome browser — this is the default. A positive value opts back into a
+	// hard cross-agent ceiling for operators who want one. The per-agent
+	// courtesy cap (tools.browser.max_tabs, default 5) is unaffected either
+	// way and is the guard most operators actually want.
+	//
+	// The real limit on an unbounded tab count is host RAM, not a counter —
+	// each renderer measured 74-268MB RSS on the UAT box — so an operator
+	// running many agents on a small host should set this explicitly rather
+	// than rely on the per-agent cap alone. Unlimited is safe as the default
+	// because the coordinator's idle-context reaper runs per-tab on a short
+	// TTL (tools.browser.idle_ttl, default 5 minutes as of the same change
+	// that removed this cap), so steady-state tab count — and therefore RSS —
+	// stays low without a global ceiling. Enforced by the coordinator's
+	// TryOpenTab, which short-circuits with no budget arithmetic at all when
+	// this is <=0 (browser_open_tab is only ever denied on this axis when a
+	// positive value is configured and reached).
 	MaxTotalTabs int `json:"max_total_tabs" env:"OMNIPUS_TOOLS_BROWSER_MAX_TOTAL_TABS"`
 	// EvaluateEnabled gates browser.evaluate (arbitrary JS execution).
 	// Defaults to false (deny-by-default per SEC-04/SEC-06). Must be explicitly

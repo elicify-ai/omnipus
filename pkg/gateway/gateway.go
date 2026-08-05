@@ -2855,9 +2855,9 @@ func setupAndStartServices(
 		}
 	}()
 
-	// Start the idle-browser reaper: closes browsing contexts that have had no
-	// attached live-panel viewer and no agent tool call within
-	// tools.browser.idle_ttl.
+	// Start the idle-browser reaper: closes idle TABS, and any browsing context
+	// they leave empty, once tools.browser.idle_ttl has passed with no attached
+	// live-panel viewer.
 	//
 	// Why this is needed: closing the live panel is a pure UI dismiss — the
 	// SPA sends no shutdown frame, and browser.CloseSession had no production
@@ -2865,8 +2865,16 @@ func setupAndStartServices(
 	// the panel indefinitely. Reopening the panel days later showed the exact
 	// page the user had left. Sweeping is best-effort and idempotent; a sweep
 	// that reaps nothing is a cheap map scan.
+	//
+	// The interval MUST stay well under idle_ttl, or the TTL is a floor rather
+	// than the actual lifetime: a tab going idle just after a sweep waits out
+	// the TTL *plus* the remainder of the interval. At the old 5m/5m pairing a
+	// "5 minute" cleanup really meant 5-10 minutes. One minute keeps the
+	// observed lifetime inside ~5-6 minutes, and a sweep that reaps nothing is
+	// a map scan — the cost of sweeping more often is negligible next to a
+	// leaked renderer process (measured 74-268MB RSS each).
 	go func() {
-		const reapInterval = 5 * time.Minute
+		const reapInterval = time.Minute
 		ticker := time.NewTicker(reapInterval)
 		defer ticker.Stop()
 		for {
