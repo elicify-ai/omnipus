@@ -91,6 +91,28 @@ if a race survives D1 in practice.
 
 ### D2 — Idle browsing contexts are reaped, gated on BOTH signals
 
+> **AMENDED 2026-08-05 (operator directive, issue #592).** Reaping is now **per
+> TAB**, not per browsing context, and the defaults changed: `idle_ttl` **30m →
+> 5m**, gateway sweep **5m → 1m**.
+>
+> - Each tab is judged on its own last-touched time. A context is torn down only
+>   once every tab in it has gone.
+> - A context with an attached live-panel viewer is exempt **in full** — the
+>   panel's tab strip lists every tab, so all of them count as "open in the UI",
+>   and tabs vanishing under a watching user is unacceptable. Viewer *detach*
+>   restarts the clock, so the 5 minutes begin when the panel closes.
+> - The sweep interval must stay well under the TTL. At 5m/5m a "5 minute"
+>   cleanup really means 5-10, because a tab going idle just after a sweep waits
+>   out the TTL plus the remainder of the interval.
+> - A session that reaches zero tabs carries its own `emptySince` stamp; without
+>   it, moving the clock to tabs would leave an empty session with no clock at
+>   all and therefore unreapable forever.
+>
+> The "BOTH signals" framing below is superseded: viewer presence is now a
+> whole-context override, and the second signal is per-tab rather than
+> per-context.
+
+
 `ReapIdleSessions` closes a browsing context only when it has had **no attached
 live-panel viewer AND no agent tool call** for `tools.browser.idle_ttl`
 (default 30m; `<= 0` disables).

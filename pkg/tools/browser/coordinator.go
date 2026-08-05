@@ -236,6 +236,26 @@ func NewBrowserCoordinator(homeDir string, cfg BrowserConfig, maxTotalTabs int) 
 		pipeLauncher: launchManagedPipe,
 	}
 	c.launchDone = sync.NewCond(&c.mu)
+	// Surface the effective budget at construction. The default changed from a
+	// hard 30 to UNLIMITED, and max_total_tabs was never seeded into anyone's
+	// config.json — it only ever existed as a runtime fallback — so an
+	// upgrading operator gets the new behaviour with no config diff and no
+	// other signal. One line at boot is what makes that visible instead of
+	// silent. Also states the real bound, since "unlimited" is only true of the
+	// counter: RAM is the limit, at 74-268MB RSS per renderer as measured.
+	if maxTotalTabs <= 0 {
+		logger.InfoCF("browser", "global tab budget: UNLIMITED (tools.browser.max_total_tabs unset or <=0)",
+			map[string]any{
+				"max_total_tabs":   "unlimited",
+				"per_agent_cap":    cfg.MaxTabs,
+				"idle_ttl":         cfg.IdleTTL.String(),
+				"real_bound":       "host RAM — idle reaping does not bound tabs kept actively in use",
+				"set_a_ceiling_by": "tools.browser.max_total_tabs > 0",
+			})
+	} else {
+		logger.InfoCF("browser", "global tab budget: capped by operator config",
+			map[string]any{"max_total_tabs": maxTotalTabs, "per_agent_cap": cfg.MaxTabs})
+	}
 	return c
 }
 

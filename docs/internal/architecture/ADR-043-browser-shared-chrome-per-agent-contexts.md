@@ -47,6 +47,34 @@ One Chrome on 9223 keeps the existing fixed-port allow-list (`sandbox_apply.go:3
 **Measured (this host, 2026-07-14):** one `chrome-headless-shell` + 1 `about:blank` tab = **91 MB across 3 procs** (`--headless --no-sandbox --disable-gpu`). Per-tab incremental varies by site weight (~40 MB light → ~300 MB heavy; well-known renderer range). The dominant RAM term is **renderers, which scale with total live tabs** — *not* with the number of Chrome processes. One-Chrome-vs-N-Chromes saves only the **browser-process overhead** (≈ 200–400 MB × N, the parent+GPU+zygote that one Chrome pays once), not the multi-GB renderer term. So: Option B's N× cost is real but **smaller than this ADR's first draft implied** (it over-stated the saving). The hybrid is still preferred at the operator-confirmed ~10-agent/often-simultaneous profile because (a) it pays browser-process overhead once, and (b) Option B's N Chromes each still host the same total tabs. Constraint #3 (<10 MB security-feature overhead) is already exceeded by one Chrome (accepted at ADR-038); the hybrid does not worsen it. **Confidence: High** (measured baseline + standard renderer model).
 
 ### D7 — Global tab budget is a v1 decision, not an implementation note (grill M3)
+
+> **AMENDED 2026-08-05 (operator directive, issue #592).** The global budget is
+> **removed**: `tools.browser.max_total_tabs` now defaults to **unlimited**, and
+> `<= 0` means unlimited rather than "fall back to 30". A positive value still
+> caps, so the mechanism below is intact and opt-in. Per-agent `MaxTabs` (5) is
+> unchanged and is now the only default ceiling.
+>
+> **Why**, and the part D7 got right: a companion change (same issue) made idle
+> reaping per-tab at a 5-minute TTL swept every minute, so *abandoned* tabs no
+> longer accumulate — which is what the 30 was mostly absorbing in practice.
+>
+> **What D7 got right and this amendment knowingly accepts:** an idle reaper
+> bounds abandoned tabs, NOT tabs kept actively in use. D7's own worst case —
+> "10 agents × 5 tabs = 50 live renderers... multiple GB and OOM a small host" —
+> is a *concurrency* scenario the reaper cannot touch, because an in-use tab is
+> touched more often than the TTL. Measured on the UAT box: ~390MB for the first
+> browsing context, then 74-268MB RSS per additional renderer; two busy
+> research-capable agents at their per-agent cap reach ~1.8-2.8GB, four up to
+> ~5.5GB. There is no global concurrent-agent limit elsewhere in the stack, so
+> the effective ceiling now scales with roster size instead of being fixed.
+>
+> This was accepted deliberately after the risk was put to the operator with
+> that arithmetic. Operators on small hosts should set `max_total_tabs`
+> explicitly; the coordinator logs the effective budget at boot so the new
+> default is visible on upgrade rather than silent. Revisit if a host-RAM-derived
+> default ceiling is wanted (the config already auto-detects RAM for agent
+> parallelism).
+
 [FACT] `MaxTabs` is **per-agent** (default 5, `manager.go:105`, copied at `loop.go:1645`); there is **no global cap today.** At 10 agents × 5 tabs = 50 live renderers, worst-case heavy sites can reach multiple GB and OOM a small host — this can break the "often simultaneous" promise and is therefore a **v1-scope D-level decision**, not a plan-spec detail. Decision: introduce a **global tab budget** `tools.browser.max_total_tabs` (default **30**, sized from the measured ~91 MB baseline + ~80 MB/tab blended average → ~2.5 GB headroom for browsing on a typical 8 GB+ host; tunable). The coordinator enforces it: a `browser_open_tab` that would exceed the global budget is denied with a clear error (the agent can `browser_close_tab` first). Per-agent `MaxTabs` stays as the per-tenant courtesy cap. **Confidence: Medium** (the default is a reasoned estimate from one measurement; the cap itself is the hard guarantee, the exact default is tunable). Plan-spec must spec the budget enforcement + the denial error.
 
 ## Consequences
