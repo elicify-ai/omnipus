@@ -359,6 +359,21 @@ type turnState struct {
 	// The counter resets per turn (initialized to zero here).
 	syntheticErrorCount int
 
+	// denialLedger is ADR-058's per-turn tool-denial state (FR-058-09): an
+	// aggregate count of every denial response handed to the model in this
+	// turn (real or replayed from the quarantine cache), and a map of tools
+	// that have already produced a PERMANENT denial and are now
+	// short-circuited for the remainder of the turn. Its type and every
+	// method that reads/mutates it are defined in tool_denial.go, so this
+	// struct gains exactly this one field for the whole ADR-058 change.
+	// Guarded by mu above (a sync.RWMutex): recordToolDenial and
+	// recordQuarantineReplay mutate it and take Lock(); quarantinedDenialFor
+	// only reads it and takes RLock(). Zero value (used 0, quarantined nil)
+	// is correct — a fresh turnState (one per turn, via newTurnState) has
+	// denied nothing yet, so no counter or quarantine entry ever survives
+	// into a new turn or crosses into another session's turnState.
+	denialLedger turnDenialLedger
+
 	// lastProducedModel is the model string that produced the most recent
 	// assistant message in this turn. Set after each successful LLM call in
 	// loop.go (and external_dispatch.go for CLI providers). The transcript
