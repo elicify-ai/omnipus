@@ -22,7 +22,9 @@
 //     confirmed by grep: the symbol appeared in no _test.go file in this
 //     package.
 //
-// Traces to: pkg/agent/loop.go:7355-7434 (abortTurn + its doc comment).
+// Traces to: pkg/agent/loop.go::AgentLoop.abortTurn (+ its doc comment).
+// loop.go/turn.go line numbers churn fast (CLAUDE.md) — cite by symbol, not
+// by line range.
 //
 // ADR-058 note: this file used to also cover the mid-turn TOCTOU policy-deny
 // branch's system-initiated abort via FR-084's per-turn counter-and-floor
@@ -73,8 +75,10 @@ func (h *hardAbortBeforeLLMHook) AfterLLM(
 }
 
 // TestAgentLoop_AbortTurn_HookHardAbort_SurfacesSystemInitiatedError drives
-// one of the four HookActionHardAbort call sites (pkg/agent/loop.go:5637-5640,
-// the BeforeLLM decision point) and asserts abortTurn takes case 2: a real,
+// one of the four HookActionHardAbort call sites in
+// pkg/agent/loop.go::AgentLoop.runTurn (the BeforeLLM decision point — the
+// other three are the AfterLLM, before_tool, and after_tool HookActionHardAbort
+// cases in the same function) and asserts abortTurn takes case 2: a real,
 // non-nil error is returned AND surfaced via an EventKindError event, and the
 // turn ends with status Aborted.
 //
@@ -93,8 +97,9 @@ func (h *hardAbortBeforeLLMHook) AfterLLM(
 //
 // And the turn must end with TurnEndStatusAborted.
 //
-// Traces to: pkg/agent/loop.go:7355-7434 (abortTurn), :5614-5641 (BeforeLLM
-// HookActionHardAbort call site).
+// Traces to: pkg/agent/loop.go::AgentLoop.abortTurn, ::AgentLoop.runTurn's
+// BeforeLLM HookActionHardAbort call site. loop.go/turn.go line numbers
+// churn fast (CLAUDE.md) — cite by symbol, not by line range.
 func TestAgentLoop_AbortTurn_HookHardAbort_SurfacesSystemInitiatedError(t *testing.T) {
 	provider := &llmHookTestProvider{}
 	al, agent, cleanup := newHookTestLoop(t, provider)

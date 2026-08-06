@@ -15,9 +15,16 @@ import (
 )
 
 // denialTableFixture is every reason ClassifyDenial must classify as KNOWN,
-// paired with its expected Permanent value (ADR-058 spec §4.1's ten rows).
-// Declared once so every test below iterates the same canonical set rather
-// than re-typing the enumeration and risking drift between tests.
+// paired with its expected Permanent value. ADR-058 spec §4.1 specified ten
+// rows; a post-epic-review pass found two more real, driveable reasons the
+// spec table missed — the headless auto-deny literal
+// (agent.autoDenyHeadlessReason) and "session canceled" (distinct from the
+// single-word "cancel" row, reachable via
+// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
+// pkg/gateway/approvals.go::cancelAllPendingForSessions) — bringing the
+// table to twelve rows. Declared once so every test below iterates the same
+// canonical set rather than re-typing the enumeration and risking drift
+// between tests.
 var denialTableFixture = []struct {
 	reason    string
 	permanent bool
@@ -32,17 +39,21 @@ var denialTableFixture = []struct {
 	{"no_approver_configured", true},
 	{"policy_denied", true},
 	{"", true},
+	{autoDenyHeadlessReason, true},
+	{"session canceled", true},
 }
 
-// TestClassifyDenial_TableHasExactlyTenRows guards FR-058-02's "exactly the
-// ten rows of §4.1" — a table-driven test that only checks the rows it
-// already expects would not notice an extra or missing row, so this
-// asserts the table's own size directly.
-func TestClassifyDenial_TableHasExactlyTenRows(t *testing.T) {
-	if got, want := len(denialTable), 10; got != want {
-		t.Fatalf("denialTable has %d rows, want exactly %d (ADR-058 spec §4.1)", got, want)
+// TestClassifyDenial_TableHasExactlyTwelveRows guards the table's own size
+// directly — a table-driven test that only checks the rows it already
+// expects would not notice an extra or missing row. Originally asserted ten
+// rows (ADR-058 spec §4.1); a post-epic-review pass added two real,
+// driveable reasons the spec table missed (see denialTableFixture's doc),
+// bringing the count to twelve.
+func TestClassifyDenial_TableHasExactlyTwelveRows(t *testing.T) {
+	if got, want := len(denialTable), 12; got != want {
+		t.Fatalf("denialTable has %d rows, want exactly %d", got, want)
 	}
-	if got, want := len(denialTableFixture), 10; got != want {
+	if got, want := len(denialTableFixture), 12; got != want {
 		t.Fatalf("test fixture has %d rows, want exactly %d — keep denialTableFixture in sync with denialTable", got, want)
 	}
 }

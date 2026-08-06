@@ -7632,8 +7632,8 @@ turnLoop:
 			}
 			// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
 			// per-turn synthetic-deny counter-and-abort helper before
-			// returning below. FR-084 is deleted in full — this was its only
-			// call site that could ever fire
+			// returning below. FR-084 is deleted in full — this was the one
+			// call site whose abort branch could NEVER fire
 			// (every other call site's shouldAbort path was reachable; this
 			// one always returns unconditionally on the very next line, so
 			// its counter could reach at most 1 and a floor of 8 was
@@ -8722,6 +8722,24 @@ turnLoop:
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
 			toolArgs := cloneStringAnyMap(tc.Arguments)
 
+			// ADR-058 fix: ledgerToolName is the PRE-HOOK tool name, captured
+			// before hooks.BeforeTool below gets a chance to run. Every
+			// recordToolDenial/recordQuarantineReplay call for THIS call must
+			// key the ledger by this value, not by whatever toolName holds
+			// after hooks.BeforeTool's HookActionContinue/HookActionModify
+			// case (a few lines down) may have reassigned it to
+			// toolReq.Tool — because the quarantine gate immediately below
+			// looks a tool up BEFORE any hook runs, using exactly this
+			// pre-hook value, on EVERY call including the next one. A hook
+			// that renames a tool would otherwise store its quarantine entry
+			// under the RENAMED (post-hook) name while every future lookup
+			// for the same incoming call keys on the ORIGINAL (pre-hook)
+			// name — a latent key-shape mismatch that means the short-circuit
+			// silently never fires for a renaming hook, and every repeat call
+			// resumes a full approval round-trip. No in-tree hook renames a
+			// tool today, but nothing prevented one from doing so.
+			ledgerToolName := toolName
+
 			// ADR-058 FR-058-11: the quarantine gate. A tool that has already
 			// produced one PERMANENT denial earlier in this turn is answered
 			// from the cached payload here — before hooks.BeforeTool, the
@@ -8731,8 +8749,19 @@ turnLoop:
 			// tool_approval_required frame. The turn CONTINUES (D5 rejected
 			// removing the tool from tools[]; the advertised tool set stays
 			// stable and this gate is what makes offering it again safe).
-			if payload, qReason, quarantined := ts.quarantinedDenialFor(toolName); quarantined {
+			if payload, qReason, quarantined := ts.quarantinedDenialFor(ledgerToolName); quarantined {
 				al.emitPolicyDenyAudit(ts, toolName, "quarantined", qReason)
+				// ADR-058 fix: persist a transcript record for this replay too.
+				// Before this, only the FIRST denial that created the
+				// quarantine entry ever produced a tool_call transcript
+				// entry — replays 2..N left no record at all and vanished on
+				// reload. This never blocks (quarantine is a synchronous
+				// short-circuit), so there is no preceding `pending`
+				// placeholder to settle; settleAskToolCallTranscript already
+				// handles that "no placeholder" case by appending directly
+				// (the same shape the headless auto-deny site below relies
+				// on for the identical reason).
+				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, qReason)
 				deniedMsg := providers.Message{
 					Role:       "tool",
 					Content:    payload,
@@ -8751,9 +8780,9 @@ turnLoop:
 						Reason: fmt.Sprintf("permission_denied (quarantined: %s)", qReason),
 					},
 				)
-				if used, exhausted := ts.recordQuarantineReplay(toolName); exhausted {
+				if used, exhausted := ts.recordQuarantineReplay(ledgerToolName); exhausted {
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurnForToolDenialBudget(ts, toolName, qReason, used)
+					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, qReason, used)
 				}
 				continue
 			}
@@ -8791,6 +8820,30 @@ turnLoop:
 					if !ts.opts.NoHistory {
 						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
 						ts.recordPersistedMessage(deniedMsg)
+					}
+					// ADR-058 fix: this branch used to `continue` with no
+					// ClassifyDenial, no recordToolDenial and no budget check
+					// at all — a third-party ProcessHook that denies a tool
+					// reproduced the pre-ADR-058 infinite retry exactly,
+					// despite tool_denial.go's package doc, turnDenialLedger's
+					// doc, and audit.EventTurnAbortedToolDenialBudget's doc all
+					// asserting the budget covers "every denial response
+					// handed to the model". This does NOT route through
+					// ClassifyDenial/denialPayloadJSON — decision.Reason is
+					// arbitrary third-party-hook free text with no fixed
+					// literal to classify against, and denyContent (plain
+					// text, not a JSON envelope) is already an honest
+					// attribution ("denied by hook", never a false claim of a
+					// human decision) so D1/D2 do not apply here. quarantine
+					// is unconditionally true: a hook that explicitly denies a
+					// tool is a deliberate decision, like a human "no" or a
+					// resolved policy deny, and there is no FR-079-style
+					// re-check mechanism for hook decisions that a cached
+					// short-circuit would disable.
+					const hookDeniedLedgerReason = "hook_denied"
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, hookDeniedLedgerReason, true, denyContent); exhausted {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, hookDeniedLedgerReason, used)
 					}
 					continue
 				case HookActionAbortTurn:
@@ -8849,6 +8902,25 @@ turnLoop:
 						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
 						ts.recordPersistedMessage(deniedMsg)
 					}
+					// ADR-058 fix: same rationale as the HookActionDenyTool
+					// branch above — this hook-deny path used to bypass the
+					// ledger entirely (no ClassifyDenial, no
+					// recordToolDenial, no budget), so a ToolApprover hook
+					// (e.g. the gateway's wsApprovalHook) denying the same
+					// tool repeatedly reproduced the pre-ADR-058 infinite
+					// retry exactly, despite this file's own doc comments
+					// claiming total budget coverage. Kept as plain text
+					// (denyContent), not the JSON permission_denied envelope:
+					// approval.Reason is arbitrary hook-supplied free text
+					// with no fixed literal to classify against, and the
+					// message already names the actual cause ("denied by
+					// approval hook") rather than claiming a human decision
+					// that did not occur.
+					const approvalHookDeniedLedgerReason = "approval_hook_denied"
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, approvalHookDeniedLedgerReason, true, denyContent); exhausted {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, approvalHookDeniedLedgerReason, used)
+					}
 					continue
 				}
 			}
@@ -8864,8 +8936,10 @@ turnLoop:
 				// "policy_denied" (spec §4.1 row 9) — the one table row that
 				// exists purely so this site can be uniformly rewired
 				// through denialPayloadJSON/ClassifyDenial without changing
-				// what the model reads (ModelMessage is unchanged from the
-				// pre-existing literal, "already true" per ADR D2).
+				// the pre-existing message text ("already true" per ADR D2;
+				// the payload as a whole does still gain "reason" and
+				// "permanent" fields it previously lacked, see the
+				// denialTable row's own comment).
 				const policyDeniedReason = "policy_denied"
 				cls, _ := ClassifyDenial(policyDeniedReason)
 				denyMsg := denialPayloadJSON(toolName, policyDeniedReason, cls)
@@ -8888,9 +8962,24 @@ turnLoop:
 						Reason: "permission_denied (mid-turn policy change)",
 					},
 				)
-				if used, exhausted := ts.recordToolDenial(toolName, policyDeniedReason, cls.Permanent, denyMsg); exhausted {
+				// ADR-058 fix: policy_denied must NOT quarantine, even
+				// though cls.Permanent is true for message-classification
+				// purposes. FR-079's TOCTOU re-check exists BECAUSE policy
+				// can change again mid-turn — quarantining here would
+				// silently disable that re-check for the rest of the turn,
+				// serving every later call to this tool a stale cached
+				// denial with no policy re-resolution at all. If an
+				// operator fixes the policy back to allow/ask a moment
+				// later, a quarantined tool would never notice; passing
+				// `false` here (not cls.Permanent) keeps recordToolDenial's
+				// aggregate-budget counting intact while excluding this one
+				// reason from the quarantine cache, so resolveToolPolicyAtExec
+				// keeps running on every subsequent call to this tool. See
+				// recordToolDenial's own doc for the quarantine-vs-Permanent
+				// distinction this relies on.
+				if used, exhausted := ts.recordToolDenial(ledgerToolName, policyDeniedReason, false, denyMsg); exhausted {
 					turnStatus = TurnEndStatusAborted
-					return al.abortTurnForToolDenialBudget(ts, toolName, policyDeniedReason, used)
+					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, policyDeniedReason, used)
 				}
 				continue
 			}
@@ -8899,16 +8988,18 @@ turnLoop:
 				// operator to approve, so any `ask`-policy tool is denied without
 				// ever issuing an approval request — the run must never stall.
 				if ts.opts.AutoDenyAsk {
-					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
-					// ADR-058: this literal has no dedicated row in the
-					// ten-row classification table (spec §4.1) — it goes
-					// through ClassifyDenial's unknown-reason fallback, which
-					// already returns Permanent: true with an honest,
-					// conservative "do not retry" message (FR-058-03). That
-					// is the correct classification here regardless (ADR D1
-					// row 9): a headless scheduled run has no operator by
-					// construction, for the whole run, so there is nothing to
-					// retry toward.
+					// ADR-058: this literal is a DEDICATED denialTable row
+					// (agent.autoDenyHeadlessReason, tool_denial.go) with
+					// headless-specific wording, not the generic
+					// unknown-reason fallback — an earlier revision of this
+					// comment described the fallback path, which produced a
+					// stuttering message ("the tool call was refused (reason:
+					// auto-denied: ...)") with no headless-specific guidance
+					// and failed AC-01's "every driven reason must be known"
+					// guard. A headless scheduled run has no operator by
+					// construction, for the whole run, so Permanent: true is
+					// the correct classification (ADR D1 row 9).
+					const denialReason = autoDenyHeadlessReason
 					cls, _ := ClassifyDenial(denialReason)
 					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					// Build optional extra Details for the deny.attempted entry so
@@ -8954,9 +9045,9 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
 						},
 					)
-					if used, exhausted := ts.recordToolDenial(toolName, denialReason, cls.Permanent, denyMsg); exhausted {
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurnForToolDenialBudget(ts, toolName, denialReason, used)
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, denialReason, used)
 					}
 					continue
 				}
@@ -9000,11 +9091,26 @@ turnLoop:
 					// ADR-058 site 3 — the original defect: denialReason here
 					// is verbatim from CheckGrantOrRequestApproval, so it is
 					// classified for real rather than assumed to be a user
-					// "no". ClassifyDenial covers every reason this call can
-					// produce (user, timeout, saturated, cancel, restart,
-					// batch_short_circuit, internal_error,
-					// no_approver_configured, "") via the ten-row table; an
-					// unrecognised value still fails safe (Permanent: true).
+					// "no". ClassifyDenial handles every reason this call is
+					// KNOWN to be able to produce — not just the
+					// approvals.go-authored six (user, timeout, saturated,
+					// cancel, restart, batch_short_circuit), but also
+					// internal_error (policy_approver.go's nil-entry branch),
+					// no_approver_configured (tool_approver.go's nop
+					// fallback), the empty reason, and "session canceled"
+					// (verified end-to-end in this session:
+					// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
+					// hooks.CancelPendingApprovals ->
+					// pkg/gateway/approvals.go::cancelAllPendingForSessions's
+					// ApprovalOutcome{Reason: "session canceled"} -> here,
+					// distinct from the single-word "cancel" reason above).
+					// An earlier revision of this comment claimed the table
+					// "covers every reason this call can produce" and
+					// enumerated only nine of these — that was never a
+					// closed set, and any reason NOT in denialTable still
+					// fails safe (Permanent: true) through ClassifyDenial's
+					// unknown-reason fallback rather than being silently
+					// treated as retryable.
 					cls, _ := ClassifyDenial(denialReason)
 					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
@@ -9027,13 +9133,13 @@ turnLoop:
 						},
 					)
 					// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
-					// bound): cls.Permanent is false ONLY for "saturated", so
-					// recordToolDenial never quarantines it here — a later
-					// call to the same tool in the same turn is free to reach
-					// the approver and execute (AC-06).
-					if used, exhausted := ts.recordToolDenial(toolName, denialReason, cls.Permanent, denyMsg); exhausted {
+					// bound): cls.Permanent is false ONLY for "saturated" at
+					// THIS site, so recordToolDenial never quarantines it
+					// here — a later call to the same tool in the same turn
+					// is free to reach the approver and execute (AC-06).
+					if used, exhausted := ts.recordToolDenial(ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
 						turnStatus = TurnEndStatusAborted
-						return al.abortTurnForToolDenialBudget(ts, toolName, denialReason, used)
+						return al.abortTurnForToolDenialBudget(ts, ledgerToolName, denialReason, used)
 					}
 					continue
 				}
@@ -9761,8 +9867,9 @@ turnLoop:
 // hardInterruptAbortReason is the abort reason used when a turn is
 // hard-aborted via ts.requestHardAbort() (InterruptHard/InterruptSessionHard,
 // reached from the turn loop's ts.hardAbortRequested() checks) rather than by
-// a hook decision or the synthetic-error floor, neither of which have a more
-// specific reason string available at the call site.
+// a hook decision or the aggregate tool-denial budget (ADR-058,
+// toolDenialAbortReason), neither of which have a more specific reason
+// string available at the call site.
 //
 // abortTurn treats this exact reason string as the signal for a clean,
 // intentional stop rather than a failure needing a surfaced error (see
@@ -9793,9 +9900,10 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //     TestAgentLoop_InterruptHard_RestoresSession asserts this: a
 //     hard-interrupted turn restores the session cleanly with a nil error.
 //
-//   - any other reason (the synthetic-error floor's abortMsg, or a hook's
-//     decision.Reason): a system-initiated abort — e.g. the repeated-policy-
-//     denial floor or a hook's HookActionHardAbort decision. Synthesizes a
+//   - any other reason (the aggregate tool-denial budget's
+//     toolDenialAbortReason, ADR-058, or a hook's decision.Reason): a
+//     system-initiated abort — e.g. the turn exhausting its per-turn tool-
+//     denial budget or a hook's HookActionHardAbort decision. Synthesizes a
 //     real, non-nil error carrying stage + reason, mirroring
 //     hookAbortError's shape; emits an error event; and appends it to the
 //     transcript so the user (and replay) learn why the turn ended.
@@ -9827,7 +9935,8 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	}
 
 	// Case 2: system-initiated abort (policy/hook decision or the
-	// synthetic-error floor) — synthesize a real, surfaced error.
+	// aggregate tool-denial budget, ADR-058) — synthesize a real, surfaced
+	// error.
 	if reason == "" {
 		reason = "no reason provided"
 	}

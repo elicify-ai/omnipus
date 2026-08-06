@@ -49,6 +49,15 @@ const denialUserMarker = "user denied"
 // (ADR-058 spec §4.2) rather than a paraphrase.
 const DenialMessageUser = "The user denied this tool call. Do not retry it; stop and report the blocker."
 
+// autoDenyHeadlessReason is the fixed loop-side pseudo-reason for the
+// headless auto-deny path (FR-009/#264, loop.go's runTurn AutoDenyAsk
+// branch): a scheduled run has no operator to approve an ask-policy tool
+// call, for the whole run, so it is denied without ever opening an
+// approval request. Declared once here — rather than as a local const at
+// the loop.go call site — so denialTable's row and the call site that
+// classifies against it can never drift onto two different literals.
+const autoDenyHeadlessReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
+
 // DenialClass is the single classification of one tool-call denial reason:
 // whether it is Permanent (never worth retrying within this turn) and the
 // two rendered strings for the model (ModelMessage) and the transcript
@@ -74,12 +83,15 @@ func unknownReasonText(reason string) string {
 	)
 }
 
-// denialTable is the normative ten-row classification (ADR-058 spec §4.1).
-// Exactly one row ("saturated") is Permanent: false — every other denial
-// reason the system can produce is treated as terminal for the rest of the
-// turn. "approved" is deliberately ABSENT: pkg/gateway/approvals.go emits
-// it with Approved: true, so it is not a denial at all (spec §2.2); a
-// classifier asserting it "known" would be asserting a lie.
+// denialTable is the denial classification (ADR-058 spec §4.1's ten rows,
+// plus two more rows added post-epic-review — the headless auto-deny
+// literal, autoDenyHeadlessReason, and "session canceled" — for reasons the
+// original spec table missed; see each row's own comment). Exactly one row
+// ("saturated") is Permanent: false — every other denial reason the system
+// can produce is treated as terminal for the rest of the turn. "approved"
+// is deliberately ABSENT: pkg/gateway/approvals.go emits it with
+// Approved: true, so it is not a denial at all (spec §2.2); a classifier
+// asserting it "known" would be asserting a lie.
 //
 // Wording for rows the ADR gives verbatim (user, timeout, saturated,
 // no_approver_configured, policy_denied) matches ADR-058 D2's illustrative
@@ -118,6 +130,24 @@ var denialTable = map[string]DenialClass{
 			"Do not retry; stop and report the blocker.",
 		TranscriptText: "Not run: the turn was cancelled while the approval request was open.",
 	},
+	// "session canceled" (two words — distinct from the single-word
+	// "cancel" row above) is a SEPARATE reason literal, reachable end to
+	// end via pkg/agent/cancel.go::AgentLoop.RequestCancel ->
+	// hooks.CancelPendingApprovals -> pkg/gateway/approvals.go's
+	// denialReasonSessionCanceled constant, passed to
+	// cancelAllPendingForSessions when a whole session (not just one
+	// in-flight turn) is cancelled. An earlier revision of a nearby loop.go
+	// comment enumerated ClassifyDenial's coverage without this reason at
+	// all; verified end-to-end and added here so it renders as a known,
+	// honestly-worded denial rather than falling through to the generic
+	// unknown-reason fallback.
+	"session canceled": {
+		Reason:    "session canceled",
+		Permanent: true,
+		ModelMessage: "The session was cancelled, which auto-denied this pending approval request. " +
+			"Do not retry; stop and report the blocker.",
+		TranscriptText: "Not run: the session was cancelled, which auto-denied this pending approval request.",
+	},
 	"restart": {
 		Reason:    "restart",
 		Permanent: true,
@@ -150,12 +180,49 @@ var denialTable = map[string]DenialClass{
 	// policy flip to deny), which today emits no "reason" field at all.
 	// ModelMessage is unchanged from the existing literal ("already true"
 	// per ADR D2) — this row exists so site 1 can be uniformly rewired
-	// through denialPayloadJSON without changing what the model reads.
+	// through denialPayloadJSON while keeping that literal unchanged.
+	// (An earlier revision of this comment overstated the result as
+	// "without changing what the model reads" — that is true only of the
+	// message TEXT; the payload as a whole now ALSO carries "reason":
+	// "policy_denied" and "permanent":true, both absent before this
+	// change, since site 1 previously emitted no reason field at all.)
+	//
+	// This row's Permanent:true is the correct MESSAGE classification (a
+	// mid-turn policy flip to deny is, from the model's point of view,
+	// not worth retrying) but loop.go's site 1 deliberately does NOT pass
+	// it through to recordToolDenial's quarantine-controlling argument —
+	// see that call site's own comment. FR-079's TOCTOU re-check exists
+	// precisely because policy can change again mid-turn, and quarantining
+	// this reason would silently disable that re-check for the rest of
+	// the turn: a later deny→allow flip would be served a stale cached
+	// denial with no re-resolution at all. The classification here stays
+	// Permanent:true (the model is still told not to retry); only the
+	// system's own internal quarantine behaviour is excluded.
 	"policy_denied": {
 		Reason:         "policy_denied",
 		Permanent:      true,
 		ModelMessage:   "Tool execution denied by policy.",
 		TranscriptText: "Not run: tool execution was denied by policy.",
+	},
+	// autoDenyHeadlessReason (FR-009/#264): a scheduled run has no operator
+	// by construction, for the entire run, so any ask-policy tool is
+	// denied without ever opening an approval request. This literal used
+	// to have NO dedicated row here — it rode ClassifyDenial's
+	// unknown-reason fallback, producing a stuttering message ("the tool
+	// call was refused (reason: auto-denied: ask-policy tool not allowed
+	// in a headless scheduled run)") with no headless-specific guidance,
+	// and failing AC-01's "every driven reason must be known" guard (spec
+	// §8, ADR-058 W1's own "including the fixed-literal headless reason"
+	// requirement). Its ModelMessage/TranscriptText below are worded
+	// specifically for this case rather than the generic unknown-reason
+	// template.
+	autoDenyHeadlessReason: {
+		Reason:    autoDenyHeadlessReason,
+		Permanent: true,
+		ModelMessage: "This is a headless scheduled run with no operator available to approve " +
+			"ask-policy tools. Do not retry; stop and report the blocker.",
+		TranscriptText: "Not run: this is a headless scheduled run with no operator available " +
+			"to approve ask-policy tools.",
 	},
 	// "" is the empty-reason row askDenialText already handles today. Its
 	// TranscriptText is preserved verbatim (spec N1); reachability of this
@@ -171,7 +238,7 @@ var denialTable = map[string]DenialClass{
 }
 
 // ClassifyDenial is the sole source of denial semantics (FR-058-01). It
-// looks reason up in the normative ten-row table (denialTable) and reports
+// looks reason up in the classification table (denialTable) and reports
 // whether it was found (known). An unrecognised reason — including
 // "approved", which is not a denial at all — returns Permanent: true and a
 // byte-identical ModelMessage/TranscriptText (FR-058-03), so a reason with
@@ -192,10 +259,23 @@ func ClassifyDenial(reason string) (DenialClass, bool) {
 
 // denialPayloadJSON builds the single wire form of a permission_denied tool
 // result the model receives (FR-058-05), shared by every loop.go emit site.
-// reason is passed separately from cls.Reason so a caller can never
-// accidentally emit a payload whose "reason" field disagrees with the
-// DenialClass it classified — callers MUST pass the same reason string they
-// gave to ClassifyDenial.
+//
+// reason is accepted as its own parameter rather than read off cls.Reason
+// purely for call-site convenience — every caller already has the raw
+// reason string in hand (it is what they passed to ClassifyDenial a line or
+// two earlier) and cls.Reason is, by ClassifyDenial's own construction,
+// ALWAYS equal to it: both the known-row branch (denialTable[reason].Reason
+// is the map key itself) and the unknown-reason fallback set
+// Reason: reason explicitly. So reason == cls.Reason holds for every value
+// this function can be called with — there is no case where they can
+// legitimately disagree. That also means the separate parameter is NOT a
+// safeguard against disagreement (the opposite of what an earlier revision
+// of this comment claimed): reading cls.Reason internally instead would
+// make disagreement structurally IMPOSSIBLE, whereas keeping reason as an
+// independent parameter is the only way a future caller could ever
+// introduce one (by passing a reason that does not match the cls it
+// classified). Callers MUST pass the same reason string they gave to
+// ClassifyDenial.
 //
 // Uses fmt.Sprintf with %q (matching the pre-existing construction at the
 // three loop.go call sites this replaces) rather than encoding/json: %q's
@@ -249,18 +329,33 @@ type turnDenialLedger struct {
 }
 
 // recordToolDenial records one denial response about to be handed to the
-// model: it increments the aggregate per-turn budget and, if permanent,
-// quarantines tool on this — its FIRST — occurrence in the turn (FR-058-10).
-// A later call for the same tool that is already quarantined does not
-// overwrite the cached entry; the first permanent denial's payload is what
-// every replay serves for the rest of the turn.
+// model: it increments the aggregate per-turn budget and, if quarantine is
+// true, quarantines tool on this — its FIRST — occurrence in the turn
+// (FR-058-10). A later call for the same tool that is already quarantined
+// does not overwrite the cached entry; the first quarantining denial's
+// payload is what every replay serves for the rest of the turn.
 //
-// permanent must be false ONLY for the "saturated" reason (ADR-058 §3.5 /
-// Binding Rule 4, the positive lower bound): recordToolDenial itself does
-// not classify anything — callers pass cls.Permanent from ClassifyDenial —
-// so a saturated denial never populates the quarantine map here, and a
-// later call to the same tool in the same turn is free to reach the
-// approver and execute.
+// quarantine is NOT simply "the caller's ClassifyDenial(reason).Permanent"
+// passed straight through, even though that is what every call site except
+// one does. It is the narrower, system-level question "should this reason
+// disable further checking of this tool for the rest of the turn" —
+// distinct from Permanent's model-facing "should the model stop retrying"
+// question, which is decided once, earlier, when the payload's message was
+// built, and does not change here. The two normally coincide:
+//
+//   - false for "saturated" (ADR-058 §3.5 / Binding Rule 4, the positive
+//     lower bound): a transient queue-full condition, so a later call to the
+//     same tool in the same turn is free to reach the approver and execute.
+//   - false for "policy_denied" as well (ADR-058 fix, post-epic-review),
+//     DESPITE that reason's DenialClass.Permanent being true: FR-079's
+//     TOCTOU re-check exists because policy can change again mid-turn, and
+//     quarantining this reason would silently disable that re-check for the
+//     rest of the turn — a later deny→allow flip would be served a stale
+//     cached denial with no re-resolution. The model is still told
+//     Permanent:true in the payload (retrying is still bad advice most of
+//     the time); only this system-internal quarantine caching is skipped so
+//     the TOCTOU check keeps running on every subsequent call.
+//   - true for every other reason.
 //
 // Returns the new aggregate count and whether the turn has now exhausted
 // its budget (used >= turnDenialBudget) — the caller aborts the turn on
@@ -271,12 +366,12 @@ type turnDenialLedger struct {
 // unrelated turnState fields, and this method mutates turnDenialLedger —
 // an RLock() here would let a concurrent RLock()-holding reader observe a
 // torn write.
-func (ts *turnState) recordToolDenial(tool, reason string, permanent bool, payload string) (used int, exhausted bool) {
+func (ts *turnState) recordToolDenial(tool, reason string, quarantine bool, payload string) (used int, exhausted bool) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
 	ts.denialLedger.used++
-	if permanent {
+	if quarantine {
 		if ts.denialLedger.quarantined == nil {
 			ts.denialLedger.quarantined = make(map[string]quarantinedDenial)
 		}
@@ -288,11 +383,22 @@ func (ts *turnState) recordToolDenial(tool, reason string, permanent bool, paylo
 }
 
 // recordQuarantineReplay records one denial response served from the
-// quarantine cache for an already-quarantined tool. It still consumes one
-// unit of the aggregate per-turn budget — ADR-058 §10.A2 is explicit that
-// counting cache-served replays is deliberate: without it, a model
-// repeating a quarantined tool would be bounded only by MaxIterations (200),
-// cheap in wall-clock but expensive in real LLM calls.
+// quarantine cache. It still consumes one unit of the aggregate per-turn
+// budget — ADR-058 §10.A2 is explicit that counting cache-served replays is
+// deliberate: without it, a model repeating a quarantined tool would be
+// bounded only by MaxIterations (200), cheap in wall-clock but expensive in
+// real LLM calls.
+//
+// tool is accepted for call-site symmetry with recordToolDenial and
+// quarantinedDenialFor (the caller already has it in hand from resolving
+// which tool's cache entry to replay) and to leave room for future
+// per-tool diagnostics at this call site, but it is NOT consulted by this
+// method today: replay accounting is purely aggregate (turnDenialLedger.used
+// is a single counter, not keyed by tool), and this method never reads
+// ts.denialLedger.quarantined — the caller is responsible for having
+// already confirmed tool is quarantined (via quarantinedDenialFor) before
+// calling this. An earlier revision of this comment implied per-tool
+// bookkeeping happened here; it does not.
 //
 // Takes ts.mu.Lock() for the same reason as recordToolDenial: it mutates
 // turnDenialLedger.used.

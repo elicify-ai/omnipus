@@ -30,7 +30,8 @@
 //     message, and the six retired identifiers resolve nowhere in pkg/.
 //
 // NOT duplicated here (see the task brief's "coverage that already exists"):
-//   - BDD-02 (the ten-row classification table) — pkg/agent/tool_denial_test.go (W1).
+//   - BDD-02 (the classification table, originally ten rows and now twelve
+//     — see tool_denial_test.go's denialTableFixture doc) — pkg/agent/tool_denial_test.go (W1).
 //   - BDD-04 (quarantine-gate reachability, turn continues) and the
 //     HOMOGENEOUS half of BDD-05 (12 calls to ONE tool, abort at the 10th,
 //     not the 11th/12th) — pkg/agent/tool_denial_quarantine_gate_test.go (W4).
@@ -63,6 +64,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -447,6 +449,430 @@ func TestRunTurn_SaturatedDenial_NeverQuarantines_ApproverConsultedEveryTime(t *
 }
 
 // ---------------------------------------------------------------------------
+// Post-epic-review fix: policy_denied must NOT quarantine (FR-079 conflict)
+// ---------------------------------------------------------------------------
+
+// policyFlipBetweenCallsHook denies the FIRST call to toolName by flipping
+// its LIVE policy to "deny" inside BeforeTool (read a few lines later, in
+// the SAME dispatch-loop iteration, by the TOCTOU re-check at
+// resolveToolPolicyAtExec) and flips it back to "allow" before the SECOND
+// call's own TOCTOU check. Both calls share ONE filterTimePolicyMap
+// snapshot — computed once per LLM iteration, BEFORE either BeforeTool call
+// runs — fixed at "allow" for the whole batch. That fixed snapshot is the
+// precondition for resolveToolPolicyAtExec to classify call 1's live "deny"
+// as "mid_turn_policy_change" (a real TOCTOU flip) rather than "tool never
+// offered at all" (wasInFilterMap == false, which auto-denies unconditionally
+// regardless of what BeforeTool does).
+type policyFlipBetweenCallsHook struct {
+	al       *AgentLoop
+	toolName string
+	calls    atomic.Int32
+}
+
+func (h *policyFlipBetweenCallsHook) BeforeTool(
+	_ context.Context, call *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision, error) {
+	n := h.calls.Add(1)
+	policy := config.ToolPolicyAllow
+	if n == 1 {
+		policy = config.ToolPolicyDeny
+	}
+	for _, agentID := range h.al.GetRegistry().ListAgentIDs() {
+		agentInst, ok := h.al.GetRegistry().GetAgent(agentID)
+		if !ok {
+			continue
+		}
+		agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{
+			Policies: map[string]config.ToolPolicy{h.toolName: policy},
+		})
+	}
+	return call, HookDecision{Action: HookActionContinue}, nil
+}
+
+func (h *policyFlipBetweenCallsHook) AfterTool(
+	_ context.Context, result *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision, error) {
+	return result, HookDecision{Action: HookActionContinue}, nil
+}
+
+// TestRunTurn_PolicyDeniedExcludedFromQuarantine_MidBatchAllowFlipExecutes is
+// the fix-2 regression. FR-079's TOCTOU re-check exists precisely because
+// policy can change mid-turn. Before this fix, site 1 (the TOCTOU
+// policy-deny branch) classified its denial permanent=true and quarantined
+// the tool on that classification — so a LATER deny->allow flip (an
+// operator fixing the policy) would be served the CACHED denial with no
+// policy re-resolution at all, while the model was simultaneously told
+// "permanent: true, do not retry": false the moment the policy changed back.
+//
+// Drives ONE LLM response containing TWO parallel calls to the SAME tool:
+// call 1 is denied (policy flipped to "deny" by the hook, mid-batch); call 2
+// — after the SAME hook flips the policy back to "allow" — must actually
+// REACH the approver/execute path, proving policy_denied did not quarantine
+// the tool.
+//
+// Stub-resistance: an implementation that quarantines policy_denied like
+// every other permanent reason (i.e. passes cls.Permanent straight through
+// to recordToolDenial's quarantine argument instead of a literal false)
+// would show stub.wasCalled.Load() == false here — call 2 would be served
+// from the quarantine cache instead of reaching TOCTOU's fresh
+// resolveToolPolicyAtExec call, and Execute would never run despite the
+// live policy genuinely being "allow" by the time call 2 is dispatched.
+func TestRunTurn_PolicyDeniedExcludedFromQuarantine_MidBatchAllowFlipExecutes(t *testing.T) {
+	cfg, _ := baseLoopDenialTestConfig(t)
+	const toolName = "bash" // distinct literal fixture tool name (spec §8.1)
+
+	provider := testutil.NewScenario().
+		WithToolCalls(distinctToolCalls(toolName, 2)).
+		WithText("both handled")
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defer al.Close()
+
+	stub := &namedStubTool{name: toolName}
+	al.RegisterTool(stub)
+	// Filter-time (and initial live) policy: allow. Both calls share this
+	// ONE snapshot, computed once at the top of the single LLM iteration
+	// both calls belong to — the hook's mid-batch flips never touch it.
+	setAskPolicyForAllAgents(t, al, toolName, config.ToolPolicyAllow)
+
+	hook := &policyFlipBetweenCallsHook{al: al, toolName: toolName}
+	require.NoError(t, al.MountHook(NamedHook("policy-flip", hook)))
+
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	finalContent, err := al.ProcessDirect(
+		context.Background(), "run bash twice", "test-session-policy-denied-no-quarantine")
+	require.NoError(t, err, "one policy_denied denial, far under budget=10, must not abort the turn")
+	assert.Equal(t, "both handled", finalContent,
+		"turn must reach the SECOND scripted LLM response, proving it did not abort")
+
+	// The core fix-2 proof: the SECOND call, dispatched after the mid-batch
+	// allow flip, actually EXECUTED — proving it was NOT served from a stale
+	// quarantine cache populated by call 1's policy_denied.
+	assert.True(t, stub.wasCalled.Load(),
+		"CRITICAL: call 2 must actually execute after the mid-batch allow flip — "+
+			"if policy_denied quarantined the tool, this would be false")
+
+	events := collectEventStream(sub.C)
+	var sawPolicyDenied, sawExecStart bool
+	for _, evt := range events {
+		switch evt.Kind {
+		case EventKindToolExecSkipped:
+			payload, ok := evt.Payload.(ToolExecSkippedPayload)
+			require.True(t, ok)
+			if strings.Contains(payload.Reason, "mid-turn policy change") {
+				sawPolicyDenied = true
+			}
+			assert.NotContains(t, payload.Reason, "quarantined",
+				"a policy_denied replay must never be attributed to the quarantine cache — "+
+					"call 2 must not even reach the skip path, let alone as a replay")
+		case EventKindToolExecStart:
+			sawExecStart = true
+		}
+	}
+	assert.True(t, sawPolicyDenied, "expected call 1's policy_denied skip event")
+	assert.True(t, sawExecStart, "expected call 2's real tool-exec-start event")
+
+	if _, ok := findEvent(events, EventKindError); ok {
+		t.Error("no EventKindError expected — the turn must complete without aborting")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Post-epic-review fix: hook-deny branches must route through the ledger
+// ---------------------------------------------------------------------------
+
+// alwaysDenyToolHook unconditionally returns HookActionDenyTool from
+// BeforeTool and counts its own invocations.
+type alwaysDenyToolHook struct {
+	reason string
+	calls  atomic.Int32
+}
+
+func (h *alwaysDenyToolHook) BeforeTool(
+	_ context.Context, call *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision, error) {
+	h.calls.Add(1)
+	return call, HookDecision{Action: HookActionDenyTool, Reason: h.reason}, nil
+}
+
+func (h *alwaysDenyToolHook) AfterTool(
+	_ context.Context, result *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision, error) {
+	return result, HookDecision{Action: HookActionContinue}, nil
+}
+
+// TestRunTurn_HookDenyTool_BoundedByLedger_QuarantinesAfterFirstDenial is
+// fix-3's first half. loop.go's HookActionDenyTool branch used to `continue`
+// with no ClassifyDenial, no recordToolDenial and no budget check at all —
+// bypassing the ledger entirely, despite tool_denial.go's package doc,
+// turnDenialLedger's doc, and audit.EventTurnAbortedToolDenialBudget's doc
+// all asserting the aggregate budget covers "every denial response handed
+// to the model". A third-party ProcessHook that unconditionally denies a
+// tool reproduced the pre-ADR-058 infinite retry exactly: every repeat call
+// re-invoked the hook, with no short-circuit and no bound.
+//
+// Drives THREE parallel calls to the same tool in one LLM response.
+//
+// Stub-resistance: reverting this branch to its pre-fix bare `continue`
+// (no recordToolDenial call at all) would show hook.calls.Load() == 3 — the
+// hook re-invoked for every call, since nothing ever quarantines the tool —
+// identical to what an unbounded retry loop looks like from the hook's own
+// point of view.
+func TestRunTurn_HookDenyTool_BoundedByLedger_QuarantinesAfterFirstDenial(t *testing.T) {
+	cfg, _ := baseLoopDenialTestConfig(t)
+	const toolName = "hook_denied_tool"
+
+	provider := testutil.NewScenario().
+		WithToolCalls(distinctToolCalls(toolName, 3)).
+		WithText("understood — will not retry")
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defer al.Close()
+
+	stub := &namedStubTool{name: toolName}
+	al.RegisterTool(stub)
+
+	hook := &alwaysDenyToolHook{reason: "blocked by policy hook"}
+	require.NoError(t, al.MountHook(NamedHook("always-deny-tool", hook)))
+
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	finalContent, err := al.ProcessDirect(
+		context.Background(), "please run the tool three times", "test-session-hookdeny-quarantine")
+	require.NoError(t, err, "3 hook denials, far under the aggregate budget of 10, must not abort the turn")
+	assert.Equal(t, "understood — will not retry", finalContent)
+
+	assert.Equal(t, int32(1), hook.calls.Load(),
+		"CRITICAL: the hook must be invoked only ONCE — calls 2 and 3 must be short-circuited "+
+			"by the quarantine gate the FIRST hook denial now populates (ADR-058 fix 3)")
+	assert.False(t, stub.wasCalled.Load())
+
+	events := collectEventStream(sub.C)
+	var skipped, replayed int
+	for _, evt := range events {
+		if evt.Kind != EventKindToolExecSkipped {
+			continue
+		}
+		payload, ok := evt.Payload.(ToolExecSkippedPayload)
+		require.True(t, ok)
+		skipped++
+		if strings.Contains(payload.Reason, "quarantined") {
+			replayed++
+		}
+	}
+	assert.Equal(t, 3, skipped, "all three calls must produce a skip event")
+	assert.Equal(t, 2, replayed, "calls 2 and 3 must be attributed to the quarantine cache")
+}
+
+// alwaysDenyApprovalHook unconditionally denies from ApproveTool and counts
+// its own invocations.
+type alwaysDenyApprovalHook struct {
+	reason string
+	calls  atomic.Int32
+}
+
+func (h *alwaysDenyApprovalHook) ApproveTool(
+	_ context.Context, _ *ToolApprovalRequest,
+) (ApprovalDecision, error) {
+	h.calls.Add(1)
+	return Deny(h.reason), nil
+}
+
+// TestRunTurn_ApprovalHookDeny_BoundedByLedger_QuarantinesAfterFirstDenial is
+// fix-3's second half — the twin of the HookActionDenyTool test above for
+// the hooks.ApproveTool/!IsApproved branch, which had the identical gap: no
+// ClassifyDenial, no recordToolDenial, no budget.
+//
+// Stub-resistance: reverting this branch to its pre-fix bare `continue`
+// would show hook.calls.Load() == 3, not 1.
+func TestRunTurn_ApprovalHookDeny_BoundedByLedger_QuarantinesAfterFirstDenial(t *testing.T) {
+	cfg, _ := baseLoopDenialTestConfig(t)
+	const toolName = "approval_hook_denied_tool"
+
+	provider := testutil.NewScenario().
+		WithToolCalls(distinctToolCalls(toolName, 3)).
+		WithText("understood — will not retry")
+
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	defer al.Close()
+
+	stub := &namedStubTool{name: toolName}
+	al.RegisterTool(stub)
+
+	hook := &alwaysDenyApprovalHook{reason: "blocked"}
+	require.NoError(t, al.MountHook(NamedHook("always-deny-approval", hook)))
+
+	finalContent, err := al.ProcessDirect(
+		context.Background(), "please run the tool three times", "test-session-approvalhookdeny-quarantine")
+	require.NoError(t, err, "3 approval-hook denials, far under the aggregate budget of 10, must not abort the turn")
+	assert.Equal(t, "understood — will not retry", finalContent)
+
+	assert.Equal(t, int32(1), hook.calls.Load(),
+		"CRITICAL: ApproveTool must be consulted only ONCE — calls 2 and 3 must be "+
+			"short-circuited by the quarantine gate the FIRST denial now populates (ADR-058 fix 3)")
+	assert.False(t, stub.wasCalled.Load())
+}
+
+// ---------------------------------------------------------------------------
+// Additional fix A: the headless auto-deny reason has its own table row
+// ---------------------------------------------------------------------------
+
+// TestRunTurn_HeadlessAutoDeny_UsesDedicatedTableRowNotUnknownFallback is the
+// 7th-reviewer spec-conformance finding "Additional fix A": loop.go's
+// AutoDenyAsk (FR-009/#264) branch classified its fixed literal reason
+// through ClassifyDenial's UNKNOWN-reason fallback — no dedicated
+// denialTable row existed for it, so AC-01's "every driven reason must be
+// known" guard structurally could not apply, and the rendered message
+// stuttered ("the tool call was refused (reason: auto-denied: ...)") with
+// no headless-specific guidance. Drives a REAL headless (ProcessScheduled)
+// run end to end and asserts both the classifier's own KNOWN status and the
+// persisted transcript entry's actual content.
+//
+// Stub-resistance: an implementation that left the literal unclassified
+// (known == false) fails outright; one that added a row but kept generic
+// unknown-reason-style wording is caught by the negative Contains assertion
+// on the stuttering template and the positive Contains assertion requiring
+// "headless" guidance.
+func TestRunTurn_HeadlessAutoDeny_UsesDedicatedTableRowNotUnknownFallback(t *testing.T) {
+	al, home := schedTestLoop(t)
+	const toolName = "dangerous_tool"
+
+	provider := testutil.NewScenario().
+		WithToolCall(toolName, `{}`).
+		WithText("understood, moving on")
+	mia := registerAgent(t, al, home, "mia", provider, false)
+
+	stub := &dangerousStubTool{}
+	mia.Tools.Register(stub)
+	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{toolName: "ask"},
+	})
+
+	meta, err := al.GetSessionStore().NewScheduledSession("mia")
+	require.NoError(t, err)
+
+	reply, err := al.ProcessScheduled(
+		context.Background(), "mia", meta.ID, "please use dangerous_tool", "scheduled", meta.ID,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "understood, moving on", reply)
+	assert.False(t, stub.wasCalled.Load())
+
+	// (1) Unit-level: the literal headless reason is a KNOWN, dedicated row
+	// rather than riding ClassifyDenial's unknown-reason fallback.
+	cls, known := ClassifyDenial(autoDenyHeadlessReason)
+	require.True(t, known,
+		"the headless auto-deny literal must be a dedicated denialTable row (Additional Fix A)")
+	assert.True(t, cls.Permanent)
+	assert.NotContains(t, cls.ModelMessage, "the tool call was refused (reason:",
+		"must not ride ClassifyDenial's generic unknown-reason template")
+	assert.Contains(t, strings.ToLower(cls.ModelMessage), "headless",
+		"message must give headless-specific guidance, not a generic refusal")
+
+	// (2) End-to-end: the transcript entry persisted by the REAL turn
+	// carries that same dedicated text, not the generic fallback.
+	entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var found bool
+	for _, e := range entries {
+		if e.Type != session.EntryTypeToolCall {
+			continue
+		}
+		for _, tc := range e.ToolCalls {
+			if tc.Tool != toolName || tc.Status != toolCallStatusDenied {
+				continue
+			}
+			found = true
+			resultText, _ := tc.Result["text"].(string)
+			assert.Equal(t, cls.TranscriptText, resultText,
+				"persisted transcript text must equal the dedicated row's TranscriptText")
+			assert.NotContains(t, resultText, "the tool call was refused (reason:",
+				"persisted transcript must not stutter through the unknown-reason fallback template")
+			permanent, _ := tc.Result["permanent"].(bool)
+			assert.True(t, permanent)
+			reason, _ := tc.Result["reason"].(string)
+			assert.Equal(t, autoDenyHeadlessReason, reason)
+		}
+	}
+	require.True(t, found, "expected a persisted denied tool_call entry for %s", toolName)
+}
+
+// ---------------------------------------------------------------------------
+// Fix 4: quarantine replays must persist a transcript record, like the first
+// ---------------------------------------------------------------------------
+
+// TestRunTurn_QuarantineReplay_PersistsTranscriptEntryPerCall is the fix-4
+// regression. The quarantine gate (loop.go, immediately after
+// quarantinedDenialFor) appended a provider message and emitted
+// EventKindToolExecSkipped for a replay, but called neither
+// recordAskPendingToolCall nor settleAskToolCallTranscript — so replays
+// 2..N left NO tool_call transcript entry at all and vanished on reload.
+// CLAUDE.md's render-only-hiding allowance for a closed set of infra tool
+// calls ("Persistence is unaffected — hidden calls still exist in the
+// session transcript") does not cover genuine ABSENCE from persistence,
+// which is what this bug produced.
+//
+// Drives a real ProcessScheduled run (AutoDenyAsk=true) with THREE parallel
+// calls to the same ask-policy tool in one LLM response: call 1 denies via
+// the headless auto-deny site (which already persisted, via its own
+// pre-existing settleAskToolCallTranscript call) and quarantines the tool;
+// calls 2 and 3 are quarantine replays — the exact case fix 4 covers.
+//
+// Stub-resistance: an implementation that only fixed call 1's persistence
+// (already working before this fix) would show exactly ONE persisted
+// tool_call entry, not three — the positive lower bound here is the COUNT
+// itself, not merely "at least one entry exists".
+func TestRunTurn_QuarantineReplay_PersistsTranscriptEntryPerCall(t *testing.T) {
+	al, home := schedTestLoop(t)
+	const toolName = "dangerous_tool"
+
+	provider := testutil.NewScenario().
+		WithToolCalls(distinctToolCalls(toolName, 3)).
+		WithText("headless run finished")
+	mia := registerAgent(t, al, home, "mia", provider, false)
+
+	stub := &dangerousStubTool{}
+	mia.Tools.Register(stub)
+	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{toolName: "ask"},
+	})
+
+	meta, err := al.GetSessionStore().NewScheduledSession("mia")
+	require.NoError(t, err)
+
+	reply, err := al.ProcessScheduled(
+		context.Background(), "mia", meta.ID, "please run dangerous_tool three times", "scheduled", meta.ID,
+	)
+	require.NoError(t, err, "3 denials, far under the aggregate budget of 10, must not abort the turn")
+	assert.Equal(t, "headless run finished", reply)
+	assert.False(t, stub.wasCalled.Load())
+
+	entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
+	require.NoError(t, err)
+
+	var toolCallEntries []session.ToolCall
+	for _, e := range entries {
+		if e.Type != session.EntryTypeToolCall {
+			continue
+		}
+		toolCallEntries = append(toolCallEntries, e.ToolCalls...)
+	}
+	require.Len(t, toolCallEntries, 3,
+		"expected THREE persisted tool_call transcript entries — one per dispatched call, including "+
+			"the two quarantine replays that used to leave no record at all")
+	for i, tc := range toolCallEntries {
+		assert.Equal(t, toolCallStatusDenied, tc.Status, "entry %d must be status=denied", i)
+		assert.Equal(t, toolName, tc.Tool, "entry %d must name the correct tool", i)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // BDD-09 — FR-084 is gone, and gone behaviourally (FR-058-14/15 · AC-08)
 // ---------------------------------------------------------------------------
 
@@ -478,12 +904,31 @@ var retiredFR084Identifiers = []string{
 // sentinel..."). The substring "synthetic_error_floor" is a genuine
 // substring of "turn_synthetic_error_floor", so a plain Contains scan flags
 // it — but it is prose about a deleted config key's name, not a live
-// identifier: TestClassifyDenial_TableHasExactlyTenRows and every other W1
-// test already prove no such field, const, or method compiles into this
-// package. Keyed by path relative to the repo root; a file NOT in this map
-// gets zero exceptions.
+// identifier: TestClassifyDenial_TableHasExactlyTwelveRows (tool_denial_test.go
+// — renamed post-epic-review when two more rows were added; see its own
+// doc) and every other W1 test already prove no such field, const, or
+// method compiles into this package. Keyed by path relative to the repo
+// root; a file NOT in this map gets zero exceptions.
+//
+// pkg/config/config_test.go::TestLoadConfig_LegacyTurnSyntheticErrorFloor_Ignored
+// is a second, PRE-EXISTING instance of the same pattern this Additional
+// Fix C's new positive-lower-bound (scannedFiles/foundPositiveControl,
+// below) surfaced as a real, currently-failing assertion: that test is a
+// deliberate ADR-058 pinning test proving a legacy
+// `"turn_synthetic_error_floor"` JSON key in an on-disk config.json still
+// loads without error (spec §10's DoD item, "One boot with a legacy
+// ... key present in config.json starts cleanly") — it names both retired
+// identifiers as raw JSON/string literal data, never as a live Go symbol.
+// It was never added to this map when it was written, so this walk had
+// been failing at HEAD before any of the fixes in this file were made; this
+// entry closes that gap without touching pkg/config (outside this file's
+// ownership) at all — this map is a pkg/agent-owned allowlist regardless of
+// which package the exempted file lives in.
 var knownFR084HistoricalMentions = map[string][]string{
 	filepath.Join("pkg", "agent", "tool_denial.go"): {"synthetic_error_floor"},
+	filepath.Join("pkg", "config", "config_test.go"): {
+		"TurnSyntheticErrorFloor", "synthetic_error_floor",
+	},
 }
 
 // TestADR058_FR084Identifiers_ResolveNowhereInSource is BDD-09's static half:
@@ -501,6 +946,18 @@ var knownFR084HistoricalMentions = map[string][]string{
 // paired with TestRunTurn_ToolDenialBudgetAbort_AuditsNewEventNotOldOne
 // below, which proves the BEHAVIOUR (new audit event, no old event string in
 // any session message) rather than relying on identifier absence alone.
+//
+// Additional Fix C (7th-reviewer spec-conformance finding): the walk below
+// asserts violations is empty, but originally never asserted HOW MANY .go
+// files it actually scanned — a wrong repoRoot that still passes os.Stat, a
+// broken suffix filter, or a WalkDir call that silently skips everything
+// would all make this pass VACUOUSLY (Binding Rule 4: every zero-count
+// assertion needs a positive lower bound). Two independent guards are added:
+// a scanned-file counter asserted against a floor far below this repo's
+// real pkg/ file count, and a positive control — turnDenialBudget, a genuinely
+// LIVE identifier defined in this same epic's tool_denial.go — which the
+// walk must actually FIND at least once, proving the content-scanning logic
+// itself works rather than the loop body never running.
 func TestADR058_FR084Identifiers_ResolveNowhereInSource(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "runtime.Caller(0) must resolve this test file's own path")
@@ -514,7 +971,14 @@ func TestADR058_FR084Identifiers_ResolveNowhereInSource(t *testing.T) {
 		t.Fatalf("BLOCKED: expected repo pkg/ directory at %s (resolved from pkg/agent's own location): %v", pkgDir, statErr)
 	}
 
+	// Additional Fix C: a control identifier known to be LIVE (defined in
+	// tool_denial.go, part of this very epic) — the walk must find it at
+	// least once, or the content-scanning logic itself is broken/vacuous.
+	const positiveControlIdentifier = "turnDenialBudget"
+
 	var violations []string
+	var scannedFiles int
+	var foundPositiveControl bool
 	walkErr := filepath.WalkDir(pkgDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -542,6 +1006,10 @@ func TestADR058_FR084Identifiers_ResolveNowhereInSource(t *testing.T) {
 			return readErr
 		}
 		content := string(data)
+		scannedFiles++
+		if strings.Contains(content, positiveControlIdentifier) {
+			foundPositiveControl = true
+		}
 		for _, ident := range retiredFR084Identifiers {
 			if !strings.Contains(content, ident) {
 				continue
@@ -554,6 +1022,24 @@ func TestADR058_FR084Identifiers_ResolveNowhereInSource(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, walkErr, "walking %s must not fail", pkgDir)
+
+	// Additional Fix C's positive lower bound: this repo's pkg/ tree has
+	// (per GitNexus's own index) tens of thousands of symbols across
+	// hundreds of .go files — 100 is a floor with generous headroom below
+	// the real count, chosen so a genuine future repo restructuring would
+	// have to shrink pkg/ by an order of magnitude before this floor itself
+	// became the false-failure risk, while still catching a repoRoot
+	// miscalculation, a broken suffix filter, or a WalkDir call that never
+	// descends into anything.
+	const minScannedFiles = 100
+	require.GreaterOrEqual(t, scannedFiles, minScannedFiles,
+		"the walk scanned only %d .go files under %s — a wrong repoRoot, a broken suffix filter, "+
+			"or a WalkDir call that skips everything would ALSO produce an empty violations list, "+
+			"which is exactly the vacuous-pass this floor exists to catch", scannedFiles, pkgDir)
+	require.True(t, foundPositiveControl,
+		"the walk never found the positive-control identifier %q anywhere under %s — the "+
+			"content-scanning logic itself is broken (an empty violations list from THIS state "+
+			"would be a vacuous pass, not proof FR-084 is gone)", positiveControlIdentifier, pkgDir)
 
 	assert.Empty(t, violations,
 		"FR-084 was deleted in full (ADR-058 §10.A3) — these identifiers must resolve nowhere under pkg/:\n%s",
