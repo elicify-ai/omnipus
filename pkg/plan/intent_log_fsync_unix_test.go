@@ -81,6 +81,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/testutil"
 )
 
 // TestIntentLog_AppendIntent_ActuallyFsyncs is the non-vacuous fsync proof
@@ -88,7 +90,19 @@ import (
 // called" (a restatement of the source); it asserts the OBSERVABLE
 // consequence of a real fsync(2) call against a destination that cannot
 // support one.
+//
+// Darwin-only exception (found via Cross-Platform CI, matrix
+// (macos-latest, arm64), 2026-08-06): this test's whole technique rests on
+// fsync(2) against a FIFO returning EINVAL, which the file-level comment
+// above already flags as a Linux-specific guarantee ("fails with EINVAL on
+// Linux"). On Darwin/XNU, fsync(2) on a named pipe returns success instead
+// of EINVAL, so AppendIntent's real f.Sync() call (fileutil.AppendJSONLSync,
+// unconditional, no platform branching) returns nil on macOS even though it
+// genuinely executed — there is no production bug here, only a
+// non-portable observability trick. Skip rather than assert a Linux-only
+// kernel quirk as if it held everywhere.
 func TestIntentLog_AppendIntent_ActuallyFsyncs(t *testing.T) {
+	testutil.SkipOnDarwin(t)
 	dir := t.TempDir()
 	planID := "p-fsync-fifo"
 	path := filepath.Join(dir, planID+".jsonl")

@@ -54,8 +54,14 @@ import (
 // h.captures snapshot before fix 3a made the fence-check+registration
 // atomic.
 func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// "Should be true" here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 	// Force the exec resolver onto the managed install path (the fake binary
 	// below), bypassing its $PATH lookup of a real google-chrome/chromium —
@@ -142,8 +148,14 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 // EncoderStarter (no timing race needed): otherCS's Start() is held open on
 // a channel for the whole test.
 func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// "Should be true" here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 	// See TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure's
 	// identical Setenv for why.

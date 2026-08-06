@@ -306,8 +306,14 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 // proxy for the "ok" gate-ladder branch reachable without a real browser
 // (real success is covered by the wave-3 Playwright e2e pass on the pod).
 func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 	// ProfileDir isolation is DOUBLY load-bearing here (see the identical
 	// note on TestHandleWebRTCOffer_GateLadder_NotCapable): this test also
@@ -744,8 +750,14 @@ func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) 
 // capture session with an attached viewer is a true conflict — the offer is
 // denied with reason "error", and the other session is left untouched.
 func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 	// See TestHandleWebRTCOffer_CapableButLaunchFails' identical Setenv for
 	// why: forces the exec resolver onto the fake managed binary below
@@ -822,8 +834,14 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 // "denied at the fence" and "proceeded past it" is the superseded session's
 // Done() channel.
 func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		// chrome-for-testing publishes no linux/arm64 build (installer.go's
+		// cftPlatform errors before findInstalledBuild ever inspects the
+		// fake binary this test plants below), so ClassifyVideoCapability
+		// can never report Capable=true on linux/arm64 either — confirmed
+		// by the Cross-Platform CI matrix (ubuntu-24.04-arm, arm64) failing
+		// here.
+		t.Skip("ClassifyVideoCapability only ever reports Capable=true on linux/amd64")
 	}
 	// See TestHandleWebRTCOffer_CapableButLaunchFails' identical Setenv for
 	// why: this test's ladder proceeds past the fence into a real launch
