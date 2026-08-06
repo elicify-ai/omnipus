@@ -148,6 +148,54 @@ type ApprovalOutcome struct {
 	Reason   string // one of "approved","user","timeout","cancel","restart","saturated","batch_short_circuit"
 }
 
+// Denial-reason literals emitted by this file (ADR-058 spec §2.2, FR-058-04).
+// "approved" (see resolve's ApprovalActionApprove case, below) carries
+// Approved: true and is deliberately EXCLUDED from these constants and from
+// allApprovalDenialReasons — it is not a denial (spec §2.2).
+//
+// denialReasonTimeout mirrors the literal fireTimeout emits (below) without
+// replacing it there: ADR-058's spec states "fireTimeout is byte-for-byte
+// unchanged" (FR-058-04) — its fail-closed behavior is explicitly correct
+// and untouched by this change — so fireTimeout keeps its own inline
+// "timeout" literal rather than referencing this constant. The constant
+// exists so allApprovalDenialReasons can still enumerate the value it
+// produces without editing that function.
+const (
+	denialReasonSaturated         = "saturated"
+	denialReasonTimeout           = "timeout"
+	denialReasonUser              = "user"
+	denialReasonCancel            = "cancel"
+	denialReasonBatchShortCircuit = "batch_short_circuit"
+	denialReasonRestart           = "restart"
+
+	// denialReasonInternalError mirrors the literal returned by
+	// policy_approver.go:58 ("internal_error") — a denial reason produced
+	// OUTSIDE this file (ADR-058 spec §2.2) by policyApproverAdapter's
+	// defensive nil-entry branch. It is collected into
+	// allApprovalDenialReasons here rather than replacing the literal in
+	// policy_approver.go, which is outside this unit's ownership (ADR-058
+	// spec §9, work unit W3) and is left unchanged.
+	denialReasonInternalError = "internal_error"
+)
+
+// allApprovalDenialReasons is every denial reason this package can hand to
+// agent.ClassifyDenial (ADR-058 FR-058-04): the six literals emitted in this
+// file plus internal_error (policy_approver.go:58). "approved" is excluded
+// (see above) because it is not a denial. A pkg/gateway test
+// (approval_denial_classification_test.go) asserts agent.ClassifyDenial(r)
+// returns known == true for every member of this slice, so a new reason
+// added here with no matching pkg/agent/tool_denial.go table row fails a
+// test rather than defaulting silently.
+var allApprovalDenialReasons = []string{
+	denialReasonSaturated,
+	denialReasonTimeout,
+	denialReasonUser,
+	denialReasonCancel,
+	denialReasonBatchShortCircuit,
+	denialReasonRestart,
+	denialReasonInternalError,
+}
+
 // approvalRegistryV2 is the central in-process approval registry (FR-016, FR-070).
 // It enforces the saturation cap (default 64) and the full Approval State Table.
 //
@@ -293,7 +341,7 @@ func (r *approvalRegistryV2) requestApproval(
 			resultCh:   make(chan ApprovalOutcome, 1),
 		}
 		// Pre-deliver the outcome so the caller can receive without blocking.
-		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: "saturated"}
+		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonSaturated}
 		return synthetic, false
 	}
 
@@ -380,10 +428,10 @@ func (r *approvalRegistryV2) resolve(
 		outcome = ApprovalOutcome{Approved: true, Reason: "approved"}
 	case ApprovalActionDeny:
 		newState = ApprovalStateDeniedUser
-		outcome = ApprovalOutcome{Approved: false, Reason: "user"}
+		outcome = ApprovalOutcome{Approved: false, Reason: denialReasonUser}
 	case ApprovalActionCancel:
 		newState = ApprovalStateDeniedCancel
-		outcome = ApprovalOutcome{Approved: false, Reason: "cancel"}
+		outcome = ApprovalOutcome{Approved: false, Reason: denialReasonCancel}
 	default:
 		r.mu.Unlock()
 		return false, false
@@ -421,7 +469,7 @@ func (r *approvalRegistryV2) cancelBatchShortCircuit(approvalID string) bool {
 	r.scheduleTerminalDelete(approvalID)
 	r.mu.Unlock()
 
-	e.resultCh <- ApprovalOutcome{Approved: false, Reason: "batch_short_circuit"}
+	e.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonBatchShortCircuit}
 	return true
 }
 
@@ -480,7 +528,7 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 
 	for _, snap := range canceled {
 		// capture loop variable
-		snap.resultCh <- ApprovalOutcome{Approved: false, Reason: "restart"}
+		snap.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonRestart}
 	}
 	return canceled
 }
