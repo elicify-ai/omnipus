@@ -628,7 +628,9 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 		// scoped to ACTIVELY-VIEWED conflicting captures instead of denying
 		// on any other live agent session. (Same BringToFront-before-capture
 		// precedent as live.go's StartScreencast/rebindScreencast.)
-		cs.bringAgentTabToFront(ctx)
+		if !cs.bringAgentTabToFront(ctx) {
+			cs.reassertForegroundAsync()
+		}
 		cs.logf("capture[%s]: started (encoder page navigating)", cs.agentID)
 	})
 
@@ -654,6 +656,12 @@ func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStar
 // exec_path before this fix).
 const bringToFrontTimeout = 5 * time.Second
 
+// foregroundReassertDelay is how long reassertForegroundAsync waits before its
+// single retry. Long enough that a cold shared-Chrome launch (the usual reason
+// the first attempt loses its budget) has finished, short enough that a viewer
+// is not left watching a ~0.5fps stream while it waits.
+const foregroundReassertDelay = 6 * time.Second
+
 // bringAgentTabToFront focuses this agent's current active tab (Page.
 // bringToFront on the DefaultSessionID session's active-tab context) so
 // encoder.js's active-in-last-focused-window tab resolution binds THIS
@@ -662,10 +670,11 @@ const bringToFrontTimeout = 5 * time.Second
 // the historical fallback resolution (first non-extension tab) rather than
 // failing the whole start — a transient CDP hiccup must not cost the viewer
 // their stream. A no-op when cs.mgr is nil (test-construction pattern).
-func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
+func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 	if cs.mgr == nil {
-		return
+		return false
 	}
+	landed := make(chan struct{}, 1)
 	// Session resolution AND chromedp.Run both happen inside this one
 	// goroutine, raced against bringToFrontTimeout as a single bound — see
 	// that const's doc comment for why Session() itself must be included,
@@ -713,7 +722,9 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 				cs.agentID,
 				runErr,
 			)
+			return
 		}
+		landed <- struct{}{}
 	}()
 	// This select is what actually honors ctx's cancellation (Start's ctx)
 	// and bringToFrontTimeout — both race directly against the goroutine
@@ -729,6 +740,58 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) {
 		)
 	case <-ctx.Done():
 	}
+
+	select {
+	case <-landed:
+		return true
+	default:
+		return false
+	}
+}
+
+// reassertForegroundAsync re-runs the foreground assert ONCE, shortly after a
+// first attempt failed to land.
+//
+// Why this exists — measured, not assumed. A tab that is not foregrounded
+// composites at roughly ONE frame every two seconds; foregrounded it produces
+// several times that (probed directly against this project's own Chrome build
+// via Page.startScreencast frame counts). Chrome's anti-backgrounding flags do
+// NOT change it: --disable-renderer-backgrounding,
+// --disable-background-timer-throttling and
+// --disable-backgrounding-occluded-windows are all already set (chromedp's
+// defaults carry them too) and a background tab still composites at ~0.5fps.
+// Animation TIMELINES keep advancing at full rate, which is what makes this so
+// easy to misdiagnose: the page is genuinely animating, it just is not being
+// painted for the capture.
+//
+// So a first attempt that times out is not cosmetic — it is the difference
+// between a live stream and one that looks frozen. The first attempt shares a
+// single 5s budget with cs.mgr.Session(), which on a cold shared-Chrome launch
+// can alone take ~20s (see bringToFrontTimeout), so under load the focus action
+// frequently never runs at all. By the time we retry, that session is resolved
+// and warm, so the retry costs a single CDP round trip.
+//
+// Deliberately ONE retry, and it re-checks stopped first: window focus is a
+// shared, global resource in the shared-Chrome model, and repeatedly stealing
+// it would fight other agents' captures for it — the exact hazard the original
+// call site's comment warns about.
+func (cs *CaptureSession) reassertForegroundAsync() {
+	go func() {
+		select {
+		case <-time.After(foregroundReassertDelay):
+		case <-cs.done:
+			return
+		}
+		cs.mu.Lock()
+		stopped := cs.stopped
+		cs.mu.Unlock()
+		if stopped {
+			return
+		}
+		if cs.bringAgentTabToFront(context.Background()) {
+			cs.logf("capture[%s]: foreground re-assert landed on retry", cs.agentID)
+		}
+	}()
 }
 
 // Relay returns this session's RelaySession (the Pion-backed webrtc.Session
