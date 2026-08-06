@@ -752,7 +752,25 @@ func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 // reassertForegroundAsync re-runs the foreground assert ONCE, shortly after a
 // first attempt failed to land.
 //
-// Why this exists — measured, not assumed. A tab that is not foregrounded
+// CORRECTION (2026-08-06): the measurement this rationale was originally
+// written from was UNSOUND, and the retry below did NOT fix the
+// browser-live-video e2e failure it was written for — that test still fails
+// identically with this in place. The probe compared Page.startScreencast frame
+// counts without ever sending Page.screencastFrameAck; Chrome throttles
+// delivery to a trickle when frames go unacked (production acks every frame,
+// see live.go's runAckWorker), so the foreground-vs-background difference it
+// showed was noise on an already-stalled stream, not evidence of compositing
+// throttling. Do not cite those numbers.
+//
+// What justifies keeping this anyway is narrower and independently true: the
+// first attempt shares ONE 5s budget with cs.mgr.Session(), which on a cold
+// shared-Chrome launch can alone take ~20s (see bringToFrontTimeout's own doc),
+// so under load the focus action can never run at all and nothing notices. A
+// single warm retry closes that gap cheaply. It is a robustness fix, NOT a fix
+// for the frozen-video test, whose root cause remains open.
+//
+// Original (unsupported) rationale follows, kept only so the next reader can
+// see what was disproved: a tab that is not foregrounded
 // composites at roughly ONE frame every two seconds; foregrounded it produces
 // several times that (probed directly against this project's own Chrome build
 // via Page.startScreencast frame counts). Chrome's anti-backgrounding flags do
