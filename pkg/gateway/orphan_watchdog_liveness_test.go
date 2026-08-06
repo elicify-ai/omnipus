@@ -220,6 +220,28 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
 	al.RegisterTool(delegateTool)
+	// Drain the async delegate's own detached goroutine before t.TempDir()'s
+	// cleanup runs (mirrors pkg/tools/delegate_adr053_test.go's
+	// newADR053TestTool and every other DelegateTool test fixture in this
+	// codebase). executeAsync's goroutine (pkg/tools/delegate.go) keeps
+	// writing to the lifecycle store — t.transitionLifecycle's
+	// LifecycleStore.Persist, an atomic write under tmpDir/session_lifecycle
+	// — AFTER SpawnSubTurn returns, which is itself AFTER the real
+	// EventKindSubTurnEnd event this test observes on `ch` was already
+	// published. So "saw the real subagent_end frame" does NOT imply this
+	// goroutine has finished writing: the goroutine can still be mid-Persist
+	// when this test function returns. al.Close() (registered by
+	// mustAgentLoop) cannot help — it has no reference to this DelegateTool
+	// or its asyncWG, since delegateTool is a local test fixture, not part of
+	// *agent.AgentLoop. Without this, the trailing Persist call's
+	// create-temp-file-then-rename can race t.TempDir()'s RemoveAll walk,
+	// intermittently failing with "TempDir RemoveAll cleanup: ...: directory
+	// not empty" — exactly the class of flake documented on
+	// DelegateTool.WaitForAsyncTasks's own doc comment. Registered here
+	// (after delegateTool is fully wired, before TempDir()-dependent test
+	// logic runs) so LIFO cleanup ordering runs this BEFORE al.Close() and
+	// well before the TempDir() cleanup registered at this test's very start.
+	t.Cleanup(delegateTool.WaitForAsyncTasks)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {
 		ag, ok := al.GetRegistry().GetAgent(agentID)
