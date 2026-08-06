@@ -134,6 +134,12 @@ func recordAskPendingToolCall(ts *turnState, callID session.ToolCallID, toolName
 // "saturated", or the headless auto-deny note) — it is surfaced verbatim
 // because "your tool call was denied" and "nobody answered for five minutes"
 // are very different things to a reader.
+//
+// ADR-058 FR-058-08: the settled Result also carries "permanent" — the same
+// bool ClassifyDenial(reason) hands the model-facing payload — INSIDE Result,
+// never as a top-level ToolCall field (ToolCall.yaml is
+// additionalProperties: false; Result is additionalProperties: true, so this
+// needs no contract change, spec §3.6).
 func settleAskToolCallTranscript(
 	ts *turnState,
 	callID session.ToolCallID,
@@ -144,15 +150,25 @@ func settleAskToolCallTranscript(
 	if ts == nil {
 		return
 	}
+	cls, _ := ClassifyDenial(reason)
 	settled := session.ToolCall{
 		ID:         callID,
 		Tool:       toolName,
 		Status:     toolCallStatusDenied,
 		Parameters: cloneEventArguments(args),
 		Result: map[string]any{
-			"error":  true,
-			"text":   askDenialText(reason),
-			"reason": reason,
+			"error": true,
+			// askDenialText(reason) and cls.TranscriptText are the same
+			// value — both trace to the identical denialTable[reason]
+			// lookup (askDenialText's own body is `cls, _ :=
+			// ClassifyDenial(reason); return cls.TranscriptText`). Calling
+			// askDenialText here, rather than reading cls.TranscriptText a
+			// second time, is what keeps askDenialText itself the one
+			// production call site for "render this reason as transcript
+			// text" — not just an assertable-but-unused delegate.
+			"text":      askDenialText(reason),
+			"reason":    reason,
+			"permanent": cls.Permanent,
 		},
 	}
 
@@ -172,21 +188,22 @@ func settleAskToolCallTranscript(
 // askDenialText renders the operator-facing one-liner for a non-approval
 // outcome. Kept separate from the raw reason so the transcript carries BOTH a
 // human sentence and the machine reason.
+//
+// ADR-058 D1: this is the transcript half of the single classification table
+// in tool_denial.go — it holds no switch of its own. Before this change the
+// switch here and the model-facing sentence built independently in loop.go
+// were two hand-maintained renderings of the same event, and D1 exists
+// precisely because they had already diverged (ADR-058 §1.4). Delegating to
+// ClassifyDenial makes that divergence structurally impossible: both
+// surfaces now read the same denialTable row. The five reasons this switch
+// used to branch on ("timeout", "user", "cancel", "saturated", and the
+// empty-reason case) render byte-for-byte the same TranscriptText they
+// always did — denialTable's rows for them were written to match verbatim
+// (tool_denial.go's package doc, spec N1) — so no persisted transcript
+// string already on disk is reinterpreted differently by this change.
 func askDenialText(reason string) string {
-	switch reason {
-	case "timeout":
-		return "Not run: the approval request expired before anyone answered it."
-	case "user":
-		return "Not run: the approval request was denied."
-	case "cancel":
-		return "Not run: the turn was cancelled while the approval request was open."
-	case "saturated":
-		return "Not run: too many approval requests were already pending."
-	case "":
-		return "Not run: the approval request was not granted."
-	default:
-		return "Not run: " + reason
-	}
+	cls, _ := ClassifyDenial(reason)
+	return cls.TranscriptText
 }
 
 // replaceToolCallInTranscript finds the most recent transcript entry of type
