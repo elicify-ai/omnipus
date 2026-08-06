@@ -50,7 +50,6 @@ func TestAllApprovalDenialReasons_EveryMemberClassifiesAsKnown(t *testing.T) {
 
 	seen := make(map[string]bool, len(allApprovalDenialReasons))
 	for _, reason := range allApprovalDenialReasons {
-		reason := reason
 		t.Run(reason, func(t *testing.T) {
 			require.False(t, seen[reason], "duplicate reason %q in allApprovalDenialReasons", reason)
 			seen[reason] = true
