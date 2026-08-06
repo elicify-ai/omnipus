@@ -13,8 +13,9 @@
 // Two things followed, both observed in a CI e2e run on 2026-07-28:
 //
 //  1. The chat thread showed NOTHING for the entire wait. A run_task approval
-//     that nobody answered blocked the turn for the registry's full 300 s
-//     timeout (pkg/gateway/approvals.go) and rendered no thread content at all.
+//     that nobody answered blocked the turn for the registry's full
+//     gateway.go::defaultToolApprovalTimeout (pkg/gateway/approvals.go) and
+//     rendered no thread content at all.
 //     A page refresh during the wait dropped the live modal too, turning a
 //     stalled turn into a permanent, causeless void.
 //  2. On non-webchat channels (Telegram, Discord, …) there is no approval UI at
@@ -132,8 +133,9 @@ func recordAskPendingToolCall(ts *turnState, callID session.ToolCallID, toolName
 //
 // reason is the approver's outcome reason ("timeout", "user", "cancel",
 // "saturated", or the headless auto-deny note) — it is surfaced verbatim
-// because "your tool call was denied" and "nobody answered for five minutes"
-// are very different things to a reader.
+// because "your tool call was denied" and "nobody answered for the whole
+// gateway.go::defaultToolApprovalTimeout window" are very different things
+// to a reader.
 //
 // ADR-058 FR-058-08: the settled Result also carries "permanent" — the same
 // bool ClassifyDenial(reason) hands the model-facing payload — INSIDE Result,
@@ -187,7 +189,20 @@ func settleAskToolCallTranscript(
 
 // askDenialText renders the operator-facing one-liner for a non-approval
 // outcome. Kept separate from the raw reason so the transcript carries BOTH a
-// human sentence and the machine reason.
+// human sentence and the machine reason — but that separation only holds for
+// a KNOWN denialTable row (ADR-058 §4.2's invariant: TranscriptText is a
+// reader-facing "Not run: …" sentence, distinct from ModelMessage's
+// instruction to the model). For an UNCLASSIFIED reason (no table row),
+// FR-058-03 deliberately makes ModelMessage and TranscriptText
+// byte-identical (unknownReasonText) — so what this function renders in that
+// case is verbatim the model-directed instruction ("Treat this as permanent;
+// do not retry — stop and report the blocker."), not a separate human
+// sentence. As of this writing the one reason still reaching this fallback
+// in production is loop.go's headless-scheduled-run auto-deny literal
+// ("auto-denied: ask-policy tool not allowed in a headless scheduled run"),
+// which has no denialTable row; a sibling unit of this same epic is adding
+// one, which will remove it from the fallback described here — this
+// paragraph documents current behavior, not that eventual state.
 //
 // ADR-058 D1: this is the transcript half of the single classification table
 // in tool_denial.go — it holds no switch of its own. Before this change the

@@ -1690,6 +1690,70 @@ func TestLoadConfig_LegacyPreviewFields_Ignored(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_LegacyTurnSyntheticErrorFloor_Ignored is a pinning test for
+// ADR-058 (tool-denial semantics): FR-084's synthetic-error turn-abort floor
+// and its gateway.turn_synthetic_error_floor config key are deleted in full,
+// with no migration (docs/internal/specs/adr-058-tool-denial-semantics-spec.md
+// FR-058-14 — "FR-084 is deleted in full: config.GatewayConfig.
+// TurnSyntheticErrorFloor, ..., and every comment referencing them";
+// docs/internal/specs/tool-registry-redesign-spec.md's FR-084 entry is
+// retained but marked superseded). LoadConfig has no DisallowUnknownFields
+// anywhere on the config-load path, so a persisted config.json from before
+// this change — carrying a "turn_synthetic_error_floor" key under "gateway"
+// — must still load without error today (unknown keys silently ignored),
+// with every other field in the same gateway object intact.
+//
+// This mirrors TestLoadConfig_LegacySandboxProfileFields_Ignored (ADR-035)
+// and TestLoadConfig_LegacyPreviewFields_Ignored (ADR-044) directly above:
+// both were written explicitly as pins against "a future change to the
+// config-load path (e.g. adding strict decoding somewhere, which this
+// codebase does elsewhere)" silently turning a harmless legacy key into a
+// boot-time hard failure. This closes the identical gap for ADR-058's own
+// retired key, discharging spec §10's DoD item verbatim: "One boot with a
+// legacy `turn_synthetic_error_floor` key present in config.json starts
+// cleanly" — previously verified only by hand with a throwaway program
+// during implementation, with no regression guard left behind.
+//
+// The two gateway sibling-field assertions below are the positive lower
+// bound (Binding Rule 4): without them, this test would pass equally well
+// for a broken implementation that silently discarded the whole gateway
+// section — or returned an empty *Config — whenever it hit an unrecognised
+// key inside it. Asserting Host/Port survive with their ACTUAL configured
+// values (not just "LoadConfig returned no error") is what rules that stub
+// out.
+func TestLoadConfig_LegacyTurnSyntheticErrorFloor_Ignored(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	rawCfg := `{
+		"version": 1,
+		"agents": {
+			"defaults": {"workspace": "` + tmpDir + `", "model_name": "test-model", "max_tokens": 4096}
+		},
+		"gateway": {
+			"host": "127.0.0.1",
+			"port": 5000,
+			"turn_synthetic_error_floor": 8
+		}
+	}`
+	if err := os.WriteFile(cfgPath, []byte(rawCfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig must not error on the legacy turn_synthetic_error_floor key, got: %v", err)
+	}
+
+	if cfg.Gateway.Host != "127.0.0.1" {
+		t.Errorf("cfg.Gateway.Host = %q, want %q — must survive alongside the retired "+
+			"turn_synthetic_error_floor key", cfg.Gateway.Host, "127.0.0.1")
+	}
+	if cfg.Gateway.Port != 5000 {
+		t.Errorf("cfg.Gateway.Port = %d, want 5000 — must survive alongside the retired "+
+			"turn_synthetic_error_floor key", cfg.Gateway.Port)
+	}
+}
+
 // TestConfig_IsPreviewEnabled verifies the semantics of
 // gateway.preview_enabled (ADR-044, FR-006, TDA-1): a nil *Config RECEIVER
 // fails closed (false — no config to consult); a non-nil *Config with the

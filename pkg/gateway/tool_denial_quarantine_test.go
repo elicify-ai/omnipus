@@ -109,9 +109,19 @@ func TestRunTurn_QuarantineAfterFirstPermanentDenial_NoFurtherRegistryRoundTrip(
 
 	// A short REAL timeout so the FIRST call's registry entry genuinely
 	// expires unanswered within the test's runtime (spec §3.7's demonstrated
-	// construction uses 1s; 150ms keeps this test fast while still being a
-	// real timer, not a synthetic reason string).
-	const approvalWindow = 150 * time.Millisecond
+	// construction uses 1s; 500ms keeps this test reasonably fast while still
+	// being a real timer, not a synthetic reason string).
+	//
+	// 500ms (not the original 150ms) is deliberate slack for the wall-clock
+	// assertion below (elapsed < 3*approvalWindow = 1.5s): the real timer
+	// consumes ~1x this window regardless of its size, so a small window
+	// leaves little headroom for everything else the turn does (session
+	// JSONL writes, scheduler jitter) before hitting the 3x ceiling — and
+	// this suite runs under `go test -race`, which commonly inflates
+	// wall-clock timing 2-5x versus a non-race build. The ratio asserted
+	// (3x) is unchanged; only the base window is widened so that ratio has
+	// real margin instead of racing the CI clock.
+	const approvalWindow = 500 * time.Millisecond
 	reg := newApprovalRegistryV2(64, approvalWindow)
 
 	// One LLM response with THREE parallel calls to the same permanently

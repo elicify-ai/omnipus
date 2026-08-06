@@ -182,7 +182,16 @@ func TestTimeoutDenial_PayloadIsHonest_BDD01(t *testing.T) {
 // kind. This is the literal opposite of §1.1's "13+ minutes, needed a
 // manual Stop" outcome.
 func TestTimeoutBudget_TurnEndsOnItsOwn_NoManualStop_AC02(t *testing.T) {
-	const window = 100 * time.Millisecond
+	// 500ms (not a smaller window) is deliberate slack for the wall-clock
+	// assertion below (elapsed < 3*window = 1.5s): the real timer consumes
+	// ~1x this window regardless of its size, so a small window leaves
+	// little headroom for the rest of the turn (session JSONL writes,
+	// scheduler jitter) before hitting the 3x ceiling — and this suite runs
+	// under `go test -race`, which commonly inflates wall-clock timing 2-5x
+	// versus a non-race build. The ratio asserted (3x) is unchanged; only
+	// the base window is widened so that ratio has real margin instead of
+	// racing the CI clock.
+	const window = 500 * time.Millisecond
 	const toolName = "run_task"
 	const agentID = "mia"
 

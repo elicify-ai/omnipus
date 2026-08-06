@@ -47,8 +47,10 @@ type denialWirePayload struct {
 // FR-058-07's "holds no switch of its own" in one table-driven pass. A
 // stub that special-cased even one reason back into a local switch would
 // still pass this if the special-cased literal happened to match — that
-// specific stub is excluded by TestAskDenialText_DelegatesToTable_NotOwnSwitch
-// below, which mutates the table live.
+// specific stub is excluded by
+// TestAskDenialText_UnknownReason_UsesLiveUnknownFormat_NotStaleSwitchDefault
+// below, which proves live delegation without mutating shared package
+// state.
 func TestAskDenialText_MatchesClassifyDenialForEveryTableRow(t *testing.T) {
 	reasons := []string{
 		"user", "timeout", "saturated", "cancel", "restart",
@@ -106,34 +108,73 @@ func TestAskDenialText_PreExistingReasons_ByteForByte(t *testing.T) {
 	}
 }
 
-// TestAskDenialText_DelegatesToTable_NotOwnSwitch proves the delegation is
-// REAL, not merely output-compatible. It mutates a live row of
-// tool_denial.go's package-level denialTable (same package, so this test
-// can reach it directly) and asserts askDenialText's output tracks the
-// mutation immediately.
+// TestAskDenialText_UnknownReason_UsesLiveUnknownFormat_NotStaleSwitchDefault
+// replaces an earlier version of this test that proved live delegation by
+// writing directly to tool_denial.go's package-level denialTable map (same
+// package, so a test can reach it), then restoring it in t.Cleanup.
 //
-// This is the test that would FAIL if askDenialText still held its own
-// independent switch (or a cached copy of the old strings): a hardcoded
-// switch branch for "timeout" would keep returning the pre-mutation
-// literal regardless of what denialTable now contains, because it would
-// never read denialTable at all.
-func TestAskDenialText_DelegatesToTable_NotOwnSwitch(t *testing.T) {
-	const probeReason = "timeout"
+// That approach is unsafe in this package and was rewritten without it:
+// denialTable is read by ClassifyDenial, which sits on the LIVE dispatch
+// path (every ask-policy denial in the whole agent loop goes through it).
+// Go maps are not safe for concurrent read/write, and pkg/agent has ~20
+// test files that use t.Parallel() and routinely leave background
+// goroutines running past their own test function's return (async
+// delegates, background bash sessions). A live write to denialTable racing
+// against any one of those reading it via ClassifyDenial produces "fatal
+// error: concurrent map read and map write" — an UNRECOVERABLE crash of the
+// whole test binary, not a reported test failure; CI would see the entire
+// package go dark with no "--- FAIL" line pointing at the cause.
+//
+// This version proves the same property — that askDenialText genuinely
+// reads through ClassifyDenial's live logic rather than retaining an
+// independent, hardcoded rendering — without touching any shared state, by
+// using a probe reason that has no denialTable row. The retired pre-ADR-058
+// askDenialText switch (git blame: this file, before ADR-058) had exactly
+// five cases ("user", "timeout", "saturated", "cancel", "") and a `default:`
+// branch that returned the literal "Not run: " + reason for anything else —
+// a different, older format from the current unknownReasonText fallback
+// ("Not run: the tool call was refused (reason: %s). Treat this as
+// permanent; do not retry — stop and report the blocker."). A residual copy
+// of that old switch — whether left in place as dead code, reintroduced by
+// a partial revert, or resurrected as a "shortcut" reimplementation that
+// looks plausible but never calls ClassifyDenial — renders the OLD default
+// format for an unrecognised reason and fails this assertion; only a
+// genuine call into ClassifyDenial's live unknown-reason path produces the
+// current format asserted here.
+//
+// Scope note: this does not (and, without mutating live state, cannot)
+// distinguish "genuine delegation" from a hypothetical hardcoded switch that
+// happens to reproduce every CURRENT denialTable literal byte-for-byte,
+// including today's exact unknownReasonText format in its own default case.
+// That specific stub shape is excluded elsewhere: it would require
+// literally copy-pasting tool_denial.go's fmt.Sprintf format string into a
+// second, unreachable copy in this file — a change visible on any diff of
+// tool_denial.go itself (owned by a different unit of this epic), not
+// something this test file can gate without reintroducing the concurrent-
+// map hazard this rewrite exists to remove.
+func TestAskDenialText_UnknownReason_UsesLiveUnknownFormat_NotStaleSwitchDefault(t *testing.T) {
+	const probeReason = "__stale_switch_probe_reason__"
 
-	original, ok := denialTable[probeReason]
-	require.True(t, ok, "test setup: %q must be a real table row before mutating it", probeReason)
-	t.Cleanup(func() { denialTable[probeReason] = original })
+	// Sanity: the probe must genuinely be unclassified, so the only
+	// production path that can produce output for it is ClassifyDenial's
+	// unknown-reason fallback — not a real table row this test would then be
+	// asserting the wrong thing about.
+	_, known := ClassifyDenial(probeReason)
+	require.False(t, known, "test setup: probe reason must not collide with a real denialTable row")
 
-	mutated := original
-	mutated.TranscriptText = "PROBE-MUTATED-TRANSCRIPT-TEXT-" + t.Name()
-	denialTable[probeReason] = mutated
-
+	want := unknownReasonText(probeReason)
 	got := askDenialText(probeReason)
-	assert.Equal(t, mutated.TranscriptText, got,
-		"askDenialText must read denialTable at call time — a hardcoded switch would still "+
-			"return the pre-mutation literal %q here", original.TranscriptText)
-	assert.NotEqual(t, original.TranscriptText, got,
-		"sanity check: the mutation must actually have changed what askDenialText returns")
+
+	assert.Equal(t, want, got,
+		"askDenialText must render the CURRENT unknownReasonText format for an unclassified "+
+			"reason via a live call into ClassifyDenial")
+
+	// Belt-and-braces: name the specific retired format so a regression to
+	// it fails loudly on this line, not just on a generic string mismatch.
+	oldSwitchDefaultFormat := "Not run: " + probeReason
+	assert.NotEqual(t, oldSwitchDefaultFormat, got,
+		"askDenialText must not reproduce the retired pre-ADR-058 switch's default-case format "+
+			`("Not run: "+reason) — that would mean a stale copy of the old switch is still live`)
 }
 
 // Note: this file deliberately contains no assertion spelling out the
