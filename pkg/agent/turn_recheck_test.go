@@ -23,6 +23,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -152,6 +154,73 @@ func TestTurnRecheck_PolicyIsPerCallNotPerTurn(t *testing.T) {
 				"See: tool-registry-redesign-spec.md FR-079 / BDD 'Tool-execution-time policy re-check'",
 		)
 	}
+}
+
+// TestTurnRecheck_SynthesizedDenialIsClassifiedAndHonest closes the gap this
+// file's own BDD scenario (top of file, line 16) has always claimed but never
+// verified: "And synthesizes permission_denied instead of running exec." No
+// test in this file inspected WHAT that synthesized payload actually said —
+// TestTurnRecheck_PolicyIsPerCallNotPerTurn only asserted exec.Execute was
+// never called, not the content of what the model was told instead.
+//
+// This test drives the exact production functions loop.go's TOCTOU
+// policy-deny site (site 1) uses — ClassifyDenial and denialPayloadJSON, both
+// in tool_denial.go — against the "policy_denied" row (ADR-058 spec §4.1 row
+// 9), the loop-pseudo-reason for precisely this file's mid-turn allow→deny
+// scenario. It does NOT duplicate pkg/agent/tool_denial_test.go's full
+// ten-row table sweep (W1): it pins ONE row, in the context this file's own
+// BDD scenario names, with distinct-value differentiation against a second
+// row to rule out a shared/hardcoded message string.
+//
+// Traces to: tool-registry-redesign-spec.md FR-079 (this file's own BDD scenario,
+// "synthesizes permission_denied") + adr-058-tool-denial-semantics-spec.md
+// FR-058-01/02/05/06.
+func TestTurnRecheck_SynthesizedDenialIsClassifiedAndHonest(t *testing.T) {
+	const policyDeniedReason = "policy_denied"
+
+	cls, known := ClassifyDenial(policyDeniedReason)
+	require.True(t, known,
+		"ADR-058 spec §4.1 row 9: %q must be a classified reason, not fall through "+
+			"to the unknown-reason fallback", policyDeniedReason)
+	assert.True(t, cls.Permanent,
+		"ADR-058 D1 row 8: a mid-turn policy flip to deny is PERMANENT for the "+
+			"rest of the turn — this is the pre-ADR-058 control case (ADR §1.2) that "+
+			"already behaved correctly and must keep doing so")
+	assert.Equal(t, "Tool execution denied by policy.", cls.ModelMessage,
+		"ADR-058 D2's pinned literal for policy_denied — 'unchanged, already true' per the ADR")
+
+	// Build the ACTUAL wire payload the way loop.go's site 1 does, and decode
+	// it — a content test, not a presence check.
+	payload := denialPayloadJSON("exec", policyDeniedReason, cls)
+	var decoded struct {
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Tool      string `json:"tool"`
+		Reason    string `json:"reason"`
+		Permanent bool   `json:"permanent"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(payload), &decoded),
+		"denialPayloadJSON must produce valid JSON: %q", payload)
+	assert.Equal(t, "permission_denied", decoded.Error)
+	assert.Equal(t, "exec", decoded.Tool,
+		"payload must name the ACTUAL denied tool — a hardcoded tool name would fail this")
+	assert.Equal(t, policyDeniedReason, decoded.Reason)
+	assert.True(t, decoded.Permanent)
+
+	// FR-058-06 negative guard: nobody was asked, so nobody could have denied
+	// it — this reason must never claim a human decision that never happened.
+	assert.False(t, strings.Contains(strings.ToLower(decoded.Message), denialUserMarker),
+		"a policy_denied message must never contain %q", denialUserMarker)
+
+	// Differentiation guard (anti-stub): a classifier that returns the same
+	// message for every reason would still satisfy every exact-match
+	// assertion above if that shared message happened to equal the
+	// policy_denied literal. Cross-check against "user" to prove the
+	// classification is reason-specific.
+	userCls, _ := ClassifyDenial("user")
+	assert.NotEqual(t, userCls.ModelMessage, cls.ModelMessage,
+		"policy_denied and user must render DIFFERENT messages — a shared/hardcoded "+
+			"string would falsely pass every assertion above")
 }
 
 // TestTurnRecheck_DenyAttemptedAuditEventExists verifies the audit event constant

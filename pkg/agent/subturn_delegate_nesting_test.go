@@ -178,6 +178,27 @@ func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 	_, ok = al.GetRegistry().GetAgent("planner")
 	require.True(t, ok, "planner must be registered")
 
+	// Pre-existing flake fix (found while adding ADR-058 coverage to this
+	// file, not caused by it — reproduced against Wave-1 HEAD with only the
+	// two ORIGINAL tests in this file, ~2/5 runs): every test built on this
+	// helper drives a REAL nested delegate spawn, and the async=true path
+	// (TestNestedDelegate_Background) explicitly runs "planner's spawn ...
+	// in a background goroutine ... from inside ray's turn" per that test's
+	// own doc comment. Nothing previously bounded that goroutine's lifetime
+	// against this function's t.TempDir() calls (tmpDir above, and the
+	// LifecycleStore's own TempDir just above this comment) — Go's testing
+	// package removes a t.TempDir() the moment the test function returns,
+	// racing a still-running background turn that keeps writing into the
+	// agents' Home dirs (observed failure: "TempDir RemoveAll cleanup:
+	// unlinkat ...: directory not empty"). This is registered LAST, on
+	// purpose: t.Cleanup runs LIFO, so al.Close() — which this codebase
+	// already uses for exactly this purpose (see its own "so nothing writes
+	// after Close() returns to race temp-dir cleanup" doc comment, loop.go)
+	// — drains before either TempDir's removal fires, for every test built
+	// on this helper (Await, Background, and the ADR-058 trust-graph test
+	// added alongside it).
+	t.Cleanup(al.Close)
+
 	return al
 }
 
@@ -421,4 +442,121 @@ func TestNestedDelegate_Background(t *testing.T) {
 		return plannerSeq.Remaining() == 0
 	}, testEventTimeout, testEventPoll, "planner's scripted response must be consumed")
 	assert.Equal(t, 0, raySeq.Remaining(), "ray's full scripted sequence must have been consumed")
+}
+
+// TestNestedDelegate_TrustGraphDenialDoesNotPoisonSubsequentCalls is an
+// ADR-058 (tool-denial semantics) regression, added in the same wave that
+// wired a new per-turn quarantine ledger into runTurn's dispatch loop
+// (FR-058-10/11): a tool that produces one PERMANENT approval-policy denial
+// is short-circuited from a cache for the rest of the turn, with no further
+// hook call, policy re-resolution, or approval round-trip.
+//
+// ADR-058 §1 names pkg/tools/result.go::DelegationDeniedResult explicitly
+// OUT OF SCOPE for that classification/quarantine machinery: a delegation
+// denial from DelegateTool.Execute's own trust-set gate is a REAL ToolResult
+// returned by a REAL Execute call, not one of loop.go's three synthetic
+// permission_denied emit sites — it never reaches ClassifyDenial,
+// denialPayloadJSON, or turnState.recordToolDenial at all. If a future change
+// ever blurred that boundary (e.g. routing every error-shaped ToolResult
+// through the same ledger "for consistency"), the FIRST time "delegate" hit
+// an unauthorized target it would get quarantined for the rest of the turn —
+// reintroducing, via a brand-new mechanism, exactly the failure class this
+// file's own file-level doc comment describes as THE BUG: a legitimate,
+// authorized nested delegate call failing closed before DelegateTool.Execute
+// is ever reached.
+//
+// Scenario: ray (delegate-allowed, with a trust edge to "planner" but NONE to
+// "outsider") is scripted to (1) load_tool, (2) delegate to "outsider" —
+// denied by the real trust-graph gate — then (3) delegate to "planner", which
+// DOES have a trust edge and must still succeed in the SAME turn. If the
+// trust-graph denial had incorrectly fed the ADR-058 ledger, step 3 would
+// come back permission_denied (quarantined) instead of spawning planner.
+func TestNestedDelegate_TrustGraphDenialDoesNotPoisonSubsequentCalls(t *testing.T) {
+	al := newNestedDelegationAgentLoop(t)
+
+	// ray: load_tool -> delegate(outsider) [denied, no trust edge] ->
+	// delegate(planner) [authorized] -> final text.
+	raySeq := newScriptedProvider(
+		&providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:        "ray-call-1",
+				Name:      "load_tool",
+				Arguments: map[string]any{"names": []string{"delegate"}},
+			}},
+		},
+		&providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:   "ray-call-2",
+				Name: "delegate",
+				Arguments: map[string]any{
+					"task":     "attempt an UNAUTHORIZED delegate to outsider",
+					"agent_id": "outsider",
+					"async":    false,
+				},
+			}},
+		},
+		&providers.LLMResponse{
+			ToolCalls: []providers.ToolCall{{
+				ID:   "ray-call-3",
+				Name: "delegate",
+				Arguments: map[string]any{
+					"task":     "retry with the AUTHORIZED target planner",
+					"agent_id": "planner",
+					"async":    false,
+				},
+			}},
+		},
+		&providers.LLMResponse{Content: "ray: outsider was refused, planner succeeded"},
+	)
+	setAgentProvider(t, al, "ray", raySeq)
+
+	// planner: a single final-text response — it must still get the chance
+	// to run at all, which is the whole point of this test.
+	plannerSeq := newScriptedProvider(
+		&providers.LLMResponse{Content: "planner: task received and done"},
+	)
+	setAgentProvider(t, al, "planner", plannerSeq)
+
+	collector, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	parent := buildParentTurnState(t, al)
+	ctx := withSpawnToolCallID(context.Background(), "jim-to-ray-trust-boundary-call")
+	_, err := spawnSubTurn(ctx, al, parent, SubTurnConfig{
+		Model:         "test-model",
+		SystemPrompt:  "hop 1: await-delegate to ray; ray tries outsider (denied) then planner (allowed)",
+		TargetAgentID: "ray",
+		Async:         false,
+		Timeout:       5 * time.Second,
+	})
+	require.NoError(t, err, "hop 1 (jim -> ray) spawnSubTurn must succeed")
+
+	// THE PROOF: planner must still be spawned — showing ray's SECOND
+	// delegate call (to an authorized target) was not blocked by the FIRST
+	// call's trust-graph denial of a DIFFERENT target.
+	require.Eventually(t, func() bool {
+		return len(findSubTurnSpawnAgentIDs(collector)) >= 2
+	}, testEventTimeout, testEventPoll,
+		"expected two SubTurnSpawn events (ray, then planner); planner missing means the "+
+			"trust-graph denial for 'outsider' incorrectly quarantined 'delegate' for the rest of the turn")
+
+	ids := findSubTurnSpawnAgentIDs(collector)
+	assert.Contains(t, ids, "ray", "must have spawned ray (hop 1)")
+	assert.Contains(t, ids, "planner", "must have spawned planner (hop 2b, the authorized retry)")
+	assert.NotContains(t, ids, "outsider",
+		"outsider must NEVER be spawned — the trust-graph gate must refuse it before "+
+			"DelegateTool.Execute ever reaches spawnSubTurn")
+
+	// ADR-058's classification/quarantine machinery must never observe this
+	// denial: it is a real ToolResult from DelegateTool.Execute's own
+	// trust-set gate, not one of loop.go's three synthetic permission_denied
+	// sites (nor the new quarantine-replay branch), so it can never produce a
+	// ToolExecSkipped event for "delegate" — this is the DelegationDeniedResult
+	// out-of-scope boundary named by ADR-058 §1.
+	assertNoDelegateDeniedByPolicy(t, collector)
+
+	assert.Equal(t, 0, raySeq.Remaining(),
+		"ray's full 4-step scripted sequence must have been consumed — a stuck remainder "+
+			"means the outsider denial was mishandled (e.g. the turn aborted early)")
+	assert.Equal(t, 0, plannerSeq.Remaining(), "planner's scripted response must be consumed")
 }
